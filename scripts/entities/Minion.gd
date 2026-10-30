@@ -71,6 +71,11 @@ func _create_visual():
 func get_hit_flash_root() -> Node3D:
 	return visual if visual != null and is_instance_valid(visual) else self
 
+# 血条锚点：跟随放大后的模型高度（模型2倍，碰撞半径保持不变）
+func bar_anchor_height() -> float:
+	var model_h := MinionModelScript.target_height(display_name) * MinionModelScript.VISUAL_SCALE + 0.3
+	return maxf(body_radius * 2.0 + 1.0, model_h)
+
 # 行走质感按体型调整：龙兵步幅更大、起伏更明显
 func _walk_opts() -> Dictionary:
 	if display_name in ["dragon", "storm", "shadow_dragon"]:

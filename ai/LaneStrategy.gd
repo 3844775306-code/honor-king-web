@@ -10,6 +10,8 @@ var game_time: float = 0.0
 var default_bush_pos: Vector3 = Vector3.ZERO
 var mid_switched_lane: int = -1
 var mid_switch_timer: float = 0.0
+var mid_quiet_timer: float = 0.0
+var _bush_resolved: bool = false     # 开局时 AI 先于防御塔创建，草丛默认位需等塔生成后重算一次
 var pending_lane: int = -1          # 4分钟后团队分推预分配分路
 
 
@@ -61,14 +63,15 @@ func _get_outermost_tower() -> Turret:
 
 
 func _get_lane_default_pos() -> Vector3:
-	var is_blue := hero.team == Config.Team.PLAYER
+	# 分路按几何判定（x+z：>0 发育路 / <0 对抗路 / =0 中路），所以默认点也用同样的几何中点，
+	# 不能按阵营镜像——之前发育路/对抗路都落在中路对角线上，AI 开局会一起往中路跑。
 	match lane:
 		AiConfig.Lane.FARM:
-			return Vector3(-30, 0, 30) if is_blue else Vector3(30, 0, -30)
+			return Vector3(43, 0, 43)
 		AiConfig.Lane.MID:
 			return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH:
-			return Vector3(30, 0, -30) if is_blue else Vector3(-30, 0, 30)
+			return Vector3(-43, 0, -43)
 	return Vector3.ZERO
 
 
@@ -264,16 +267,25 @@ func _has_enemy_minions_on_lane(ln: int) -> bool:
 	return false
 
 
-# 中路：无目标且敌方本路无兵线 → 随机换边路
+# 中路：无目标且敌方本路无兵线 → 随机换边路（开局保护 + 静默计时，避免开局/兵线间隙就走）
 func _try_mid_switch() -> void:
 	if lane != AiConfig.Lane.MID:
 		return
 	if mid_switched_lane >= 0:
 		return
+	# 开局第一波兵还没交火时中路必然是“空的”，此时换边等于法师永远不走中路
+	if game_time < AiConfig.MID_SWITCH_GRACE:
+		return
 	if _find_target() != null:
+		mid_quiet_timer = 0.0
 		return
 	if _has_enemy_minions_on_lane(AiConfig.Lane.MID):
+		mid_quiet_timer = 0.0
 		return
+	mid_quiet_timer += AiConfig.LANE_THINK_INTERVAL
+	if mid_quiet_timer < AiConfig.MID_SWITCH_QUIET:
+		return
+	mid_quiet_timer = 0.0
 	mid_switched_lane = AiConfig.Lane.FARM if randf() < 0.5 else AiConfig.Lane.CLASH
 	mid_switch_timer = 0.0
 	lane = mid_switched_lane
@@ -293,6 +305,7 @@ func _try_mid_switch_back() -> void:
 		lane = AiConfig.Lane.MID
 		mid_switched_lane = -1
 		mid_switch_timer = 0.0
+		mid_quiet_timer = 0.0
 		default_bush_pos = _find_default_bush()
 
 
@@ -321,6 +334,7 @@ func try_switch_lane() -> void:
 			pending_lane = -1
 			mid_switched_lane = -1
 			mid_switch_timer = 0.0
+			mid_quiet_timer = 0.0
 			default_bush_pos = _find_default_bush()
 
 
@@ -347,6 +361,13 @@ func _get_forward_minion_pos() -> Vector3:
 # ==================== 主决策（每秒） ====================
 
 func decide() -> void:
+	# 开局 AI 先于防御塔创建，默认草丛位当时算不准：塔生成后补算一次
+	if not _bush_resolved:
+		var turrets := hero.get_tree().get_nodes_in_group("turrets")
+		if turrets.size() > 0:
+			default_bush_pos = _find_default_bush()
+			_bush_resolved = true
+
 	# 尝试执行预分配分路切换
 	try_switch_lane()
 

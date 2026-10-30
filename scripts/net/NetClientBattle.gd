@@ -247,6 +247,7 @@ var _pv_arrow: Node3D = null           # 线性/位移方向箭头（箭身+箭�
 var _pv_shaft: MeshInstance3D = null
 var _pv_head: MeshInstance3D = null
 var _pv_aim: Vector3 = Vector3.ZERO    # 最近一帧瞄准落点（供 _handle_skill_release 复算时一致用，纯预览用）
+var _pv_color_key := ""
 
 # —— 生命周期 ——
 func _ready() -> void:
@@ -1600,8 +1601,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				var mstr := float(mm.get_meta("tint_strength", 0.5))
 				UnitVisuals.tint_team(mm, team, mstr)
 				model_ref = mm
-				# 血条锚点随兵种高度（超级兵/主宰先锋/暗影先锋 = 1.5× 普通兵）
-				head_off = 2.1 if name in NetModels.MINION_BIG else 1.45
+				# 血条锚点随放大后的兵种高度（模型2倍；超级兵/先锋 = 1.5× 普通兵）
+				head_off = 4.6 if name in NetModels.MINION_BIG else 2.9
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 0.9
@@ -1614,15 +1615,14 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 			if jm != null:
 				node.add_child(jm)
 				model_ref = jm
-				head_off = 1.4
+				# 野怪模型2倍后血条抬到头顶（同主机锚点）
+				head_off = 4.0
 				if NetModels.is_epic_jungle(name):
-					head_off = 3.0
+					head_off = 8.0
 					# 史诗野怪范围圈：半径≈8 的黄环贴脚（同主机 _add_activity_ring），随怪移动
 					var er := _make_flat_ring(7.8, 8.2, Color(1.0, 0.85, 0.2, 0.25))
 					er.position = Vector3(0.0, 0.02, 0.0)
 					node.add_child(er)
-				elif name == "red_buff" or name == "blue_buff":
-					head_off = 2.0
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 0.9
@@ -1844,6 +1844,18 @@ func _update_cast_preview() -> void:
 	var range := float(sk.get("range", 0.0))
 	if range <= 0.0:
 		range = 3.0
+	# 预览配色跟随本端英雄元素色（同主机）
+	var pv_hero := str(_manifest.get("hero_name", ""))
+	var pv_key := "%s|%d" % [pv_hero, slot]
+	if pv_key != _pv_color_key:
+		_pv_color_key = pv_key
+		var pv_col := Color(0.32, 0.72, 1.0)
+		if pv_hero != "":
+			pv_col = Vfx.color_for_hero(pv_hero)
+			if slot > 0:
+				pv_col = pv_col.lerp(Vfx.color2_for_hero(pv_hero), 0.16 * slot)
+		for mi in [_pv_range, _pv_aoe, _pv_shaft, _pv_head]:
+			MeshFactory.set_cast_preview_color(mi, pv_col)
 	_pv_aim = aim
 	# 自身施法范围圈（type0/1 用；线性/位移用箭头示意长度，不复用范围圈）
 	if typ == 0 or typ == 1:

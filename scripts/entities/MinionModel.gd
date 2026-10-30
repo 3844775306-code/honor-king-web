@@ -8,6 +8,7 @@ const APPLIED := ["melee", "ranged", "siege", "super", "dragon", "storm", "shado
 const TEAM_CLOTH := [Color(0.16, 0.62, 0.74), Color(0.76, 0.20, 0.16)]
 const TARGET_H := {"melee": 1.30, "ranged": 1.30, "siege": 1.30, "super": 1.95,
 	"dragon": 2.15, "storm": 2.15, "shadow_dragon": 2.15}
+const VISUAL_SCALE := 2.0   # 模型整体放大 2 倍（碰撞/判定不变）
 
 # 模板缓存：同兵种同阵营只构建一次，之后 duplicate() 共享 Mesh/材质。
 # 构建模型在真实渲染下约 60~170ms（headless 仅 2ms），每次出兵重建是每波兵线卡顿的根源。
@@ -72,7 +73,7 @@ static func _build_template(kind: String, team: int) -> Node3D:
 	if kind == "super":
 		h = 1.36
 	if h > 0.01:
-		var s := target_height(kind) / h
+		var s := target_height(kind) / h * VISUAL_SCALE
 		root.scale = Vector3(s, s, s)
 	root.set_meta("minion_model_kind", kind)
 	root.set_meta("tint_strength", 0.0)   # 阵营色已烘焙进顶点色，无需再复制材质染色

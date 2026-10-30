@@ -271,6 +271,9 @@ func _draw():
 		MinimapDraw.draw_jungle(self, jpos, jname, seen)
 
 	# ---- 英雄（阵营色 + 朝向箭头 + 血量弧；本人白边；阵亡灰点 + 复活倒计时） ----
+	# 血环统一：我方恒绿 / 敌方恒红（弧长仍按血量比例，颜色不再随血量变化）
+	var ally_ring := Color(0.30, 0.95, 0.42)
+	var enemy_ring := Color(1.0, 0.28, 0.24)
 	for h in heroes:
 		if not is_instance_valid(h): continue
 		if h.team != player_team and not h.visible and h.health > 0.0: continue
@@ -280,7 +283,8 @@ func _draw():
 		var dir := Vector2(sin(h.rotation.y), cos(h.rotation.y))
 		if h.velocity.length() > 0.2:
 			dir = Vector2(h.velocity.x, h.velocity.z)
-		MinimapDraw.draw_hero(self, pos, dir, base_col, hp_ratio, not h.is_ai, h.health <= 0.0, float(h.respawn_timer), str(h.display_name))
+		var ring_col: Color = ally_ring if h.team == player_team else enemy_ring
+		MinimapDraw.draw_hero(self, pos, dir, base_col, hp_ratio, not h.is_ai, h.health <= 0.0, float(h.respawn_timer), str(h.display_name), ring_col)
 
 	# 血包：可用=绿光十字，已拿走=灰色空心环
 	for p2 in get_tree().get_nodes_in_group("health_packs"):

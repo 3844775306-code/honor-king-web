@@ -143,6 +143,7 @@ static func visual(type_name: String) -> Node3D:
 		sc = 0.8
 	elif basic == "bird":
 		sc = 0.85
+	sc *= 2.0   # 野怪模型整体放大2倍（碰撞/判定不变）
 	# 动画挂点：内外分离，外层交给 WalkFeel 步态，内层做 idle/move/attack/die
 	var anim := Node3D.new()
 	anim.name = "Anim"

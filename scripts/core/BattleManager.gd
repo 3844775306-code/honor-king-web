@@ -2996,7 +2996,7 @@ func _show_hero_select_ui():
 	# —— 底部 h=300：职业页签 + 英雄卡横条 | 召唤师 + 按钮 ——
 	var bottom := HBoxContainer.new()
 	bottom.name = "SelectBottom"
-	bottom.custom_minimum_size = Vector2(0, 300)
+	bottom.custom_minimum_size = Vector2(0, 344)
 	bottom.add_theme_constant_override("separation", 16)
 	page.add_child(bottom)
 	# 英雄选择面板：屏幕正中浮层（职业页签 + 英雄卡横条）；未选英雄阶段只显示这一块
@@ -3150,44 +3150,40 @@ func _show_hero_select_ui():
 	sel_build_rows.add_theme_constant_override("h_separation", 6)
 	sel_build_rows.add_theme_constant_override("v_separation", 6)
 	sel_build_panel.add_child(sel_build_rows)
-	var build_bottom := HBoxContainer.new()
-	build_bottom.custom_minimum_size = Vector2(0, 40)
-	build_bottom.add_theme_constant_override("separation", 8)
-	sel_build_panel.add_child(build_bottom)
-	var restore := _sel_btn("恢复推荐", UiKit.C_GOLD, false, Vector2(120, 40))
-	restore.name = "SelectBuildRestore"
-	restore.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
-	restore.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	restore.pressed.connect(_on_build_restore)
-	build_bottom.add_child(restore)
-	var build_hint := _sel_label("该顺序用于对局内推荐出装 / 一键快买", _sel_fs(UiKit.FS_XS), SEL_DIM, false)
-	build_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	build_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	build_hint.clip_text = true
-	build_bottom.add_child(build_hint)
-	var btn_row := HBoxContainer.new()
-	btn_row.custom_minimum_size = Vector2(0, 92)
-	btn_row.add_theme_constant_override("separation", 0)
-	right.add_child(btn_row)
+	# 两侧操作区：换英雄/返回大厅在左，确定/开始在右（不再占用右栏，避免挡住召唤/出装面板）
+	var side_left := VBoxContainer.new()
+	side_left.name = "SelectSideLeft"
+	side_left.custom_minimum_size = Vector2(190, 0)
+	side_left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	side_left.add_theme_constant_override("separation", 10)
+	bottom.add_child(side_left)
+	bottom.move_child(side_left, 0)
+	var side_right := VBoxContainer.new()
+	side_right.name = "SelectSideRight"
+	side_right.custom_minimum_size = Vector2(190, 0)
+	side_right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	side_right.add_theme_constant_override("separation", 10)
+	bottom.add_child(side_right)
 	var leave := _sel_btn("返回大厅", UiKit.C_TEAM1, false, Vector2(180, 92))
 	leave.name = "SelectLeave"
 	leave.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	leave.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_MD))
+	leave.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	leave.pressed.connect(_on_select_leave)
-	sel_back_btn = _sel_btn("换英雄", UiKit.C_PANEL_EDGE, false, Vector2(180, 92))
+	sel_back_btn = _sel_btn("换英雄", UiKit.C_PANEL_EDGE, false, Vector2(190, 86))
 	sel_back_btn.name = "SelectBackToPick"
 	sel_back_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	sel_back_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_MD))
+	sel_back_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	sel_back_btn.pressed.connect(_on_back_to_pick)
-	btn_row.add_child(sel_back_btn)
-	btn_row.add_child(leave)
-	select_confirm_btn = _sel_btn("✔  开始游戏", UiKit.C_GOLD, true, Vector2(340, 92))
+	side_left.add_child(sel_back_btn)
+	leave.custom_minimum_size = Vector2(190, 86)
+	side_left.add_child(leave)
+	select_confirm_btn = _sel_btn("✔  开始游戏", UiKit.C_GOLD, true, Vector2(190, 100))
 	select_confirm_btn.name = "SelectConfirm"
 	select_confirm_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	select_confirm_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_LG))
+	select_confirm_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	select_confirm_btn.disabled = true
 	select_confirm_btn.pressed.connect(_on_confirm)
-	btn_row.add_child(select_confirm_btn)
+	side_right.add_child(select_confirm_btn)
 	# 技能悬浮详情浮层（悬停技能 chip 时弹出）
 	sel_skill_tip = PanelContainer.new()
 	sel_skill_tip.name = "SelectSkillTip"
@@ -3367,7 +3363,7 @@ func _set_sel_stage(picking: bool) -> void:
 	if sel_right_body != null and is_instance_valid(sel_right_body):
 		sel_right_body.visible = not picking
 	if sel_bottom_row != null and is_instance_valid(sel_bottom_row):
-		sel_bottom_row.custom_minimum_size = Vector2(0, 0 if picking else 300)
+		sel_bottom_row.custom_minimum_size = Vector2(0, 0 if picking else 344)
 	if sel_back_btn != null and is_instance_valid(sel_back_btn):
 		sel_back_btn.visible = (not picking) and not sel_player_picked
 	if picking:
@@ -3846,6 +3842,12 @@ func _rebuild_build_schemes() -> void:
 		btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 		btn.pressed.connect(_on_build_scheme_pressed.bind(i))
 		sel_build_scheme_row.add_child(btn)
+	# 恢复推荐（并入方案网格末尾，省掉底部一行）
+	var reset_btn := _sel_btn("恢复推荐", UiKit.C_GOLD, false, Vector2(112, 40))
+	reset_btn.name = "SelectBuildRestore"
+	reset_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	reset_btn.pressed.connect(_on_build_restore)
+	sel_build_scheme_row.add_child(reset_btn)
 
 func _current_build_scheme_name() -> String:
 	if sel_build_hero == "": return ""

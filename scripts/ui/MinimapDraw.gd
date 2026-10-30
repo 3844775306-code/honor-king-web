@@ -256,7 +256,8 @@ static func _draw_epic(ci: CanvasItem, pos: Vector2, kind: String, seen: bool) -
 
 ## 英雄：朝向箭头 + 底盘 + 本人白环 + 血量弧；阵亡灰点 + 复活倒计时
 static func draw_hero(ci: CanvasItem, pos: Vector2, dir: Vector2, base: Color, hp_ratio: float,
-		is_self: bool = false, dead: bool = false, respawn: float = 0.0, hero_name: String = "") -> void:
+		is_self: bool = false, dead: bool = false, respawn: float = 0.0, hero_name: String = "",
+		ring_col: Color = Color(0.30, 0.95, 0.42)) -> void:
 	var d: Vector2 = dir.normalized() if dir.length() > 0.01 else Vector2(0, -1)
 	var r := 10.5	# 头像放大 1.5 倍（原 7.0）
 	var body: Color = base if not dead else Color(0.42, 0.44, 0.48, 0.9)
@@ -280,7 +281,10 @@ static func draw_hero(ci: CanvasItem, pos: Vector2, dir: Vector2, base: Color, h
 	if is_self:
 		ci.draw_arc(pos, r + 4.0, 0, TAU, 26, Color(0.32, 1.0, 0.45, 1.0), 2.6, true)
 	var hp: float = clampf(hp_ratio, 0.0, 1.0)
-	var hcol := Color(0.40, 1.0, 0.52) if hp > 0.5 else (Color(1.0, 0.88, 0.30) if hp > 0.25 else Color(1.0, 0.36, 0.30))
+	# 血量环颜色按阵营固定（我方绿 / 敌方红），弧长仍表示剩余血量；低血时略微提亮以保留警示
+	var hcol := ring_col
+	if hp <= 0.25:
+		hcol = ring_col.lightened(0.25)
 	ci.draw_arc(pos, r + 2.2, -PI / 2.0, -PI / 2.0 + TAU * hp, 22, hcol, 2.4)
 
 # ==================== 小兵聚类 ====================

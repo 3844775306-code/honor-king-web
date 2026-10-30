@@ -6,6 +6,7 @@ const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 var arrow_preview: Node3D
 var arrow_shaft: MeshInstance3D
 var arrow_head: MeshInstance3D
+var _pv_color_key := ""
 var buff_ring_red: MeshInstance3D
 var buff_ring_blue: MeshInstance3D
 var damage_log: Array = []  
@@ -2906,6 +2907,7 @@ func _show_donghuang_w_preview(aim_pos: Vector3):
 	while donghuang_aim_rings.size() < total:
 		var ring := MeshFactory.create_cast_area(
 			Color(1.0, 0.33, 0.264, 1.0) if team == 1 else Color(0.0, 0.886, 1.0, 1.0), 1)
+		MeshFactory.set_cast_preview_color(ring, Vfx.color_for_hero(display_name))
 		ring.scale = Vector3(3.2, 1.0, 3.2)
 		add_child(ring)
 		donghuang_aim_rings.append(ring)

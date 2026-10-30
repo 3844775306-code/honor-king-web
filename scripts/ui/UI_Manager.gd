@@ -107,6 +107,7 @@ var target_detail_labels: Dictionary = {}
 var target_detail_accent: ColorRect      # 顶部队色强调条（每帧按目标阵营上色）
 var target_detail_team_dot: ColorRect    # 姓名前的队色小方块
 var target_detail_hp_fill: StyleBoxFlat  # 血条填充样式，填充色跟随阵营
+var target_detail_hp_gloss: Control     # 血条质感层（高光/刻度/末端亮边）
 var target_detail_icons: Dictionary = {} # 属性徽章图标（键=属性名）
 var kda_label: Label
 var time_chip: Panel
@@ -401,15 +402,31 @@ func _create_target_detail_panel():
 	# 两端统一：小地图已放大并内收，目标面板移到其下方；同时避让刘海
 	target_detail_panel.position = Vector2(40 + UiKit.safe_left(), 370 + UiKit.safe_top())
 	target_detail_panel.visible = false
-	var frame := UiKit.flat(0.86, 10, 2, Color(1, 1, 1, 0.16), Color(0.02, 0.04, 0.09, 0.86))
+	# 面板底：深色玻璃 + 双层描边（外冷光 / 内高光）+ 柔和投影，比纯 flat 更有层次
+	var frame := UiKit.flat(0.94, 12, 2, Color(0.62, 0.74, 0.96, 0.22), Color(0.025, 0.045, 0.095, 0.92), 0.0, 16.0)
+	frame.shadow_color = Color(0, 0, 0, 0.5)
+	frame.set_corner_detail(10)
 	target_detail_panel.add_theme_stylebox_override("panel", frame)
 	add_child(target_detail_panel)
+
+	# 顶部渐隐冷光（压在面板上、标签下），让顶边有玻璃反光质感
+	var sheen := ColorRect.new()
+	sheen.position = Vector2(2, 2)
+	sheen.size = Vector2(326, 2.0) * rs
+	sheen.color = Color(1, 1, 1, 0.10)
+	sheen.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_detail_panel.add_child(sheen)
 
 	# 顶部阵营色强调条 + 姓名前同色小方块（二者颜色在每帧 update 中随目标阵营切换）
 	target_detail_accent = ColorRect.new()
 	target_detail_accent.position = Vector2.ZERO
 	target_detail_accent.size = Vector2(330, 5) * rs
 	target_detail_panel.add_child(target_detail_accent)
+	var accent_shine := TargetAccentShine.new()
+	accent_shine.position = Vector2.ZERO
+	accent_shine.size = Vector2(330, 5) * rs
+	accent_shine.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_detail_panel.add_child(accent_shine)
 	target_detail_team_dot = ColorRect.new()
 	target_detail_team_dot.position = Vector2(16, 13) * rs
 	target_detail_team_dot.size = Vector2(10, 10) * rs
@@ -418,7 +435,18 @@ func _create_target_detail_panel():
 	var name_label = Label.new()
 	name_label.position = Vector2(32, 8) * rs; name_label.size = Vector2(180, 26) * rs
 	_apply_label_style(name_label, 17, Color.WHITE)
+	name_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	name_label.add_theme_constant_override("shadow_offset_x", 1)
+	name_label.add_theme_constant_override("shadow_offset_y", 2)
 	target_detail_panel.add_child(name_label); target_detail_labels["name"] = name_label
+	# 等级徽章底片（金色描边小胶囊），让右侧 Lv 不再是裸字
+	var lv_chip := Panel.new()
+	lv_chip.position = Vector2(210, 7) * rs
+	lv_chip.size = Vector2(108, 24) * rs
+	lv_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lv_chip.add_theme_stylebox_override("panel",
+		UiKit.flat(0.60, 7, 1, Color(1.0, 0.82, 0.35, 0.28), Color(0.09, 0.07, 0.02, 0.55)))
+	target_detail_panel.add_child(lv_chip)
 	var lv_label = Label.new()
 	lv_label.position = Vector2(224, 10) * rs; lv_label.size = Vector2(92, 22) * rs
 	lv_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -439,14 +467,32 @@ func _create_target_detail_panel():
 	target_detail_hp_fill.set_corner_radius_all(8)
 	target_detail_hp_bar.add_theme_stylebox_override("fill", target_detail_hp_fill)
 	target_detail_panel.add_child(target_detail_hp_bar)
+	# 血条质感层：顶部高光、每 1000 点刻度、填充末端亮边、细描边（在文字之下）
+	var hp_gloss := TargetHpGloss.new()
+	hp_gloss.position = Vector2(16, 44) * rs
+	hp_gloss.size = Vector2(298, 17) * rs
+	hp_gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_detail_panel.add_child(hp_gloss)
+	target_detail_hp_gloss = hp_gloss
 	var hp_text = Label.new()
 	hp_text.position = Vector2(16, 44) * rs; hp_text.size = Vector2(298, 17) * rs
 	hp_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hp_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_apply_label_style(hp_text, 11, Color(1, 1, 1, 0.92))
+	hp_text.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))
+	hp_text.add_theme_constant_override("shadow_offset_x", 1)
+	hp_text.add_theme_constant_override("shadow_offset_y", 1)
 	target_detail_panel.add_child(hp_text); target_detail_labels["hp"] = hp_text
 
-	# 属性区：2×2 的「彩色圆徽章 + 属性色数值」
+	# 属性区：2×2 的「彩色圆徽章 + 属性色数值」；两行各垫一条低对比底片分出层次
+	for chip_y in [74.0, 110.0]:
+		var chip := Panel.new()
+		chip.position = Vector2(10, chip_y) * rs
+		chip.size = Vector2(310, 30) * rs
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		chip.add_theme_stylebox_override("panel",
+			UiKit.flat(0.22, 8, 1, Color(1, 1, 1, 0.05), Color(0.05, 0.075, 0.13, 0.40)))
+		target_detail_panel.add_child(chip)
 	var attrs := ["攻击", "法强", "护甲", "魔抗"]
 	var tints := {
 		"攻击": Color(1.0, 0.58, 0.2),
@@ -2970,6 +3016,10 @@ func update(battle: BattleManager):
 		lv_lab.text = "Lv.%d" % target.level if target is Hero else ""
 		target_detail_hp_bar.max_value = maxf(1.0, target.max_health)
 		target_detail_hp_bar.value = target.health
+		if target_detail_hp_gloss != null:
+			target_detail_hp_gloss.max_hp = maxf(1.0, target.max_health)
+			target_detail_hp_gloss.hp = target.health
+			target_detail_hp_gloss.queue_redraw()
 		target_detail_labels["hp"].text = "%d / %d" % [int(target.health), int(target.max_health)]
 		target_detail_labels["攻击"].text = "%d" % int(target.attack)
 		target_detail_labels["法强"].text = "%d" % int(target.ability_power if target is Hero else 0)
@@ -3702,3 +3752,46 @@ func _shop_pay_for(id: String, hero) -> int:
 				off += int(ri.get("cost", 0))
 			rem.remove_at(idx)
 	return maxi(cost - off, 0)
+
+
+# ---------- 目标信息面板：质感装饰层（纯视觉，不参与交互） ----------
+class TargetAccentShine extends Control:
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w <= 0.0 or h <= 0.0:
+			return
+		# 顶部色条：左亮右隐的玻璃高光 + 1px 冷光顶边
+		var steps := 14
+		for i in range(steps):
+			var a := 0.24 * (1.0 - float(i) / float(steps))
+			draw_rect(Rect2(w * float(i) / float(steps), 0, w / float(steps) + 1.0, h),
+				Color(1, 1, 1, a))
+		draw_rect(Rect2(0, 0, w, 1.0), Color(1, 1, 1, 0.32))
+
+
+class TargetHpGloss extends Control:
+	var max_hp := 1000.0
+	var hp := 1000.0
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w <= 2.0 or h <= 2.0:
+			return
+		var ratio := clampf(hp / maxf(max_hp, 1.0), 0.0, 1.0)
+		# 上部高光带（内收 8px 避开圆角）
+		draw_rect(Rect2(8.0, 1.0, maxf(w - 16.0, 0.0), h * 0.42), Color(1, 1, 1, 0.12))
+		# 填充末端亮边
+		var fx := w * ratio
+		if fx > 2.0:
+			draw_rect(Rect2(maxf(fx - 3.0, 1.0), 1.5, 2.0, h - 3.0), Color(1, 1, 1, 0.28))
+		# 每 1000 生命一条刻度
+		var step_w := 1000.0 / maxf(max_hp, 1.0) * w
+		if step_w >= 3.0:
+			var x := step_w
+			while x < w - 8.0:
+				draw_rect(Rect2(x, 3.0, 1.0, h - 6.0), Color(0, 0, 0, 0.22))
+				x += step_w
+		# 细描边
+		draw_rect(Rect2(0.5, 0.5, w - 1.0, h - 1.0), Color(1, 1, 1, 0.08), false, 1.0)

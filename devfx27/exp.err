@@ -1,6 +1,0 @@
-ERROR: Failed to read the root certificate store.
-   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
-SCRIPT ERROR: Parse Error: Identifier "_pv_color_key" not declared in the current scope.
-   at: GDScript::reload (res://scripts/entities/Hero.gd:2975)
-SCRIPT ERROR: Parse Error: Identifier "_pv_color_key" not declared in the current scope.
-   at: GDScript::reload (res://scripts/entities/Hero.gd:2976)

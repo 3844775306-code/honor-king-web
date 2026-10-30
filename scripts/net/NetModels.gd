@@ -120,12 +120,13 @@ const MINION_RAW_H := {
 const MINION_TARGET_H := 1.30
 const MINION_BIG := ["super", "dragon", "storm", "shadow_dragon"]
 const MINION_BIG_MUL := 1.5
+const MINION_VISUAL_SCALE := 2.0   # 与 MinionModel.VISUAL_SCALE 同步：模型放大2倍
 
 # 按「目标高度 / 模型原始高度」反算缩放，保证各兵种视觉高度一致
 static func minion_scale(sub_type: String) -> float:
 	var raw: float = float(MINION_RAW_H.get(sub_type, 0.84))
 	var target := MINION_TARGET_H * (MINION_BIG_MUL if sub_type in MINION_BIG else 1.0)
-	return target / maxf(raw, 0.01)
+	return target / maxf(raw, 0.01) * MINION_VISUAL_SCALE
 
 
 static func minion(sub_type: String, team: int = 0) -> Node3D:

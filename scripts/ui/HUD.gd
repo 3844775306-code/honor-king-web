@@ -107,7 +107,7 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 		return
 
 	var anchor: float = entity.body_radius * 2.0 + 1.0
-	if is_epic:
+	if entity.has_method("bar_anchor_height"):
 		anchor = entity.bar_anchor_height()
 	var world_pos: Vector3 = entity.global_position + Vector3.UP * anchor
 	if cam_forward.dot(world_pos - cam.global_position) <= 0.3:
