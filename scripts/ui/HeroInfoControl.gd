@@ -29,6 +29,47 @@ func _draw_text_shadow(f: Font, pos: Vector2, txt: String, align: int, width: fl
 	draw_string_outline(f, pos, txt, align, width, fs, outline_px, Color(0, 0, 0, 0.92))
 	draw_string(f, pos, txt, align, width, fs, col)
 
+# MVP 徽章：深底金边圆盘 + 金色王冠 + 呼吸光晕（替代原“MVP”文字角标）
+func _draw_mvp_badge(c: Vector2, r: float) -> void:
+	var t: float = Time.get_ticks_msec() * 0.001
+	var pulse: float = 0.5 + 0.5 * sin(t * 2.1)
+	# 外发光（两层，随呼吸涨落）
+	draw_circle(c, r * (1.46 + 0.08 * pulse), Color(1.0, 0.78, 0.30, 0.08 + 0.05 * pulse))
+	draw_circle(c, r * 1.14, Color(1.0, 0.70, 0.22, 0.18))
+	# 底盘 + 金边
+	draw_circle(c, r, Color(0.11, 0.07, 0.02, 0.97))
+	draw_arc(c, r - 1.0, 0.0, TAU, 48, Color(1.0, 0.80, 0.34, 0.95), 2.4)
+	draw_arc(c, r * 0.84, 0.0, TAU, 40, Color(1.0, 0.72, 0.24, 0.45), 1.1)
+	# 左上高光弧，给圆盘一点金属感
+	draw_arc(c, r - 1.8, PI * 1.12, PI * 1.86, 24, Color(1.0, 0.96, 0.82, 0.85), 1.5)
+	# 王冠本体（7 点折线：冠带两端 + 两个谷 + 三个峰）
+	var s: float = r * 0.76
+	var pts := PackedVector2Array([
+		c + Vector2(-0.62, 0.26) * s, c + Vector2(-0.62, -0.18) * s,
+		c + Vector2(-0.31, 0.04) * s, c + Vector2(0.0, -0.48) * s,
+		c + Vector2(0.31, 0.04) * s, c + Vector2(0.62, -0.18) * s,
+		c + Vector2(0.62, 0.26) * s,
+	])
+	draw_colored_polygon(pts, Color(1.0, 0.84, 0.38, 0.98))
+	# 冠带 + 三颗宝石
+	draw_rect(Rect2(c + Vector2(-0.62, 0.27) * s, Vector2(1.24, 0.17) * s), Color(1.0, 0.68, 0.16, 0.98))
+	for i in range(3):
+		var gx: float = -0.34 + 0.34 * i
+		draw_circle(c + Vector2(gx, 0.355) * s, s * 0.08, Color(0.26, 0.09, 0.02, 0.95))
+		draw_circle(c + Vector2(gx - s * 0.02, 0.34) * s, s * 0.035, Color(1.0, 0.95, 0.75, 0.9))
+	# 峰顶亮点
+	for p in [Vector2(-0.62, -0.18), Vector2(0.0, -0.48), Vector2(0.62, -0.18)]:
+		draw_circle(c + p * s, s * 0.085, Color(1.0, 0.97, 0.86, 0.95))
+	# 深色描边，让王冠在金色底上依然清晰
+	draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.36, 0.19, 0.02, 0.85), 1.4)
+	draw_rect(Rect2(c + Vector2(-0.62, 0.27) * s, Vector2(1.24, 0.17) * s), Color(0.36, 0.19, 0.02, 0.8), false, 1.0)
+	# 右上角小闪光
+	var sp: Vector2 = c + Vector2(r * 0.95, -r * 0.95)
+	var a: float = 0.55 + 0.4 * pulse
+	draw_line(sp + Vector2(-4.0, 0.0), sp + Vector2(4.0, 0.0), Color(1.0, 0.98, 0.9, a), 1.3)
+	draw_line(sp + Vector2(0.0, -4.0), sp + Vector2(0.0, 4.0), Color(1.0, 0.98, 0.9, a), 1.3)
+
+
 func _draw():
 	if not hero: return
 	var font = UiKit.font()  # 使用默认字体
@@ -138,18 +179,10 @@ func _draw():
 	_draw_text_shadow(_bold(), Vector2(center_x - _max_line * 8.0, y_offset), name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 34, Color.WHITE, 5)
 	y_offset += font.get_multiline_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 34).y + 10
 
-	# ---- MVP标识：当前全场MVP的血条左侧显示金色角标 ----
+	# ---- MVP标识：血条左侧金色王冠徽章（图标，不再用文字） ----
 	if hero.is_mvp:
-		var _tag_font_size := 24
-		var _ts := font.get_string_size("MVP", HORIZONTAL_ALIGNMENT_LEFT, -1, _tag_font_size)
-		var _tag_w := _ts.x + 12.0
-		var _tag_h := bar_height + 2.0
-		var _tag_x: float = center_x - bar_width / 2.0 - 8.0 - _tag_w
-		var _tag_y: float = y_offset - 1.0
-		draw_rect(Rect2(_tag_x, _tag_y, _tag_w, _tag_h), Color(0.98, 0.82, 0.2, 0.95))
-		draw_rect(Rect2(_tag_x, _tag_y, _tag_w, _tag_h), Color(0.4, 0.28, 0.0, 1.0), false, 1.5)
-		draw_string(font, Vector2(_tag_x + 6.0, _tag_y + _tag_h * 0.5 + _tag_font_size * 0.36), "MVP",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, _tag_font_size, Color(0.1, 0.06, 0.0))
+		var _r: float = bar_height * 0.66
+		_draw_mvp_badge(Vector2(center_x - bar_width / 2.0 - 12.0 - _r, y_offset + bar_height * 0.5), _r)
 
 	# ---- 英雄血条（投影 / 双层描边 / 分段渐变 / 玻璃高光 / 护盾段 / 低血脉冲） ----
 	var max_hp: float = maxf(1.0, hero.actual_max_health)
