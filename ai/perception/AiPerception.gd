@@ -219,7 +219,10 @@ func _nearest_turret(radius: float, team: int) -> Turret:
 	var best: Turret = null
 	var best_dist := radius + 1.0
 	for entity in _shared_turrets(tree):
-		if not (entity is Turret) or not is_instance_valid(entity):
+		# 必须先判有效性：对已释放实例做 `is Turret` 会抛 "Left operand of 'is' is a previously freed instance"
+		if not is_instance_valid(entity):
+			continue
+		if not (entity is Turret):
 			continue
 		var turret := entity as Turret
 		if turret.health <= 0 or turret.team != team:
