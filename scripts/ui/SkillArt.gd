@@ -36,13 +36,18 @@ const KEYWORDS := [
 ## 技能纹样名（供外部探测/调试）
 static func motif_for(skill, slot: int) -> String:
 	if skill == null:
+		return motif_for_name("", -1, slot)
+	return motif_for_name(str(skill.skill_name), int(skill.type), slot)
+
+## 按「技能名 + type」取纹样：给只有名称/类型的载荷（如全局英雄面板行）用
+static func motif_for_name(skill_name: String, skill_type: int, slot: int) -> String:
+	if skill_name == "" and skill_type < 0:
 		return ["lock", "aoe", "beam", "dash", "shield"][clampi(slot, 0, 4)]
-	var n := str(skill.skill_name)
 	for entry in KEYWORDS:
 		for kw in entry[0]:
-			if n.find(str(kw)) >= 0:
+			if skill_name.find(str(kw)) >= 0:
 				return str(entry[1])
-	match int(skill.type):
+	match skill_type:
 		0: return "lock"
 		1: return "aoe"
 		3: return "beam"
@@ -53,6 +58,14 @@ static func motif_for(skill, slot: int) -> String:
 ## 画按钮底盘 + 纹样。learned=false 压暗，ready=false 加冷灰罩
 static func draw_bg(ci: CanvasItem, c: Vector2, r: float, hero_name: String, skill, slot: int,
 		learned: bool, ready: bool) -> void:
+	if skill == null:
+		draw_icon(ci, c, r, hero_name, "", -1, slot, learned, ready)
+	else:
+		draw_icon(ci, c, r, hero_name, str(skill.skill_name), int(skill.type), slot, learned, ready)
+
+## 按「技能名 + type」画图标（同上视觉，供只有名称/类型的行数据使用）
+static func draw_icon(ci: CanvasItem, c: Vector2, r: float, hero_name: String, skill_name: String,
+		skill_type: int, slot: int, learned: bool, ready: bool) -> void:
 	var base: Color = Vfx.color_for_hero(hero_name) if hero_name != "" else Color(0.42, 0.60, 0.88)
 	# 同英雄 1/2/3 技能用副元素色偏色，避免三格颜色一模一样
 	if hero_name != "" and slot > 0:
@@ -67,7 +80,7 @@ static func draw_bg(ci: CanvasItem, c: Vector2, r: float, hero_name: String, ski
 	ci.draw_arc(c, r * 0.88, -PI * 0.95, -PI * 0.15, 22, Color(1, 1, 1, 0.12), maxf(r * 0.09, 1.5), true)
 	ci.draw_circle(c + Vector2(0, r * 0.62), r * 0.62, Color(0, 0, 0, 0.16))
 	# 纹样（外发光 + 主色 + 高光芯）
-	var m := motif_for(skill, slot)
+	var m := motif_for_name(skill_name, skill_type, slot)
 	var k := r * 0.46
 	var col := base.lightened(0.42)
 	_glyph(ci, c, k * 1.26, m, Color(base.r, base.g, base.b, 0.20))

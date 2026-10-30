@@ -120,6 +120,7 @@ var minimap_drag_pos: Vector3 = Vector3.ZERO
 var minimap_jump_requested: bool = false
 # —— 右半屏拖拽相机：按住右半屏拖动看视野，松手平滑回正（手势由 TouchController 提供）——
 var cam_pan_offset: Vector3 = Vector3.ZERO
+var cam_yaw: float = 0.0   # 玩家在红方时镜头绕Y轴转180°，使红方出生与蓝方手感一致
 var cam_pan_prev_valid: bool = false
 var cam_pan_prev_screen: Vector2 = Vector2.ZERO
 # 桌面中键自由镜头：拖动平移，松手保持，Y 回正；_cam_touch_decay 仅手机端松手回正用
@@ -164,6 +165,7 @@ func remove_recall_line(hero: Hero):
 	recall_lines.erase(hero)
 func _ready():
 	add_to_group("battle_manager")
+	Config.reset_player_team()
 	# 选人/加载阶段沿用大厅氛围音乐（真正开局 _start_game_body 会淡出；直接从本场景启动也有音乐）
 	SfxManager.start_menu_music()
 
@@ -223,7 +225,7 @@ func _ready():
 
 	minimap.heroes = [hero, enemy_hero]
 	minimap.turrets = turrets
-	minimap.player_team = Config.Team.PLAYER
+	minimap.player_team = Config.player_team
 	add_child(minimap)
 	minimap.set_battle(self)
 	set_process(true)
@@ -240,6 +242,7 @@ func _ready():
 		call_deferred("_start_game", "亚瑟")
 
 func _start_net_lineup(picks: Dictionary) -> void:
+	Config.reset_player_team()
 	# 大厅选人结果开局：picks = { peer_id: { hero, summoner, role } }
 	# 席位 1 = host（本机操控），其余 guest 以“PLAYER 队、无 AI 控制”形态生成，
 	# 由 NetSession.assign_lineup() 在开局后按 display_name 逐一配给对应 client 接管。
@@ -300,21 +303,24 @@ func _start_game(hero_type: String, summoner_id: String = "flash"):
 	# 先显示王者式加载界面：BP 用双方 picks，网络 host / --net-test 无 BP 数据时占位
 	if _loading_shown: return
 	_loading_shown = true
+	# 随机分配玩家阵营（加载界面/出生点/镜头都由 Config.player_team 决定；联机保持蓝方）
+	if NetSession.mode == NetSession.Mode.NONE:
+		Config.roll_player_team()
 	var heroes: Array = []
 	if sel_ally_picks.size() == 5 and sel_enemy_picks.size() == 5:
 		for i in 5:
 			var hn := str(sel_ally_picks[i])
 			if i == sel_player_seat and hn == "": hn = hero_type
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 0})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.player_team})
 		for i in 5:
 			var hn := str(sel_enemy_picks[i])
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 1})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.foe_team()})
 	else:
-		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": 0})
+		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": Config.player_team})
 		for i in 4:
-			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": 0})
+			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": Config.player_team})
 		for i in 5:
-			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": 1})
+			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": Config.foe_team()})
 	loading_screen = LoadingScreen.new()
 	loading_screen.setup(heroes, "对局加载中", "王者峡谷 · 5v5", 2.8)
 	loading_screen.finished.connect(_on_loading_finished.bind(hero_type, summoner_id))
@@ -360,6 +366,11 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	_clear_prewarm_protos()
 	selected_hero_type = hero_type
 	hero_selected = true
+	# 随机分配玩家阵营：红方出生时镜头整体旋转 180°，手感与蓝方一致
+	if NetSession.mode == NetSession.Mode.NONE:
+		Config.roll_player_team()
+	cam_yaw = PI if Config.player_team == Config.Team.ENEMY else 0.0
+	cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
 	# 调试：默认开启AI路径小球显示（F4可切换）
 	GameEntity.debug_show_path = true
 	print("[Debug] AI路径球显示已开启（F4切换）")
@@ -376,8 +387,8 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		for i in 5:
 			if i != sel_player_seat and str(sel_ally_picks[i]) != "":
 				sel_ally_ai_picks.append(str(sel_ally_picks[i]))
-	_create_team_ai(Config.Team.PLAYER, 4, [], sel_ally_ai_picks)  # 4个己方AI
-	_create_team_ai(Config.Team.ENEMY, 5, [], sel_enemy_picks)    # 5个敌方AI
+	_create_team_ai(Config.player_team, 4, [], sel_ally_ai_picks)  # 4个己方AI
+	_create_team_ai(Config.foe_team(), 5, [], sel_enemy_picks)    # 5个敌方AI
 	sel_ally_picks = []
 	sel_enemy_picks = []
 	sel_taken = {}
@@ -957,10 +968,10 @@ void fragment() {
 
 func _create_player_hero(type: String, summoner_id: String = "flash"):
 	var config = hero_configs[type].duplicate()
-	config["team"] = Config.Team.PLAYER
+	config["team"] = Config.player_team
 	hero = Hero.new()
 	hero.setup(config)
-	hero.position = Vector3(-60, 0, 60)
+	hero.position = Vector3(-60, 0, 60) if Config.player_team == Config.Team.PLAYER else Vector3(60, 0, -60)
 	hero.setup_skills_from_database(config.get("skills", []), summoner_id)
 	hero.gold = 500
 	add_child(hero)
@@ -988,7 +999,7 @@ func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_he
 		picks.append(fname)
 	var required = ["刺客", "法师", "射手", "战士", "辅助"]
 	# 玩家方：排除人类已占职责（大厅 lock 的 exclude_roles + host 本人），AI 补齐缺的职责
-	if team == Config.Team.PLAYER:
+	if team == Config.player_team:
 		for r in exclude_roles:
 			required.erase(r)
 		if hero and hero.role in required:
@@ -1124,6 +1135,7 @@ func spawn_tower_stump(team: int, pos: Vector3) -> void:
 	rmat2.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	ring.material_override = rmat2
 	stump.add_child(ring)
+	stump.add_to_group("tower_stumps")   # 废墟塔墩：参与实体推挤（不靠寻路网格阻挡）
 	add_child(stump)
 	_tower_stumps[key] = stump
 
@@ -1830,14 +1842,14 @@ func check_team_wipe(victim: Hero) -> void:
 			break
 	if not all_down:
 		return
-	if victim.team == Config.Team.PLAYER:
+	if victim.team == Config.player_team:
 		trigger_special_announce("wiped", 3.0)
 	else:
 		trigger_special_announce("perfect_fight", 3.0)
 
 # 漂亮的击杀：我方越塔强杀 / 敌方越我方塔被反杀 / 远距离击杀（百步穿杨）
 func _maybe_nice_kill(killer: Hero, victim: Hero) -> void:
-	if killer == null or killer.team != Config.Team.PLAYER:
+	if killer == null or killer.team != Config.player_team:
 		return
 	var dive := hero_under_enemy_tower(killer)
 	var defend := false
@@ -1866,7 +1878,7 @@ func _maybe_epic_steal(monster: JungleMonster, killer: Hero) -> bool:
 	var threshold := maxf(800.0, float(monster.max_health) * 0.08)
 	if max_dmg < threshold:
 		return false
-	if killer.team == Config.Team.PLAYER:
+	if killer.team == Config.player_team:
 		trigger_special_announce("steal", 4.0)
 	else:
 		trigger_special_announce("e_steal", 4.0)
@@ -2173,7 +2185,7 @@ func _generate_outer_walls() -> void:
 			var a: float = deg_to_rad(base_ang + 10.0 * float(i))
 			_add_outer_wall(Vector3(cx + cos(a) * 8.5, 0.0, cz + sin(a) * 8.5), Vector3(cos(a), 0.0, sin(a)), 2.0, false)
 
-	# 泉水外周城墙（基地角）：以泉水为圆心半径 4.35 的 270° 石环，
+	# 泉水外周城墙（基地角）：以泉水为圆心半径 4.35 的 270° 石环（外周墙同款模型），
 	# 朝地图内的 90° 留出入口；石环同时把外周城墙在基地角上的缺口补齐
 	for corner in [Vector2(-62, 62), Vector2(62, -62)]:
 		var c: Vector2 = corner
@@ -2184,14 +2196,14 @@ func _generate_outer_walls() -> void:
 			if absf(rel) <= 45.0:
 				continue
 			var a: float = deg_to_rad(ang)
-			_add_wall(Vector3(c.x + cos(a) * 4.35, 0.0, c.y + sin(a) * 4.35), Vector3(cos(a), 0.0, sin(a)), true)
+			_add_wall(Vector3(c.x + cos(a) * 4.35, 0.0, c.y + sin(a) * 4.35), Vector3(cos(a), 0.0, sin(a)), true, false, true, 2.0)
 		# 石环与地图边界外墙的接缝补墙，外周不留缝
 		if c.x < 0.0:
-			_add_wall(Vector3(-63, 0, 57.5), Vector3(1, 0, 0), true)
-			_add_wall(Vector3(-57.5, 0, 63), Vector3(0, 0, -1), true)
+			_add_wall(Vector3(-63, 0, 57.5), Vector3(1, 0, 0), true, false, true, 2.0)
+			_add_wall(Vector3(-57.5, 0, 63), Vector3(0, 0, -1), true, false, true, 2.0)
 		else:
-			_add_wall(Vector3(63, 0, -57.5), Vector3(-1, 0, 0), true)
-			_add_wall(Vector3(57.5, 0, -63), Vector3(0, 0, 1), true)
+			_add_wall(Vector3(63, 0, -57.5), Vector3(-1, 0, 0), true, false, true, 2.0)
+			_add_wall(Vector3(57.5, 0, -63), Vector3(0, 0, 1), true, false, true, 2.0)
 
 ## 外周城墙落点：避开泉水（半径 5.25 的池子 + 边缘），其余按 force 放置
 func _add_outer_wall(pos: Vector3, facing: Vector3, len: float = 2.0, outer_style: bool = true) -> void:
@@ -2352,7 +2364,7 @@ var hero_configs = {
 		"name": "马超", "role": "刺客",
 		"max_health": 3482, "attack": 172, "attack_range": 325, 
 		"move_speed": 375, "max_mana": 4,
-		"skills": ["machao_q", "machao_w", "machao_r"], "summoner": "flash",
+		"skills": ["machao_q", "machao_w", "machao_r"], "summoner": "smite",
 		"hp_reg": 50
 	},
 	"铠": {
@@ -2637,6 +2649,8 @@ var sel_back_btn: Button = null
 var sel_skill_tip: PanelContainer = null
 var sel_skill_tip_title: Label = null
 var sel_skill_tip_body: Label = null
+var _skill_tip_probe: Hero = null
+var _skill_tip_probe_name: String = ""
 
 # 装饰倒计时环（仅选人页）：底环 + 缓慢旋转的金色进度弧
 class SelRing extends Control:
@@ -2719,6 +2733,13 @@ func _sel_skill_type(t: int) -> String:
 		6: return "护盾"
 	return "通用"
 
+# 选人/加载界面按玩家真实阵营上色（蓝方=蓝，红方=红）
+func sel_side_col() -> Color:
+	return UiKit.C_TEAM0 if Config.player_team == Config.Team.PLAYER else UiKit.C_TEAM1
+
+func sel_foe_col() -> Color:
+	return UiKit.C_TEAM1 if Config.player_team == Config.Team.PLAYER else UiKit.C_TEAM0
+
 # 立绘预览：切模型/职责色 + 左下角名称/标签/技能 chip（不改选人状态）
 func _refresh_sel_preview(hero_name: String) -> void:
 	if sel_prev_name == null: return
@@ -2754,16 +2775,24 @@ func _refresh_sel_preview(hero_name: String) -> void:
 			var chip := PanelContainer.new()
 			chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.58, 12))
 			var row := HBoxContainer.new()
+			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_theme_constant_override("separation", 7)
-			row.add_child(SelectArt.SkillGlyph.new(hero_name, sk, i, 38))
+			var glyph := SelectArt.SkillGlyph.new(hero_name, sk, i, 38)
+			glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(glyph)
 			var info := VBoxContainer.new()
+			info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			info.add_theme_constant_override("separation", 0)
-			info.add_child(_sel_label("%d  %s" % [i + 1, str(sk.skill_name) if sk != null else str(skills[i])], _sel_fs(UiKit.FS_MD), SEL_TEXT, false))
+			var name_lbl := _sel_label("%d  %s" % [i + 1, str(sk.skill_name) if sk != null else str(skills[i])], _sel_fs(UiKit.FS_MD), SEL_TEXT, false)
+			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			info.add_child(name_lbl)
 			var meta := _sel_skill_type(int(sk.type) if sk != null else 0)
 			if sk != null:
 				meta += " · 冷却 %ds" % int(round(sk.cooldown))
 				if sk.mana_cost > 0: meta += " · 法力 %d" % sk.mana_cost
-			info.add_child(_sel_label(meta, _sel_fs(UiKit.FS_XS), SEL_DIM, false))
+			var meta_lbl := _sel_label(meta, _sel_fs(UiKit.FS_XS), SEL_DIM, false)
+			meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			info.add_child(meta_lbl)
 			row.add_child(info)
 			chip.mouse_filter = Control.MOUSE_FILTER_STOP
 			chip.mouse_entered.connect(_show_skill_tip.bind(sk, i))
@@ -2777,6 +2806,8 @@ func _refresh_sel_preview(hero_name: String) -> void:
 # 王者式全屏选人：顶部阶段条 + 左右 5v5 席位 + 中央 3D 立绘 + 底部英雄条/召唤师/确认
 func _show_hero_select_ui():
 	# —— 进入选人：读取玩家固定分路 + 随机号位 + 重置 BP 状态 ——
+	Config.reset_player_team()
+	Config.roll_player_team()
 	sel_lane_role = PlayerPrefs.get_lane_role()
 	sel_lane_name = PlayerPrefs.get_lane()
 	if sel_lane_name == "":
@@ -2825,7 +2856,7 @@ func _show_hero_select_ui():
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(bg)
-	UiKit.make_backdrop(root, UiKit.C_TEAM0, 1.0)
+	UiKit.make_backdrop(root, sel_side_col(), 1.0)
 	root.move_child(bg, 0)
 	# 全屏边距：左右 16 / 上下 8
 	var margin := MarginContainer.new()
@@ -2851,7 +2882,7 @@ func _show_hero_select_ui():
 	top.name = "SelectTop"
 	top.custom_minimum_size = Vector2(0, 92)
 	# 收紧上下内边距，确保阶段块文字不把 92 高撑开
-	var top_style := UiKit.skin_card(UiKit.C_TEAM0, false, 0.5)
+	var top_style := UiKit.skin_card(sel_side_col(), false, 0.5)
 	top_style.content_margin_top = 2
 	top_style.content_margin_bottom = 2
 	top.add_theme_stylebox_override("panel", top_style)
@@ -2862,7 +2893,7 @@ func _show_hero_select_ui():
 	var our_tag := VBoxContainer.new()
 	our_tag.alignment = BoxContainer.ALIGNMENT_CENTER
 	our_tag.custom_minimum_size = Vector2(64, 0)
-	our_tag.add_child(_sel_label("我方", _sel_fs(UiKit.FS_SM), UiKit.C_TEAM0, false))
+	our_tag.add_child(_sel_label("我方", _sel_fs(UiKit.FS_SM), sel_side_col(), false))
 	our_tag.add_child(_sel_label("5 席", _sel_fs(UiKit.FS_XS), SEL_DIM, false))
 	top_row.add_child(our_tag)
 	for i in 5:
@@ -2885,7 +2916,7 @@ func _show_hero_select_ui():
 	var foe_tag := VBoxContainer.new()
 	foe_tag.alignment = BoxContainer.ALIGNMENT_CENTER
 	foe_tag.custom_minimum_size = Vector2(64, 0)
-	foe_tag.add_child(_sel_label("敌方", _sel_fs(UiKit.FS_SM), UiKit.C_TEAM1, false))
+	foe_tag.add_child(_sel_label("敌方", _sel_fs(UiKit.FS_SM), sel_foe_col(), false))
 	foe_tag.add_child(_sel_label("5 席", _sel_fs(UiKit.FS_XS), SEL_DIM, false))
 	top_row.add_child(foe_tag)
 	# —— 中部 expand：左席位 / 中央立绘 / 右席位 ——
@@ -3011,7 +3042,7 @@ func _show_hero_select_ui():
 	sel_pick_panel = PanelContainer.new()
 	sel_pick_panel.name = "SelectPickPanel"
 	sel_pick_panel.custom_minimum_size = Vector2(minf(1560.0, get_viewport().get_visible_rect().size.x * 0.88), 0)
-	var pick_style := UiKit.skin_card(UiKit.C_TEAM0, false, 0.94)
+	var pick_style := UiKit.skin_card(sel_side_col(), false, 0.94)
 	pick_style.content_margin_left = 18
 	pick_style.content_margin_right = 18
 	pick_style.content_margin_top = 12
@@ -3189,8 +3220,8 @@ func _show_hero_select_ui():
 	sel_skill_tip.name = "SelectSkillTip"
 	sel_skill_tip.visible = false
 	sel_skill_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	sel_skill_tip.custom_minimum_size = Vector2(380, 0)
-	sel_skill_tip.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_TEAM0, false, 0.96))
+	sel_skill_tip.custom_minimum_size = Vector2(430, 0)
+	sel_skill_tip.add_theme_stylebox_override("panel", UiKit.skin_card(sel_side_col(), false, 0.96))
 	var tip_v := VBoxContainer.new()
 	tip_v.add_theme_constant_override("separation", 4)
 	sel_skill_tip.add_child(tip_v)
@@ -3198,7 +3229,7 @@ func _show_hero_select_ui():
 	tip_v.add_child(sel_skill_tip_title)
 	sel_skill_tip_body = _sel_label("", _sel_fs(UiKit.FS_XS), SEL_TEXT, false)
 	sel_skill_tip_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sel_skill_tip_body.custom_minimum_size = Vector2(340, 0)
+	sel_skill_tip_body.custom_minimum_size = Vector2(390, 0)
 	tip_v.add_child(sel_skill_tip_body)
 	root.add_child(sel_skill_tip)
 	# 先入树让 HeroPreview 建好 SubViewport，再刷新立绘/席位/英雄条/BP 流程
@@ -3236,9 +3267,9 @@ func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	if kind == 0:
 		sty = UiKit.skin_card(UiKit.C_GOLD, true, 0.9)
 	elif kind == 1:
-		sty = UiKit.skin_chip(UiKit.C_TEAM0, 0.75)
+		sty = UiKit.skin_chip(sel_side_col(), 0.75)
 	else:
-		sty = UiKit.skin_chip(UiKit.C_TEAM1, 0.75)
+		sty = UiKit.skin_chip(sel_foe_col(), 0.75)
 	sty.content_margin_top = 2
 	sty.content_margin_bottom = 2
 	slot.add_theme_stylebox_override("panel", sty)
@@ -3246,7 +3277,7 @@ func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	h.add_theme_constant_override("separation", 8)
 	h.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slot.add_child(h)
-	var accent := UiKit.C_GOLD if kind == 0 else (UiKit.C_TEAM0 if kind == 1 else UiKit.C_TEAM1)
+	var accent := UiKit.C_GOLD if kind == 0 else (sel_side_col() if kind == 1 else sel_foe_col())
 	var avatar = SelectArt.Avatar.new("", accent, 34)
 	h.add_child(avatar)
 	if kind == 2:
@@ -3279,15 +3310,15 @@ func _create_team_seat(idx: int, kind: int) -> PanelContainer:
 	if kind == 0:
 		seat_sty = UiKit.skin_card(UiKit.C_GOLD, true, 0.9)
 	elif kind == 1:
-		seat_sty = UiKit.skin_chip(UiKit.C_TEAM0, 0.72)
+		seat_sty = UiKit.skin_chip(sel_side_col(), 0.72)
 	else:
-		seat_sty = UiKit.skin_chip(UiKit.C_TEAM1, 0.72)
+		seat_sty = UiKit.skin_chip(sel_foe_col(), 0.72)
 	seat_sty.content_margin_left = 8
 	seat_sty.content_margin_right = 8
 	seat_sty.content_margin_top = 2
 	seat_sty.content_margin_bottom = 2
 	slot.add_theme_stylebox_override("panel", seat_sty)
-	var accent := UiKit.C_GOLD if kind == 0 else (UiKit.C_TEAM0 if kind == 1 else UiKit.C_TEAM1)
+	var accent := UiKit.C_GOLD if kind == 0 else (sel_side_col() if kind == 1 else sel_foe_col())
 	var seat_h := HBoxContainer.new()
 	seat_h.add_theme_constant_override("separation", 6)
 	seat_h.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -3378,36 +3409,210 @@ func _on_back_to_pick() -> void:
 func _tip_dist(v: float) -> String:
 	return "%.1f" % (v * 0.01) if v > 20.0 else "%.1f" % v
 
-# 技能悬浮详情（名称 / 类型 / 冷却 / 伤害 / 范围 / 控制效果）
+# 选人页技能悬浮提示用的“裸装 1 级英雄”探针：只用于按真实公式算数值，不进场、不画模型。
+func _skill_tip_probe_for(hero_name: String) -> Hero:
+	if _skill_tip_probe != null and _skill_tip_probe_name == hero_name:
+		return _skill_tip_probe
+	var cfg: Dictionary = hero_configs.get(hero_name, {})
+	if cfg.is_empty():
+		return null
+	var h := Hero.new()
+	h.display_name = hero_name
+	h.team = int(Config.player_team)
+	h.level = 1
+	var hp := maxf(1.0, float(cfg.get("max_health", 3300.0)))
+	h.base_health = hp
+	h.max_health = hp
+	h.health = hp
+	h.actual_max_health = hp
+	var atk := float(cfg.get("attack", 170.0))
+	h.base_attack = atk
+	h.attack = atk
+	h.actual_attack_damage = atk
+	h.bonus_attack = 0.0
+	h.base_ability_power = 0.0
+	h.ability_power = 0.0
+	h.actual_ability_power = 0.0
+	h.bonus_health = 0.0
+	h.bonus_move_speed = 0.0
+	h.skill_levels = [1, 1, 1]
+	h.donghuang_orbs = 3          # 东皇二技能按满能量体预览发数
+	h.taiyi_q_timer = 5.0         # 太乙一技能按满蓄力预览伤害
+	_skill_tip_probe = h
+	_skill_tip_probe_name = hero_name
+	return h
+
+func _skill_tip_max_level(idx: int) -> int:
+	if idx >= 3: return 1
+	return Hero.SKILL_MAX_LEVEL if idx < 2 else Hero.ULTIMATE_MAX_LEVEL
+
+func _skill_tip_damage_at(probe: Hero, idx: int, lv: int) -> Dictionary:
+	if probe == null or idx < 0 or idx >= probe.skill_levels.size():
+		return {}
+	probe.skill_levels[idx] = lv
+	return SkillDatabase.get_skill_icon_damage(probe, idx)
+
+func _skill_tip_fmt_damage(d: Dictionary) -> String:
+	if not bool(d.get("valid", false)):
+		return ""
+	var parts: Array = []
+	var dm := int(d.get("dmg", 0))
+	if dm > 0:
+		parts.append("%s %d" % ["法术" if bool(d.get("magic", false)) else "物理", dm])
+	if d.has("dmg2"):
+		var dm2 := int(d.get("dmg2", 0))
+		if dm2 > 0:
+			parts.append("%s %d" % ["法术" if bool(d.get("magic2", false)) else "物理", dm2])
+	return " / ".join(parts)
+
+func _skill_tip_raw_damage(sk: Skill) -> String:
+	if sk == null:
+		return ""
+	var parts: Array = []
+	if sk.phy_damage > 0.0:
+		parts.append("物理 %d" % int(round(sk.phy_damage)))
+	var mag := maxf(sk.mag_damage, sk.damage)
+	if mag > 0.0:
+		parts.append("法术 %d" % int(round(mag)))
+	return " / ".join(parts)
+
+func _skill_tip_damage_text(sk: Skill, probe: Hero, idx: int, max_lv: int) -> String:
+	if probe != null:
+		var s1 := _skill_tip_fmt_damage(_skill_tip_damage_at(probe, idx, 1))
+		var sm := _skill_tip_fmt_damage(_skill_tip_damage_at(probe, idx, max_lv))
+		if s1 == "" and sm == "":
+			s1 = _skill_tip_raw_damage(sk)
+		if sm != "" and sm != s1:
+			return "伤害（裸装）：%s（技能1级）→ %s（技能满级）" % [s1, sm]
+		if s1 != "":
+			return "伤害（裸装）：%s" % s1
+	var raw := _skill_tip_raw_damage(sk)
+	return "伤害：%s" % raw if raw != "" else ""
+
+func _skill_tip_fx(probe: Hero, idx: int, lv: int) -> Dictionary:
+	var res := {"count": 0, "unit": "", "lines": [], "texts": []}
+	if probe == null or idx < 0 or idx >= probe.skill_levels.size():
+		return res
+	probe.skill_levels[idx] = lv
+	var fx: Dictionary = SkillDatabase.get_skill_fx(probe, idx)
+	res["count"] = int(fx.get("count", 0))
+	res["unit"] = str(fx.get("unit", ""))
+	var lines: Array = []
+	for e in fx.get("fx", []):
+		var line := _skill_tip_effect_text(e)
+		if line != "":
+			lines.append(line)
+	res["lines"] = lines
+	res["texts"] = fx.get("texts", [])
+	return res
+
+func _skill_tip_effect_text(e: Dictionary) -> String:
+	var t := str(e.get("t", ""))
+	var v := float(e.get("v", 0.0))
+	var d := float(e.get("d", 0.0))
+	match t:
+		"slow": return "减速 %d%% · %.1f秒" % [int(round(v)), d]
+		"selfspeed": return "移速 +%d%% · %.1f秒" % [int(round(v)), d]
+		"msup": return "移速 +%d · %.1f秒" % [int(round(v)), d]
+		"stun": return "眩晕 %.1f秒" % v
+		"knockup": return "击飞 %.1f秒" % v
+		"freeze": return "冰冻 %.1f秒" % v
+		"suppress": return "压制 %.1f秒" % v
+		"bt": return "霸体 %.1f秒" % v
+		"unsel": return "无法选中 %.1f秒" % v
+		"shield": return "护盾 %d" % int(round(v))
+		"heal": return "回复 %d" % int(round(v))
+		"defup": return "双抗 +%d · %.1f秒" % [int(round(v)), d]
+		"defdn": return "双防 -%d%% · %.1f秒" % [int(round(v)), d]
+		"armup": return "护甲 +%d · %.1f秒" % [int(round(v)), d]
+		"armdn": return "护甲 -%d%% · %.1f秒" % [int(round(v)), d]
+		"armred": return "护甲 -%d · %.1f秒" % [int(round(v)), d]
+		"mrup": return "魔抗 +%d · %.1f秒" % [int(round(v)), d]
+		"mrdn": return "魔抗 -%d · %.1f秒" % [int(round(v)), d]
+		"asup": return "攻速 +%d%% · %.1f秒" % [int(round(v)), d]
+		"asdn": return "攻速 -%d%% · %.1f秒" % [int(round(v)), d]
+		"atkdn": return "攻击 -%d%% · %.1f秒" % [int(round(v)), d]
+		"cleanse": return "净化控制"
+	return ""
+
+func _skill_tip_raw_effects(sk: Skill) -> String:
+	if sk == null:
+		return ""
+	var parts: Array = []
+	if sk.applies_stun > 0.0: parts.append("眩晕 %.1f秒" % sk.applies_stun)
+	if sk.applies_knockup > 0.0: parts.append("击飞 %.1f秒" % sk.applies_knockup)
+	if sk.applies_slow > 0.0: parts.append("减速 %d%% · %.1f秒" % [int(round(sk.applies_slow * 100.0)), sk.slow_duration])
+	return "；".join(parts)
+
+# 技能悬浮详情（名称 / 类型 / 冷却 / 具体伤害与逐级成长 / 弹数 / 控制与增益数值 / 范围）
+func _build_skill_tip_lines(sk: Skill, idx: int) -> Array:
+	var lines: Array = []
+	if sk != null:
+		var max_lv := _skill_tip_max_level(idx)
+		var meta := "类型：%s · 冷却 %.1fs" % [_sel_skill_type(int(sk.type)), sk.cooldown]
+		var cd_max := maxf(0.0, sk.cooldown - sk.cd_bonus * float(max_lv - 1))
+		if absf(cd_max - sk.cooldown) > 0.05:
+			meta += "（满级 %.1fs）" % cd_max
+		if sk.mana_cost > 0:
+			var mana_max := maxi(0, sk.mana_cost - int(round(sk.power_bonus * float(max_lv - 1))))
+			meta += " · 法力 %d" % sk.mana_cost
+			if mana_max != sk.mana_cost:
+				meta += "（满级 %d）" % mana_max
+		lines.append(meta)
+
+		var probe := _skill_tip_probe_for(selected_hero_type)
+		var dmg_text := _skill_tip_damage_text(sk, probe, idx, max_lv)
+		if dmg_text != "":
+			lines.append(dmg_text)
+
+		var f1 := _skill_tip_fx(probe, idx, 1)
+		var fm := _skill_tip_fx(probe, idx, max_lv)
+		var c1 := int(f1["count"])
+		var cm := int(fm["count"])
+		if c1 > 1 or cm > 1:
+			var unit := str(fm["unit"]) if str(fm["unit"]) != "" else str(f1["unit"])
+			if c1 != cm and c1 > 1 and cm > 1:
+				lines.append("弹数：%d%s（技能1级）→ %d%s（技能满级）" % [c1, unit, cm, unit])
+			else:
+				lines.append("弹数：%d%s" % [maxi(c1, cm), unit])
+
+		var e1: Array = f1["lines"]
+		var em: Array = fm["lines"]
+		var s1 := "；".join(e1)
+		var sm := "；".join(em)
+		if s1 != "" or sm != "":
+			if s1 == sm:
+				lines.append("效果：" + s1)
+			else:
+				if s1 != "": lines.append("技能1级效果：" + s1)
+				if sm != "": lines.append("技能满级效果：" + sm)
+		else:
+			var raw_fx := _skill_tip_raw_effects(sk)
+			if raw_fx != "": lines.append("效果：" + raw_fx)
+
+		var texts: Array = fm.get("texts", [])
+		if texts.is_empty():
+			texts = f1.get("texts", [])
+		for txt in texts:
+			lines.append("· " + str(txt))
+
+		if sk.shield_amount > 0.0 and sk.skill_name != "大变活人":
+			lines.append("护盾 %d" % int(round(sk.shield_amount)))
+		if sk.restore > 0:
+			var rest_max := sk.restore + int(round(sk.restore_bonus * float(max_lv - 1)))
+			lines.append("可存储 %d 层（满级 %d 层）" % [sk.restore, rest_max])
+		if sk.cast_range > 0.0: lines.append("施法距离 %s 米" % _tip_dist(sk.cast_range))
+		if sk.bullet_range > 0.0: lines.append("弹道距离 %s 米" % _tip_dist(sk.bullet_range))
+		if sk.radius > 0.0: lines.append("范围半径 %s 米" % _tip_dist(sk.radius))
+		if sk.self_displacement > 0.0: lines.append("位移 %s 米" % _tip_dist(sk.self_displacement))
+		if sk.duration > 0.0: lines.append("持续 %.1f 秒" % sk.duration)
+	return lines
+
 func _show_skill_tip(sk: Skill, idx: int) -> void:
 	if sel_skill_tip == null or not is_instance_valid(sel_skill_tip): return
 	if sel_stage_picking: return
 	sel_skill_tip_title.text = "%d  %s" % [idx + 1, sk.skill_name if sk != null else "技能"]
-	var lines: Array = []
-	if sk != null:
-		lines.append("类型：%s" % _sel_skill_type(int(sk.type)))
-		var meta := "冷却 %ds" % int(round(sk.cooldown))
-		if sk.mana_cost > 0: meta += " · 法力 %d" % sk.mana_cost
-		lines.append(meta)
-		if sk.phy_damage > 0.0:
-			var s1 := "物理伤害 %d" % int(round(sk.phy_damage))
-			if sk.phy_bonus_ratio > 0.0: s1 += "（+%d%% 额外AD）" % int(round(sk.phy_bonus_ratio * 100.0))
-			lines.append(s1)
-		var mag := maxf(sk.mag_damage, sk.damage)
-		if mag > 0.0:
-			var s2 := "法术伤害 %d" % int(round(mag))
-			if sk.mag_bonus_ratio > 0.0: s2 += "（+%d%% 法强）" % int(round(sk.mag_bonus_ratio * 100.0))
-			lines.append(s2)
-		if sk.shield_amount > 0.0: lines.append("护盾 %d" % int(round(sk.shield_amount)))
-		if sk.restore > 0: lines.append("回复 %d" % sk.restore)
-		if sk.cast_range > 0.0: lines.append("施法距离 %s 米" % _tip_dist(sk.cast_range))
-		if sk.radius > 0.0: lines.append("范围半径 %s 米" % _tip_dist(sk.radius))
-		if sk.self_displacement > 0.0: lines.append("位移 %s 米" % _tip_dist(sk.self_displacement))
-		if sk.duration > 0.0: lines.append("持续 %.1f 秒" % sk.duration)
-		if sk.applies_stun > 0.0: lines.append("眩晕 %.1f 秒" % sk.applies_stun)
-		if sk.applies_knockup > 0.0: lines.append("击飞 %.1f 秒" % sk.applies_knockup)
-		if sk.applies_slow > 0.0: lines.append("减速 %d%% · %.1f 秒" % [int(round(sk.applies_slow * 100.0)), sk.slow_duration])
-		if sk.is_channeling: lines.append("引导施法")
+	var lines := _build_skill_tip_lines(sk, idx)
 	sel_skill_tip_body.text = "\n".join(lines) if not lines.is_empty() else "（无详细数据）"
 	sel_skill_tip.visible = true
 	sel_skill_tip.reset_size()
@@ -4134,6 +4339,7 @@ func _on_hero_selected(type: String, card: Panel = null, role_color: Color = Col
 	# 未手动改过召唤师时，换英雄自动跟随该英雄的推荐召唤师
 	_apply_default_summoner(type)
 	_refresh_sel_preview(type)
+	_load_build_for_hero(type)   # 右栏「出装」按该英雄载入推荐/已保存备战方案（切换英雄同刷）
 	_set_sel_stage(false)
 	_update_selection_summary()
 	_update_confirm_button_style()
@@ -4230,7 +4436,7 @@ func _on_confirm():
 	if selected_hero_type != "":
 		_start_game(selected_hero_type, selected_summoner)
 func add_team_kill(team: int):
-	if team == Config.Team.PLAYER:
+	if team == Config.player_team:
 		team_player_kills += 1
 	else:
 		team_enemy_kills += 1
@@ -4239,11 +4445,11 @@ func _update_team_stats():
 	team_enemy_gold = 0; team_enemy_exp = 0; 
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity is Hero:
-			if entity.team == Config.Team.PLAYER:
+			if entity.team == Config.player_team:
 				team_player_gold += entity.total_gold_earned
 				team_player_exp += entity.exp
 				# 人头数需要另外记录（可在击杀时累加到团队变量）
-			elif entity.team == Config.Team.ENEMY:
+			elif entity.team == Config.foe_team():
 				team_enemy_gold += entity.total_gold_earned
 				team_enemy_exp += entity.exp
 # 全场MVP评分：在全部存活/已阵亡英雄中按综合表现归一化打分（权重与结算面板一致，跨队伍比较）
@@ -4420,7 +4626,7 @@ func _process(delta):
 		_cam_snap = true
 	elif hero and is_instance_valid(hero) and not hero.is_dead:
 		# 正常跟随英雄：跟随偏移（还原初始镜头 (0,12,8)，无放大；沿 -70° 视角射线）
-		var _follow_offset := Vector3(0, 12, 8)
+		var _follow_offset := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
 		# 玩家为兰陵王且隐身中：相机拉远/拉高25%（看得更广）；隐身结束自动恢复
 		if hero.display_name == "兰陵王" and hero.lanling_stealth_active:
 			_follow_offset *= 1.25
@@ -4432,6 +4638,8 @@ func _process(delta):
 		else:
 			cam.global_position = cam.global_position.lerp(target, 1.0 - exp(-12.0 * delta))
 		_apply_camera_shake(delta)
+	# 逆光：主光始终在相机水平正前方，补光在相机后方（随第一人称/换边旋转同步）
+	MapVisuals.update_backlight_for_camera(cam)
 	if not hero_selected:
 		return
 	
@@ -4493,7 +4701,7 @@ func _process(delta):
 	minimap.jungle_monsters = get_tree().get_nodes_in_group("jungle_monsters")
 	minimap.turrets = turrets   # 已经维护
 
-	minimap.player_team = Config.Team.PLAYER
+	minimap.player_team = Config.player_team
 	minimap.queue_redraw()# 需要在创建野怪时加入数组
 
 	# 胜利检测
@@ -4534,7 +4742,7 @@ func _update_vision(delta: float) -> void:
 		return
 
 	_vision_timer = 0.2
-	var player_team := Config.Team.PLAYER
+	var player_team := Config.player_team
 
 	# Collect friendly vision sources (heroes, minions, turrets)
 	var vision_sources: Array[GameEntity] = []
@@ -5054,7 +5262,7 @@ func _unhandled_input(event):
 		if is_instance_valid(hero) and not hero.is_dead:
 			var nearest_enemy: GameEntity = null
 			var nearest_dist := 99999.0
-			var atk_range := hero.attack_range * 0.01
+			var atk_range := hero._aa_engage_reach()
 			for entity in get_tree().get_nodes_in_group("entities"):
 				if not (entity is GameEntity) or entity.health <= 0 or entity.team == hero.team:
 					continue
@@ -5119,7 +5327,7 @@ func _set_camera_mode(first_person: bool):
 		# 恢复俯视视角（回到第三人称时硬设一次，避免从头部缓慢拉出）
 		_cam_snap = true
 		cam.fov = 70.0
-		cam.rotation_degrees = Vector3(-60, 0, 0)
+		cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
 		if is_instance_valid(hero) and hero.visual_mesh:
 			hero.visual_mesh.visible = true
 var game_over: bool = false
@@ -5139,7 +5347,7 @@ func crystal_destroyed(team: int):
 	else:
 		winner = Config.Team.PLAYER
 	# 胜负语音（host/离线；接管客户端由 NetResultPanel 收到结算广播时各自播）
-	SfxManager.play_announce("victory" if winner == Config.Team.PLAYER else "defeat")
+	SfxManager.play_announce("victory" if winner == Config.player_team else "defeat")
 	_show_game_over()
 
 func _show_game_over():
@@ -5150,18 +5358,15 @@ func _show_game_over():
 	add_child(panel)
 	panel.setup(self)
 func spawn_exp_orb(world_pos: Vector3, target: Hero, amount: int):
-	var orb = MeshInstance3D.new()
-	orb.mesh = SphereMesh.new()
-	orb.mesh.radius = 0.15
+	# 亮核 + 双层菲涅尔光晕；生成时弹性放大，再飞向目标英雄
+	var orb: Node3D = MeshFactory.create_exp_orb(0.16)
 	orb.position = world_pos + Vector3.UP * 1.0
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color.GREEN
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	orb.material_override = mat
+	orb.scale = Vector3(0.35, 0.35, 0.35)
 	add_child(orb)
 
 	var tween = create_tween()
-	tween.tween_property(orb, "position", target.global_position + Vector3.UP * 1.5, 0.5)
+	tween.tween_property(orb, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(orb, "position", target.global_position + Vector3.UP * 1.5, 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_callback(func():
 		target.add_exp(amount)
 		orb.queue_free()

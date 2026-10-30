@@ -36,7 +36,16 @@ const RECIPE := {
 	"杨玉环":   {"t": "lute", "a": Color(0.95, 0.62, 0.80), "b": Color(0.40, 0.18, 0.25), "l": 0.85},
 }
 
-static func attach(instance: Node3D, hero_name: String) -> void:
+# 近战英雄普攻距离(米)，随武器长度体现：与 BattleManager.hero_configs 对齐，
+# 联机客户端拿不到 config 时用它算武器长度（主机直接传真实 attack_range*0.01）
+const HERO_REACH := {
+	"吕布": 4.75, "夏侯惇": 4.75,
+	"亚瑟": 3.25, "马超": 3.25, "铠": 3.25, "不知火舞": 3.25, "李白": 3.25,
+	"兰陵王": 3.25, "张飞": 3.25, "刘禅": 3.25, "孙悟空": 3.25, "英睿": 3.25,
+	"大禹": 3.5, "太乙真人": 3.5,
+}
+
+static func attach(instance: Node3D, hero_name: String, reach_m: float = -1.0) -> void:
 	if instance == null or not is_instance_valid(instance):
 		return
 	if instance.has_meta("_hero_weapon"):
@@ -51,6 +60,16 @@ static func attach(instance: Node3D, hero_name: String) -> void:
 	var holder: Node3D = WeaponRigScript.new()
 	holder.name = "Weapon"
 	var node := _build(str(rp["t"]), rp["a"], rp["b"], s * float(rp["l"]))
+	# 长兵器按普攻距离加长：武器越长，普攻够得着的距离越远（握把在原点，只沿武器长轴拉伸）
+	if reach_m <= 0.0:
+		reach_m = float(HERO_REACH.get(hero_name, 0.0))
+	if reach_m > 0.0:
+		var top := _local_top(node)
+		if top > 0.35:
+			var want := clampf(reach_m - 1.25, 0.9, 6.5)
+			var mult := clampf(want / top, 1.0, 2.2)
+			node.scale = Vector3(1.0, mult, 1.0)
+			node.set_meta("reach_scale", mult)
 	holder.add_child(node)
 	# 优先绑到手臂骨（握在手中，随手臂动画摆动）
 	var skel := _find_skeleton(instance)
@@ -130,6 +149,19 @@ static func _collect_mats(node: Node, out: Array) -> void:
 		out.append((node as MeshInstance3D).material_override)
 	for c in node.get_children():
 		_collect_mats(c, out)
+
+
+# 武器从握把(原点)沿 +Y 的最远长度（构建单位≈米），用于按普攻距离决定加长倍率
+static func _local_top(node: Node, xf: Transform3D = Transform3D.IDENTITY) -> float:
+	var top := 0.0
+	if node is Node3D:
+		xf = xf * (node as Node3D).transform
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		var box: AABB = xf * (node as MeshInstance3D).mesh.get_aabb()
+		top = maxf(top, box.end.y)
+	for c in node.get_children():
+		top = maxf(top, _local_top(c, xf))
+	return top
 
 static func _style_of(t: String) -> String:
 	match t:

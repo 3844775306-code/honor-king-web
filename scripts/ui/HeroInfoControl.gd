@@ -158,7 +158,10 @@ func _draw():
 	var bx: float = center_x - bar_width * 0.5
 	var bh: float = bar_height
 	var hw: float = (hp / max_hp) * bar_width
-	var tc: Color = Color(1.0, 0.33, 0.264) if hero.team == 1 else (Color(0.0, 0.886, 1.0) if hero.is_ai else Color(0.0, 0.886, 0.431))
+	var _bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	var _is_self: bool = _bm != null and _bm.hero != null and is_instance_valid(_bm.hero) and _bm.hero == hero
+	# 玩家自己的血条恒为绿色（与阵营无关），其余按敌友相对上色
+	var tc: Color = Color(0.33, 0.95, 0.42) if _is_self else (Color(0.0, 0.886, 1.0) if Config.is_ally(hero.team) else Color(1.0, 0.33, 0.264))
 
 	# 投影（两层）
 	draw_rect(Rect2(bx + 3.0, y_offset + 5.0, bar_width, bh), Color(0, 0, 0, 0.22))
@@ -258,114 +261,137 @@ func _draw():
 			draw_rect(Rect2(bx, y_offset, mw, 1.5), Color(1, 1, 1, 0.45))
 		draw_rect(Rect2(bx, y_offset, bar_width, mh), Color(0.35, 0.62, 1.0, 0.5), false, 1.0)
 		y_offset += mh + 3.0
-	# 在 HeroInfoControl._draw 底部添加
-	y_offset += bar_height*0.5 + 2
-	if hero.display_name == "吕布":
-		var prog_ratio = hero.stat_timer / 8.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
-	if hero.display_name == "王昭君":
-		var prog_ratio = hero.wangzhaojun_combat_timer / 5.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
+	# ---- 血条下方状态条：统一玻璃槽 + 渐变填充 + 描边 + 标签/数值 ----
+	y_offset += bar_height * 0.5 + 4.0
+	_draw_status_bars(center_x, y_offset)
 
-	if hero.display_name == "马超":
-		var prog_ratio = hero.stat_timer / 8.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, 2):
-			var x = center_x - bar_width/2 + (i *0.5) * bar_width	
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
 
-	if hero.display_name == "不知火舞":
-		var prog_ratio = hero.stat_timer / 5.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
-	if hero.display_name == "沈梦溪":
-		var prog_ratio = hero.stat / 10
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.ORANGE)
-		for i in range(1, hero.stat+1):
-			var x = center_x - bar_width/2 + (i *0.1) * bar_width
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	if hero.display_name == "狄仁杰":
-		var prog_ratio = hero.stat / 5
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, hero.stat+1):
-			var x = center_x - bar_width/2 + (i *0.2) * bar_width		
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	if hero.display_name == "元流之子":
-		var prog_ratio = hero.yuanliu_flow / 9.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, hero.yuanliu_flow+1):
-			var x = center_x - bar_width/2 + (i *0.11) * bar_width		
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	if hero.display_name == "英睿":
-		var prog_ratio = hero.yingrui_aa_count / 3.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, hero.yingrui_aa_count+1):
-			var x = center_x - bar_width/2 + (i *0.33) * bar_width		
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	if hero.display_name == "后羿":
-		var prog_ratio = hero.stat / 3.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, hero.stat+1):
-			var x = center_x - bar_width/2 + (i *0.33) * bar_width		
-			
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	if hero.display_name == "鲁班七号":
-		var prog_ratio = hero.luban_passive_stacks / 5.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		for i in range(1, hero.luban_passive_stacks+1):
-			var x = center_x - bar_width/2 + (i *0.2) * bar_width		
-			
-			draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
 
-	if hero.display_name == "李白":
-		
-		var prog_ratio = hero.libai_sword_auras / 4.0 if not hero.libai_xia_active else hero.libai_xia_timer/5.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.WHITE)
-		if not hero.libai_xia_active :
-			for i in range(1, hero.libai_sword_auras+1):
-				var x = center_x - bar_width/2 + (i *0.25) * bar_width		
-				
-				draw_line(Vector2(x, y_offset), Vector2(x, y_offset + 4), Color.BLACK, 2)
-	# 太乙Q爆炸倒计时条
-	if hero.display_name == "太乙真人" and hero.taiyi_q_channeling:
-		var prog_ratio = hero.taiyi_q_timer / 5.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
+# ---- 血条下方状态条：统一样式，替代原先各英雄手绘的 4px 黑条 ----
+var _status_sb_cache: Dictionary = {}
+
+func _status_entry(label: String, ratio: float, col: Color, segments: int, value: String, pulse: bool = false) -> Dictionary:
+	return {
+		"label": label,
+		"ratio": clampf(ratio, 0.0, 1.0),
+		"color": col,
+		"segments": segments,
+		"value": value,
+		"pulse": pulse,
+	}
+
+func _status_entries() -> Array:
+	var out: Array = []
+	if not hero:
+		return out
+	match hero.display_name:
+		"吕布":
+			if hero.stat_timer > 0.0:
+				out.append(_status_entry("附魔", hero.stat_timer / 8.0, Color(0.74, 0.38, 1.0), 0, "%.1fs" % hero.stat_timer, true))
+		"王昭君":
+			if hero.wangzhaojun_combat_timer > 0.0:
+				out.append(_status_entry("冰霜", hero.wangzhaojun_combat_timer / 5.0, Color(0.42, 0.80, 1.0), 0, "%.1fs" % hero.wangzhaojun_combat_timer, true))
+		"马超":
+			if hero.stat_timer > 0.0:
+				out.append(_status_entry("枪意", hero.stat_timer / 8.0, Color(0.72, 0.94, 1.0), 0, "%.1fs" % hero.stat_timer, true))
+		"不知火舞":
+			if hero.stat_timer > 0.0:
+				out.append(_status_entry("忍锋", hero.stat_timer / 5.0, Color(1.0, 0.52, 0.28), 0, "%.1fs" % hero.stat_timer, true))
+		"沈梦溪":
+			if hero.stat > 0.0:
+				out.append(_status_entry("炸弹", hero.stat / 10.0, Color(1.0, 0.66, 0.18), 10, "%d/10" % int(round(hero.stat)), false))
+		"狄仁杰":
+			if hero.stat > 0.0:
+				out.append(_status_entry("被动", hero.stat / 5.0, Color(1.0, 0.78, 0.30), 5, "%d/5" % int(round(hero.stat)), false))
+		"元流之子":
+			if hero.yuanliu_flow > 0:
+				out.append(_status_entry("流", hero.yuanliu_flow / 9.0, Color(0.30, 0.94, 0.82), 9, "%d/9" % hero.yuanliu_flow, false))
+		"英睿":
+			if hero.yingrui_aa_count > 0:
+				out.append(_status_entry("冰爽", hero.yingrui_aa_count / 3.0, Color(0.62, 0.86, 1.0), 3, "%d/3" % hero.yingrui_aa_count, false))
+		"后羿":
+			if hero.stat > 0.0:
+				out.append(_status_entry("惩戒", hero.stat / 3.0, Color(1.0, 0.56, 0.18), 3, "%d/3" % int(round(hero.stat)), false))
+		"鲁班七号":
+			if hero.luban_passive_stacks > 0:
+				out.append(_status_entry("扫射", hero.luban_passive_stacks / 5.0, Color(1.0, 0.70, 0.24), 5, "%d/5" % hero.luban_passive_stacks, false))
+		"李白":
+			if hero.libai_xia_active:
+				if hero.libai_xia_timer > 0.0:
+					out.append(_status_entry("侠客行", hero.libai_xia_timer / 5.0, Color(0.78, 0.92, 1.0), 0, "%.1fs" % hero.libai_xia_timer, true))
+			elif hero.libai_sword_auras > 0:
+				out.append(_status_entry("剑意", hero.libai_sword_auras / 4.0, Color(0.62, 0.88, 1.0), 4, "%d/4" % hero.libai_sword_auras, false))
+		"太乙真人":
+			if hero.taiyi_q_channeling and hero.taiyi_q_timer > 0.0:
+				out.append(_status_entry("引爆", hero.taiyi_q_timer / 5.0, Color(0.80, 0.50, 1.0), 0, "%.1fs" % hero.taiyi_q_timer, true))
 	if hero.is_teleporting:
-		var prog_ratio = hero.teleport_progress / 3.0
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
+		var tr := clampf(hero.teleport_progress / 3.0, 0.0, 1.0)
+		out.append(_status_entry("传送", tr, Color(0.34, 0.72, 1.0), 0, "%d%%" % int(tr * 100.0), true))
 	if hero.is_recalling:
-		var prog_ratio = 1.0 - (hero.recall_timer / Hero.RECALL_DURATION)
-		var prog_width = bar_width * prog_ratio
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, bar_width, 4), Color.BLACK)
-		draw_rect(Rect2(center_x - bar_width/2, y_offset, prog_width, 4), Color.PURPLE)
-		y_offset += 6		
+		var rr := clampf(1.0 - hero.recall_timer / Hero.RECALL_DURATION, 0.0, 1.0)
+		out.append(_status_entry("回城", rr, Color(0.50, 0.96, 0.72), 0, "%.1fs" % hero.recall_timer, true))
+	return out
 
+func _status_style(bg: Color, border: Color, border_w: int, radius: int, glow: Color = Color(0, 0, 0, 0)) -> StyleBoxFlat:
+	var key := "%s|%s|%d|%d|%s" % [bg.to_html(true), border.to_html(true), border_w, radius, glow.to_html(true)]
+	if _status_sb_cache.has(key):
+		return _status_sb_cache[key]
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.border_color = border
+	sb.set_border_width_all(border_w)
+	sb.set_corner_radius_all(radius)
+	sb.corner_detail = 4
+	sb.anti_aliasing = true
+	if glow.a > 0.0:
+		sb.shadow_color = Color(glow.r, glow.g, glow.b, 0.36)
+		sb.shadow_size = 4
+		sb.shadow_offset = Vector2.ZERO
+	_status_sb_cache[key] = sb
+	return sb
 
+func _draw_status_bar(cx: float, y: float, sh: float, e: Dictionary) -> void:
+	var w := bar_width
+	var bx := cx - w * 0.5
+	var col: Color = e["color"]
+	var ratio: float = e["ratio"]
+	var fillw := w * ratio
+	var frame := _status_style(Color(0.015, 0.022, 0.04, 0.94), Color(col.r, col.g, col.b, 0.42), 1, 5)
+	var track := _status_style(Color(0.055, 0.068, 0.10, 0.96), Color(col.r, col.g, col.b, 0.20), 1, 4)
+	draw_style_box(frame, Rect2(bx - 1.5, y - 1.5, w + 3.0, sh + 3.0))
+	draw_style_box(track, Rect2(bx, y, w, sh))
+	if fillw > 0.5:
+		var fill := _status_style(Color(col.r * 0.52, col.g * 0.52, col.b * 0.52, 0.98), col.lightened(0.25), 1, 4, col)
+		draw_style_box(fill, Rect2(bx, y, fillw, sh))
+		draw_rect(Rect2(bx + 2.0, y + 1.5, maxf(fillw - 4.0, 0.0), sh * 0.34), Color(1, 1, 1, 0.18))
+		draw_rect(Rect2(bx + 2.0, y + sh - 2.5, maxf(fillw - 4.0, 0.0), 1.5), Color(0, 0, 0, 0.24))
+		if fillw > 3.0:
+			var cap_a := 0.62
+			if e["pulse"]:
+				cap_a = 0.48 + 0.34 * (0.5 + 0.5 * sin(float(Time.get_ticks_msec()) * 0.006))
+			draw_rect(Rect2(bx + fillw - 2.0, y + 2.0, 2.0, sh - 4.0), Color(1, 1, 1, cap_a))
+			draw_rect(Rect2(bx + fillw - 5.0, y + 2.0, 3.0, sh - 4.0), Color(col.r, col.g, col.b, 0.22))
+	var segs: int = e["segments"]
+	if segs > 1:
+		for i in range(1, segs):
+			var sx := bx + w * float(i) / float(segs)
+			draw_line(Vector2(sx, y + 2.0), Vector2(sx, y + sh - 2.0), Color(0, 0, 0, 0.56), 1.0)
+			draw_line(Vector2(sx + 1.0, y + 2.0), Vector2(sx + 1.0, y + sh - 2.0), Color(1, 1, 1, 0.09), 1.0)
+	if e["pulse"]:
+		var pulse_sb := _status_style(Color(0, 0, 0, 0), Color(col.r, col.g, col.b, 0.34), 1, 5)
+		draw_style_box(pulse_sb, Rect2(bx - 2.5, y - 2.5, w + 5.0, sh + 5.0))
+	var fs := 11
+	_draw_text_shadow(_bold(), Vector2(bx + 7.0, y + sh - 2.5), str(e["label"]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.92, 0.96, 1.0, 0.96), 3)
+	_draw_text_shadow(_bold(), Vector2(bx + 6.0, y + sh - 2.5), str(e["value"]), HORIZONTAL_ALIGNMENT_RIGHT, w - 12.0, fs, Color(0.88, 0.93, 1.0, 0.92), 3)
+
+func _draw_status_bars(cx: float, top: float) -> void:
+	var entries := _status_entries()
+	if entries.is_empty():
+		return
+	var sh := 12.0
+	var gap := 4.0
+	for i in range(entries.size()):
+		_draw_status_bar(cx, top + float(i) * (sh + gap), sh, entries[i])
 
 # 血量过渡
 var damage_flash_amount: float = 0.0

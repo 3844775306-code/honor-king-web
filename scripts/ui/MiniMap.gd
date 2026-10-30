@@ -177,7 +177,8 @@ func exit_teleport_mode():
 	size = original_size
 
 func _get_entity_at_minimap(local_pos: Vector2) -> GameEntity:
-	
+	if _flip180():
+		local_pos = Vector2(MINIMAP_SIZE - local_pos.x, MINIMAP_SIZE - local_pos.y)
 	var world_x = (local_pos.x / MINIMAP_SIZE - 0.5) * MAP_SIZE
 	var world_z = (local_pos.y / MINIMAP_SIZE - 0.5) * MAP_SIZE
 	var world_pos = Vector3(world_x, 0, world_z)
@@ -209,6 +210,8 @@ func _get_entity_at_minimap(local_pos: Vector2) -> GameEntity:
 func _local_to_world(local_pos: Vector2) -> Vector3:
 	if local_pos.x < 0 or local_pos.x > MINIMAP_SIZE or local_pos.y < 0 or local_pos.y > MINIMAP_SIZE:
 		return Vector3.ZERO
+	if _flip180():
+		local_pos = Vector2(MINIMAP_SIZE - local_pos.x, MINIMAP_SIZE - local_pos.y)
 	return Vector3((local_pos.x / MINIMAP_SIZE - 0.5) * MAP_SIZE, 0, (local_pos.y / MINIMAP_SIZE - 0.5) * MAP_SIZE)
 
 func add_teleport_line(from: Vector3, to: Vector3):
@@ -221,7 +224,10 @@ func add_teleport_line(from: Vector3, to: Vector3):
 func _draw():
 	# 预渲染地形底图（一次性生成，见 _ensure_terrain_texture）
 	_ensure_terrain_texture()
-	draw_texture_rect(_terrain_texture, Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), false)
+	if _flip180():
+		draw_texture_rect(_terrain_texture, Rect2(Vector2(MINIMAP_SIZE, MINIMAP_SIZE), Vector2(-MINIMAP_SIZE, -MINIMAP_SIZE)), false)
+	else:
+		draw_texture_rect(_terrain_texture, Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), false)
 
 	# ---- 草丛 / 墙体（静态地形装饰：压在地形上、单位下）----
 	# 已预烘焙为一张透明贴图（见 _bake_static_overlay），每帧仅 1 次绘制
@@ -271,8 +277,8 @@ func _draw():
 		MinimapDraw.draw_jungle(self, jpos, jname, seen)
 
 	# ---- 英雄（阵营色 + 朝向箭头 + 血量弧；本人白边；阵亡灰点 + 复活倒计时） ----
-	# 血环统一：我方恒绿 / 敌方恒红（弧长仍按血量比例，颜色不再随血量变化）
-	var ally_ring := Color(0.30, 0.95, 0.42)
+	# 血环统一：我方恒蓝 / 敌方恒红（弧长仍按血量比例，颜色不再随血量变化）
+	var ally_ring := Color(0.25, 0.85, 1.0)
 	var enemy_ring := Color(1.0, 0.28, 0.24)
 	for h in heroes:
 		if not is_instance_valid(h): continue
@@ -283,6 +289,8 @@ func _draw():
 		var dir := Vector2(sin(h.rotation.y), cos(h.rotation.y))
 		if h.velocity.length() > 0.2:
 			dir = Vector2(h.velocity.x, h.velocity.z)
+		if _flip180():
+			dir = -dir
 		var ring_col: Color = ally_ring if h.team == player_team else enemy_ring
 		MinimapDraw.draw_hero(self, pos, dir, base_col, hp_ratio, not h.is_ai, h.health <= 0.0, float(h.respawn_timer), str(h.display_name), ring_col)
 
@@ -302,7 +310,12 @@ func _draw():
 	MinimapDraw.draw_viewport(self, MinimapDraw.viewport_corners(get_viewport().get_camera_3d(), Callable(self, "_world_to_minimap")), is_teleport_mode)
 
 	# 视野迷雾（我方英雄/小兵/塔 + 泉水点亮；未覆盖区域压暗）
-	MinimapDraw.draw_fog(self, MinimapDraw.fog_grid(_fog_sources(), MAP_SIZE), MINIMAP_SIZE)
+	var _fg := MinimapDraw.fog_grid(_fog_sources(), MAP_SIZE)
+	if _flip180():
+		_fg.reverse()
+		for _row in _fg:
+			_row.reverse()
+	MinimapDraw.draw_fog(self, _fg, MINIMAP_SIZE)
 	# 暴君 / 主宰 刷新倒计时
 	MinimapDraw.draw_objectives(self, _objective_entries(), MINIMAP_SIZE)
 	# ---- 我方防御塔被攻击警告圈（绘制在最上层） ----
@@ -386,10 +399,17 @@ func _ensure_terrain_texture():
 	_terrain_texture = MinimapDraw.terrain_texture(256, MAP_SIZE)
 
 
+# 玩家在红方时小地图整体旋转 180°（己方基地在左下，和镜头方向一致）
+func _flip180() -> bool:
+	return Config.player_team == Config.Team.ENEMY
+
 func _world_to_minimap(world_pos: Vector3) -> Vector2:
 	var gx = world_pos.x + MAP_SIZE / 2.0
 	var gy = world_pos.z + MAP_SIZE / 2.0
-	return Vector2(gx * MINIMAP_SIZE / MAP_SIZE, gy * MINIMAP_SIZE / MAP_SIZE)
+	var p := Vector2(gx * MINIMAP_SIZE / MAP_SIZE, gy * MINIMAP_SIZE / MAP_SIZE)
+	if _flip180():
+		p = Vector2(MINIMAP_SIZE - p.x, MINIMAP_SIZE - p.y)
+	return p
 func _get_minimap_terrain(wx: float, wz: float) -> int:
 	# 河道判定（对角线宽度20）
 	var dist_to_diag = abs(wx - wz) / sqrt(2.0)

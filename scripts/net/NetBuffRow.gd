@@ -32,7 +32,7 @@ func _build() -> void:
 	# 详情弹层（同主机 BuffInfoPanel：_apply_panel_style(0.88) 纯黑半透明，标题金字 + 说明白字）
 	_info = Panel.new()
 	_info.name = "BuffInfoPanel"
-	_info.add_theme_stylebox_override("panel", UiKit.panel_style(0.92, 8.0))
+	_info.add_theme_stylebox_override("panel", UiKit.flat(0.88, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0), 10.0, 6.0))   # 同 host _apply_panel_style(0.88)
 	_info.visible = false
 	add_child(_info)
 	_info_title = Label.new()
@@ -40,8 +40,8 @@ func _build() -> void:
 	_info_title.size = Vector2(INFO_W - 30, 0)
 	_info_title.add_theme_font_size_override("font_size", int(round(18 * us)))
 	_info_title.add_theme_color_override("font_color", UiKit.C_GOLD)
-	_info_title.add_theme_color_override("font_outline_color", Color.BLACK)
-	_info_title.add_theme_constant_override("outline_size", 1)
+	_info_title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.82))
+	_info_title.add_theme_constant_override("outline_size", UiKit.outline_size(18 * us))
 	_info.add_child(_info_title)
 	_info_desc = Label.new()
 	_info_desc.position = Vector2(15, 40)
@@ -49,8 +49,8 @@ func _build() -> void:
 	_info_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_info_desc.add_theme_font_size_override("font_size", int(round(14 * us)))
 	_info_desc.add_theme_color_override("font_color", Color.WHITE)
-	_info_desc.add_theme_color_override("font_outline_color", Color.BLACK)
-	_info_desc.add_theme_constant_override("outline_size", 1)
+	_info_desc.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.82))
+	_info_desc.add_theme_constant_override("outline_size", UiKit.outline_size(14 * us))
 	_info.add_child(_info_desc)
 	built = true
 
@@ -189,3 +189,4 @@ func _position_info(node, vw: float) -> void:
 	if py < 96.0:
 		py = float(node.position.y) + float(node.size.y) + 12.0
 	_info.position = Vector2(cx - half, py)
+

@@ -165,6 +165,8 @@ func _draw() -> void:
 		MinimapDraw.draw_health_pack(self, pk, true)
 	var ally_col := Color(0.0, 0.886, 1.0)
 	var enemy_col := Color(1.0, 0.33, 0.264)
+	var ally_ring_col := Color(0.30, 0.95, 0.42)   # 血量环固定色（同单机 Minimap.gd）
+	var enemy_ring_col := Color(1.0, 0.28, 0.24)
 
 	# —— 防御塔（外塔/内塔/高地/水晶 分级形状；血量底部填充）——
 	for nid in views:
@@ -239,7 +241,9 @@ func _draw() -> void:
 		var hcol := enemy_col if int(v4.get("team", 9)) == TEAM_ENEMY else ally_col
 		var hpr := _hp_ratio(float(v4.get("hp", 0.0)), float(v4.get("maxhp", 1.0)))
 		var rot := float(v4.get("rot", 0.0))
-		MinimapDraw.draw_hero(self, hpos, Vector2(sin(rot), cos(rot)), hcol, hpr, nid4 == self_net, false, 0.0, str(v4.get("name", "")))
+		# 血环颜色按阵营固定（我方绿 / 敌方红），与单机 Minimap.gd 完全一致
+		var hring: Color = enemy_ring_col if int(v4.get("team", 9)) == TEAM_ENEMY else ally_ring_col
+		MinimapDraw.draw_hero(self, hpos, Vector2(sin(rot), cos(rot)), hcol, hpr, nid4 == self_net, false, 0.0, str(v4.get("name", "")), hring)
 
 	# —— 自己回城黄线 ——
 	if own_recalling != 0 and own_pos != Vector3.ZERO:

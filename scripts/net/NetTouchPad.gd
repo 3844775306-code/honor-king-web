@@ -597,3 +597,31 @@ func _on_summoner_released(_index: int, final_drag: Vector2, cancelled: bool, re
 # 主动装按钮按下：记录待消费索引（NetClientBattle 每帧消费后发 C_ACTIVE）
 func _on_active_pressed(i: int) -> void:
 	_active_press_pending = i
+
+# —— 右半屏拖拽相机（同 TouchController：只吃未被按钮/摇杆消费的空白区触摸）——
+var cam_pan_index := -1
+var cam_pan_start := Vector2.ZERO
+var cam_pan_cur := Vector2.ZERO
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not touch_active or not visible:
+		cam_pan_index = -1
+		return
+	if event is InputEventScreenTouch and not event.pressed and event.index == cam_pan_index:
+		cam_pan_index = -1
+		return
+	if event is InputEventScreenTouch and event.pressed and cam_pan_index < 0:
+		var vp := get_viewport().get_visible_rect().size
+		if event.position.x >= vp.x * 0.5:
+			cam_pan_index = event.index
+			cam_pan_start = event.position
+			cam_pan_cur = event.position
+	elif event is InputEventScreenDrag and event.index == cam_pan_index:
+		cam_pan_cur = event.position
+
+# 相机拖拽状态（NetClientBattle 每帧轮询读取；松手由客户端 10/s 回正）
+func camera_pan_active() -> bool:
+	return cam_pan_index >= 0
+
+func get_camera_pan_current() -> Vector2:
+	return cam_pan_cur

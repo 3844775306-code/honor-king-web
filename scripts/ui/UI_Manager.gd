@@ -718,12 +718,13 @@ func _create_hero_detail_panel():
 	hero_detail_dim.color = Color(0, 0, 0, 0.4)
 	hero_detail_dim.visible = false
 	add_child(hero_detail_dim)
-	_connect_tap_to_action(hero_detail_dim, Callable(self, "toggle_hero_detail"))
+	_connect_tap_to_action(hero_detail_dim, Callable(self, "close_hero_detail"))
 	hero_detail_panel = RosterView.new()
 	hero_detail_panel.visible = false
 	add_child(hero_detail_panel)
 	hero_detail_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	hero_detail_panel.closed_by_user.connect(toggle_hero_detail)
+	# 关闭信号必须只执行“关闭”，不能复用 toggle：同一帧出现重复关闭事件时 toggle 会把它重新打开
+	hero_detail_panel.closed_by_user.connect(close_hero_detail)
 
 func _create_death_recap_panel():
 	# 死亡面板：纯绘制视图（击杀者/复活读秒/承伤构成/来源排行/自动归因），主机与联机客户端共用
@@ -786,9 +787,9 @@ func _create_team_decision_panel():
 	var sep = HSeparator.new()
 	vbox.add_child(sep)
 
-	# 蓝方标题
+	# 我方标题
 	var blue_title = Label.new()
-	blue_title.text = "-- 蓝方 --"
+	blue_title.text = "-- 我方 --"
 	_apply_label_style(blue_title, 14, Color(0.0, 0.886, 1.0))
 	vbox.add_child(blue_title)
 	team_decision_labels["blue_title"] = blue_title
@@ -802,9 +803,9 @@ func _create_team_decision_panel():
 	var sep2 = HSeparator.new()
 	vbox.add_child(sep2)
 
-	# 红方标题
+	# 敌方标题
 	var red_title = Label.new()
-	red_title.text = "-- 红方 --"
+	red_title.text = "-- 敌方 --"
 	_apply_label_style(red_title, 14, Color(1.0, 0.33, 0.264))
 	vbox.add_child(red_title)
 	team_decision_labels["red_title"] = red_title
@@ -850,7 +851,7 @@ func _refresh_team_decision_panel():
 		dragon_label.text = "龙: " + ("存活" if dragon_alive else "已击杀")
 		dragon_label.add_theme_color_override("font_color", Color.ORANGE if dragon_alive else Color.GRAY)
 
-	# 蓝方英雄列表
+	# 我方英雄列表
 	var blue_vbox := team_decision_labels.get("blue_vbox") as VBoxContainer
 	if blue_vbox:
 		for child in blue_vbox.get_children():
@@ -859,7 +860,7 @@ func _refresh_team_decision_panel():
 			if not (entity is Hero) or entity.health <= 0:
 				continue
 			var h := entity as Hero
-			if h.team != Config.Team.PLAYER:
+			if not Config.is_ally(h.team):
 				continue
 			var line := _format_hero_lane_line(h, tt.assignments.get(h, -1), h.is_ai)
 			var lbl = Label.new()
@@ -867,7 +868,7 @@ func _refresh_team_decision_panel():
 			lbl.text = line
 			blue_vbox.add_child(lbl)
 
-	# 红方英雄列表
+	# 敌方英雄列表
 	var red_vbox := team_decision_labels.get("red_vbox") as VBoxContainer
 	if red_vbox:
 		for child in red_vbox.get_children():
@@ -876,7 +877,7 @@ func _refresh_team_decision_panel():
 			if not (entity is Hero) or entity.health <= 0:
 				continue
 			var h := entity as Hero
-			if h.team != Config.Team.ENEMY:
+			if Config.is_ally(h.team):
 				continue
 			var line := _format_hero_lane_line(h, tt.assignments.get(h, -1), h.is_ai)
 			var lbl = Label.new()
@@ -946,13 +947,13 @@ func _create_kill_feed_panel(actor: String, actor_team: int, desc: String, victi
 
 	if actor != "":
 		var actor_label = Label.new(); actor_label.text = actor
-		_apply_label_style(actor_label, 18, Color(1.0,0.33,0.264) if actor_team == Config.Team.ENEMY else Color(0.0,0.886,1.0))
+		_apply_label_style(actor_label, 18, Color(0.0,0.886,1.0) if Config.is_ally(actor_team) else Color(1.0,0.33,0.264))
 		hbox.add_child(actor_label)
 	var desc_label = Label.new(); desc_label.text = desc; _apply_label_style(desc_label, 18, Color.WHITE)
 	hbox.add_child(desc_label)
 	if victim != "":
 		var victim_label = Label.new(); victim_label.text = victim
-		var vcolor = Color(0.0,0.886,1.0) if victim_team == Config.Team.PLAYER else (Color(1.0,0.33,0.264) if victim_team == Config.Team.ENEMY else Color.PURPLE)
+		var vcolor = Color(0.0,0.886,1.0) if Config.is_ally(victim_team) else (Color(1.0,0.33,0.264) if victim_team == Config.Team.PLAYER or victim_team == Config.Team.ENEMY else Color.PURPLE)
 		_apply_label_style(victim_label, 18, vcolor)
 		hbox.add_child(victim_label)
 	return panel
@@ -2034,7 +2035,7 @@ func _marker_meta(src, mtype: String) -> Dictionary:
 		glyph = "爆"; tint = Color(1.0, 0.72, 0.25); name = "沈梦溪·爆弹"
 		desc = "爆弹印记（5 秒）：被沈梦溪再次命中时引爆并追加爆炸伤害"
 	else:
-		if src is Hero and src.team == Config.Team.PLAYER:
+		if src is Hero and Config.is_ally(src.team):
 			tint = Color(0.4, 0.9, 1.0)
 	return {"glyph": glyph, "tint": tint, "name": name, "desc": desc}
 
@@ -2626,7 +2627,9 @@ func _refresh_hero_detail_panel():
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or not (e is Hero):
 			continue
-		rows.append(_roster_row(e as Hero, battle))
+		var row: Dictionary = _roster_row(e as Hero, battle)
+		row["own"] = e == battle.hero
+		rows.append(row)
 	hero_detail_panel.set_rows(rows)
 
 ## 单英雄行数据（供 RosterView 双列对位绘制；与客户端 NetSession 行载荷字段同名）
@@ -2656,9 +2659,11 @@ func _roster_row(h: Hero, battle) -> Dictionary:
 	var skills: Array = []
 	for i in range(mini(h.skills.size(), 3)):
 		var sk = h.skills[i]
-		skills.append([i + 1, sk.skill_name if sk != null else "", int(h.skill_levels[i]), float(h.skill_cooldowns[i])])
+		skills.append([i + 1, sk.skill_name if sk != null else "", int(h.skill_levels[i]),
+			float(h.skill_cooldowns[i]), int(sk.type) if sk != null else -1])
 	if h.summoner_skill != null:
-		skills.append([9, str(h.summoner_skill.skill_name), 0, float(h.summoner_cooldown)])
+		skills.append([9, str(h.summoner_skill.skill_name), 0, float(h.summoner_cooldown),
+			int(h.summoner_skill.type)])
 	var equips: Array = []
 	for item_id in h.equipment_slots:
 		var it: Dictionary = ItemDatabase.get_item(item_id)
@@ -2712,7 +2717,7 @@ func _update_respawn_widgets():
 	var ally_row := HBoxContainer.new()
 	ally_row.add_theme_constant_override("separation", 10)
 	for h in get_tree().get_nodes_in_group("heroes"):
-		if not is_instance_valid(h) or h.team != Config.Team.PLAYER: continue
+		if not is_instance_valid(h) or not Config.is_ally(h.team): continue
 		var widget = RespawnWidget.new(); widget.hero = h; ally_row.add_child(widget)
 	respawn_container.add_child(ally_row)
 	# 第二排：已阵亡的敌方英雄（复活后自动从第二排消失）
@@ -2720,7 +2725,7 @@ func _update_respawn_widgets():
 	enemy_row.add_theme_constant_override("separation", 10)
 	var any_enemy := false
 	for h in get_tree().get_nodes_in_group("heroes"):
-		if not is_instance_valid(h) or h.team != Config.Team.ENEMY or not h.is_dead: continue
+		if not is_instance_valid(h) or Config.is_ally(h.team) or not h.is_dead: continue
 		var widget = RespawnWidget.new(); widget.hero = h; enemy_row.add_child(widget); any_enemy = true
 	if any_enemy:
 		respawn_container.add_child(enemy_row)
@@ -2742,21 +2747,31 @@ func toggle_shop():
 		_open_shop()
 
 func toggle_hero_detail():
-	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
-	hero_detail_visible = !hero_detail_visible
 	if hero_detail_visible:
-		UiKit.show_panel(hero_detail_panel, 0.15)
-		UiKit.show_panel(hero_detail_dim, 0.15)
+		close_hero_detail()
 	else:
-		UiKit.hide_panel(hero_detail_panel, 0.12)
-		UiKit.hide_panel(hero_detail_dim, 0.12)
+		open_hero_detail()
+
+func open_hero_detail():
+	if hero_detail_panel == null or not is_instance_valid(hero_detail_panel):
+		return
+	hero_detail_visible = true
+	UiKit.show_panel(hero_detail_panel, 0.15)
+	UiKit.show_panel(hero_detail_dim, 0.15)
 	# 打开英雄面板时关闭商店抽屉，避免叠在一起
-	if hero_detail_visible and shop_ui:
+	if shop_ui:
 		_close_shop()
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	if battle:
 		hero_detail_refresh_timer = battle.game_time
-	if hero_detail_visible:
-		_refresh_hero_detail_panel()
+	_refresh_hero_detail_panel()
+
+func close_hero_detail():
+	if hero_detail_panel == null or not is_instance_valid(hero_detail_panel):
+		return
+	hero_detail_visible = false
+	UiKit.hide_panel(hero_detail_panel, 0.12)
+	UiKit.hide_panel(hero_detail_dim, 0.12)
 
 func toggle_team_decision():
 	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
@@ -2773,7 +2788,8 @@ func buy_recommended():
 
 # ---------- 输入处理 ----------
 func _input(event):
-	if event is InputEventKey and event.pressed:
+	# 忽略操作系统的按键自动重复：长按 C/O/T 不能反复开关面板
+	if event is InputEventKey and event.pressed and not event.echo:
 		# 商店打开时优先处理商店键位（1-9 切分类 / ↑↓·W S 选装 / Enter 购买 / Esc 关闭）
 		if shop_ui != null and is_instance_valid(shop_ui) and _shop_handle_key(event):
 			get_viewport().set_input_as_handled()
@@ -3002,7 +3018,7 @@ func update(battle: BattleManager):
 		target_detail_panel.visible = true
 		# 阵营主色：敌方橙红 / 己方青蓝 / 中立金黄（默认按敌方显示，与攻击目标面板的直觉一致）
 		var tcol := Color(1.0, 0.45, 0.2)
-		if "team" in target and target.team == Config.Team.PLAYER:
+		if "team" in target and Config.is_ally(target.team):
 			tcol = Color(0.2, 0.9, 1.0)
 		elif "team" in target and target.team == Config.Team.NEUTRAL:
 			tcol = Color(1.0, 0.8, 0.35)
@@ -3336,7 +3352,7 @@ class HeroDisc extends Control:
 		var c := size * 0.5
 		var r := minf(size.x, size.y) * 0.5 - 2.0
 		var st := _role_style()
-		var team_col := Color(0.0, 0.886, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.33, 0.264)
+		var team_col := Color(0.0, 0.886, 1.0) if Config.is_ally(team) else Color(1.0, 0.33, 0.264)
 		if dead: team_col = Color(0.32, 0.32, 0.36)
 		# 外环 + 暗色内盘
 		draw_circle(c, r, Color(0.02, 0.04, 0.07, 0.92))
@@ -3366,12 +3382,12 @@ class RespawnWidget extends Control:
 	func _draw():
 		if not is_instance_valid(hero): return
 		var center = size / 2
-		var bg_color = Color(1.0, 0.33, 0.264, 1.0) if hero.team == 1 else Color(0.0, 0.886, 1.0, 1.0)if hero.is_ai else Color(0.0, 0.886, 0.431, 1.0)
+		var bg_color = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(hero.team) else Color(1.0, 0.33, 0.264, 1.0)
 		# 阵亡后底色变深：我方=近黑，敌方(第二排)=暗红，一眼区分两排归属
 		if hero.is_dead:
-			bg_color = Color(0.32, 0.05, 0.07, 1.0) if hero.team == 1 else Color(0.04, 0.05, 0.07, 1.0)
+			bg_color = Color(0.32, 0.05, 0.07, 1.0) if not Config.is_ally(hero.team) else Color(0.04, 0.05, 0.07, 1.0)
 		# 专属英雄徽记头像（取代原来的纯色圆盘；阵营色留在最外细边，血弧/阵亡压暗不变）
-		var team_tint := Color(1.0, 0.33, 0.264) if hero.team == 1 else (Color(0.0, 0.886, 1.0) if hero.is_ai else Color(0.0, 0.886, 0.431))
+		var team_tint := Color(0.0, 0.886, 1.0) if Config.is_ally(hero.team) else Color(1.0, 0.33, 0.264)
 		HeroArt.draw_portrait(self, center, ring_radius, hero.display_name, team_tint, hero.is_dead)
 		draw_arc(center, ring_radius + 3.75, 0, 2*PI, 48, Color.BLACK, 5.0)
 		if hero.is_dead:
@@ -3384,7 +3400,7 @@ class RespawnWidget extends Control:
 			draw_arc(center, ring_radius + 3.75, -PI/2, -PI/2 + 2*PI*hp_ratio, 48, hp_color, 5.0)
 		var name_lv = hero.display_name + " Lv." + str(hero.level)
 		# 名字着色随阵营：敌方(第二排)浅红、己方白色；移到头像圆圈正上方（超宽按单元宽度自动缩字）
-		var name_col = Color(1.0, 0.6, 0.5, 1.0) if hero.team == 1 else Color.WHITE
+		var name_col = Color(1.0, 0.6, 0.5, 1.0) if not Config.is_ally(hero.team) else Color.WHITE
 		var name_fs := 18
 		var name_sz = UiKit.font().get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs)
 		if name_sz.x > size.x - 4.0:

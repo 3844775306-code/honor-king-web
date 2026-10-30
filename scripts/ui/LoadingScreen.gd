@@ -88,7 +88,7 @@ func _ready() -> void:
 	bg.color = Color(0.016, 0.022, 0.042, 1.0)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_root.add_child(bg)
-	UiKit.make_backdrop(_root, UiKit.C_TEAM0, 0.85)
+	UiKit.make_backdrop(_root, UiKit.C_TEAM0 if Config.player_team == Config.Team.PLAYER else UiKit.C_TEAM1, 0.85)
 	_root.move_child(bg, 0)
 
 	var margin := MarginContainer.new()
@@ -177,7 +177,7 @@ func setup(heroes: Array, title := "对局加载中", subtitle := "", duration :
 
 
 func _hero_entry(i: int, ally: bool) -> Dictionary:
-	var team_id := 0 if ally else 1
+	var team_id: int = Config.player_team if ally else 1 - Config.player_team
 	var pool: Array = []
 	for h in _heroes:
 		if h is Dictionary and int(h.get("team", team_id)) == team_id:
@@ -208,7 +208,8 @@ func _rebuild_cards() -> void:
 
 
 func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
-	var team_color: Color = UiKit.C_TEAM0 if ally else UiKit.C_TEAM1
+	var blue_side := Config.player_team == Config.Team.PLAYER
+	var team_color: Color = (UiKit.C_TEAM0 if blue_side else UiKit.C_TEAM1) if ally else (UiKit.C_TEAM1 if blue_side else UiKit.C_TEAM0)
 	var hero_name := str(entry.get("name", "—"))
 	var role := str(entry.get("role", ""))
 	var role_color: Color = ROLE_COLORS.get(role, team_color)

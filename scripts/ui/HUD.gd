@@ -175,11 +175,15 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 	row["ticks"] = is_turret
 
 	row["team"] = int(entity.team)
-	match int(entity.team):
-		0: row["team_color"] = Color(0.0, 0.886, 1.0, 1.0)
-		1: row["team_color"] = Color(1.0, 0.33, 0.264, 1.0)
-		2: row["team_color"] = Color(0.0, 0.886, 0.431, 1.0)
-		_: row["team_color"] = Color(0.945, 0.925, 0.251, 1.0)
+	# 玩家自己的血条恒为绿色（与阵营无关）
+	var _bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	if _bm and _bm.hero and is_instance_valid(_bm.hero) and entity == _bm.hero:
+		row["team_color"] = Color(0.33, 0.95, 0.42, 1.0)
+	else:
+		match int(entity.team):
+			0, 1: row["team_color"] = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(int(entity.team)) else Color(1.0, 0.33, 0.264, 1.0)
+			2: row["team_color"] = Color(0.0, 0.886, 0.431, 1.0)
+			_: row["team_color"] = Color(0.945, 0.925, 0.251, 1.0)
 
 	row["interfere"] = 0.0
 	row["shield_icon"] = false

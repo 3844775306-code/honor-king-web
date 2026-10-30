@@ -7,8 +7,12 @@ class_name NetKillFeed extends Control
 const SHOW := 1.0
 const FADE := 0.5
 const GAP := 4.0              # 同 host HBoxContainer 默认 separation
-const BASE_Y := 100.0         # 同 host panel.position = Vector2(-100, 100) * ui_scale
-const FONT_SZ := 16.0         # 同 host _apply_label_style(..., 16, ...)
+const BASE_Y := 154.0         # 同 host KF_TOP（原始像素，不乘 ui_scale）
+const KF_W := 420.0           # 同 host KF_W
+const KF_H := 40.0            # 同 host KF_H
+const KF_GAP := 8.0           # 同 host KF_GAP
+const KF_MAX := 3             # 同 host KF_MAX
+const FONT_SZ := 18.0         # 同 host _apply_label_style(..., 18, ...)
 const ENEMY_C := Color(1.0, 0.33, 0.264)
 const CYAN_C := Color(0.0, 0.886, 1.0)
 const PURPLE_C := Color(0.75, 0.5, 1.0)
@@ -33,7 +37,7 @@ func _on_kill_feed(actor: String, actor_team: int, desc: String, victim: String,
 	SfxManager.play_feed(actor, actor_team, desc, victim, victim_team)
 	_items.push_back({"actor": actor, "a_team": actor_team, "desc": desc,
 			"victim": victim, "v_team": victim_team, "born": Time.get_ticks_msec()})
-	if _items.size() > 5:
+	if _items.size() > KF_MAX:
 		_items.remove_at(0)
 	queue_redraw()
 
@@ -48,7 +52,6 @@ func _draw() -> void:
 	var us := _us()
 	var fs := FONT_SZ * us
 	var gap := GAP * us
-	var line_h := fs * 1.55
 	var now := Time.get_ticks_msec()
 	var rows: Array = []
 	for it in _items:
@@ -58,7 +61,10 @@ func _draw() -> void:
 	_items = rows
 	if rows.is_empty():
 		return
-	# 单行文本总宽（actor [desc] victim 三段式），逐行自顶向下铺开
+	# 每行一块同 host 面板（KF_W×KF_H 居中、圆角玻璃 + 投影），第 i 行 y = KF_TOP + i×(KF_H+KF_GAP)
+	var line_h := (KF_H + KF_GAP) * us
+	var box_w := KF_W * us
+	var box_h := KF_H * us
 	for ri in range(rows.size()):
 		var it: Dictionary = rows[ri]
 		var a: String = str(it["actor"])
@@ -79,15 +85,14 @@ func _draw() -> void:
 		for s in segs:
 			total += _seg_w(str(s[0]), fs)
 		total += gap * (segs.size() - 1)
-		var x := (area.x - total) * 0.5
-		var y := BASE_Y * us + ri * line_h
+		var y := BASE_Y + ri * line_h
 		var age := (now - int(it["born"])) * 0.001
 		var alpha := 1.0 if age < SHOW else clampf(1.0 - (age - SHOW) / FADE, 0.0, 1.0)
-		# 衬底（同 host _apply_panel_style(panel, 0.6)）
-		draw_rect(Rect2(x - 10.0 * us, y - fs * 0.92, total + 20.0 * us, fs * 1.62),
-				Color(0, 0, 0, 0.6 * alpha))
+		var box := Rect2((area.x - box_w) * 0.5, y, box_w, box_h)
+		draw_style_box(_row_style(alpha), box)
+		var x := area.x * 0.5 - total * 0.5
 		var sh := Color(0, 0, 0, 0.5 * alpha)
-		var baseline := y + fs * 0.86
+		var baseline := y + (box_h - (_f.get_ascent(fs) + _f.get_descent(fs))) * 0.5 + _f.get_ascent(fs)
 		for s in segs:
 			var txt: String = str(s[0])
 			var col: Color = s[1]
@@ -96,3 +101,12 @@ func _draw() -> void:
 			draw_string(_f, Vector2(x, baseline), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 			x += _seg_w(txt, fs) + gap
 
+# 同 host _apply_panel_style(panel, 0.6)：圆角玻璃 + 投影；淡出按 0.1 档缓存样式，避免每帧分配
+var _styles: Dictionary = {}
+func _row_style(alpha: float) -> StyleBoxFlat:
+	var k := int(round(clampf(alpha, 0.0, 1.0) * 10.0))
+	if not _styles.has(k):
+		var sb := UiKit.flat(0.62 * float(k) / 10.0, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0), 10.0, 6.0)
+		sb.shadow_color = Color(0, 0, 0, 0.45 * float(k) / 10.0)
+		_styles[k] = sb
+	return _styles[k]

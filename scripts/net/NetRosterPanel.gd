@@ -7,6 +7,7 @@ const RosterView = preload("res://scripts/ui/RosterView.gd")
 
 var view := "attr"          # "attr"=属性面板 / "team"=队伍面板（同视图，标题不同）
 var _v = null
+var self_net := -1      # 本端 net_id：与自己同 id 的行用绿色底板
 var _req := 0.0
 var _rows: Array = []
 
@@ -24,6 +25,8 @@ func show_panel(v: String) -> void:
 	view = v
 	visible = true
 	UiKit.show_panel(self, 0.15)
+	if _v != null and is_instance_valid(_v):
+		UiKit.show_panel(_v, 0.15)
 	_req = 99.0
 	set_process(true)
 	queue_redraw()
@@ -64,6 +67,7 @@ func _row_from_net(r: Array) -> Dictionary:
 	var mhp := float(r[5])
 	return {
 		"name": str(r[1]), "hero": str(r[1]), "team": int(r[2]), "level": int(r[3]),
+		"own": self_net >= 0 and int(r[0]) == self_net,
 		"hp_ratio": hp / mhp if mhp > 0.0 else 1.0,
 		"k": int(r[6]), "d": int(r[7]), "a": int(r[8]),
 		"gold": int(r[16]) if r.size() > 16 else int(r[9]),

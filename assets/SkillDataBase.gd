@@ -293,30 +293,22 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				var r_preview = create_preview(5.0, pos, hero.team)
 				r_preview.visible = true
 				hero.get_parent().add_child(r_preview)
-				# 地面法阵圆盘（视觉效果）
-				var r_disc = MeshInstance3D.new()
-				var r_disc_mesh = CylinderMesh.new()
-				r_disc_mesh.top_radius = 5.0
-				r_disc_mesh.bottom_radius = 5.0
-				r_disc_mesh.height = 0.15
-				r_disc.mesh = r_disc_mesh
-				r_disc.position = pos + Vector3(0, 0.05, 0)
-				var r_disc_mat = StandardMaterial3D.new()
-				r_disc_mat.albedo_color = Color(0.9, 0.15, 0.05, 0.3) if hero.team == 1 else Color(0.05, 0.25, 0.9, 0.3)
-				r_disc_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				r_disc_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				r_disc.material_override = r_disc_mat
-				r_disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				# 地面法阵（暗影魔神法阵：柔光底盘+旋转符文环+黑刺/火星）
+				var r_disc = create_spell(5.0, hero.team, "吕布", 6.0)
+				r_disc.position = pos
 				hero.get_parent().add_child(r_disc)
+				# #43 网络 FX：吕布R 魔神法阵（联机客户端同款暗影法阵）
+				if NetSession.mode == NetSession.Mode.HOST:
+					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 5.0, 6.0, "吕布")
 				# 跳跃动画
 				await hero.get_tree().create_timer(1.0).timeout
 				hero.fly = 3
 				hero.fly_timer = 0.5
 				hero.global_position = pos
 				# 更新法阵视觉位置
-				if is_instance_valid(r_disc): r_disc.position = pos + Vector3(0, 0.05, 0)
-				if is_instance_valid(r_preview): r_preview.position = pos + Vector3(0, 0.2, 0)
+				if is_instance_valid(r_disc): r_disc.position = pos
 				await hero.get_tree().create_timer(0.5).timeout
+				if is_instance_valid(r_preview): r_preview.queue_free()
 				# 落地双抗
 				hero._apply_df_buff(75 + 75*level, 0, 5, false)
 				hero._apply_df_buff(75 + 75*level, 0, 5, true)
@@ -361,7 +353,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.apply_flat_move_buff("shenmengxi_boost", float(min(5, hero.stat)), 48 + 12 * level)
 				var shen_shots: int = mini(5, int(hero.stat))
 				var shen_fired: int = 0
-				var shen_preview: MeshInstance3D = null
+				var shen_preview: Node3D = null
 				while shen_fired < shen_shots and hero.stat > 0.0:
 					if shen_fired > 0 and not hero.is_ai:
 						# 每0.75秒一发；松开技能轮盘/键盘即停止连发（已发保留、剩余炸弹不消耗）
@@ -678,7 +670,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 
 				preview.queue_free()
 				# 圣印圈：金色圣印环+半透明地盘，持续5秒，每秒对圈内非防御塔敌人造成法术伤害
-				var seal_disc = create_spell(3.5, hero.team)
+				var seal_disc = create_spell(3.5, hero.team, "亚瑟", 5.5)
 				seal_disc.position = pos + Vector3(0, 0.08, 0)
 				hero.get_parent().add_child(seal_disc)
 				var seal_ring = MeshFactory.create_torus_ring(3.4, 3.6, Color(1.0, 0.85, 0.25), true, 0.95, true)
@@ -686,7 +678,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.get_parent().add_child(seal_ring)
 				# #43 网络 FX：亚瑟R 圣印伤害圈（5s 持续地面区）
 				if NetSession.mode == NetSession.Mode.HOST:
-					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 3.5, 5.0)
+					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 3.5, 5.0, "亚瑟")
 				var seal_tree = hero.get_tree()
 				var seal_dmg = 130.0 + 8.0 * hero.level
 				for _s in range(5):
@@ -1562,12 +1554,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 							ent.take_damage(w1_dmg, hero, true, 1, 0)
 							_apply_freezing(ent,level)
 				# 视野标记（2秒可见）
-				var w1_vision = create_spell(2.0, hero.team)
+				var w1_vision = create_spell(2.0, hero.team, "王昭君", 2.4)
 				w1_vision.position = pos
 				hero.get_parent().add_child(w1_vision)
 				# #43 网络 FX：王昭君1 冰晶视野圈（2s）
 				if NetSession.mode == NetSession.Mode.HOST:
-					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 2.0, 2.0)
+					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 2.0, 2.0, "王昭君")
 				await hero.get_tree().create_timer(2.0).timeout
 				w1_vision.queue_free()
 				w1_preview.queue_free()
@@ -1595,12 +1587,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.shield_remaining = max(hero.shield_remaining, w3_shield)
 				hero.wangzhaojun_shield_was_active = true
 				# 持续暴风雪
-				var w3_zone = create_spell(5.0, hero.team)
+				var w3_zone = create_spell(5.0, hero.team, "王昭君", 5.6)
 				w3_zone.position = pos
 				hero.get_parent().add_child(w3_zone)
 				# #43 网络 FX：王昭君R 暴风雪持续区（5s）
 				if NetSession.mode == NetSession.Mode.HOST:
-					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 5.0, 5.0)
+					NetSession.push_net_fx(NetSession.FX_SPELL, Vector3(pos.x, 0.0, pos.z), hero.team, 5.0, 6.0, "王昭君")
 				for _tick in range(10):
 					await hero.get_tree().create_timer(0.5).timeout
 					if hero.health <= 0: break
@@ -1644,7 +1636,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.get_parent().add_child(ls_ground_ring)
 				# #43 网络 FX：刘禅R 旋转地面环（3s 橙区，随英雄起手位）
 				if NetSession.mode == NetSession.Mode.HOST:
-					NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(hero.global_position.x, 0.0, hero.global_position.z), hero.team, 4.0, 3.0)
+					NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(hero.global_position.x, 0.0, hero.global_position.z), hero.team, 4.0, 3.0, "李元芳")
 				# === 视觉2：腰部旋转光环 ===
 				var ls_waist_ring = MeshFactory.create_torus_ring(0.65, 0.8, Color(1.0, 0.5, 0.15), true, 0.6, true)
 				ls_waist_ring.position = hero.global_position + Vector3(0, 1.0, 0)
@@ -2429,34 +2421,14 @@ func create_bullet(base_dmg,phy_bonus_ratio,mag_bonus_ratio,level_bonus,is_magic
 	# 设置线性飞行参数（需要扩展 Bullet）
 	bullet.set_linear(dir, 8)
 	return bullet
-func create_spell(radius,team):
-	var mesh = MeshInstance3D.new()
-	mesh.mesh = CylinderMesh.new()
-	mesh.mesh.top_radius = radius
-	mesh.mesh.bottom_radius = radius
-	mesh.mesh.height = 0.5
-	mesh.position.y = 0.3
-	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 0.33, 0.264, 0.6) if team == 1 else Color(0.0, 0.886, 1.0, 0.6)
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.33, 0.264, 0.3) if team == 1 else Color(0.0, 0.886, 1.0, 0.3)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mesh.set_surface_override_material(0, mat)
-	return mesh
-func create_preview(radius,pos,team)->MeshInstance3D:
-	# 圆形范围预览（半透明圆环）
-	var area_preview = MeshInstance3D.new()
-	var torus = TorusMesh.new()
-	torus.inner_radius = radius
-	torus.outer_radius = radius+0.25
-	area_preview.mesh = torus
-	var mat_area = StandardMaterial3D.new()
-	mat_area.albedo_color = Color(1.0, 0.33, 0.264, 1.0) if team == 1 else Color(0.0, 0.886, 1.0, 1.0)
-	
-	area_preview.material_override = mat_area
+func create_spell(radius,team,hero_name := "",dur := 0.0)->Node3D:
+	# 持续地面区域：交给 Vfx 统一法阵（柔光底盘+旋转符文环+元素装饰），host/client 同一套观感
+	return Vfx.ground_zone(float(radius), int(team), str(hero_name), float(dur))
+func create_preview(radius,pos,team)->Node3D:
+	# 圆形范围预览：柔光圆底 + 亮环 + 呼吸（替代旧纯色 torus）
+	var area_preview: Node3D = Vfx.preview_ring(float(radius), int(team))
 	area_preview.position = pos
-	area_preview.position.y +=0.2
+	area_preview.position.y += 0.2
 	return area_preview
 func create_machao_spear(pos: Vector3, team: int) -> Node3D:
 	var spear: Node3D = HeroWeapons.spear_marker(team)
@@ -2560,7 +2532,7 @@ func _create_water_zone(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	parent.add_child(zone_root)
 	# #43 网络 FX：水域地面盘（persist ~4s，固定水系蓝，颜色与阵营无关）
 	if NetSession.mode == NetSession.Mode.HOST:
-		NetSession.push_net_fx(NetSession.FX_WATER_ZONE, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0)
+		NetSession.push_net_fx(NetSession.FX_WATER_ZONE, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0, "甄姬")
 	return zone_root
 func _create_water_pulse(parent: Node, pos: Vector3, radius: float, caster = null):
 	# 扩展冲击波
@@ -2842,7 +2814,7 @@ func _lyf_storm_visual(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	parent.add_child(zone_root)
 	# #43 网络 FX：风暴地面域（persist ~4s，固定暗橙）
 	if NetSession.mode == NetSession.Mode.HOST:
-		NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0)
+		NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0, "李元芳")
 	return zone_root
 
 
@@ -2913,7 +2885,7 @@ func _yuanliu_flow_pool(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	parent.add_child(zone_root)
 	# #43 网络 FX：元流区域池（persist ~3.5s，固定青色）
 	if NetSession.mode == NetSession.Mode.HOST:
-		NetSession.push_net_fx(NetSession.FX_YL_POOL, Vector3(pos.x, 0.0, pos.z), -1, radius, 3.5)
+		NetSession.push_net_fx(NetSession.FX_YL_POOL, Vector3(pos.x, 0.0, pos.z), -1, radius, 3.5, "元流之子")
 	return zone_root
 
 

@@ -86,7 +86,7 @@ func _update_range_preview():
 
 func _get_player_hero() -> Hero:
 	for entity in get_tree().get_nodes_in_group("heroes"):
-		if entity is Hero and entity.team == Config.Team.PLAYER:
+		if entity is Hero and Config.is_ally(entity.team):
 			return entity
 	return null
 
@@ -141,8 +141,8 @@ func _add_base_blend(f: float) -> void:
 	# 外圈低矮过渡台（颜色更深，视觉上"长"进地里）
 	var s1 := MeshInstance3D.new()
 	var c1 := CylinderMesh.new()
-	c1.top_radius = 2.9
-	c1.bottom_radius = 3.4
+	c1.top_radius = 1.68
+	c1.bottom_radius = 1.96
 	c1.height = 0.14
 	c1.radial_segments = 32
 	s1.mesh = c1
@@ -153,8 +153,8 @@ func _add_base_blend(f: float) -> void:
 	# 内圈石台（承接模型底部）
 	var s2 := MeshInstance3D.new()
 	var c2 := CylinderMesh.new()
-	c2.top_radius = 2.1
-	c2.bottom_radius = 2.4
+	c2.top_radius = 1.24
+	c2.bottom_radius = 1.44
 	c2.height = 0.30
 	c2.radial_segments = 32
 	s2.mesh = c2
@@ -165,7 +165,7 @@ func _add_base_blend(f: float) -> void:
 	# 接地暗影（径向渐隐，假 AO，压住地面硬边）
 	var sh := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
-	pm.size = Vector2(9.0, 9.0)
+	pm.size = Vector2(5.3, 5.3)
 	sh.mesh = pm
 	sh.material_override = _blend_mat
 	sh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -499,7 +499,7 @@ func play_hit_react() -> void:
 var _recently_reported
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false,skill_id:int=0,pen: float = 0.0, is_crit_forced: int = -1):
 	# 无兵线减伤：仅对英雄伤害生效，且塔附近没有攻击方的小兵
-	if not _recently_reported and team == Config.Team.PLAYER:
+	if not _recently_reported and Config.is_ally(team):
 		var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 		# 按塔类型出差异化警报文案（高地塔/水晶），战报 desc 直接给到 SfxManager 选对应语音
 		var warn_desc := "我方防御塔正在被攻击"

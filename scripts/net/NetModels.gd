@@ -107,7 +107,7 @@ static func hero(name: String) -> Node3D:
 		return null
 	var inst = _spawn(path, Vector3.ONE * HERO_SCALE)
 	# 与主机同源：英雄专属武器
-	HeroWeapons.attach(inst, name)
+	HeroWeapons.attach(inst, name, float(HeroWeapons.HERO_REACH.get(name, -1.0)))
 	return inst
 
 

@@ -76,7 +76,8 @@ func _hit_pages() -> int:
 	return maxi(1, int(ceil(float((src.get("hits", []) as Array).size()) / float(HIT_ROWS))))
 
 func _source_rect(i: int, L: Dictionary) -> Rect2:
-	return Rect2(24.0, float(L["src_rows"]) + float(i) * 38.0 - 4.0, CARD_W - 48.0, 34.0)
+	# 行高铺满整格 38（=行间距）：与下一行相接、无死区，第二行「普攻/技能」文字也点得到
+	return Rect2(24.0, float(L["src_rows"]) + float(i) * 38.0 - 4.0, CARD_W - 48.0, 38.0)
 
 func _page_rects() -> Array:
 	var L := _layout()
@@ -177,7 +178,7 @@ func _header() -> void:
 	var killer := str(data.get("killer", ""))
 	var khero := str(data.get("killer_hero", killer))
 	var kteam := int(data.get("killer_team", 1))
-	var tint := Color(1.0, 0.36, 0.30) if kteam == 1 else Color(0.0, 0.886, 1.0)
+	var tint := Color(0.0, 0.886, 1.0) if Config.is_ally(kteam) else Color(1.0, 0.36, 0.30)
 	# 击杀者环形头像
 	HeroArt.draw_portrait(self, Vector2(66.0, 62.0), 34.0, khero, tint, false)
 	# 标题
@@ -242,10 +243,10 @@ func _sources(y: float) -> void:
 		var sel := _expanded == i
 		if sel:
 			draw_style_box(UiKit.flat(0.45, 8, 1, Color(0.55, 0.68, 0.92, 0.45),
-				Color(0.10, 0.13, 0.20, 0.82), 0.0, 0.0), Rect2(24.0, ry - 4.0, CARD_W - 48.0, 34.0))
+				Color(0.10, 0.13, 0.20, 0.82), 0.0, 0.0), Rect2(24.0, ry - 4.0, CARD_W - 48.0, 38.0))
 		HeroArt.draw_portrait(self, Vector2(46.0, ry + 16.0), 13.0,
 			str(row.get("hero", row.get("name", ""))),
-			Color(1.0, 0.36, 0.30) if int(row.get("team", 1)) == 1 else Color(0.0, 0.886, 1.0), false)
+			Color(0.0, 0.886, 1.0) if Config.is_ally(int(row.get("team", 1))) else Color(1.0, 0.36, 0.30), false)
 		UiKit.text(self, Vector2(68.0, ry + 14.0), str(row.get("name", "?")), 17, Color.WHITE)
 		var skills := str(row.get("skills", ""))
 		if skills != "":

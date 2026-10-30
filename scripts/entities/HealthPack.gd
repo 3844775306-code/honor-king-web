@@ -246,7 +246,7 @@ func _on_body_entered(body):
 		var level = body.level
 		var heal_hp = 200 + 12 * level
 		var heal_mp = 16 + 4 * level
-		body.apply_regen(heal_hp, heal_mp, 5.0, "health_pack")
+		body.apply_regen(heal_hp, heal_mp, 5.0, "health_pack", 1.0)   # 每秒 1 次整块回复
 		SfxManager.try_heal_sfx(body.display_name)
 		available = false
 		_set_orb_visible(false)

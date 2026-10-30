@@ -24,11 +24,11 @@ func ui_scale() -> float:
 	return UiKit.scale()
 
 func _styl(lab: Label, font_size: int, col: Color) -> void:
-	# 同主机 _apply_label_style：字号 × ui_scale()，并加黑色 1px 描边
+	# 同主机 _apply_label_style：字号 × ui_scale()，描边色/宽度也随字号缩放
 	lab.add_theme_font_size_override("font_size", int(round(font_size * ui_scale())))
 	lab.add_theme_color_override("font_color", col)
-	lab.add_theme_color_override("font_outline_color", Color.BLACK)
-	lab.add_theme_constant_override("outline_size", 1)
+	lab.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.82))
+	lab.add_theme_constant_override("outline_size", UiKit.outline_size(font_size * ui_scale()))
 
 func _build() -> void:
 	var rs := ui_scale()
@@ -36,18 +36,35 @@ func _build() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	_panel = Panel.new()
-	# 位置基底不乘 rs（同主机）；刘海/挖孔避让（桌面 safe_* 为 0）
-	_panel.position = Vector2(40 + UiKit.safe_left(), 370 + UiKit.safe_top())
+	# 同主机：属性标题条占住小地图正下方后，目标框下移到 属性顶边 + 标题条高 + 12；刘海/挖孔避让
+	_panel.position = Vector2(40 + UiKit.safe_left(), 350 + UiKit.safe_top() + 30.0 * rs + 12.0)
 	_panel.size = Vector2(330 * rs, 170 * rs)
-	_panel.add_theme_stylebox_override("panel", UiKit.panel_style(0.94, 8.0))
+	# 同主机：深色玻璃 + 2px 冷光描边 + 16px 柔和投影 + 大圆角
+	var frame := UiKit.flat(0.94, 12, 2, Color(0.62, 0.74, 0.96, 0.22), Color(0.025, 0.045, 0.095, 0.92), 0.0, 16.0)
+	frame.shadow_color = Color(0, 0, 0, 0.5)
+	frame.set_corner_detail(10)
+	_panel.add_theme_stylebox_override("panel", frame)
 	_panel.visible = false
 	add_child(_panel)
 
-	# 顶部阵营色强调条 + 姓名前同色小方块（颜色随目标阵营刷新）
+	# 顶部渐隐冷光（压在面板上、标签下），顶边玻璃反光
+	var sheen := ColorRect.new()
+	sheen.position = Vector2(2, 2)
+	sheen.size = Vector2(326, 2.0) * rs
+	sheen.color = Color(1, 1, 1, 0.10)
+	sheen.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.add_child(sheen)
+
+	# 顶部阵营色强调条 + 渐变高光 + 姓名前同色小方块（颜色随目标阵营刷新）
 	_accent = ColorRect.new()
 	_accent.position = Vector2.ZERO
 	_accent.size = Vector2(330, 5) * rs
 	_panel.add_child(_accent)
+	var accent_shine := UI_Manager.TargetAccentShine.new()
+	accent_shine.position = Vector2.ZERO
+	accent_shine.size = Vector2(330, 5) * rs
+	accent_shine.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.add_child(accent_shine)
 	_team_dot = ColorRect.new()
 	_team_dot.position = Vector2(16, 13) * rs
 	_team_dot.size = Vector2(10, 10) * rs
@@ -57,9 +74,20 @@ func _build() -> void:
 	name_label.position = Vector2(32, 8) * rs
 	name_label.size = Vector2(180, 26) * rs
 	_styl(name_label, 17, Color.WHITE)
+	name_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	name_label.add_theme_constant_override("shadow_offset_x", 1)
+	name_label.add_theme_constant_override("shadow_offset_y", 2)
 	_panel.add_child(name_label)
 	_labels["name"] = name_label
 
+	# 等级徽章底片（金色描边小胶囊），同主机
+	var lv_chip := Panel.new()
+	lv_chip.position = Vector2(210, 7) * rs
+	lv_chip.size = Vector2(108, 24) * rs
+	lv_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lv_chip.add_theme_stylebox_override("panel",
+		UiKit.flat(0.60, 7, 1, Color(1.0, 0.82, 0.35, 0.28), Color(0.09, 0.07, 0.02, 0.55)))
+	_panel.add_child(lv_chip)
 	var lv_label := Label.new()
 	lv_label.position = Vector2(224, 10) * rs
 	lv_label.size = Vector2(92, 22) * rs
@@ -83,14 +111,34 @@ func _build() -> void:
 	_panel.add_child(hp_bar)
 	_labels["hp_bar"] = hp_bar
 
+	# 血条质感层（高光/每 1000 刻度/末端亮边/内描边），在数字之下
+	_hp_gloss = UI_Manager.TargetHpGloss.new()
+	_hp_gloss.position = Vector2(16, 44) * rs
+	_hp_gloss.size = Vector2(298, 17) * rs
+	_hp_gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.add_child(_hp_gloss)
+
 	var hp_text := Label.new()
 	hp_text.position = Vector2(16, 44) * rs
 	hp_text.size = Vector2(298, 17) * rs
 	hp_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hp_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_styl(hp_text, 11, Color(1, 1, 1, 0.92))
+	hp_text.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))
+	hp_text.add_theme_constant_override("shadow_offset_x", 1)
+	hp_text.add_theme_constant_override("shadow_offset_y", 1)
 	_panel.add_child(hp_text)
 	_labels["hp"] = hp_text
+
+	# 属性区两行低对比底片（同主机）
+	for chip_y in [74.0, 110.0]:
+		var chip := Panel.new()
+		chip.position = Vector2(10, chip_y) * rs
+		chip.size = Vector2(310, 30) * rs
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		chip.add_theme_stylebox_override("panel",
+			UiKit.flat(0.22, 8, 1, Color(1, 1, 1, 0.05), Color(0.05, 0.075, 0.13, 0.40)))
+		_panel.add_child(chip)
 
 	# 属性区 2×2：彩色圆徽章（复用主机 StatIcon）+ 属性色数值
 	var cols: Array[float] = [16.0, 168.0]
@@ -115,6 +163,7 @@ func _build() -> void:
 	built = true
 
 var built := false
+var _hp_gloss: Control = null
 
 func refresh(a: Array) -> void:
 	if not built:
@@ -147,6 +196,10 @@ func refresh(a: Array) -> void:
 	var maxhp := maxf(1.0, float(a[5]))
 	hp_bar.max_value = maxhp
 	hp_bar.value = clampf(float(a[4]), 0.0, maxhp)
+	if _hp_gloss != null:
+		_hp_gloss.max_hp = maxhp
+		_hp_gloss.hp = clampf(float(a[4]), 0.0, maxhp)
+		_hp_gloss.queue_redraw()
 	_labels["hp"].text = "%d / %d" % [int(a[4]), int(a[5])]
 	_labels["攻击"].text = "%d" % int(a[6])
 	_labels["法强"].text = "%d" % int(a[7])

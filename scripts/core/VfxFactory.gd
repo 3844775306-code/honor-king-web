@@ -58,6 +58,7 @@ var _particle_ramp_tex: GradientTexture1D
 var _crescent_mesh_cache: Dictionary = {}
 var _beam_shader: Shader
 var _glow_shader: Shader
+var _zone_shader: Shader
 var _last_shake_msec: int = 0
 
 const SPELL_FX = preload("res://scripts/core/SpellFxTable.gd")
@@ -68,6 +69,7 @@ func _ready():
 	_spark_tex = _make_radial_texture(32, 0.18)
 	_beam_shader = load("res://shaders/fx_beam.gdshader")
 	_glow_shader = load("res://shaders/fx_glow.gdshader")
+	_zone_shader = load("res://shaders/fx_zone.gdshader")
 
 # ---------------- 查询 ----------------
 func element_of(hero_name: String) -> String:
@@ -938,6 +940,209 @@ func sigil(pos: Vector3, color: Color, radius: float = 3.0, dur: float = 0.9) ->
 	tw.tween_property(disc, "scale", Vector3(1.25, 1.0, 1.25), dur).set_ease(Tween.EASE_OUT)
 	tw.chain().tween_callback(root.queue_free)
 
+## 地面持续区域法阵（王昭君暴风雪 / 吕布魔神降世 / 亚瑟圣印 等）。
+## 单张 shader 贴花（柔光底盘 + 双层亮环 + 旋转符文齿 + 元素纹理 + 外扩涟漪）
+## + 双层实体亮环 + 元素边缘装饰（冰=冰晶锥·飘雪 / 暗影=黑刺·上浮火星）+ 末段淡出。
+## 返回根节点，调用方自行设 position 并在结束时 queue_free。
+func ground_zone(radius: float, team: int, hero_name: String = "", dur: float = 0.0,
+		element: String = "") -> Node3D:
+	var root := Node3D.new()
+	if quality <= 0 or get_tree() == null:
+		return root
+	root.add_to_group(GROUP_FX)
+	var el := element
+	if el == "" and hero_name != "":
+		el = element_of(hero_name)
+	# 吕布·魔神降世：暗影元素但技能色是血魔红（与原地面法阵同色域）
+	if hero_name == "吕布":
+		el = "shadow"
+	var c1: Color = team_color(team)
+	var c2: Color = c1.lerp(Color.WHITE, 0.6)
+	var style := 2.0
+	if el != "":
+		var ed: Dictionary = element_data(el)
+		c1 = ed.get("c", c1)
+		c2 = ed.get("c2", c2)
+		if el == "ice" or el == "water":
+			style = 0.0
+		elif el == "shadow" or el == "fire" or el == "earth":
+			style = 1.0
+	if hero_name == "吕布":
+		c1 = Color(0.58, 0.10, 0.06)
+		c2 = Color(1.0, 0.44, 0.16)
+	# 地面贴花（唯一 shader 面，开销恒定）
+	var disc := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(radius * 2.0, radius * 2.0)
+	disc.mesh = plane
+	disc.position = Vector3(0.0, 0.045, 0.0)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var dmat := ShaderMaterial.new()
+	dmat.shader = _zone_shader
+	dmat.set_shader_parameter("color_a", Color(c1.r, c1.g, c1.b, 0.80))
+	dmat.set_shader_parameter("color_b", Color(c2.r, c2.g, c2.b, 1.0))
+	dmat.set_shader_parameter("style", style)
+	dmat.set_shader_parameter("intensity", 2.7 if style > 1.5 else 2.1)
+	dmat.set_shader_parameter("spin_speed", -0.32 if style > 1.5 else 0.34)
+	dmat.set_shader_parameter("opacity", 1.0)   # 先落一次，tween 才能识别 shader_parameter/opacity
+	disc.material_override = dmat
+	root.add_child(disc)
+	# 双层实体亮环（与贴花错相位，增强法阵纵深感）
+	var rings: Array[MeshInstance3D] = []
+	var ring_mats: Array[StandardMaterial3D] = []
+	for i in range(2):
+		var mi := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		var rr: float = radius * (0.985 if i == 0 else 0.760)
+		torus.inner_radius = rr - maxf(radius * 0.014, 0.035)
+		torus.outer_radius = rr
+		torus.rings = 40
+		torus.ring_segments = 6
+		mi.mesh = torus
+		mi.position = Vector3(0.0, 0.07 + 0.02 * float(i), 0.0)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var m := _add_mat(c2 if i == 0 else c1, 0.85 if i == 0 else 0.55, 2.6)
+		mi.material_override = m
+		root.add_child(mi)
+		rings.append(mi)
+		ring_mats.append(m)
+	# 元素边缘装饰
+	var deco: int = 14 if quality >= 3 else (10 if quality >= 2 else 6)
+	if style < 0.5:
+		var cmesh := _crystal_mesh(radius * 0.030, radius * 0.15, 6, 0.35)
+		var cmat := _ice_crystal_mat(c2, 0.55, 1.7)
+		for i in range(deco):
+			var a := TAU * float(i) / float(deco) + 0.12
+			var mi2 := MeshInstance3D.new()
+			mi2.mesh = cmesh
+			mi2.material_override = cmat
+			var rr2 := radius * (0.90 + 0.05 * sin(float(i) * 2.3))
+			mi2.position = Vector3(cos(a) * rr2, 0.02, sin(a) * rr2)
+			mi2.rotation = Vector3(0.0, -a + PI * 0.5, 0.0)
+			mi2.scale = Vector3(1.0, 0.8 + 0.5 * absf(sin(float(i) * 1.7)), 1.0)
+			mi2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			root.add_child(mi2)
+	else:
+		var smesh := _crystal_mesh(radius * 0.040, radius * 0.20, 5, 0.5)
+		var smat := StandardMaterial3D.new()
+		smat.albedo_color = Color(0.10, 0.02, 0.10, 0.92)
+		smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		smat.emission_enabled = true
+		smat.emission = Color(c1.r * 0.9, c1.g * 0.35, c1.b * 0.9)
+		smat.emission_energy_multiplier = 1.4
+		smat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		for i in range(deco):
+			var a := TAU * float(i) / float(deco) + 0.22
+			var mi3 := MeshInstance3D.new()
+			mi3.mesh = smesh
+			mi3.material_override = smat
+			var rr3 := radius * (0.92 + 0.04 * sin(float(i) * 1.9))
+			mi3.position = Vector3(cos(a) * rr3, 0.02, sin(a) * rr3)
+			mi3.rotation = Vector3(-0.28, -a + PI * 0.5, 0.0)
+			mi3.scale = Vector3(1.0, 0.7 + 0.6 * absf(sin(float(i) * 2.1)), 1.0)
+			mi3.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			root.add_child(mi3)
+	# 持续粒子：冰=飘雪+冷雾；暗影=上浮火星+暗雾
+	var parts: Array[CPUParticles3D] = []
+	if quality >= 2:
+		var snow := _charge_particles(46, 2.8, c2, 0.06, 1.0)
+		snow.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		snow.emission_box_extents = Vector3(radius * 0.95, 0.10, radius * 0.95)
+		snow.position = Vector3(0.0, 2.8, 0.0)
+		snow.gravity = Vector3(0.0, -1.8, 0.0)
+		snow.initial_velocity_min = 0.10
+		snow.initial_velocity_max = 0.45
+		snow.scale_amount_min = 0.7
+		snow.scale_amount_max = 1.15
+		root.add_child(snow)
+		parts.append(snow)
+		var mist := _charge_particles(18, 2.4, c1, 0.34, 1.0)
+		mist.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+		mist.emission_ring_axis = Vector3.UP
+		mist.emission_ring_radius = radius * 0.86
+		mist.emission_ring_inner_radius = radius * 0.30
+		mist.emission_ring_height = 0.10
+		mist.position = Vector3(0.0, 0.20, 0.0)
+		mist.gravity = Vector3(0.0, 0.28, 0.0)
+		mist.initial_velocity_min = 0.0
+		mist.initial_velocity_max = 0.35
+		mist.scale_amount_min = 0.8
+		mist.scale_amount_max = 1.4
+		root.add_child(mist)
+		parts.append(mist)
+		if style >= 0.5:
+			var ember := _charge_particles(30, 1.8, Color(1.0, 0.45, 0.18), 0.07, 1.0)
+			ember.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+			ember.emission_ring_axis = Vector3.UP
+			ember.emission_ring_radius = radius * 0.95
+			ember.emission_ring_inner_radius = radius * 0.55
+			ember.emission_ring_height = 0.15
+			ember.position = Vector3(0.0, 0.25, 0.0)
+			ember.gravity = Vector3(0.0, 1.5, 0.0)
+			ember.initial_velocity_min = 0.5
+			ember.initial_velocity_max = 1.3
+			root.add_child(ember)
+			parts.append(ember)
+	# 动画在入树后启动（tween/粒子都要在场景树内才生效；调用方随后 add_child 本节点）
+	if root.is_inside_tree():
+		_zone_start_anim.call_deferred(root, rings, ring_mats, dmat, parts, dur)
+	else:
+		root.ready.connect(_zone_start_anim.bind(root, rings, ring_mats, dmat, parts, dur), CONNECT_ONE_SHOT)
+	return root
+
+## 区域法阵动画：环反向旋转 + 粒子起始发射 + 末段淡出
+func _zone_start_anim(root: Node3D, rings: Array[MeshInstance3D], ring_mats: Array[StandardMaterial3D],
+		dmat: ShaderMaterial, parts: Array[CPUParticles3D], dur: float) -> void:
+	for p in parts:
+		p.emitting = true
+	var spin := root.create_tween()
+	spin.set_parallel(true)
+	spin.tween_property(rings[0], "rotation:y", TAU, 12.0).set_trans(Tween.TRANS_LINEAR)
+	spin.tween_property(rings[1], "rotation:y", -TAU * 1.4, 9.0).set_trans(Tween.TRANS_LINEAR)
+	if dur > 0.5:
+		var fade := root.create_tween()
+		fade.tween_interval(maxf(0.0, dur - 0.55))
+		fade.tween_property(dmat, "shader_parameter/opacity", 0.0, 0.5)
+		for m in ring_mats:
+			fade.parallel().tween_property(m, "albedo_color:a", 0.0, 0.5)
+		for p in parts:
+			fade.parallel().tween_property(p, "color:a", 0.0, 0.5)
+
+## 范围瞄准环（技能前摇预览）：柔光圆底 + 亮环 + 呼吸，替代旧的纯色 torus。
+func preview_ring(radius: float, team: int) -> Node3D:
+	var root := Node3D.new()
+	if quality <= 0 or get_tree() == null:
+		return root
+	var c: Color = team_color(team)
+	var disc := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(radius * 2.0, radius * 2.0)
+	disc.mesh = plane
+	disc.position = Vector3(0.0, 0.03, 0.0)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var dm := ShaderMaterial.new()
+	dm.shader = _glow_shader
+	dm.set_shader_parameter("glow_color", Color(c.r, c.g, c.b, 0.5))
+	dm.set_shader_parameter("intensity", 1.5)
+	dm.set_shader_parameter("softness", 0.5)
+	dm.set_shader_parameter("ring_width", 0.16)
+	dm.set_shader_parameter("pulse_speed", 6.0)
+	disc.material_override = dm
+	root.add_child(disc)
+	var mi := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = radius - maxf(radius * 0.035, 0.06)
+	torus.outer_radius = radius
+	torus.rings = 40
+	torus.ring_segments = 6
+	mi.mesh = torus
+	mi.position = Vector3(0.0, 0.03, 0.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.material_override = _add_mat(c, 0.95, 2.2)
+	root.add_child(mi)
+	return root
+
+
 ## 光柱：大招落地/变身用的竖直能量柱
 func pillar(pos: Vector3, color: Color, radius: float = 2.0, height: float = 8.0, dur: float = 0.8) -> void:
 	if quality <= 0 or get_tree() == null:
@@ -993,6 +1198,20 @@ func slash_fx(from: Vector3, to: Vector3, color: Color) -> void:
 		beam(base, base + d * 3.4, color, 0.09, 0.30)
 		beam(base, base + d * 3.4, color.lerp(Color.WHITE, 0.5), 0.05, 0.24)
 	hit_spark(to + Vector3.UP, color, Vector3.UP, 1.2)
+
+## 近战普攻「武器真的砍到」：从武器挥向命中点的刀光 + 接触点火花（高频调用，轻量）
+func weapon_hit(from: Vector3, to: Vector3, color: Color, color2: Color = Color.WHITE, scale_f: float = 1.0) -> void:
+	if quality <= 0 or get_tree() == null:
+		return
+	var flat := Vector3(to.x - from.x, 0.0, to.z - from.z)
+	if flat.length() < 0.25:
+		return
+	# 刀光：细芯 + 外辉，0.2s 内淡出（不长时间遮挡角色）
+	beam(from, to, color, 0.07 * scale_f, 0.20)
+	beam(from, to, color.lerp(color2, 0.6), 0.032 * scale_f, 0.16)
+	# 接触点：一闪 + 少量碎光
+	_impact_flash(to, color.lerp(Color.WHITE, 0.4), 0.42 * scale_f, 0.12)
+	_burst(color, color2, to, 5, 0.20, 0.26 * scale_f, 3.4, flat.normalized(), 55.0, 0.7)
 
 ## 突进：起点爆发 + 沿途残影粒子
 ## 位移类技能特效：蹬地冲击环 + 贯穿全程的加色拖尾光带 + 沿途速度线 + 落点冲击

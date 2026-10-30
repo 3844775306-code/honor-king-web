@@ -62,10 +62,9 @@ func update_bar(health, max_health, team, shield = 0.0, always_show = false, epi
 	max_value = max_health
 	current_value = health
 
-	# 根据队伍设置颜色
+	# 根据队伍设置颜色（敌友相对：友方蓝 / 敌方红）
 	match team:
-		0: team_color = Color(0.0, 0.886, 1.0, 1.0)          # 蓝方（玩家）
-		1: team_color = Color(1.0, 0.33, 0.264, 1.0)         # 红方（敌人）
+		0, 1: team_color = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(int(team)) else Color(1.0, 0.33, 0.264, 1.0)
 		2: team_color = Color(0.0, 0.886, 0.431, 1.0)        # 中立（野怪等）
 		_: team_color = Color(0.945, 0.925, 0.251, 1.0)      # 默认黄色
 

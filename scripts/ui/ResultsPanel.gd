@@ -102,7 +102,7 @@ func setup(battle: BattleManager):
 	for entity in get_tree().get_nodes_in_group("heroes"):
 		if is_instance_valid(entity) and entity is Hero:
 			all_heroes.append(entity)
-			if entity.team == Config.Team.PLAYER:
+			if Config.is_ally(entity.team):
 				team_player_heroes.append(entity)
 			else:
 				team_enemy_heroes.append(entity)
@@ -115,7 +115,7 @@ func setup(battle: BattleManager):
 func _create_ui():
 	# 结算页独占最上层：盖住 HUD(layer 2)/PostFX(layer 1)，避免战斗控件压在结算内容上
 	layer = UiKit.LAYER_RESULTS
-	var is_win = bm.winner == Config.Team.PLAYER
+	var is_win = Config.is_ally(bm.winner)
 	var result_color = BLUE_TEAM if is_win else RED_TEAM
 
 	# 全屏程序化背景（渐变+辉光+网格+粒子+暗角）+ 薄暗幕保证文字可读
@@ -362,7 +362,7 @@ func _build_vs_column(mvp_player: Hero, mvp_enemy: Hero) -> Control:
 	col.add_theme_constant_override("separation", 4)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var is_win = bm.winner == Config.Team.PLAYER
+	var is_win = Config.is_ally(bm.winner)
 	var top_sp = Control.new(); top_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(top_sp)
 
@@ -890,7 +890,7 @@ func _calc_team_maxes(heroes: Array) -> Dictionary:
 	return maxes
 
 func _get_hero_stats(hero: Hero) -> Array:
-	var team_heroes = team_player_heroes if hero.team == Config.Team.PLAYER else team_enemy_heroes
+	var team_heroes = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
 	var team_total_kills = 0
 	var team_total_damage = 0.0
 	var team_total_gold = 0
@@ -997,7 +997,7 @@ func _find_mvp(heroes: Array) -> Hero:
 	return best
 
 func _calculate_rating(hero: Hero) -> float:
-	var team_heroes = team_player_heroes if hero.team == Config.Team.PLAYER else team_enemy_heroes
+	var team_heroes = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
 
 	var team_max_kills = 1
 	var team_max_damage = 1.0

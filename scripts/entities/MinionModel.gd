@@ -40,6 +40,8 @@ static func _build_template(kind: String, team: int) -> Node3D:
 	var root := Node3D.new()
 	var mats := _materials(team, kind)
 	var sts: Dictionary = {}
+	var stw_l: Dictionary = {}
+	var stw_r: Dictionary = {}
 	match kind:
 		"melee":
 			_body(sts, mats, false, true)
@@ -54,7 +56,7 @@ static func _build_template(kind: String, team: int) -> Node3D:
 			_arms_halberd(sts, mats)
 			_heavy_crest(sts, mats)
 		"dragon", "storm", "shadow_dragon":
-			_dragon(sts, mats, kind)
+			_dragon(sts, mats, kind, stw_l, stw_r)
 		_:
 			_body(sts, mats, false, true)
 			_arms_melee(sts, mats)
@@ -68,6 +70,9 @@ static func _build_template(kind: String, team: int) -> Node3D:
 	# 拆出的双腿：髋关节枢轴，供行走摆动
 	if kind in ["melee", "ranged", "super"]:
 		_build_legs(pivot, mats, kind == "super")
+	# 龙兵：双翼拆成独立枢轴（WalkFeel 扇动）
+	if kind in ["dragon", "storm", "shadow_dragon"]:
+		_build_wings(pivot, mats, stw_l, stw_r, 1.12 if kind == "shadow_dragon" else 1.0)
 	var h := mesh.get_aabb().end.y if kind in ["melee", "ranged", "super"] else mesh.get_aabb().size.y
 	# 超级兵按甲士本体高度归一化，长戟不参与身高缩放
 	if kind == "super":
@@ -257,6 +262,25 @@ static func _build_legs(pivot: Node3D, mats: Dictionary, heavy: bool) -> void:
 		leg.add_child(mi)
 		pivot.add_child(leg)
 
+
+# 双翼：以肩点为枢轴的独立网格（翼几何已在 _dragon 里按左右侧分别构建）
+static func _build_wings(pivot: Node3D, mats: Dictionary, stw_l: Dictionary, stw_r: Dictionary, big: float) -> void:
+	for entry in [[stw_l, -1.0, "WingL"], [stw_r, 1.0, "WingR"]]:
+		var sts: Dictionary = entry[0]
+		if sts.is_empty():
+			continue
+		var s: float = entry[1]
+		var shoulder := Vector3(s * 0.24, 0.82, -0.05)
+		var mi := MeshInstance3D.new()
+		mi.mesh = _commit(sts, mats)
+		mi.position = -shoulder
+		var w := Node3D.new()
+		w.name = str(entry[2])
+		w.position = shoulder
+		w.add_child(mi)
+		pivot.add_child(w)
+
+
 static func _arms_melee(sts: Dictionary, mats: Dictionary) -> void:
 	# 左臂圆盾
 	for s in [-1.0, 1.0]:
@@ -388,7 +412,7 @@ static func _siege(sts: Dictionary, mats: Dictionary) -> void:
 
 # ==================== 主宰先锋（龙形） ====================
 
-static func _dragon(sts: Dictionary, mats: Dictionary, kind: String) -> void:
+static func _dragon(sts: Dictionary, mats: Dictionary, kind: String, stw_l: Dictionary = {}, stw_r: Dictionary = {}) -> void:
 	var big := 1.12 if kind == "shadow_dragon" else 1.0
 	# 躯干 / 胸腹
 	_sph(sts, mats, "scale", 0.34, Vector3(0, 0.68, 0.02), 12, 6)
@@ -453,14 +477,16 @@ static func _dragon(sts: Dictionary, mats: Dictionary, kind: String) -> void:
 		var tip := Vector3(s * 1.10 * big, 0.88, -0.42)
 		var inner := Vector3(s * 0.30, 0.70, -0.24)
 		var low := Vector3(s * 0.22, 0.55, -0.40)
-		_limb(sts, mats, "scale", 0.045, 0.034, shoulder, elbow, 6)
-		_limb(sts, mats, "scale", 0.034, 0.022, elbow, tip, 6)
-		_limb(sts, mats, "scale", 0.030, 0.018, shoulder, inner, 6)
-		_tri(sts, mats, "membrane", shoulder, elbow, tip)
-		_tri(sts, mats, "membrane", shoulder, tip, inner)
-		_tri(sts, mats, "membrane", shoulder, inner, low)
+		# 双翼单独成网格 + 肩部枢轴（WingL/WingR），行走/悬停时扇动
+		var wsts: Dictionary = stw_l if s < 0.0 else stw_r
+		_limb(wsts, mats, "scale", 0.045, 0.034, shoulder, elbow, 6)
+		_limb(wsts, mats, "scale", 0.034, 0.022, elbow, tip, 6)
+		_limb(wsts, mats, "scale", 0.030, 0.018, shoulder, inner, 6)
+		_tri(wsts, mats, "membrane", shoulder, elbow, tip)
+		_tri(wsts, mats, "membrane", shoulder, tip, inner)
+		_tri(wsts, mats, "membrane", shoulder, inner, low)
 		# 翼尖爪
-		_limb(sts, mats, "horn", 0.022, 0.0, elbow, elbow + Vector3(s * 0.10, 0.10, -0.04), 5)
+		_limb(wsts, mats, "horn", 0.022, 0.0, elbow, elbow + Vector3(s * 0.10, 0.10, -0.04), 5)
 	# 尾巴
 	var t0 := Vector3(0, 0.66, -0.48)
 	var t1 := Vector3(0, 0.54, -0.82)

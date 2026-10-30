@@ -32,37 +32,38 @@ func _ready() -> void:
 	_card.mouse_filter = Control.MOUSE_FILTER_STOP
 	_card.anchor_left = 1.0
 	_card.anchor_right = 1.0
-	_card.offset_left = -470.0
-	_card.offset_top = 68.0
+	# 同 host UI_Manager.rec_card：right -410..-20，top 53..137（金币 chip 底边 45 下方 8px）
+	_card.offset_left = -410.0
+	_card.offset_top = 53.0
 	_card.offset_right = -20.0
-	_card.offset_bottom = 168.0
+	_card.offset_bottom = 137.0
 	add_child(_card)
 
 	# “+”快速购买按钮（与推荐卡同高，贴右下）
 	_plus = TouchActionButtonScript.new()
 	_plus.label_text = "+"
-	_plus.label_font_size = 80.0
+	_plus.label_font_size = 64.0     # 同 host buy_plus_btn.label_font_size
 	_plus.color = Color(0.98, 0.84, 0.25, 0.95)
 	_plus.hold_to_act = false
 	_plus.emit_activated_on_press = true
 	_plus.activated.connect(_on_buy_clicked)
 	_plus.anchor_left = 1.0
 	_plus.anchor_top = 0.0
-	_plus.offset_left = -120.0
-	_plus.offset_top = 76.0
-	_plus.offset_right = -30.0
-	_plus.offset_bottom = 166.0
+	_plus.offset_left = -94.0
+	_plus.offset_top = 61.0
+	_plus.offset_right = -26.0
+	_plus.offset_bottom = 133.0
 	_plus.visible = false   # 初始隐藏，feed 按 host 烘焙 show 刷新（买得起才亮）
 	add_child(_plus)
 
-	# 金币 chip：右上角（同 host gold chip：right -285..-55, top 12..52），点按开/关商店
+	# 金币 chip：右上角（同 host gold_chip：right -250..-45, top 8..45），点按开/关商店
 	_chip = GoldChip.new()
 	_chip.anchor_left = 1.0
 	_chip.anchor_top = 0.0
-	_chip.offset_left = -285.0
-	_chip.offset_top = 12.0
-	_chip.offset_right = -55.0
-	_chip.offset_bottom = 60.0
+	_chip.offset_left = -250.0
+	_chip.offset_top = 8.0
+	_chip.offset_right = -45.0
+	_chip.offset_bottom = 45.0
 	_chip.tapped.connect(func(): shop_requested.emit())
 	add_child(_chip)
 
@@ -117,19 +118,19 @@ class RecCard extends Control:
 			if not collapsed:
 				collapsed = true
 				auto_collapsed = true
-				offset_left = -112.0
+				offset_left = -96.0
 				queue_redraw()
 		elif auto_collapsed:
 			collapsed = false
 			auto_collapsed = false
-			offset_left = -470.0
+			offset_left = -410.0
 			queue_redraw()
 	func _gui_input(ev: InputEvent) -> void:
 		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
 				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 			collapsed = not collapsed
 			auto_collapsed = false
-			offset_left = -112.0 if collapsed else -470.0   # 收起时缩成图标大小，避免挡住后方面板
+			offset_left = -96.0 if collapsed else -410.0   # 收起时缩成图标大小，避免挡住后方面板
 			queue_redraw()
 			accept_event()
 	func _draw() -> void:
@@ -161,10 +162,10 @@ class GoldChip:
 		queue_redraw()
 	func _draw() -> void:
 		var r := Rect2(Vector2.ZERO, size)
-		# 同 host gold_chip：_apply_panel_style(0.55) 纯黑半透明、无描边
-		draw_rect(r, Color(0, 0, 0, 0.55))
+		# 同 host gold_chip：_apply_panel_style(0.55) 圆角玻璃 + 冷光描边
+		draw_style_box(UiKit.flat(0.55, 12, 1), r)
 		var txt := "金币: %d" % gold
-		var fs := 16.0 * _us()   # host: _apply_label_style(gold_label, 16, UiKit.C_GOLD)
+		var fs := 17.0 * _us()   # host: _apply_label_style(gold_label, 17, UiKit.C_GOLD)
 		var w := _f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var c := size * 0.5 + Vector2(-w * 0.5, fs * 0.36)
 		draw_string_outline(_f, c, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, int(round(fs)), 1, Color.BLACK)
@@ -173,3 +174,4 @@ class GoldChip:
 		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
 				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 			tapped.emit()
+

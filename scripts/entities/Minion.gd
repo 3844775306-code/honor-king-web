@@ -12,6 +12,8 @@ var minion_type: String = "melee"
 var visual: Node3D = null   # 模型实例（攻城车等无骨骼动画的兵种靠程序化后坐表现攻击）
 var _proc_visual: bool = false
 var _death_anim_started: bool = false
+var _wp_idx_cached: int = -1      # 路点到达半径缓存（塔位路点会被塔基推挤，半径需放宽）
+var _wp_reach: float = 1.0
 
 func _ready():
 	add_to_group("minions")
@@ -76,10 +78,11 @@ func bar_anchor_height() -> float:
 	var model_h := MinionModelScript.target_height(display_name) * MinionModelScript.VISUAL_SCALE + 0.3
 	return maxf(body_radius * 2.0 + 1.0, model_h)
 
-# 行走质感按体型调整：龙兵步幅更大、起伏更明显
+# 行走质感按体型调整：龙兵双翼扇动 + 更大起伏
 func _walk_opts() -> Dictionary:
 	if display_name in ["dragon", "storm", "shadow_dragon"]:
-		return {"stride": 1.7, "bob": 0.055, "sway": 0.028, "lean": 0.03, "dust": false}
+		return {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
+			"wings": [visual.get_node_or_null("ModelPivot/WingL"), visual.get_node_or_null("ModelPivot/WingR")]}
 	if display_name == "siege":
 		return {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
 	# 甲士：双腿绕髋关节前后摆 + 步频起伏，避免“贴地滑行”
@@ -89,20 +92,92 @@ func _walk_opts() -> Dictionary:
 		"leg_swing": swing}
 
 
-# 无骨骼模型的普攻前刺（有 AnimationPlayer 的兵种仍用原动画）
+# 无骨骼模型的普攻：蓄力(后拉+抬身) → 出手(前冲+压身+拧腰) → 收势回位
+# 只动 ModelPivot（WalkFeel 动的是 visual 根节点），两者互不覆盖
 func _model_lunge() -> void:
 	if visual == null or not is_instance_valid(visual):
 		return
 	var pivot: Node3D = visual.get_node_or_null("ModelPivot")
 	if pivot == null:
 		return
-	var base := pivot.position
+	var old: Tween = pivot.get_meta("atk_tween", null)
+	if old != null and old.is_valid():
+		old.kill()
+	# 兵种手感：远程拉弓后弹射、超级兵重砸、龙兵俯冲冲撞、近战兵刺击
+	var p := {"back": 0.12, "fwd": 0.36, "up": 0.18, "down": 0.18, "twist": 0.26, "dip": 0.05,
+		"windup": 0.09, "strike": 0.10, "settle": 0.30}
+	if display_name == "ranged":
+		p = {"back": 0.17, "fwd": 0.09, "up": 0.11, "down": 0.12, "twist": 0.15, "dip": 0.04,
+			"windup": 0.13, "strike": 0.07, "settle": 0.26}
+	elif display_name == "super":
+		p = {"back": 0.19, "fwd": 0.52, "up": 0.32, "down": 0.36, "twist": 0.46, "dip": 0.11,
+			"windup": 0.13, "strike": 0.12, "settle": 0.36}
+	elif display_name in ["dragon", "storm", "shadow_dragon"]:
+		p = {"back": 0.13, "fwd": 0.38, "up": 0.12, "down": 0.24, "twist": 0.0, "dip": 0.06,
+			"windup": 0.10, "strike": 0.12, "settle": 0.30}
+	var base_pos := pivot.position
+	var base_rot := pivot.rotation
+	var base_scl := pivot.scale
+	# 个体差异：每个兵的攻击节奏/幅度略有不同，整排兵同帧出手也不会像复制粘贴
+	var seed_v: int = absi(get_instance_id() % 89)
+	var rnd: float = float(seed_v) / 89.0
+	var side_dir: float = 1.0 if (seed_v % 2 == 0) else -1.0
+	var back: float = float(p.back) * (0.85 + 0.30 * rnd)
+	var fwd: float = float(p.fwd) * (0.90 + 0.20 * rnd)
+	var up: float = float(p.up) * (0.85 + 0.30 * rnd)
+	var down: float = float(p.down) * (0.85 + 0.30 * rnd)
+	var twist: float = float(p.twist) * (0.80 + 0.40 * rnd)
+	var dip: float = float(p.dip) * (0.85 + 0.30 * rnd)
+	var windup: float = float(p.windup) * (0.85 + 0.30 * rnd)
+	var strike: float = float(p.strike) * (0.85 + 0.30 * rnd)
+	var settle: float = float(p.settle) * (0.90 + 0.20 * rnd)
+	# 横向挥砍 + 身体侧倾：近战/超级兵是「砍」不是「戳」，远程/龙兵只做轻微摆动
+	var swing: float = 0.0
+	var roll: float = 0.0
+	if display_name in ["melee", "super"]:
+		var heavy: float = 1.6 if display_name == "super" else 1.0
+		swing = (0.16 + 0.12 * rnd) * side_dir * heavy
+		roll = (0.10 + 0.08 * rnd) * side_dir * heavy
+	elif display_name in ["dragon", "storm", "shadow_dragon"]:
+		swing = 0.06 * side_dir
+	var hop: float = up * 0.22 if display_name in ["melee", "super"] else 0.0
 	var tw := create_tween()
-	tw.tween_property(pivot, "position:z", base.z + 0.16, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(pivot, "rotation:x", -0.10, 0.10)
-	tw.tween_interval(0.03)
-	tw.tween_property(pivot, "position:z", base.z, 0.20).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-	tw.parallel().tween_property(pivot, "rotation:x", 0.0, 0.20)
+	pivot.set_meta("atk_tween", tw)
+	# 1) 蓄力：重心后坐、上身抬起、反向拧腰 + 纵向压扁（挤压感）
+	tw.tween_property(pivot, "position:z", base_pos.z - back, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x + up, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y + twist, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x - swing * 0.45, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z + roll * 0.4, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y - dip * 0.35, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 1.05, base_scl.y * 0.93, base_scl.z * 1.05), windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 2) 出手：前冲 + 横砍 + 压身 + 顺向拧腰（TRANS_BACK 过冲），拉伸变形 + 轻微腾空
+	tw.tween_property(pivot, "position:z", base_pos.z + fwd, strike).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x + swing, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y - dip + hop, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x - down, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y - twist * 1.5, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z - roll, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 0.94, base_scl.y * 1.10, base_scl.z * 0.94), strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# 3) 收势：先回到前冲一半再缓落（避免直线弹回），带一点反向过冲
+	tw.tween_property(pivot, "position:z", base_pos.z + fwd * 0.25, settle * 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x + swing * 0.3, settle * 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x + up * 0.2, settle * 0.45)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 1.02, base_scl.y * 0.97, base_scl.z * 1.02), settle * 0.45)
+	tw.tween_property(pivot, "position:z", base_pos.z, settle * 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x, settle * 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z, settle * 0.55)
+	tw.parallel().tween_property(pivot, "scale", base_scl, settle * 0.55)
+
+# 本地英雄附近才生成刀光（远处小兵不占特效预算）
+func _near_local_hero(radius: float) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or bm.hero == null or not is_instance_valid(bm.hero):
+		return false
+	return global_position.distance_to(bm.hero.global_position) <= radius
 
 
 # 无骨骼模型死亡：停掉行走起伏，侧倒/坠地
@@ -177,12 +252,15 @@ func _physics_process(delta):
 	# 如果有目标且在视野内，追击或攻击
 	if current_target and is_instance_valid(current_target) and current_target.health > 0:
 		var dist = global_position.distance_to(current_target.global_position) 
-		if dist <= attack_range*0.01:
+		# 塔基半径 3.2：以塔基边缘判定攻击距离（塔基是障碍，否则近战兵永远够不到塔心）
+		var reach: float = attack_range*0.01 + (3.2 if current_target is Turret else 0.0)
+		if dist <= reach:
 			# 进入攻击范围：始终面向目标（近战/远程/攻城车一致，不再只朝移动方向）
 			var to_t: Vector3 = current_target.global_position - global_position
 			rotation.y = lerp_angle(rotation.y, atan2(to_t.x, to_t.z), clampf(delta * 10.0, 0.0, 1.0))
 			# 攻击范围内 → 攻击，停止移动
 			if attack_timer <= 0:
+				var _tgt_pos: Vector3 = current_target.global_position
 				if attack_range*0.01 > 1.0:
 					var bullet = Bullet.new()
 					bullet.speed = 10.0
@@ -221,6 +299,10 @@ func _physics_process(delta):
 					_siege_recoil()   # 攻城车模型无骨骼动画 → 程序化开炮后坐
 				elif _proc_visual:
 					_model_lunge()    # 程序化甲士模型无骨骼动画 → 普攻前刺
+					if display_name in ["melee", "super"] and _near_local_hero(20.0):
+						var swing_from: Vector3 = global_position + Vector3.UP * (0.85 if display_name == "melee" else 1.25)
+						var side_off: Vector3 = to_t.normalized().rotated(Vector3.UP, 0.6) * (0.5 if display_name == "melee" else 0.9)
+						Vfx.weapon_hit(swing_from - side_off, _tgt_pos + Vector3.UP * (0.55 if display_name == "melee" else 0.9), Vfx.team_color(team), Color(1.0, 0.96, 0.86), 0.9 if display_name == "melee" else 1.45)
 			# 停步
 			return
 		elif ( _is_on_lane_or_high_ground(current_target.global_position)):
@@ -231,7 +313,8 @@ func _physics_process(delta):
 			global_position += dir * move_speed * delta*0.01
 			rotation.y = atan2(dir.x, dir.z)
 			_play_anim("walk")
-			var half = Config.MAP_SIZE / 2.0
+			# 边界格（世界坐标 |v| >= 60）是实心墙：留 1m 余量，站进实心格会让 A* 起点变成墙体而卡死
+			var half = Config.MAP_SIZE / 2.0 - 1.0
 			
 			global_position.x = clamp(global_position.x, -half, half)
 			global_position.z = clamp(global_position.z, -half, half)
@@ -245,17 +328,32 @@ func _physics_process(delta):
 	# 无有效目标 → 沿路点移动
 	if waypoint_index < waypoints.size():
 		var target_pos = waypoints[waypoint_index]
+		# 塔位路点：塔基会把单位推开，永远站不到路点中心 → 放宽到达半径，避免绕塔打转
+		if waypoint_index != _wp_idx_cached:
+			_wp_idx_cached = waypoint_index
+			_wp_reach = 1.0
+			for tu in get_tree().get_nodes_in_group("turrets"):
+				if is_instance_valid(tu) and tu.global_position.distance_to(target_pos) < 3.4:
+					_wp_reach = 3.4
+					break
+			if _wp_reach <= 1.0:
+				for st in get_tree().get_nodes_in_group("tower_stumps"):
+					if is_instance_valid(st) and st.global_position.distance_to(target_pos) < 3.4:
+						_wp_reach = 3.4
+						break
 		var dir = (target_pos - global_position).normalized()
 		dir = _avoid_walls(dir, delta, target_pos)
 		global_position += dir * move_speed*0.01 * delta
 		rotation.y = atan2(dir.x, dir.z)
 		_play_anim("walk")
-		if global_position.distance_to(target_pos) < 1.0:
+		if global_position.distance_to(target_pos) < _wp_reach:
 			waypoint_index += 1
-	var half = Config.MAP_SIZE / 2.0
+	# 边界格（世界坐标 |v| >= 60）是实心墙：留 1m 余量，站进实心格会让 A* 起点变成墙体而卡死
+	var half = Config.MAP_SIZE / 2.0 - 1.0
 	global_position.x = clamp(global_position.x, -half, half)
 	global_position.z = clamp(global_position.z, -half, half)
 	
+
 
 func _find_target():
 	var best: GameEntity = null

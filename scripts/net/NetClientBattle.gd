@@ -14,6 +14,7 @@ const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const NetDeathRecapScript = preload("res://scripts/net/NetDeathRecap.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
+const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
 ## 读取主机快照渲染战场（不含任何模拟），接管主机同队 AI 后由真人发指令：
 ##   左键  行动（点敌方=攻击，点地=移动；预选技能时=施法目标）
@@ -174,7 +175,7 @@ var _death_cl: CanvasLayer = null   # 死亡全屏压暗层（同 host UI_Manage
 var _death_tint: ColorRect = null
 var _pfx_hp: float = -1.0           # PostFX 受击红晕：上一帧 own.hp（-1=未初始化）
 var _pop_offsets := {}         # key(0.1 精度 Vector3) -> {"count": int, "ms": int}（同点错开、过期清）
-var _exp_orbs := []            # {n: MeshInstance3D, nid, tx, tz, spd}（每帧向目标英雄头顶飞行）
+var _exp_orbs := []            # {n: Node3D, nid, tx, tz, spd}（每帧向目标英雄头顶飞行）
 var _cam: Camera3D
 var _cam_focus := Vector3.ZERO
 var _cam_yaw := 225.0     # 度数；默认看向对角方向
@@ -214,6 +215,24 @@ var _pred_speed := 380.0        # 预估移速（客户端无 actual_move_speed�
 var _pred_sp_pos := Vector3.ZERO  # 上次校准用的快照位置
 var _pred_sp_t := 0.0           # 上次校准用的快照时刻
 var _pred_err := 0.0            # 最近一次预测与快照的水平误差（米，调试/探针）
+var _pred_turn_cd := 0.0        # 转向模式本地转向节流（同 host turn_timer：0.05s/次）
+# —— 手感：镜头反馈（同 host BattleManager camera_shake/fov_punch/hitstop/flash_screen） ——
+var _shake_amp := 0.0
+var _shake_dur := 0.0
+var _shake_t := 0.0
+var _fov_punch_amp := 0.0
+var _fov_punch_dur := 0.0
+var _fov_punch_t := 0.0
+var _fov_punch_cur := 0.0
+var _hitstop_until := 0
+var _last_feedback_ms := 0
+var _flash_rect: ColorRect = null
+var _flash_tween: Tween = null
+var _cam_pan := Vector3.ZERO     # 右半屏拖动取景偏移（同 host cam_pan_offset，上限 45m）
+var _cam_pan_prev := Vector2.ZERO
+var _cam_pan_prev_valid := false
+var _cam_pan_decay := false
+var _cam_mid_drag := false       # 桌面中键自由镜头拖动中
 
 # —— P2：相机 / 小地图 / 世界血条 ——
 var _mm: NetMiniMapScript       # 顶左小地图（CanvasLayer 80，触摸层 100 之下）
@@ -317,6 +336,8 @@ func _process(delta: float) -> void:
 	if _death_tint != null:
 		_death_tint.visible = _owned and int(_own.get("alive", 1)) == 0
 	_sync_postfx()
+	_tick_feedback(delta)
+	_update_cam_pan(delta)
 	_hud.fp = _first_person
 	_hud.game_time = _last_snap_time
 	_hud.u = _hud_scale()
@@ -393,22 +414,31 @@ func _process(delta: float) -> void:
 	elif _owned:
 		var mm_now := Time.get_ticks_msec()
 		if _mm != null and _mm.panning:
-			# 按住小地图拖动取景：镜头随拖动平移，松手回正跟随英雄
-			_cam_focus = _cam_focus.lerp(Vector3(_mm.pan_world.x, 0.0, _mm.pan_world.z), minf(1.0, delta * 10.0))
+			# 按住小地图拖动取景：镜头随拖动平移（host 为即时硬设），松手回正跟随英雄
+			_cam_focus = Vector3(_mm.pan_world.x, 0.0, _mm.pan_world.z)
 		elif _mm != null and _mm.gaze_ready:
 			_mm_gaze_until = mm_now + MM_GAZE_MS
 			var g: Vector3 = _mm.take_gaze()
 			_cam_focus = Vector3(g.x, 0.0, g.z)
 		elif _mm_gaze_until <= mm_now:
-			_cam_focus = _cam_focus.lerp(want, minf(1.0, delta * 5.0))
+			# 跟随手感同 host：指数平滑 12/s，目标跳变 >25m 直接硬设（小地图跳转/复活传送）
+			if _cam_focus.distance_to(want) > 25.0:
+				_cam_focus = want
+			else:
+				_cam_focus = _cam_focus.lerp(want, 1.0 - exp(-12.0 * delta))
 	elif _last_snap_time <= 0.0:
-		_cam_focus = _cam_focus.lerp(want, minf(1.0, delta * 5.0))
+		if _cam_focus.distance_to(want) > 25.0:
+			_cam_focus = want
+		else:
+			_cam_focus = _cam_focus.lerp(want, 1.0 - exp(-12.0 * delta))
 	# 第一人称：隐藏自身模型防挡视线（同主机隐藏 visual_mesh）；退出后恢复
 	if _owned:
 		var sv2: Dictionary = _views.get(_self_net, {})
 		if sv2.has("node") and sv2.node != null:
 			sv2.node.visible = not _first_person
 	_update_camera()
+	# 逆光：主光始终在相机水平正前方，补光在相机后方（与 host BattleManager 同源）
+	MapVisuals.update_backlight_for_camera(_cam)
 	# 小地图数据每帧喂入（引用式共享 views，纯展示不改模拟）
 	if _mm != null:
 		_mm.visible = _owned   # 未接管的观战棋盘期先不叠小地图
@@ -833,7 +863,8 @@ func _apply_fx(snap: Array) -> void:
 		var life := float(row[FX_ROW_LIFE])
 		if life <= 0.0:
 			life = 0.5
-		var n: Node3D = _build_fx(kind, team, rr)
+		var caster := str(row[9]) if row.size() > 9 else ""
+		var n: Node3D = _build_fx(kind, team, rr, life, caster)
 		n.position = p
 		_vis_root.add_child(n)
 		_fx_live.append({"n": n, "born_ms": now, "life_ms": life * 1000.0, "kind": kind, "r": rr, "team": team})
@@ -845,8 +876,13 @@ func _apply_fx(snap: Array) -> void:
 # FX catalog：按 kind 还原 host 各 helper 的硬编码色/形/生命周期语义（值取自 SkillDataBase）。
 # zone 类（spell 地面圈/地形/水域/风暴/元流池）= 落位即满尺寸、整段存在、末段淡出；
 # one-shot 类（水花/水浪冲击/后羿爆炸）= 由小扩散 + 中段淡出。
-func _build_fx(kind: int, team: int, r: float) -> Node3D:
+func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String = "") -> Node3D:
 	var root := Node3D.new()
+	# 持续地面区域（王昭君暴风雪/吕布魔神法阵/亚瑟圣印/甄姬水域/元芳风暴/元流池）：
+	# 直接用 host 同款 Vfx.ground_zone（同一 shader 法阵 + 元素装饰 + 末段淡出）
+	if kind == FX_SPELL or kind == FX_WATER_ZONE or kind == FX_LYF_STORM or kind == FX_YL_POOL:
+		root.add_child(Vfx.ground_zone(maxf(r, 0.15), team, caster, life))
+		return root
 	var mats: Array = []
 	var team_col := COL_ALLY_DIM
 	if team == TEAM_ENEMY:
@@ -1097,12 +1133,19 @@ func _sync_postfx() -> void:
 	if _pfx_hp >= 0.0 and hp < _pfx_hp:
 		var lost := (_pfx_hp - hp) / maxhp
 		PostFX.damage(clampf(0.3 + lost * 4.0, 0.0, 1.0), clampf(lost * 3.0, 0.0, 0.6))
+		# 受击震屏：同 host GameEntity（伤害 > max(5, 2%maxhp)，90ms 节流；本机在镜头中心恒 <14m）
+		var dmg := _pfx_hp - hp
+		var now_ms := Time.get_ticks_msec()
+		if dmg > maxf(5.0, maxhp * 0.02) and now_ms - _last_feedback_ms > 90:
+			_last_feedback_ms = now_ms
+			_camera_shake(clampf(0.03 + dmg / 5000.0, 0.03, 0.12), 0.18)
 	_pfx_hp = hp
 
 
 # PostFX：离开联机战斗场景时复位死亡去饱和，避免回大厅后画面仍压暗
 func _exit_tree() -> void:
 	PostFX.set_dead(false)
+	Engine.time_scale = 1.0   # 本地顿帧兜底复位（防止中途退出卡在慢放）
 	if is_instance_valid(SfxManager):
 		SfxManager.stop_all()
 
@@ -1201,13 +1244,16 @@ func _spawn_gold_label(wp: Vector3, amount: int, own: bool) -> void:
 	tw.tween_callback(lab.queue_free)
 
 
-# 经验珠：source 处绿珠 0.5s 飞向目标英雄头顶（host 单机 spawn_exp_orb 同款）
+# 经验珠：source 处亮核光球 0.5s 飞向目标英雄头顶（host 单机 spawn_exp_orb 同款）
 func _spawn_exp_orb(src: Vector3, end: Vector3, nid: int) -> void:
 	if _vis_root == null:
 		return
-	var orb: MeshInstance3D = MeshFactory.create_sphere(0.15, Color(0.2, 1.0, 0.35, 1.0), true, 0.85)
-	orb.global_position = Vector3(src.x, maxf(src.y + 0.3, 0.3), src.z)
+	var orb: Node3D = MeshFactory.create_exp_orb(0.16)
 	_vis_root.add_child(orb)
+	orb.global_position = Vector3(src.x, maxf(src.y + 0.3, 0.3), src.z)
+	orb.scale = Vector3(0.4, 0.4, 0.4)
+	var tw := create_tween()
+	tw.tween_property(orb, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	var to := end + Vector3(0.0, 1.5, 0.0)
 	var dist := to.distance_to(orb.global_position)
 	_exp_orbs.append({"n": orb, "nid": nid, "tx": end.x, "tz": end.z,
@@ -1227,7 +1273,7 @@ func _advance_exp_orbs(delta: float) -> void:
 		return
 	var done3: Array = []
 	for o in _exp_orbs:
-		var nn3: MeshInstance3D = o.n
+		var nn3: Node3D = o.n
 		if nn3 == null or not is_instance_valid(nn3):
 			done3.append(o)
 			continue
@@ -1482,8 +1528,10 @@ func _tick_hero_anims(delta: float) -> void:
 		var sp := sqrt(dx * dx + dz * dz) / maxf(delta, 0.0001)
 		if sp > 0.45:
 			var yaw2 := atan2(dx, dz)
-			var dyaw := wrapf(yaw2 - nn.rotation.y, -PI, PI)
-			nn.rotation.y = nn.rotation.y + dyaw * minf(1.0, delta * 10.0)
+			# 本机英雄朝向由预测直接管理（host 是即时 atan2 / 转向模式按键转向），此处不再平滑盖写
+			if not (nid == _self_net and _owned):
+				var dyaw := wrapf(yaw2 - nn.rotation.y, -PI, PI)
+				nn.rotation.y = nn.rotation.y + dyaw * minf(1.0, delta * 10.0)
 			if v.get("anim", "") != "walk":
 				var cw: String = str(v.get("walk_clip", ""))
 				if cw != "" and ap.has_animation(cw):
@@ -1641,7 +1689,16 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 		if typ == NET_HERO:
 			wopts = {"stride": 1.9, "bob": 0.055, "sway": 0.028, "lean": 0.075, "dust": false}
 		elif typ == NET_MINION:
-			wopts = {"stride": 1.15, "bob": 0.032, "sway": 0.04, "lean": 0.05, "dust": false}
+			# 客户端与主机同源：地面兵给双腿枢轴、龙兵给双翼枢轴，步频按实际位移推进
+			if name in ["dragon", "storm", "shadow_dragon"]:
+				wopts = {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
+					"wings": [model_ref.get_node_or_null("ModelPivot/WingL"),
+						model_ref.get_node_or_null("ModelPivot/WingR")]}
+			else:
+				wopts = {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust": false,
+					"legs": [model_ref.get_node_or_null("ModelPivot/LegL"),
+						model_ref.get_node_or_null("ModelPivot/LegR")],
+					"leg_swing": 0.52 if name == "super" else 0.62}
 		WalkFeel.attach(node, model_ref, wopts)
 	# 自己高亮：淡蓝竖直光柱（从头顶向上）
 	if nid == _self_net and typ == NET_HERO:
@@ -1907,6 +1964,8 @@ func _on_takeover(manifest: Dictionary) -> void:
 	_manifest = manifest
 	_skills = manifest.get("skills", [])
 	_self_net = int(manifest.get("net_id", -1))
+	if _rp != null and is_instance_valid(_rp):
+		_rp.self_net = _self_net
 	_owned = _self_net >= 0
 	_pending_skill = -1
 	# 播报「你击杀…/你被击杀」需知道本地玩家英雄名（host 走 BM.hero 兜底，不必设）
@@ -1973,8 +2032,38 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_ESCAPE:
 				if _rp and _rp.visible:
 					_rp.hide_panel()
+			KEY_Y:
+				# 桌面自由镜头回正（同 host BattleManager：Y 键清空 cam_pan_offset）
+				_cam_pan = Vector3.ZERO
+				_cam_mid_drag = false
+				_cam_pan_decay = false
 		return
 	if _owned:
+		# 桌面鼠标（同 host BattleManager 世界点击）：左键=锁定敌方/施法目标，右键=移动到地面点，中键=拖镜
+		if event is InputEventMouseButton:
+			var mb2 := event as InputEventMouseButton
+			if mb2.button_index == MOUSE_BUTTON_LEFT and mb2.pressed:
+				if _pending_skill >= 0:
+					_do_action(mb2.position)
+				else:
+					var tid := _pick_entity(mb2.position, false)
+					if tid >= 0:
+						NetSession.send_command([NetSession.C_ATTACK, tid])
+				return
+			if mb2.button_index == MOUSE_BUTTON_RIGHT and mb2.pressed:
+				var g2 := _ground_hit(mb2.position)
+				NetSession.send_command([NetSession.C_MOVE, g2.x, g2.z])
+				return
+			if mb2.button_index == MOUSE_BUTTON_MIDDLE:
+				_cam_mid_drag = mb2.pressed
+				if not mb2.pressed:
+					_cam_pan_prev_valid = false
+		elif event is InputEventMouseMotion and _cam_mid_drag:
+			_cam_pan.x -= (event as InputEventMouseMotion).relative.x / 60.0
+			_cam_pan.z += (event as InputEventMouseMotion).relative.y / 60.0
+			if _cam_pan.length() > 45.0:
+				_cam_pan = _cam_pan.normalized() * 45.0
+			_cam_pan_decay = false
 		return
 	if event is InputEventMouseMotion:
 		_mouse_screen = event.position
@@ -2371,20 +2460,19 @@ func _update_camera() -> void:
 	if _owned:
 		if _first_person and int(_own.get("alive", 1)) == 1:
 			# 第一人称：镜头在英雄头部，朝向跟随英雄面朝方向（own.ry = host hero.rotation.y）
-			if _cam.fov != 90.0:
-				_cam.fov = 90.0
+			_cam.fov = 90.0 - _fov_punch_cur
 			_cam.global_position = _cam_focus + CAM_FP_EYE
 			_cam.rotation = Vector3(0.0, float(_own.get("ry", 0.0)) + PI, 0.0)
 			return
 		# 接管：固定俯视主机镜头 —— 视角锁定（fov70 / -60°，与 host BattleManager 完全一致），只随英雄平移。
 		# 这样摇杆/键盘的「世界方向移动」与主机屏幕方向 1:1。
-		if _cam.fov != 70.0:
-			_cam.fov = 70.0
+		_cam.fov = 70.0 - _fov_punch_cur
 		var zoom := 1.0
 		# 兰陵王隐身中：同主机把固定跟随镜头拉远/拉高 25%（看得更广）
 		if int(_own.get("hidden_self", 0)) == 1:
 			zoom = 1.25
-		_cam.global_position = _cam_focus + CAM_FOLLOW_OFF * zoom
+		# host：目标点 = 英雄 + 跟随偏移 + 拖动平移偏移；震屏在其后叠加
+		_cam.global_position = _cam_focus + CAM_FOLLOW_OFF * zoom + _cam_pan + _shake_offset()
 		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
 		return
 	var pitch := deg_to_rad(_cam_pitch)
@@ -2393,6 +2481,121 @@ func _update_camera() -> void:
 	var off := Vector3(sin(yaw) * hoz, _cam_dist * sin(pitch), cos(yaw) * hoz)
 	_cam.global_position = _cam_focus + off
 	_cam.look_at(_cam_focus + Vector3.UP * 1.2, Vector3.UP)
+
+
+# —— 手感：镜头反馈（照抄 host BattleManager camera_shake/fov_punch/hitstop；客户端只有表现） ——
+func _camera_shake(amp: float = 0.12, dur: float = 0.22) -> void:
+	_shake_amp = maxf(_shake_amp, amp)
+	_shake_dur = maxf(_shake_dur, dur)
+	_shake_t = maxf(_shake_t, dur)
+
+
+func _shake_offset() -> Vector3:
+	if _shake_t <= 0.0:
+		return Vector3.ZERO
+	var k := _shake_t / maxf(0.001, _shake_dur)
+	var a := _shake_amp * k * k
+	var now := Time.get_ticks_msec() * 0.001
+	return Vector3(sin(now * 61.0), sin(now * 47.0) * 0.6, cos(now * 53.0)) * a
+
+
+func _fov_punch(amount: float = 2.5, dur: float = 0.35) -> void:
+	_fov_punch_amp = amount
+	_fov_punch_dur = maxf(0.01, dur)
+	_fov_punch_t = _fov_punch_dur
+
+
+func _local_hitstop(dur: float = 0.035) -> void:
+	var now := Time.get_ticks_msec()
+	if now < _hitstop_until:
+		return
+	_hitstop_until = now + int(dur * 1000.0)
+	Engine.time_scale = 0.12
+
+
+# 屏幕闪光：同 host UI_Manager.flash_screen（0→0.26 用 25% 时长，再 75% 时长回落）
+func _screen_flash(color: Color, dur: float = 0.18) -> void:
+	if _flash_rect == null:
+		var cl := CanvasLayer.new()
+		cl.layer = UiKit.LAYER_POPUP + 5
+		add_child(cl)
+		_flash_rect = ColorRect.new()
+		_flash_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_flash_rect.color = Color(0, 0, 0, 0)
+		_flash_rect.visible = false
+		cl.add_child(_flash_rect)
+	if _flash_tween != null and _flash_tween.is_valid():
+		_flash_tween.kill()
+	_flash_rect.visible = true
+	_flash_rect.color = Color(color.r, color.g, color.b, 0.0)
+	_flash_tween = create_tween()
+	_flash_tween.tween_property(_flash_rect, "color:a", 0.26, dur * 0.25)
+	_flash_tween.tween_property(_flash_rect, "color:a", 0.0, dur * 0.75)
+	_flash_tween.tween_callback(func(): _flash_rect.visible = false)
+
+
+# 本机大招本地即时反馈（host Hero._start_casting → BattleManager.on_big_cast，参数查 SpellFxTable）
+func _play_big_cast_feedback() -> void:
+	var hn := str(_manifest.get("hero_name", ""))
+	if hn == "" and _hud != null:
+		hn = str(_hud.name_text)
+	var ent: Dictionary = SpellFxTable.get_ult(hn)
+	_camera_shake(float(ent.get("shake", 0.10)), 0.28)
+	_fov_punch(2.5, 0.40)
+	if bool(ent.get("heavy", false)):
+		_local_hitstop(0.03)
+	_screen_flash(Vfx.color_for_hero(hn).lerp(Color.WHITE, 0.55), 0.20)
+
+
+func _tick_feedback(delta: float) -> void:
+	# 顿帧复位（每帧墙钟判定；不用 SceneTreeTimer，避免 time_scale 下计时偏差）
+	if Engine.time_scale != 1.0 and Time.get_ticks_msec() >= _hitstop_until:
+		Engine.time_scale = 1.0
+	if _shake_t > 0.0:
+		_shake_t = maxf(0.0, _shake_t - delta)
+		if _shake_t <= 0.0:
+			_shake_amp = 0.0
+	if _fov_punch_t > 0.0:
+		_fov_punch_t = maxf(0.0, _fov_punch_t - delta)
+		var e := 1.0 - _fov_punch_t / _fov_punch_dur
+		var k := (e / 0.3) if e < 0.3 else ((1.0 - e) / 0.7)
+		_fov_punch_cur = _fov_punch_amp * clampf(k, 0.0, 1.0)
+	else:
+		_fov_punch_cur = 0.0
+
+
+# —— 右半屏拖拽取景（同 host BattleManager._update_cam_pan：增量累加、上限 45m、松手 10/s 回正） ——
+func _update_cam_pan(delta: float) -> void:
+	if not _owned or _first_person or int(_own.get("alive", 1)) != 1:
+		_cam_pan_prev_valid = false
+		if not _cam_pan_decay:
+			_cam_pan = Vector3.ZERO
+			return
+	var allow: bool = _owned and not _first_person and int(_own.get("alive", 1)) == 1 \
+		and _pad != null and _pad.camera_pan_active()
+	if not allow:
+		_cam_pan_prev_valid = false
+		if not _cam_pan_decay:
+			return
+		if _cam_pan.length() < 0.05:
+			_cam_pan = Vector3.ZERO
+			_cam_pan_decay = false
+		else:
+			_cam_pan = _cam_pan.lerp(Vector3.ZERO, clampf(delta * 10.0, 0.0, 1.0))
+		return
+	_cam_pan_decay = true
+	var cur: Vector2 = _pad.get_camera_pan_current()
+	if _cam_pan_prev_valid:
+		var ga := _ground_hit(_cam_pan_prev)
+		var gb := _ground_hit(cur)
+		_cam_pan += Vector3(ga.x - gb.x, 0.0, ga.z - gb.z)
+		if _cam_pan.length() > 45.0:
+			_cam_pan = _cam_pan.normalized() * 45.0
+	else:
+		_cam_pan_prev_valid = true
+	_cam_pan_prev = cur
+
 
 func _build_hud() -> void:
 	var cl := CanvasLayer.new()
@@ -2472,6 +2675,7 @@ func _build_roster_panel() -> void:
 	cl.layer = 101
 	add_child(cl)
 	_rp = NetRosterPanelScript.new()
+	_rp.self_net = _self_net
 	cl.add_child(_rp)
 
 # —— P3d 商店：own.gold/equip/rec 喂入；CanvasLayer 102 盖过 C/T 面板；O/B/Esc 在面板自身处理 ——
@@ -2542,15 +2746,23 @@ func _reset_drive_state() -> void:
 
 
 # —— P0-C：本机操控英雄移动预测 ——
-# 每帧按当前输入轴积分位置（与主机 Hero 直驱同公式 speed*0.01*delta），快照只做校正，
+# 每帧按当前输入轴积分位置（与主机 Hero 直驱同公式 spd*0.01*delta），快照只做校正，
 # 使走位零延迟；伤害/技能/命中仍全由主机结算。
+# spd/lock/cc 由主机快照下发（同源）：移速含前摇减速与暗影加速，走A锁定与硬控期间与主机同样静止。
 func _tick_self_prediction(delta: float) -> void:
 	if not _owned or _state != 1 or _self_net < 0:
 		_pred_on = false
 		return
-	# 与直驱输入同门禁：没有触控输入通道时不预测（否则桌面端会出现"本地动、主机不动"的幽灵位移）
-	if _pad == null or not TouchController.touch_active:
+	# 与直驱输入同门禁：本端没有正在发送的移动输入时不预测（否则会出现"本地动、主机不动"的幽灵位移）
+	if _pad == null:
 		_pred_on = false
+		return
+	var ax := Input.get_axis("ui_left", "ui_right")
+	var az := Input.get_axis("ui_down", "ui_up")
+	var jv := _pad.get_move_vector()
+	# 无输入且尚未起预测：不介入（走快照插值）；已在预测态则继续做快照校正，保证松手瞬间不弹回滞后位置
+	if absf(ax) < 0.02 and absf(az) < 0.02 and jv.length() < 0.02 and not _pred_on:
+		_pred_turn_cd = 0.0
 		return
 	var v = _views.get(_self_net)
 	if v == null or v.node == null or not is_instance_valid(v.node):
@@ -2565,21 +2777,37 @@ func _tick_self_prediction(delta: float) -> void:
 		_pred_pos = node.global_position      # 起算：贴合当前显示位置，避免首帧拉扯
 		_pred_snap = _pred_pos
 		_pred_on = true
-	# 1) 输入积分（方向映射与主机 Hero 直驱一致；转向模式沿英雄当前朝向）
+	# 0) 转向模式：左右键转向复刻 host（每 0.05s × 15°，只在有输入时推进；摇杆模式不用）
+	var mm := _pad.get_move_mode()
+	if mm == TouchController.MOVE_MODE_TURN and jv.length() <= 0.1 and absf(ax) > 0.1:
+		_pred_turn_cd -= delta
+		if _pred_turn_cd <= 0.0:
+			node.rotation.y += ax * deg_to_rad(-15.0)
+			_pred_turn_cd = 0.05
+	else:
+		_pred_turn_cd = 0.0
+	# 1) 输入积分（方向映射与主机 Hero 直驱一致；移速/阻断同源下发）
 	var dir := _pred_dir(node)
-	if dir.length() > 0.01:
-		_pred_pos += dir.normalized() * _pred_speed * 0.01 * delta
+	if dir.length() > 0.01 and int(_own.get("cc", 0)) == 0 and float(_own.get("lock", 0.0)) <= 0.0:
+		var spd := float(_own.get("spd", _pred_speed))
+		_pred_pos += dir.normalized() * spd * 0.01 * delta
 		var half := Config.MAP_SIZE / 2.0
 		_pred_pos.x = clampf(_pred_pos.x, -half, half)
 		_pred_pos.z = clampf(_pred_pos.z, -half, half)
-	# 2) 快照校正：误差 >3m 直接吸附（闪现/位移/被拽走），否则本帧向快照位置靠拢 20%~35%
+		# 摇杆 / 前后左右模式：主机是即时朝向移动方向（Hero: rotation.y = atan2(dir.x, dir.z)）
+		if jv.length() > 0.1 or mm != TouchController.MOVE_MODE_TURN:
+			node.rotation.y = atan2(dir.x, dir.z)
+	# 2) 快照校正：只修「预测不该有」的偏差（撞墙/被推/减速/位移技能），不把正常网络滞后当成错
+	#    - 误差 >3m：位移技能/闪现/回城/复活，直接吸附
+	#    - 误差 0.5~3m：6/s 缓慢回贴（撞墙被拦、被控位移）
+	#    - 误差 <0.5m：即本端领先主机的合理前瞻量（≈移速×单程延迟），保持不动，否则会退回滞后位置
 	var drift := _pred_snap - _pred_pos
 	drift.y = 0.0
 	_pred_err = drift.length()
 	if _pred_err > 3.0:
 		_pred_pos = Vector3(_pred_snap.x, node.global_position.y, _pred_snap.z)
-	elif _pred_err > 0.001:
-		_pred_pos += drift * clampf(delta * 12.0, 0.20, 0.35)
+	elif _pred_err > 0.5:
+		_pred_pos += drift * clampf(delta * 6.0, 0.0, 0.25)
 	node.global_position = Vector3(_pred_pos.x, node.global_position.y, _pred_pos.z)
 
 
@@ -2613,6 +2841,21 @@ func _calibrate_pred_speed(pos: Vector3) -> void:
 # 摇杆向量 = 世界方向；键盘 WASD 方向受 MoveModeToggle(移动模式) 约束，故随包发送模式值。
 func _poll_touch_input() -> void:
 	if _pad == null:
+		return
+	# 同 host UiManager.blocks_gameplay_input()：商店/属性面板打开时不响应移动与普攻（否则线上可在商店里跑）
+	var ui_block: bool = (_sp != null and _sp.visible) or (_rp != null and _rp.visible)
+	if ui_block:
+		if absf(_d_ax) > 0.02 or absf(_d_az) > 0.02 or absf(_d_jx) > 0.02 \
+				or absf(_d_jy) > 0.02 or _d_mode != -99:
+			NetSession.send_command([NetSession.C_DRIVE, 0.0, 0.0, 0.0, 0.0, _pad.get_move_mode()])
+			_d_ax = 0.0
+			_d_az = 0.0
+			_d_jx = 0.0
+			_d_jy = 0.0
+			_d_mode = _pad.get_move_mode()
+		if _atk_sent:
+			NetSession.send_command([NetSession.C_ATTACK_AUTO, 0])
+			_atk_sent = false
 		return
 	var now := Time.get_ticks_msec() * 0.001
 	# 移动：变化即发；持续非零每 0.03s 心跳（≥20Hz，帧率 60 时每 2 帧一次），防主机 0.5s 直驱超时误判松手
@@ -2852,6 +3095,7 @@ func _poll_aux_input() -> void:
 					var ry := float(_own.get("ry", 0.0))
 					aim2 = Vector2(sin(ry), cos(ry)) * 100.0
 				NetSession.send_command([NetSession.C_SUMMONER, -1, aim2.x, aim2.y])
+				_summoner_local_feedback()
 	# 恢复：点按 → C_RECOVER（cd 预检；主机同款 index4=恢复槽）
 	if _pad.consume_recover_press():
 		var cds: Array = _own.get("cd", [])
@@ -2962,12 +3206,26 @@ func _kbd_summoner() -> void:
 		var ry := float(_own.get("ry", 0.0))
 		dir = Vector2(sin(ry), cos(ry)) * 100.0
 	NetSession.send_command([NetSession.C_SUMMONER, -1, dir.x, dir.y])
+	_summoner_local_feedback()
+
+# 召唤师技能本地镜头反馈（同 host Hero._use_summoner：闪现 0.04/0.16，晕眩 0.08/0.25）
+func _summoner_local_feedback() -> void:
+	match str(_own.get("summoner_name", "")):
+		"闪现":
+			_camera_shake(0.04, 0.16)
+		"晕眩":
+			_camera_shake(0.08, 0.25)
 
 func _send_cast(slot: int, target: int, aim: Vector3) -> void:
 	NetSession.send_command([NetSession.C_CAST, slot, target, aim.x, aim.z])
 	# 接管客户端本地施法短音（host 的 Hero 回调不在本地跑，仅此处补；按 manifest type 分档）
 	var sk = _skills[slot] if slot >= 0 and slot < _skills.size() else null
 	SfxManager.client_cast_sfx(slot, sk)
+	# 大招本地即时反馈（震屏/FOV 推镜/顿帧/闪屏）：不等主机回包，手感与单机一致
+	if slot == 2:
+		_play_big_cast_feedback()
+	elif sk != null and int(sk.get("type", 0)) == 4:
+		_camera_shake(0.07, 0.14)   # 位移技能本地震屏（同 host VfxFactory.dash_fx 的本地反馈）
 
 # 松手施放翻译。type0（指向）拖拽→吸附、点按→智能施法；其余类型只发瞄准点，
 # host C_CAST 用 release 语义在 _start_casting/_finish_casting 复核施放。
@@ -3322,17 +3580,44 @@ class Hud:
 			_nw = max(_nw, len(_ln))
 		draw_string(_font, Vector2(cx - float(_nw) * 8.0, top2), name_str,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 34.0, Color.WHITE)
-		# 血条 280×28
+		# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
 		var by := top2 + _font.get_multiline_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 34).y + 10.0
 		var bw := 280.0
 		var bh := 28.0
 		var mhp := maxf(float(r.maxhp), 1.0)
-		var ratio := clampf(float(r.hp) / mhp, 0.0, 1.0)
-		var hp_col: Color = r.get("hp_col", Color(0.0, 0.886, 1.0))
-		draw_rect(Rect2(cx - bw / 2.0, by, bw, bh), Color(0, 0, 0, 0.5))
-		var shield := clampf(float(r.get("shield", 0.0)), 0.0, float(r.maxhp))
+		var hp_now := clampf(float(r.hp), 0.0, mhp)
+		var ratio := hp_now / mhp
+		var hp_col: Color = r.get("hp_col", _team_color(int(r.get("team", 9))))
+		var bx := cx - bw / 2.0
 		var hpx := bw * ratio
-		draw_rect(Rect2(cx - bw / 2.0, by, hpx, bh), hp_col)
+		var shield := clampf(float(r.get("shield", 0.0)), 0.0, mhp)
+		# 投影（两层）
+		draw_rect(Rect2(bx + 3.0, by + 5.0, bw, bh), Color(0, 0, 0, 0.22))
+		draw_rect(Rect2(bx + 1.5, by + 2.5, bw, bh), Color(0, 0, 0, 0.34))
+		# 外框：深底 + 队伍色细边
+		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(0.02, 0.03, 0.06, 0.96))
+		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(hp_col.r, hp_col.g, hp_col.b, 0.55), false, 1.5)
+		# 空槽（上亮下暗）
+		draw_rect(Rect2(bx, by, bw, bh), Color(0.10, 0.11, 0.15, 0.97))
+		draw_rect(Rect2(bx, by, bw, bh * 0.5), Color(0.17, 0.18, 0.22, 0.9))
+		# 残血拖尾（掉血后浅色回落，同 host _hp_lag：lerp(delta×4)）
+		var lag := _lag_value(int(r.get("nid", -1)), hp_now)
+		if lag > hp_now + 0.5:
+			var lagw := (lag / mhp) * bw
+			draw_rect(Rect2(bx + hpx, by, lagw - hpx, bh), Color(1.0, 0.93, 0.82, 0.34))
+			draw_rect(Rect2(bx + lagw - 2.0, by, 2.0, bh), Color(1.0, 0.9, 0.75, 0.85))
+		# 渐变填充（5 段 lerp）+ 顶部玻璃高光 / 次高光带 / 底部暗边
+		if hpx > 0.5:
+			var bands := 5
+			var c_top := hp_col.lightened(0.35)
+			var c_bot := hp_col.darkened(0.42)
+			for bi in range(bands):
+				var q := float(bi) / float(bands - 1)
+				draw_rect(Rect2(bx, by + bh * float(bi) / float(bands), hpx, bh / float(bands) + 1.0),
+						c_top.lerp(c_bot, q))
+			draw_rect(Rect2(bx, by, hpx, maxf(2.0, bh * 0.18)), Color(1, 1, 1, 0.50))
+			draw_rect(Rect2(bx, by + maxf(2.0, bh * 0.18), hpx, 1.5), Color(1, 1, 1, 0.14))
+			draw_rect(Rect2(bx, by + bh - 1.5, hpx, 1.5), Color(0, 0, 0, 0.35))
 		# 李元芳暗印预判：爆炸前将造成的实际伤害 → 当前血条右端相应段染黄（扣盾、封顶当前血）
 		var lyf_rows: Array = r.get("lyf", [])
 		var lyf_pred := 0.0
@@ -3340,36 +3625,48 @@ class Hud:
 			if m.size() >= 3:
 				lyf_pred += float(m[2])
 		if lyf_pred > 0.0:
-			var doom := clampf(lyf_pred - shield, 0.0, float(r.hp))
+			var doom := clampf(lyf_pred - shield, 0.0, hp_now)
 			var doom_w := (doom / mhp) * bw
 			if doom_w > 0.5:
-				draw_rect(Rect2(cx - bw / 2.0 + hpx - doom_w, by, doom_w, bh), Color(1.0, 0.88, 0.18, 0.9))
-		draw_rect(Rect2(cx - bw / 2.0, by, bw, bh), Color.WHITE, false, 1.0)
-		# 受伤闪橙：血量右端 0.5s 衰减（复刻主机 HeroInfoControl L174-178）
+				draw_rect(Rect2(bx + hpx - doom_w, by, doom_w, bh), Color(1.0, 0.88, 0.18, 0.9))
+		# 护盾段（淡蓝 + 斜纹 + 白色左隔线，同 host）
+		var sw := minf((shield / mhp) * bw, bw - hpx)
+		if sw > 0.5:
+			draw_rect(Rect2(bx + hpx, by, sw, bh), Color(0.62, 0.84, 1.0, 0.95))
+			var hatch := int(sw / 7.0)
+			for hi in range(hatch):
+				var hx := bx + hpx + 2.0 + float(hi) * 7.0
+				draw_line(Vector2(hx, by + bh), Vector2(hx + 5.0, by), Color(1, 1, 1, 0.30), 1.0)
+			draw_rect(Rect2(bx + hpx, by, sw, 2.0), Color(1, 1, 1, 0.42))
+			draw_rect(Rect2(bx + hpx, by, 1.5, bh), Color(1, 1, 1, 0.9))
+		# 受伤闪橙：血量右端 0.5s 衰减（同 host HeroInfoControl）
 		var _nid_h := int(r.get("nid", -1))
 		if _nid_h >= 0:
 			var _fr_h := _flash_ratio_of(_nid_h)
 			if _fr_h > 0.0:
 				var _fw_h := (float(_flash_amt.get(_nid_h, 0.0)) / mhp) * bw * _fr_h
 				if _fw_h > 0.5:
-					draw_rect(Rect2(cx - bw / 2.0 + hpx, by, _fw_h, bh), Color.ORANGE)
-		# 每 1000 血分隔线
-		var divs := int(mhp / 1000.0)
-		for i in range(1, divs + 1):
-			var dx := cx - bw / 2.0 + (1000.0 * float(i) / mhp) * bw
-			draw_line(Vector2(dx, by), Vector2(dx, by + bh), Color.WHITE, 1.0)
-		# 护盾灰白段（右侧叠置）
-		if shield > 0.0:
-			var sw := minf(shield / mhp * bw, bw - hpx)
-			if sw > 0.0:
-				draw_rect(Rect2(cx - bw / 2.0 + hpx, by, sw, bh), Color(0.8, 0.8, 0.8))
-		# 蓝条（有法力上限的英雄才画）
+					draw_rect(Rect2(bx + hpx, by, _fw_h, bh), Color.ORANGE)
+		# 低血警示脉冲 + 顶部白线压边（同 host HeroInfoControl）
+		if ratio < 0.3 and ratio > 0.0:
+			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006)
+			draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0),
+					Color(1.0, 0.25, 0.18, 0.30 + 0.45 * pulse), false, 2.0)
+		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(1, 1, 1, 0.16), false, 1.0)
+		# 法力条（同 host：半高、3 段蓝渐变 + 蓝边框）
 		var mana_max := float(r.get("maxmana", 0.0))
 		if mana_max > 0.0:
-			var mby := by + bh + 2.0
-			draw_rect(Rect2(cx - bw / 2.0, mby, bw, bh * 0.5), Color(0, 0, 0, 0.5))
-			draw_rect(Rect2(cx - bw / 2.0, mby, bw * clampf(float(r.get("mana", 0.0)) / mana_max, 0.0, 1.0), bh * 0.5), Color.BLUE)
-			draw_rect(Rect2(cx - bw / 2.0, mby, bw, bh * 0.5), Color.WHITE, false, 1.0)
+			var mby := by + bh + 3.0
+			var mh := bh * 0.5
+			var mw := clampf(float(r.get("mana", 0.0)) / mana_max, 0.0, 1.0) * bw
+			draw_rect(Rect2(bx, mby, bw, mh), Color(0.06, 0.08, 0.14, 0.95))
+			if mw > 0.5:
+				for mi in range(3):
+					var mq := float(mi) / 2.0
+					draw_rect(Rect2(bx, mby + mh * float(mi) / 3.0, mw, mh / 3.0 + 1.0),
+							Color(0.16, 0.42, 0.95).lerp(Color(0.05, 0.16, 0.55), mq))
+				draw_rect(Rect2(bx, mby, mw, 1.5), Color(1, 1, 1, 0.45))
+			draw_rect(Rect2(bx, mby, bw, mh), Color(0.35, 0.62, 1.0, 0.5), false, 1.0)
 		# 暗印层数文字（黄，最顶行；对齐主机 HeroInfoControl 标记行位置：内容顶 y0 基线）
 		var ltxt := ""
 		for m in lyf_rows:
@@ -3512,6 +3809,21 @@ class Hud:
 				_flash_amt.erase(nid)
 				_flash_exp.erase(nid)
 
+	# 残血拖尾值（同 host HeroInfoControl._hp_lag：按 delta×4 向当前血量收敛；回血时立即跟上）
+	var _lag_hp: Dictionary = {}
+	func _lag_value(nid: int, hp_now: float) -> float:
+		if not _lag_hp.has(nid):
+			_lag_hp[nid] = hp_now
+			return hp_now
+		var lag := float(_lag_hp[nid])
+		if hp_now >= lag:
+			_lag_hp[nid] = hp_now
+			return hp_now
+		var dt := clampf(get_process_delta_time(), 0.0, 0.1)
+		lag = lerpf(lag, hp_now, clampf(dt * 4.0, 0.0, 1.0))
+		_lag_hp[nid] = lag
+		return lag
+
 	func _flash_ratio_of(nid: int) -> float:
 		var exp0: int = int(_flash_exp.get(nid, 0))
 		if exp0 <= 0:
@@ -3523,14 +3835,14 @@ class Hud:
 			return 0.0
 		return clampf(float(ms) / 500.0, 0.0, 1.0)
 
-	# —— 小地图右侧英雄环形头像带（复刻主机 respawn_container/RespawnWidget，两排）——
+	# —— 小地图右侧英雄环形头像带（同 host respawn_container：小地图右侧 (340,28)，单元 130×150、行距 6、环 r=56.25）——
 	func _draw_respawn_widget_rows() -> void:
-		var x0 := 350.0
-		var y0 := 40.0
-		var cell_w := 156.0
-		var cell_h := 180.0
-		var sep_x := 12.0
-		var sep_y := 10.0
+		var x0 := 340.0 + UiKit.safe_left()
+		var y0 := 28.0 + safe_top
+		var cell_w := 130.0
+		var cell_h := 150.0
+		var sep_x := 4.0     # host 行内 HBoxContainer 默认 separation
+		var sep_y := 6.0     # host respawn_container.separation
 		var row1: Array = []
 		var row2: Array = []
 		for r in widget_rows:
@@ -3552,8 +3864,8 @@ class Hud:
 			yy += cell_h + sep_y
 
 	func _draw_widget_cell(r: Array, xx: float, yy: float) -> void:
-		var center := Vector2(xx + 78.0, yy + 90.0)
-		var ring_r := 67.5
+		var center := Vector2(xx + 65.0, yy + 75.0)   # 单元 130×150 中心（同 host custom_minimum_size）
+		var ring_r := 56.25                            # 同 host ring_radius = 45×1.25
 		var team := int(r[1])
 		var is_ai := int(r[6]) == 1
 		var dead := int(r[7]) == 1
@@ -3565,29 +3877,29 @@ class Hud:
 		# 专属英雄徽记头像（同 host RespawnWidget；r[2]=英雄名）
 		var team_tint := Color(1.0, 0.33, 0.264) if team == 1 else (Color(0.0, 0.886, 1.0) if is_ai else Color(0.0, 0.886, 0.431))
 		HeroArt.draw_portrait(self, center, ring_r, str(r[2]), team_tint, dead)
-		draw_arc(center, ring_r + 4.5, 0.0, TAU, 48, Color.BLACK, 6.0)
+		draw_arc(center, ring_r + 3.75, 0.0, TAU, 48, Color.BLACK, 5.0)
 		if dead:
 			var total := float(r[9])
 			var remain := maxf(float(r[8]), 0.0)
 			var prog := 1.0
 			if total > 0.0:
 				prog = clampf(1.0 - remain / total, 0.0, 1.0)
-			draw_arc(center, ring_r + 4.5, -PI / 2.0, -PI / 2.0 + TAU * prog, 48, Color.WHITE, 6.0)
+			draw_arc(center, ring_r + 3.75, -PI / 2.0, -PI / 2.0 + TAU * prog, 48, Color.WHITE, 5.0)
 			_draw_widget_mid(center, str(int(ceil(remain))))
 		else:
 			var maxhp := maxf(float(r[5]), 1.0)
 			var hratio := clampf(float(r[4]) / maxhp, 0.0, 1.0)
 			var hcol := Color(0.25, 1.0, 0.3) if hratio > 0.5 else (Color(1.0, 0.9, 0.2) if hratio > 0.25 else Color(1.0, 0.3, 0.2))
-			draw_arc(center, ring_r + 4.5, -PI / 2.0, -PI / 2.0 + TAU * hratio, 48, hcol, 6.0)
+			draw_arc(center, ring_r + 3.75, -PI / 2.0, -PI / 2.0 + TAU * hratio, 48, hcol, 5.0)
 		# 名字+Lv 移到头像圆圈正上方（同 host RespawnWidget；超宽按单元宽度自动缩字）
 		var name_lv := "%s Lv.%d" % [str(r[2]), int(r[3])]
 		var ncol := Color(1.0, 0.6, 0.5) if team == 1 else Color.WHITE
 		var nfs := 18
 		var ns := _font.get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs).x
-		if ns > 150.0:
-			nfs = maxi(11, int(nfs * 150.0 / ns))
+		if ns > 126.0:   # host: size.x - 4 = 126
+			nfs = maxi(11, int(nfs * 126.0 / ns))
 			ns = _font.get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs).x
-		draw_string(_font, Vector2(center.x - ns * 0.5, center.y - ring_r - 6.0), name_lv,
+		draw_string(_font, Vector2(center.x - ns * 0.5, center.y - ring_r - 5.0), name_lv,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, nfs, ncol)
 
 	func _draw_widget_mid(center: Vector2, txt: String) -> void:
@@ -3597,27 +3909,34 @@ class Hud:
 		draw_string(_font, mp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.WHITE)
 
 	# —— 顶部实时战况：与 host UI_Manager._create_info_labels/_update_team_stats 完全同版式 ——
-	# 中央锚点 -140..+340、y 8..190：第一行 计时(30px)/K/D/A(26px @ +160)，第二行 经济比分(32px @ y84)
+	# 与 host UI_Manager._create_battle_hud 顶带逐项对齐：
+	# team_stats_bg（中心 -145..+315 / y6..150，0.62 玻璃圆角 + 投影）、time_chip（-140..+110 / y8..52，居中 24px 计时）、
+	# K/D/A（右对齐到 +300 / y12..48，20px）、经济比分（中心 +85 / y82 起，24px）、FPS（bg 内 (5,50) 120×24 居中，14px 固定绿）
 	func _draw_score_strip(s: float) -> void:
 		var cx := size.x * 0.5
 		var st := safe_top
-		draw_rect(Rect2(cx - 160.0, 8.0 + st, 520.0, 188.0), Color(0.0, 0.0, 0.0, 0.6))
-		var gs := 30.0 * s
-		_text(Vector2(cx - 150.0, 8.0 + st + _font.get_ascent(gs)),
-				"%02d:%02d" % [int(game_time) / 60, int(game_time) % 60], gs, Color.WHITE)
-		# FPS：计时下方常显（与 host UI_Manager.fps_label 同位置/同阈值配色）
-		var fs := 18.0 * s
-		var fps_now := Engine.get_frames_per_second()
-		var fps_col := Color(1.0, 0.42, 0.38) if fps_now < 30 else (Color(1.0, 0.82, 0.35) if fps_now < 50 else Color(0.55, 0.95, 0.65))
-		_text(Vector2(cx - 150.0, 8.0 + st + _font.get_ascent(gs) + _font.get_ascent(fs) + 6.0),
-				"FPS %d" % fps_now, fs, fps_col)
+		var bg_style := UiKit.flat(0.62, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0), 10.0, 6.0)
+		draw_style_box(bg_style, Rect2(cx - 145.0, 6.0 + st, 460.0, 144.0))
+		draw_style_box(bg_style, Rect2(cx - 140.0, 8.0 + st, 250.0, 44.0))
+		var gs := 24.0 * s
+		var gd := _font.get_ascent(gs) + _font.get_descent(gs)
+		var gy := 8.0 + st + (44.0 - gd) * 0.5 + _font.get_ascent(gs)
+		draw_string(_font, Vector2(cx - 140.0, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
+				HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
+		# FPS：bg 内 (5,50) 120×24 居中，固定绿色（同 host fps_label，不按帧率变色）
+		var fs := 14.0 * s
+		var fd := _font.get_ascent(fs) + _font.get_descent(fs)
+		var fy := 6.0 + st + 50.0 + (24.0 - fd) * 0.5 + _font.get_ascent(fs)
+		draw_string(_font, Vector2(cx - 140.0, fy), "FPS %d" % Engine.get_frames_per_second(),
+				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, Color(0.55, 0.95, 0.65))
 		if kda.size() >= 3:
-			var ks := 24.0 * s
-			var ktxt := "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])]
-			var kw := _font.get_string_size(ktxt, HORIZONTAL_ALIGNMENT_LEFT, -1, ks).x
-			_text(Vector2(cx + 350.0 - kw, 16.0 + st + _font.get_ascent(ks)), ktxt, ks, Color.WHITE)
-		var sz := 28.0 * s
-		var base := 92.0 + st + _font.get_ascent(sz)
+			var ks := 20.0 * s
+			var kd := _font.get_ascent(ks) + _font.get_descent(ks)
+			var ky := 12.0 + st + (36.0 - kd) * 0.5 + _font.get_ascent(ks)
+			draw_string(_font, Vector2(cx - 120.0, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
+					HORIZONTAL_ALIGNMENT_RIGHT, 420.0, ks, Color.WHITE)
+		var sz := 24.0 * s
+		var base := 82.0 + st + _font.get_ascent(sz)
 		var segs: Array = [
 			["%s " % _format_gold(int(sc.get("pg", 0))), Color(0.0, 0.886, 1.0)],
 			["%d " % int(sc.get("pk", 0)), Color.WHITE],
@@ -3625,11 +3944,11 @@ class Hud:
 			[" %d " % int(sc.get("ek", 0)), Color.WHITE],
 			[_format_gold(int(sc.get("eg", 0))), Color(1.0, 0.33, 0.264)],
 		]
-		# 第二行在比分面板内居中（面板中心相对屏幕中心 +100，同 host）
+		# 第二行在比分面板内居中（面板中心相对屏幕中心 +85，同 host）
 		var total := 0.0
 		for g in segs:
 			total += _font.get_string_size(str(g[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
-		var bx := cx + 100.0 - total * 0.5
+		var bx := cx + 85.0 - total * 0.5
 		for g in segs:
 			var txt: String = str(g[0])
 			_text(Vector2(bx, base), txt, sz, g[1])
@@ -3641,68 +3960,75 @@ class Hud:
 			return "%.1fk" % (v / 1000.0)
 		return str(v)
 
-	# —— 自身属性面板（左下；复刻主机 attribute_panel：18 行 2 列，逐行按 基础/装备/增益 配色）——
+	# —— 自身属性面板（同 host attribute_panel：小地图下方 (40, 350+safe)，标题条 30rs + 图例 26rs + 18 行 2 列 ×28rs）——
 	func _draw_attr_panel(s: float) -> void:
 		var cfg: Array = UiManager.ATTRIBUTE_ROWS
 		var n := mini(cfg.size(), int(sa.size() / 3))
 		if n <= 0:
 			return
-		var pad_x := 12.0 * s
-		var pad_y := 12.0 * s
-		var legend_h := 24.0 * s
-		var row_h := 26.0 * s
+		var pad := 12.0 * s
+		var head_h := 30.0 * s
+		var legend_h := 26.0 * s
+		var row_h := 28.0 * s
 		var col_w := 200.0 * s
 		var col_gap := 12.0 * s
-		var ncol := (n + ATTR_ROWS_PER_COL - 1) / ATTR_ROWS_PER_COL
-		var rows_h := float(mini(n, ATTR_ROWS_PER_COL)) * row_h
-		var panel_w := pad_x * 2.0 + col_w * float(ncol) + col_gap * float(maxi(ncol - 1, 0))
-		var panel_h := pad_y * 2.0 + legend_h + rows_h
-		# host：position=(30, vp.y-385-panel_h) 原始像素；面板尺寸按 ui_scale 放大
-		var top := size.y - 385.0 - panel_h
-		# 底板
-		draw_rect(Rect2(30.0, top, panel_w, panel_h), Color(0.04, 0.05, 0.08, 0.6))
-		draw_rect(Rect2(30.0, top, panel_w, panel_h), Color(1, 1, 1, 0.14), false, 1.0)
-		# 图例：基础（白） 装备（绿） 加成（橙）
-		var ly := top + pad_y + 14.0 * s
-		var legend_x := 30.0 + pad_x
+		var ncol := 2
+		var panel_w := pad * 2.0 + col_w * float(ncol) + col_gap * float(ncol - 1)
+		var panel_h := pad * 2.0 + head_h + legend_h + row_h * ATTR_ROWS_PER_COL
+		# 紧贴小地图下方（小地图 inset 40 + 300，再留 10），顶边固定、向下展开（同 host）
+		var left := 40.0 + UiKit.safe_left()
+		var top := 40.0 + safe_top + 310.0
+		draw_style_box(UiKit.flat(0.5, 12, 1), Rect2(left, top, panel_w, panel_h))
+		# 折叠标题条（同 host attr_header："属性  ▴"，16px）
+		var hs := 16.0 * s
+		draw_string(_font, Vector2(left + pad, top + 2.0 * s + (head_h - (_font.get_ascent(hs) + _font.get_descent(hs))) * 0.5 + _font.get_ascent(hs)),
+				"属性  ▴", HORIZONTAL_ALIGNMENT_LEFT, -1, hs, Color(0.85, 0.9, 1.0, 0.95))
+		# 图例：基础（白） +装备（绿） +增益（橙），同 host legend 文案/配色
+		var lys := 13.0 * s
+		var ly := top + pad + head_h + (_font.get_ascent(lys) + _font.get_descent(lys)) * 0.5 + _font.get_ascent(lys)
+		var lx := left + pad
 		for lg in [
-			["基础", ATTR_BASE_C],
-			["  装备", ATTR_EQUIP_C],
-			["  加成", ATTR_BUFF_C],
+			["基础", Color.WHITE],
+			["  +装备", ATTR_EQUIP_C],
+			["  +增益", ATTR_BUFF_C],
 		]:
 			var lt: String = str(lg[0])
-			_text(Vector2(legend_x, ly), lt, 13.0 * s, lg[1])
-			legend_x += _font.get_string_size(lt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13.0 * s).x
-		var y0 := top + pad_y + legend_h
+			draw_string(_font, Vector2(lx, ly), lt, HORIZONTAL_ALIGNMENT_LEFT, -1, lys, lg[1])
+			lx += _font.get_string_size(lt, HORIZONTAL_ALIGNMENT_LEFT, -1, lys).x
+		var y0 := top + pad + head_h + legend_h
+		var rfs := 15.0 * s
+		var nfs := 15.0 * s
 		for i in range(n):
 			var c: Dictionary = cfg[i]
 			var col := int(i / ATTR_ROWS_PER_COL)
 			var ri := i % ATTR_ROWS_PER_COL
-			var x0 := 12.0 * s + pad_x + float(col) * (col_w + col_gap)
+			var x0 := left + pad + float(col) * (col_w + col_gap)
 			var mult := float(c.get("mult", 1.0))
 			var pct := bool(c.get("pct", false))
-			var base := float(sa[i * 3]) * mult
-			var equip := float(sa[i * 3 + 1]) * mult
-			var buff := float(sa[i * 3 + 2]) * mult
-			var any := absf(base) > 0.05 or absf(equip) > 0.05 or absf(buff) > 0.05
+			var base_v := float(sa[i * 3]) * mult
+			var equip_v := float(sa[i * 3 + 1]) * mult
+			var buff_v := float(sa[i * 3 + 2]) * mult
+			var row_y := y0 + float(ri) * row_h + row_h * 0.72
+			var nm: String = str(c.get("name", "")) + "  "
+			draw_string(_font, Vector2(x0, row_y), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs, ATTR_NAME_C)
+			var tx := x0 + _font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs).x
+			var wrote := false
 			var segs2: Array = []
-			if not any:
-				segs2.append([_attr_txt(base, pct), ATTR_BASE_C])
-			else:
-				if absf(base) > 0.05:
-					segs2.append([_attr_txt(base, pct), ATTR_BASE_C])
-				if absf(equip) > 0.05:
-					segs2.append(["+%s" % _attr_txt(equip, pct), ATTR_EQUIP_C])
-				if absf(buff) > 0.05:
-					segs2.append(["+%s" % _attr_txt(buff, pct), ATTR_BUFF_C])
-			var row_y := y0 + float(ri) * row_h + 16.0 * s
-			var nm: String = str(c.get("name", ""))
-			_text(Vector2(x0, row_y), nm, 13.0 * s, ATTR_NAME_C)
-			var tx := x0 + _font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 13.0 * s).x + 8.0 * s
+			for k in range(3):
+				var v: float = [base_v, equip_v, buff_v][k]
+				if absf(v) < 0.05:
+					continue
+				var t2: String = _attr_txt(v, pct)
+				if k > 0 and v > 0.0:
+					t2 = "+" + t2
+				segs2.append([t2, [ATTR_BASE_C, ATTR_EQUIP_C, ATTR_BUFF_C][k]])
+				wrote = true
+			if not wrote:
+				segs2.append(["0", ATTR_BASE_C])
 			for seg3 in segs2:
-				var t2: String = str(seg3[0])
-				_text(Vector2(tx, row_y), t2, 13.0 * s, seg3[1])
-				tx += _font.get_string_size(t2, HORIZONTAL_ALIGNMENT_LEFT, -1, 13.0 * s).x
+				var t3: String = str(seg3[0])
+				draw_string(_font, Vector2(tx, row_y), t3, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, seg3[1])
+				tx += _font.get_string_size(t3, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs).x
 
 	func _attr_txt(e: float, pct: bool) -> String:
 		if pct:

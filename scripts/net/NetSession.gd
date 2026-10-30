@@ -971,6 +971,9 @@ func _build_snapshot(bm: Node) -> Array:
 			"yl_pick": str(h.yuanliu_pick),   # 元流之子当前流派（切流派面板高亮当前项）
 			"x": h.global_position.x, "z": h.global_position.z,
 			"ry": h.rotation.y,   # 接管英雄真实朝向：客户端点按技能/朝向 fallback 用
+			# 客户端移动预测同源参数：本帧有效移速（含前摇/暗影倍率）、走A锁定剩余、硬控阻断
+			"spd": h.net_predict_speed(), "lock": h.net_predict_locked(),
+			"cc": 1 if h.net_predict_blocked() else 0,
 			"exp_to_next": h.exp_to_next,   # 第一人称/等级环经验弧（客户端仅自已这一格用）
 			"hidden_self": (1 if (h.display_name == "兰陵王" and h.lanling_stealth_active) else 0),
 				# 兰陵王隐身中：客户端照主机把固定跟随镜头拉远/拉高 ×1.25
@@ -1171,14 +1174,16 @@ func _bullet_vkind(bl: Bullet) -> int:
 # 可见性闸门统一口径：离我方(PLAYER侧)所有存活实体 >18m 的特效一律丢（防隐藏敌人被透视）。
 # team 只用于客户端上色：0/1 红蓝阵营色，-1 表示固定色域（水系/风暴/元流池，与阵营无关）。
 # 事件入 _fx_buf 后由 _build_snapshot 随快照广播并 ~0.35s 后剪掉。
-func push_net_fx(kind: int, pos: Vector3, team: int, r: float, life: float) -> void:
+func push_net_fx(kind: int, pos: Vector3, team: int, r: float, life: float,
+		hero_name: String = "") -> void:
 	if mode != Mode.HOST:
 		return
 	if not _fx_ally_near(Vector3(pos.x, 0.0, pos.z)):
 		return
 	var now := Time.get_ticks_msec()
 	_fx_fid += 1
-	_fx_buf.append([_fx_fid, kind, pos.x, pos.y, pos.z, int(team), r, life, now])
+	# 第 10 位：施法英雄名，客户端据此用 host 同款 Vfx.ground_zone 元素/技能配色；旧客户端忽略多余字段
+	_fx_buf.append([_fx_fid, kind, pos.x, pos.y, pos.z, int(team), r, life, now, hero_name])
 	if _fx_buf.size() > 64:
 		_fx_buf.pop_front()
 
@@ -2144,9 +2149,11 @@ func _pack_roster_skill_info(h: Node) -> Array:
 	var out: Array = []
 	for i in range(mini(h.skills.size(), 3)):
 		var sk = h.skills[i]
-		out.append([i + 1, str(sk.skill_name) if sk != null else "", int(h.skill_levels[i]), float(h.skill_cooldowns[i])])
+		out.append([i + 1, str(sk.skill_name) if sk != null else "", int(h.skill_levels[i]),
+			float(h.skill_cooldowns[i]), int(sk.type) if sk != null else -1])
 	if h.summoner_skill != null:
-		out.append([9, str(h.summoner_skill.skill_name), 0, float(h.summoner_cooldown)])
+		out.append([9, str(h.summoner_skill.skill_name), 0, float(h.summoner_cooldown),
+			int(h.summoner_skill.type)])
 	return out
 
 # 小地图目标计时（客户端 MinimapDraw.draw_objectives 用）

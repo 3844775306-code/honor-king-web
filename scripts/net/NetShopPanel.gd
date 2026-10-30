@@ -5,7 +5,8 @@ class_name NetShopPanel extends Control
 ## 坐标基底 2400×1400 stretch 画布（canvas_items + expand），rs = ui_scale() = maxf(1.0, 视口宽/2400) × 1.35。
 ## 数据全部来自 host own 快照（gold/equip/rec），购买/出售统一走 C_BUY/C_SELL 由 host 校验。
 
-const PANEL_W := 2000.0       # host drawer offset_left/right = ±1000（原始像素，不乘 rs）
+const PANEL_W_MAX := 2280.0   # host drawer 宽 = min(2280, 视口宽-48)（原始像素，不乘 rs）
+const PANEL_PAD := 48.0
 const GRID_L := 0.02          # host 商店左网格锚点
 const GRID_R := 0.56
 const DETAIL_L := 0.60        # host 右侧详情列锚点
@@ -85,9 +86,14 @@ func _owned_slot(rs: float) -> float:
 func _owned_h(rs: float) -> float:
 	return _owned_slot(rs) + 18.0
 
+func _pw() -> float:
+	var area := get_viewport().get_visible_rect().size
+	return minf(PANEL_W_MAX, area.x - PANEL_PAD)
+
 func _panel_rect() -> Rect2:
 	var area := get_viewport().get_visible_rect().size
-	return Rect2((area.x - PANEL_W) * 0.5, 0.0, PANEL_W, area.y)
+	var pw := _pw()
+	return Rect2((area.x - pw) * 0.5, 0.0, pw, area.y)
 
 func _text(pos: Vector2, txt: String, sz: float, col: Color) -> void:
 	draw_string_outline(_f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, 1, Color(0, 0, 0, 0.85))
@@ -339,10 +345,10 @@ func _draw() -> void:
 	var area := vp.get_visible_rect().size
 	var tn := _tabs().size()
 	_tab = clampi(_tab, 0, maxi(tn - 1, 0))
-	# host：dim ColorRect(0,0,0,0.4) + drawer Panel(纯黑 0.92、直角、无边框)
+	# host：dim ColorRect(0,0,0,0.4) + drawer Panel(_apply_panel_style 0.90、直角、无边框)
 	draw_rect(Rect2(Vector2.ZERO, area), Color(0, 0, 0, 0.4))
 	var panel := _panel_rect()
-	draw_rect(panel, Color(0, 0, 0, 0.92))
+	draw_rect(panel, Color(0, 0, 0, 0.90))
 	_draw_header(panel, rs)
 	_draw_tabs(panel, rs)
 	_draw_grid(panel, rs)
@@ -361,7 +367,7 @@ func _draw_header(panel: Rect2, rs: float) -> void:
 		"商店  |  金币: %d  |  可买 %d 件" % [_gold, n], fs, Color(1.0, 0.84, 0.0))
 func _draw_close(panel: Rect2, rs: float) -> void:
 	# host close_btn：锚右上，offset(-56, 6, -6, 56)，font 26*rs
-	var r := Rect2(panel.position.x + PANEL_W - CLOSE_MARGIN - CLOSE_W, panel.position.y + CLOSE_MARGIN, CLOSE_W, CLOSE_W)
+	var r := Rect2(panel.position.x + _pw() - CLOSE_MARGIN - CLOSE_W, panel.position.y + CLOSE_MARGIN, CLOSE_W, CLOSE_W)
 	_hot.append({"r": r, "k": "close", "a": 0})
 	_box(r, Color(0.24, 0.27, 0.33, 0.95), Color(1, 1, 1, 0.22), 1, 5)
 	var fs := 26.0 * rs
@@ -395,8 +401,8 @@ func _draw_tabs(panel: Rect2, rs: float) -> void:
 			_text_c(br.position.x + br.size.x * 0.5, br.position.y + br.size.y * 0.5 + 10.0 * rs * 0.36,
 				str(cnt), 10.0 * rs, tint.lightened(0.55))
 func _draw_grid(panel: Rect2, rs: float) -> void:
-	var gx0 := panel.position.x + PANEL_W * GRID_L
-	var gx1 := panel.position.x + PANEL_W * GRID_R
+	var gx0 := panel.position.x + _pw() * GRID_L
+	var gx1 := panel.position.x + _pw() * GRID_R
 	var gy0 := panel.position.y + _content_top(rs)
 	var gy1 := panel.end.y - _owned_h(rs) - 24.0
 	var list := _items_of_tab(_tab)
@@ -493,8 +499,8 @@ func _draw_owned(panel: Rect2, rs: float) -> void:
 	var sz := _owned_slot(rs)
 	var area_h := _owned_h(rs)
 	var gap := 8.0 * rs
-	var area := Rect2(panel.position.x + PANEL_W * GRID_L, panel.end.y - area_h - 8.0,
-		PANEL_W * (GRID_R - GRID_L), area_h)
+	var area := Rect2(panel.position.x + _pw() * GRID_L, panel.end.y - area_h - 8.0,
+		_pw() * (GRID_R - GRID_L), area_h)
 	_box(area, Color(0.02, 0.03, 0.05, 0.72), Color(1, 1, 1, 0.10), 1, 10)
 	var cap_w := 78.0 * rs
 	var oy := area.position.y + (area_h - sz) * 0.5
@@ -516,8 +522,8 @@ func _draw_detail(panel: Rect2, rs: float) -> void:
 	var it: Dictionary = ItemDatabase.get_item(_sel)
 	if it.is_empty():
 		return
-	var dx := panel.position.x + PANEL_W * DETAIL_L
-	var dw := PANEL_W * (DETAIL_R - DETAIL_L)
+	var dx := panel.position.x + _pw() * DETAIL_L
+	var dw := _pw() * (DETAIL_R - DETAIL_L)
 	var dy := panel.position.y + _content_top(rs)
 	var bar_h := 46.0 * rs
 	var dby := panel.end.y - 42.0 - bar_h - 6.0
@@ -846,7 +852,7 @@ func _gui_input(ev: InputEvent) -> void:
 		if visible:
 			var dir := -1.0 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0
 			var pr := _panel_rect()
-			var ddx := pr.position.x + PANEL_W * DETAIL_L
+			var ddx := pr.position.x + _pw() * DETAIL_L
 			if pr.has_point(mb.position) and mb.position.x >= ddx:
 				_dscroll = clampf(_dscroll + dir * 48.0, 0.0, maxf(0.0, _dbody_h - _dview_h))
 			else:
@@ -927,8 +933,8 @@ func _draw_action_bar(panel: Rect2, rs: float) -> void:
 	var slot := _slot_of(_sel)
 	var owned := slot >= 0
 	var tier := int(it.get("tier", 1))
-	var dx := panel.position.x + PANEL_W * DETAIL_L
-	var dw := PANEL_W * (DETAIL_R - DETAIL_L)
+	var dx := panel.position.x + _pw() * DETAIL_L
+	var dw := _pw() * (DETAIL_R - DETAIL_L)
 	var bh := 46.0 * rs
 	var by := panel.end.y - 42.0 - bh
 	var can_more := not owned or tier < 3
@@ -950,3 +956,4 @@ func _draw_action_bar(panel: Rect2, rs: float) -> void:
 		_hot.append({"r": sr, "k": "sell", "a": slot})
 		_box(sr, Color(0.20, 0.30, 0.44, 0.95), Color(0.55, 0.75, 0.95, 0.8), 1, 8)
 		_text_c(sr.position.x + sr.size.x * 0.5, sr.position.y + bh * 0.5 + 14.0 * rs * 0.36, "出售 +%d" % int(int(it.get("cost", 0)) * 0.7), 14.0 * rs, Color(0.75, 0.88, 1.0))
+

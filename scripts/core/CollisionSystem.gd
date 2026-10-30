@@ -51,13 +51,51 @@ func apply_collision_pushback(entities: Array, delta: float):
 			var overlap: float = -dist
 			var np_i: Vector3 = mob_pos[i] + push_dir * overlap * 0.4
 			var np_j: Vector3 = mob_pos[j] - push_dir * overlap * 0.4
-			var half: float = Config.MAP_SIZE / 2.0
+			var half: float = Config.MAP_SIZE / 2.0 - 1.0   # 边界格是实心墙，推挤不能把单位推上去
 			np_i.x = clampf(np_i.x, -half, half)
 			np_i.z = clampf(np_i.z, -half, half)
 			mob_pos[i] = np_i
 			mob_pos[j] = np_j
 			mob[i].global_position = np_i
 			mob[j].global_position = np_j
+
+	# ---- 塔基推挤：塔/塔墩把可移动单位推开（寻路网格不再标记塔基，靠推挤让单位绕塔走）----
+	var tower_pos: Array = []
+	var tower_rad: Array = []
+	for t in get_tree().get_nodes_in_group("turrets"):
+		if not is_instance_valid(t) or t.health <= 0:
+			continue
+		tower_pos.append(t.global_position)
+		tower_rad.append(1.96)
+	for st in get_tree().get_nodes_in_group("tower_stumps"):
+		if not is_instance_valid(st):
+			continue
+		tower_pos.append(st.global_position)
+		tower_rad.append(1.24)
+	if not tower_pos.is_empty():
+		var half_map: float = Config.MAP_SIZE / 2.0 - 1.0
+		# 英雄/小兵/野怪都会被塔基推开（塔本身不动）
+		for a in entities:
+			if not is_instance_valid(a) or a.health <= 0 or not a.get("can_move") or a is Turret:
+				continue
+			if a.collision_layer == 0:
+				continue
+			var pt: Vector3 = a.global_position
+			var rad: float = float(a.get("body_radius")) * 0.35
+			for k in range(tower_pos.size()):
+				var tp: Vector3 = tower_pos[k]
+				var dx: float = pt.x - tp.x
+				var dz: float = pt.z - tp.z
+				var min_d: float = tower_rad[k] + rad
+				var d2: float = dx * dx + dz * dz
+				if d2 >= min_d * min_d:
+					continue
+				var d: float = sqrt(d2)
+				if d < 0.001:
+					dx = 1.0; dz = 0.0; d = 1.0
+				pt.x = clampf(tp.x + dx / d * min_d, -half_map, half_map)
+				pt.z = clampf(tp.z + dz / d * min_d, -half_map, half_map)
+			a.global_position = pt
 
 	# ---- 实体与墙体的碰撞推离（空间网格：只查周围 3×3 格）----
 	if get_tree() == null:
@@ -66,7 +104,7 @@ func apply_collision_pushback(entities: Array, delta: float):
 		_rebuild_wall_grid()
 	if _wall_pts.is_empty():
 		return
-	var half_map: float = Config.MAP_SIZE / 2.0
+	var half_map: float = Config.MAP_SIZE / 2.0 - 1.0
 	for ent in entities:
 		if not is_instance_valid(ent) or ent.health <= 0 or not ent.get("can_move"): continue
 		if ent.collision_layer == 0: continue   # 隐身/筋斗云等无碰撞状态不参与墙体推离

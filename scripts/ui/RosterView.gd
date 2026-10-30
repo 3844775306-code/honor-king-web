@@ -1,22 +1,28 @@
 extends Control
 ## 全局英雄信息面板（主机 C 键 / 联机客户端 C·T 键共用视图）
-## 版式：顶部结论条 + 5 行「分路对位」双列（左我方 / 右敌方），单卡=头像/名字/等级/状态/KDA/属性徽章/装备图标/技能徽章。
+## 版式：顶部结论条 + 左右分队双列（左=我方蓝底板 / 右=敌方红底板），
+## 每列 5 行按该队总经济从高到低排序；自己所在行用绿色底板。
+## 单卡 = 队内名次 / 头像 / 名字·等级·分路 / 血量 / 4 个技能图标 / 6 格装备 / 属性徽章 / KDA·经济。
 ## 纯 _draw 绘制，数据由 host UI_Manager 或 NetSession 推送的 roster 行转换而来。
 
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
+const SkillArt = preload("res://scripts/ui/SkillArt.gd")
 
 signal closed_by_user
 
 const PANEL_W := 2160.0
 const HEAD_H := 96.0
-const ROW_GAP := 10.0
-const C_ALLY := Color(0.0, 0.886, 1.0)
+const ROW_GAP := 12.0
+const COL_GAP := 24.0
+const TEAM_ROWS := 5
+const C_ALLY := Color(0.22, 0.66, 1.0)
 const C_ENEMY := Color(1.0, 0.33, 0.264)
+const C_OWN := Color(0.36, 0.95, 0.55)
 const C_GOLD := Color(0.98, 0.84, 0.38)
 const C_DIM := Color(0.66, 0.73, 0.85)
-const C_CARD_ALLY := Color(0.03, 0.10, 0.18, 0.86)
-const C_CARD_ENEMY := Color(0.14, 0.04, 0.06, 0.86)
-const SKILL_TAG := ["1", "2", "3", "召"]
+const C_CARD_ALLY := Color(0.045, 0.145, 0.315, 0.92)
+const C_CARD_ENEMY := Color(0.235, 0.045, 0.065, 0.92)
+const C_CARD_OWN := Color(0.035, 0.215, 0.115, 0.94)
 const PAD := 0.965
 
 var rows: Array = []
@@ -30,26 +36,48 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 func set_rows(r: Array, md: String = "attr") -> void:
-	rows = r
+	# 两队各自按总经济降序（并列时按击杀、再按名字稳定排序），列内名次即队内经济名次
+	rows = r.duplicate()
+	rows.sort_custom(func(a, b):
+		var ga := int(a.get("gold", 0))
+		var gb := int(b.get("gold", 0))
+		if ga != gb:
+			return ga > gb
+		var ka := int(a.get("k", 0))
+		var kb := int(b.get("k", 0))
+		if ka != kb:
+			return ka > kb
+		return str(a.get("name", "")) < str(b.get("name", "")))
 	mode = md
-	if not visible:
-		visible = true
-		UiKit.show_panel(self, 0.15)
-	queue_redraw()
+	# 只更新数据，不在这里显示面板：面板开关必须由持有者统一控制，
+	# 否则关闭后下一次秒级刷新会把已关闭的面板重新弹出来。
+	if visible:
+		queue_redraw()
 
 func _s() -> float:
 	return clampf(UiKit.scale(), 0.88, 1.35)
+
+func _split() -> Array:
+	var ally: Array = []
+	var foe: Array = []
+	for r in rows:
+		if Config.is_ally(int(r.get("team", 0))):
+			ally.append(r)
+		else:
+			foe.append(r)
+	return [ally, foe]
 
 ## 版式：全部由自身矩形（= 屏幕可用区）推算，保证任何分辨率/缩放下不越界
 func _layout() -> Dictionary:
 	var avail := size
 	if avail.x <= 1.0 or avail.y <= 1.0:
 		avail = Vector2(2400.0, 1400.0)
-	var s := minf(_s(), minf(avail.x * PAD / PANEL_W, 1.35))
+	var need_h := HEAD_H + 22.0 + 5.0 * 206.0 + ROW_GAP * float(TEAM_ROWS - 1)
+	var s := minf(_s(), minf(avail.x * PAD / PANEL_W, avail.y * PAD / need_h))
 	var ph := minf(avail.y * PAD / s, 1600.0)
-	var rh := maxf((ph - HEAD_H - 24.0 - ROW_GAP * 5.0) / 5.0, 112.0)
+	var rh := maxf((ph - HEAD_H - 22.0 - ROW_GAP * float(TEAM_ROWS - 1)) / float(TEAM_ROWS), 168.0)
 	var w := PANEL_W * s
-	var h := ph * s
+	var h := minf((HEAD_H + 22.0 + rh * float(TEAM_ROWS) + ROW_GAP * float(TEAM_ROWS - 1)) * s, avail.y * PAD)
 	return {"s": s, "ph": ph, "rh": rh, "w": w, "h": h, "o": ((avail - Vector2(w, h)) * 0.5).floor()}
 
 func _draw() -> void:
@@ -64,13 +92,16 @@ func _draw() -> void:
 		Rect2(0.0, 0.0, PANEL_W, panel_h))
 	draw_rect(Rect2(24.0, 0.0, PANEL_W - 48.0, 2.5), Color(0.98, 0.82, 0.32, 0.85))
 	_header()
-	var pairs := _pair_rows()
+	var split := _split()
+	var ally: Array = split[0]
+	var foe: Array = split[1]
+	var cw := (PANEL_W - 44.0 - COL_GAP) * 0.5
 	var y := HEAD_H + 6.0
-	for i in range(5):
-		var ally: Dictionary = pairs[i][0]
-		var foe: Dictionary = pairs[i][1]
-		_card(ally, Rect2(22.0, y, PANEL_W * 0.5 - 32.0, _row_h), C_CARD_ALLY, C_ALLY)
-		_card(foe, Rect2(PANEL_W * 0.5 + 10.0, y, PANEL_W * 0.5 - 32.0, _row_h), C_CARD_ENEMY, C_ENEMY)
+	for i in range(TEAM_ROWS):
+		var ar: Dictionary = ally[i] if i < ally.size() else {}
+		var er: Dictionary = foe[i] if i < foe.size() else {}
+		_card(ar, i + 1, true, Rect2(22.0, y, cw, _row_h))
+		_card(er, i + 1, false, Rect2(22.0 + cw + COL_GAP, y, cw, _row_h))
 		y += _row_h + ROW_GAP
 	# 关闭按钮
 	var cr := _close_rect()
@@ -84,9 +115,9 @@ func _notification(what: int) -> void:
 		queue_redraw()
 
 func _header() -> void:
-	var title := "队伍信息" if mode == "team" else "战场信息"
-	UiKit.text(self, Vector2(44.0, 44.0), title, 32, C_GOLD)
-	# 结论条：经济差 / 人头 / 存活（由行数据实时汇总，两端同源）
+	var split := _split()
+	var ally: Array = split[0]
+	var foe: Array = split[1]
 	var ag := 0
 	var eg := 0
 	var ak := 0
@@ -95,127 +126,133 @@ func _header() -> void:
 	var ea := 0
 	var al := 0
 	var el := 0
-	for r in rows:
-		var team := int(r.get("team", 0))
-		if team == 0:
-			ag += int(r.get("gold", 0)); ak += int(r.get("k", 0)); aa += int(r.get("a", 0))
-			if not bool(r.get("dead", false)): al += 1
-		else:
-			eg += int(r.get("gold", 0)); ek += int(r.get("k", 0)); ea += int(r.get("a", 0))
-			if not bool(r.get("dead", false)): el += 1
+	for r in ally:
+		ag += int(r.get("gold", 0)); ak += int(r.get("k", 0)); aa += int(r.get("a", 0))
+		if not bool(r.get("dead", false)): al += 1
+	for r in foe:
+		eg += int(r.get("gold", 0)); ek += int(r.get("k", 0)); ea += int(r.get("a", 0))
+		if not bool(r.get("dead", false)): el += 1
+	# 左上：我方标题 + 汇总（蓝）
+	UiKit.text(self, Vector2(44.0, 44.0), "我方" if mode != "team" else "我方队伍", 30, C_ALLY)
+	UiKit.text(self, Vector2(140.0, 43.0), "经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(ag), ak, al], 19, Color(0.82, 0.90, 1.0))
+	# 右上：敌方标题 + 汇总（红，右对齐）
+	var rx := PANEL_W - 44.0
+	UiKit.text(self, Vector2(rx - 340.0, 44.0), "敌方", 30, C_ENEMY, HORIZONTAL_ALIGNMENT_RIGHT, 340.0)
+	UiKit.text(self, Vector2(rx - 560.0, 43.0), "敌方 经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(eg), ek, el], 19,
+		Color(1.0, 0.82, 0.78), HORIZONTAL_ALIGNMENT_RIGHT, 420.0)
+	# 中间：经济差
 	var diff := ag - eg
 	var diff_col := Color(0.40, 0.95, 0.55) if diff >= 0 else Color(1.0, 0.36, 0.30)
-	var x := 190.0
-	var txt := "经济差 %s%d" % ["+" if diff >= 0 else "-", absi(diff)]
-	UiKit.text(self, Vector2(x, 44.0), txt, 21, diff_col)
-	x += UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 21).x + 26.0
-	txt = "击杀 %d:%d" % [ak, ek]
-	UiKit.text(self, Vector2(x, 44.0), txt, 21, Color(0.88, 0.92, 0.98))
-	x += UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 21).x + 26.0
-	txt = "存活 %d:%d" % [al, el]
-	UiKit.text(self, Vector2(x, 44.0), txt, 21, Color(0.88, 0.92, 0.98))
-	UiKit.text(self, Vector2(44.0, 76.0), "按分路对位 · 点面板外或 × 关闭", 17, Color(0.62, 0.70, 0.82))
-	# 分隔
+	UiKit.text(self, Vector2(PANEL_W * 0.5 - 130.0, 44.0), "经济差 %s%d" % ["+" if diff >= 0 else "-", absi(diff)],
+		23, diff_col, HORIZONTAL_ALIGNMENT_CENTER, 260.0)
+	# 图例（自己=绿底板）
+	UiKit.text(self, Vector2(44.0, 76.0), "两列各按本队经济从高到低 · 绿底=你 · 点面板外或 × 关闭", 17,
+		Color(0.62, 0.70, 0.82))
 	draw_rect(Rect2(24.0, 88.0, PANEL_W - 48.0, 1.0), Color(0.40, 0.50, 0.66, 0.30))
 
-# ---------- 单卡 ----------
+# ---------- 单行卡 ----------
 
-func _card(r: Dictionary, rect: Rect2, bg: Color, accent: Color) -> void:
+func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
+	var accent := C_ALLY if ally_side else C_ENEMY
+	var plate := C_CARD_ALLY if ally_side else C_CARD_ENEMY
 	if r.is_empty():
-		draw_style_box(UiKit.flat(0.5, 12, 1, Color(0.3, 0.36, 0.46, 0.35), Color(0.06, 0.07, 0.10, 0.6), 0.0, 6.0), rect)
-		UiKit.text(self, rect.position + Vector2(0.0, rect.size.y * 0.5), "（无对位英雄）", 19, C_DIM,
+		draw_style_box(UiKit.flat(0.42, 12, 1, Color(accent.r, accent.g, accent.b, 0.22), Color(0.05, 0.06, 0.09, 0.55), 0.0, 6.0), rect)
+		UiKit.text(self, rect.position + Vector2(0.0, rect.size.y * 0.5), "（暂无英雄）", 19, C_DIM,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x)
 		return
 	var dead := bool(r.get("dead", false))
-	var sb := UiKit.flat(0.9, 12, 1, accent, bg, 0.0, 8.0)
-	sb.border_width_left = 4
+	var own := bool(r.get("own", false))
+	if own:
+		accent = C_OWN
+		plate = C_CARD_OWN
+	var sb := UiKit.flat(0.92, 12, 1, accent, plate, 0.0, 8.0)
+	sb.border_width_left = 6
 	draw_style_box(sb, rect)
 	var x := rect.position.x
 	var y := rect.position.y
-	var ch := rect.size.y
-	var top := y + (ch - 148.0) * 0.5
-	if top < y + 8.0:
-		top = y + 8.0
-	# 头像环
-	HeroArt.draw_portrait(self, Vector2(x + 44.0, top + 44.0), 32.0, str(r.get("hero", r.get("name", ""))),
-		accent, dead)
-	# 名字 / 等级 / 分路
+	var W := rect.size.x
+	var H := rect.size.y
+	var hero_name := str(r.get("hero", r.get("name", "")))
+	# 队内名次徽章（含绿色=自己时描边绿）
+	draw_circle(Vector2(x + 36.0, y + 40.0), 19.0, Color(accent.r, accent.g, accent.b, 0.18))
+	draw_arc(Vector2(x + 36.0, y + 40.0), 19.0, 0.0, TAU, 26, Color(accent.r, accent.g, accent.b, 0.85), 2.0, true)
+	UiKit.text(self, Vector2(x + 17.0, y + 49.0), str(rank), 24, accent.lightened(0.35), HORIZONTAL_ALIGNMENT_CENTER, 38.0)
+	# 头像（程序化立绘，与选人界面同源）
+	HeroArt.draw_portrait(self, Vector2(x + 104.0, y + 74.0), 44.0, hero_name, accent, dead)
+	# 名字 / 等级·分路·状态
 	var nm := str(r.get("name", "?"))
 	if bool(r.get("is_ai", false)):
 		nm += " [AI]"
-	UiKit.text(self, Vector2(x + 84.0, top + 34.0), nm, 27, Color.WHITE if int(r.get("team", 0)) == 0 else Color(1.0, 0.66, 0.62))
+	if own:
+		nm += "  （你）"
+	UiKit.text(self, Vector2(x + 162.0, y + 58.0), nm, 29,
+		C_OWN.lightened(0.25) if own else (Color.WHITE if ally_side else Color(1.0, 0.72, 0.68)))
 	var sub := "Lv.%d" % int(r.get("level", 1))
 	var role := str(r.get("role", ""))
 	if role != "":
 		sub += "  ·  " + role
-	UiKit.text(self, Vector2(x + 84.0, top + 58.0), sub, 18, C_GOLD)
-	# 状态
-	var st := "存活"
-	var stc := Color.GREEN
 	if dead:
-		st = "%ds 后复活" % int(ceil(float(r.get("respawn", 0.0))))
-		stc = Color(1.0, 0.42, 0.36)
+		sub += "  ·  %ds 复活" % int(ceil(float(r.get("respawn", 0.0))))
 	elif float(r.get("hp_ratio", 1.0)) < 0.3:
-		st = "残血"
-		stc = Color.ORANGE
-	UiKit.text(self, Vector2(x + 84.0, top + 80.0), st, 18, stc)
-	# KDA / 经济（右对齐）
-	var rx := x + rect.size.x - 18.0
-	UiKit.text(self, Vector2(rx - 220.0, top + 34.0), "%d / %d / %d" % [int(r.get("k", 0)), int(r.get("d", 0)), int(r.get("a", 0))],
-		24, Color(0.92, 0.95, 1.0), HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
-	UiKit.text(self, Vector2(rx - 220.0, top + 58.0), "经济 %s" % _fmt_gold(int(r.get("gold", 0))), 18, C_GOLD,
-		HORIZONTAL_ALIGNMENT_RIGHT, 210.0)
-	# 属性徽章（最多 7，超出折叠）
-	var chips: Array = r.get("chips", [])
-	var cx := x + 84.0
-	var cy := top + 104.0
-	var shown := 0
-	for c in chips:
-		if shown >= 7:
-			UiKit.text(self, Vector2(cx, cy), "+%d" % (chips.size() - 7), 16, C_DIM)
-			break
-		cx = _chip(cx, cy, str(c[0]), c[1], str(c[2]))
-		shown += 1
-	if chips.is_empty():
-		UiKit.text(self, Vector2(cx, cy), "（无属性）", 16, C_DIM)
+		sub += "  ·  残血"
+	UiKit.text(self, Vector2(x + 162.0, y + 88.0), sub, 18, C_GOLD if not dead else Color(1.0, 0.48, 0.42))
+	# 血条
+	var hp_w := 200.0
+	draw_rect(Rect2(x + 162.0, y + 98.0, hp_w, 6.0), Color(0.08, 0.11, 0.16, 0.9))
+	draw_rect(Rect2(x + 162.0, y + 98.0, hp_w * clampf(float(r.get("hp_ratio", 1.0)), 0.0, 1.0), 6.0),
+		Color(0.32, 0.92, 0.48) if not dead else Color(0.55, 0.32, 0.30))
+	# 右上：KDA / 经济
+	var rx := x + W - 24.0
+	UiKit.text(self, Vector2(rx - 230.0, y + 52.0), "%d / %d / %d" % [int(r.get("k", 0)), int(r.get("d", 0)), int(r.get("a", 0))],
+		26, Color(0.92, 0.95, 1.0), HORIZONTAL_ALIGNMENT_RIGHT, 224.0)
+	UiKit.text(self, Vector2(rx - 230.0, y + 84.0), "经济 %s" % _fmt_gold(int(r.get("gold", 0))), 23, C_GOLD,
+		HORIZONTAL_ALIGNMENT_RIGHT, 224.0)
+	# 技能图标 4 个（1/2/3 + 召唤）：真实程序化技能图标
+	var sk: Array = r.get("skills", [])
+	for i in range(4):
+		var has := i < sk.size()
+		var slot := int(sk[i][0]) if has else (9 if i == 3 else i + 1)
+		var sname := str(sk[i][1]) if has else ""
+		var lv := int(sk[i][2]) if has else 0
+		var cd := float(sk[i][3]) if has else 0.0
+		var stype := int(sk[i][4]) if has and (sk[i] as Array).size() > 4 else -1
+		var cpos := Vector2(x + 176.0 + float(i) * 56.0, y + 152.0)
+		SkillArt.draw_icon(self, cpos, 21.0, hero_name, sname, stype, slot, lv > 0, cd <= 0.0)
+		if cd > 0.0:
+			var frac := clampf(cd / maxf(cd + 0.01, 6.0), 0.0, 1.0)
+			draw_arc(cpos, 20.4, -PI * 0.5, -PI * 0.5 + TAU * frac, 20, Color(0, 0, 0, 0.72), 4.0, true)
+		if lv > 0:
+			UiKit.text(self, Vector2(cpos.x + 11.0, cpos.y + 30.0), "%d" % lv, 14, C_GOLD)
 	# 装备图标 6 格
 	var eq: Array = r.get("equips", [])
 	for i in range(6):
-		var ir := Rect2(x + 84.0 + float(i) * 30.0, top + 118.0, 26.0, 26.0)
+		var ir := Rect2(x + 416.0 + float(i) * 33.0, y + 128.0, 27.0, 27.0)
 		if i < eq.size():
 			var e: Array = eq[i]
 			UiKit.item_icon(self, ir, int(e[1]) if e.size() > 1 else 1, str(e[0]))
 		else:
 			draw_style_box(UiKit.flat(0.5, 5, 1, Color(0.30, 0.36, 0.46, 0.5), Color(0.06, 0.07, 0.10, 0.55), 0.0, 0.0), ir)
-	# 技能徽章 4 个（1/2/3/召唤）
-	var sk: Array = r.get("skills", [])
-	var hero_name := str(r.get("hero", r.get("name", "")))
-	var acc := HeroArt.accent_of(hero_name)
-	for i in range(4):
-		var cpos := Vector2(x + 300.0 + float(i) * 40.0, top + 131.0)
-		var slot := int(sk[i][0]) if i < sk.size() else (9 if i == 3 else i + 1)
-		var cd := float(sk[i][3]) if i < sk.size() else 0.0
-		var lv := int(sk[i][2]) if i < sk.size() else 0
-		var ready := cd <= 0.0
-		var tint := acc if ready else acc.darkened(0.55)
-		draw_circle(cpos, 17.0, Color(tint.r, tint.g, tint.b, 0.22))
-		draw_arc(cpos, 17.0, 0.0, TAU, 24, tint, 2.0, true)
-		if not ready:
-			var frac := clampf(cd / maxf(cd + 0.01, 6.0), 0.0, 1.0)
-			draw_arc(cpos, 13.0, -PI * 0.5, -PI * 0.5 + TAU * frac, 20, Color(0, 0, 0, 0.75), 4.0, true)
-		UiKit.text(self, Vector2(cpos.x - 17.0, cpos.y + 6.0), SKILL_TAG[i], 18,
-			Color.WHITE if ready else Color(0.72, 0.76, 0.84), HORIZONTAL_ALIGNMENT_CENTER, 34.0)
-		if lv > 0:
-			UiKit.text(self, Vector2(cpos.x + 8.0, cpos.y + 24.0), "%d" % lv, 14, C_GOLD)
+	# 属性徽章（装备下方，最多 4 条）
+	var chips: Array = r.get("chips", [])
+	var cx := x + 416.0
+	var cy2 := y + 184.0
+	var shown := 0
+	for c in chips:
+		if shown >= 4:
+			break
+		if cx > x + W - 30.0:
+			break
+		cx = _chip(cx, cy2, str(c[0]), c[1], str(c[2]))
+		shown += 1
 	# 死亡压暗
 	if dead:
 		draw_style_box(UiKit.flat(0.55, 12, 0, Color(0, 0, 0, 0), Color(0.02, 0.02, 0.04, 0.55), 0.0, 0.0), rect)
 
 func _chip(x: float, baseline: float, glyph: String, col: Color, txt: String) -> float:
-	_glyph(Vector2(x + 8.0, baseline - 6.0), 8.5, glyph, col)
-	UiKit.text(self, Vector2(x + 22.0, baseline), txt, 17, col.lightened(0.32))
-	var w := UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x
-	return x + 26.0 + w + 12.0
+	_glyph(Vector2(x + 8.0, baseline - 6.0), 8.0, glyph, col)
+	UiKit.text(self, Vector2(x + 22.0, baseline), txt, 16, col.lightened(0.32))
+	var w := UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
+	return x + 26.0 + w + 10.0
 
 func _glyph(c: Vector2, r: float, id: String, col: Color) -> void:
 	var w := maxf(r * 0.34, 1.2)
@@ -271,29 +308,6 @@ func _glyph(c: Vector2, r: float, id: String, col: Color) -> void:
 			draw_line(c, c + Vector2(r * 0.42, 0), col, w, true)
 		_:
 			draw_circle(c, r * 0.55, col)
-
-# ---------- 对位配对 ----------
-
-func _pair_rows() -> Array:
-	var ally: Array = []
-	var foe: Array = []
-	for r in rows:
-		if int(r.get("team", 0)) == 0:
-			ally.append(r)
-		else:
-			foe.append(r)
-	var _by_lane := func(a, b):
-		var la := int(a.get("lane", 99))
-		var lb := int(b.get("lane", 99))
-		if la != lb:
-			return la < lb
-		return int(a.get("gold", 0)) > int(b.get("gold", 0))
-	ally.sort_custom(_by_lane)
-	foe.sort_custom(_by_lane)
-	var pairs: Array = []
-	for i in range(5):
-		pairs.append([ally[i] if i < ally.size() else {}, foe[i] if i < foe.size() else {}])
-	return pairs
 
 func _close_rect() -> Rect2:
 	return Rect2(PANEL_W - 92.0, 14.0, 40.0, 34.0)

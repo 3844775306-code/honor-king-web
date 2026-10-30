@@ -21,6 +21,13 @@ static var _normal_tex: NoiseTexture2D
 static var _ground_shader: Shader
 static var _brick_shader: Shader
 static var _water_shader: Shader
+static var _sun_light: DirectionalLight3D
+static var _fill_light: DirectionalLight3D
+
+# 逆光参数：太阳放在相机正前方的低空，光线朝相机方向打 → 角色边缘轮廓光、地面长投影；
+# 补光放在相机后上方，只轻轻提亮朝向镜头的一面，避免正面死黑。
+const SUN_ELEVATION_DEG := 38.0
+const FILL_ELEVATION_DEG := 22.0
 
 # ================= 环境 / 光照 =================
 
@@ -71,11 +78,12 @@ static func setup_environment(parent: Node3D) -> void:
 	we.environment = env
 	parent.add_child(we)
 
-	# 暖色主光（软阴影）
+	# 暖色主光（软阴影）：默认相机朝 -Z，太阳放正前方（+180°），开局即逆光
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52, 38, 0)
-	sun.light_color = Color(1.0, 0.96, 0.87)
-	sun.light_energy = 2.2
+	sun.name = "SunBacklight"
+	sun.rotation_degrees = Vector3(-SUN_ELEVATION_DEG, 180.0, 0.0)
+	sun.light_color = Color(1.0, 0.93, 0.80)
+	sun.light_energy = 2.35
 	sun.light_angular_distance = 1.0
 	sun.shadow_enabled = true
 	sun.shadow_bias = 0.03
@@ -87,14 +95,33 @@ static func setup_environment(parent: Node3D) -> void:
 	sun.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_AND_SKY
 	parent.add_child(sun)
 
-	# 冷色补光（无阴影，提亮背光面）
+	# 冷色补光（无阴影）：从相机后上方补正面，压住逆光造成的死黑
 	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(-24, -145, 0)
+	fill.name = "CameraFill"
+	fill.rotation_degrees = Vector3(-FILL_ELEVATION_DEG, 0.0, 0.0)
 	fill.light_color = Color(0.58, 0.68, 0.95)
-	fill.light_energy = 0.55
+	fill.light_energy = 0.58
 	fill.shadow_enabled = false
 	fill.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	parent.add_child(fill)
+
+	_sun_light = sun
+	_fill_light = fill
+
+# 每帧把主光锁在相机正前方（水平方向），形成真正的相机逆光；补光锁在相机后方。
+static func update_backlight_for_camera(cam: Camera3D) -> void:
+	if cam == null or _sun_light == null or not is_instance_valid(_sun_light):
+		return
+	var fwd := -cam.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.000001:
+		return
+	fwd = fwd.normalized()
+	# 相机水平朝向：Godot 里 yaw 旋转的 forward = (-sin yaw, 0, -cos yaw)
+	var yaw := rad_to_deg(atan2(-fwd.x, -fwd.z))
+	_sun_light.rotation_degrees = Vector3(-SUN_ELEVATION_DEG, yaw + 180.0, 0.0)
+	if _fill_light != null and is_instance_valid(_fill_light):
+		_fill_light.rotation_degrees = Vector3(-FILL_ELEVATION_DEG, yaw, 0.0)
 
 # ================= 地面材质 =================
 

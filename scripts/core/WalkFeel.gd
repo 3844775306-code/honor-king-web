@@ -41,6 +41,10 @@ class Walker extends Node:
 	var legs: Array = []
 	var leg_swing := 0.55
 	var leg_base: Array = []
+	# 龙兵双翼：肩部枢轴，悬停/移动都持续扇动
+	var wings: Array = []
+	var wing_base: Array = []
+	var wing_phase := 0.0
 
 	func setup(u: Node3D, m: Node3D, o: Dictionary) -> void:
 		unit = u
@@ -59,6 +63,9 @@ class Walker extends Node:
 		leg_swing = float(o.get("leg_swing", 0.55))
 		for l in legs:
 			leg_base.append((l as Node3D).rotation.x)
+		wings = o.get("wings", [])
+		for w in wings:
+			wing_base.append((w as Node3D).rotation.z if w != null and is_instance_valid(w) else 0.0)
 
 	func _process(delta: float) -> void:
 		if not is_instance_valid(unit) or not is_instance_valid(model):
@@ -77,6 +84,15 @@ class Walker extends Node:
 		spd = lerpf(spd, minf(inst, 12.0), clampf(delta * 12.0, 0.0, 1.0))
 		var f := clampf(spd / 3.6, 0.0, 1.3)
 
+		# 龙兵双翼扇动：悬停也有慢扇，移动时更急更大（不参与下方“站定归位”早退）
+		if not wings.is_empty():
+			wing_phase += delta * (2.0 + 5.5 * f)
+			for i in wings.size():
+				var wg: Node3D = wings[i]
+				if wg != null and is_instance_valid(wg):
+					var sgn := -1.0 if i == 0 else 1.0
+					wg.rotation.z = float(wing_base[i]) + sin(wing_phase) * (0.16 + 0.34 * f) * sgn
+
 		# 站定：平滑归位（不硬切，避免抖）
 		if spd < 0.25:
 			var k := clampf(delta * 8.0, 0.0, 1.0)
@@ -93,8 +109,8 @@ class Walker extends Node:
 			return
 
 		step_cd = maxf(0.0, step_cd - delta)
-		# 步频：每步距离 stride → 相位推进；上下起伏 2×步频、左右摆 1×
-		phase += spd / maxf(stride, 0.2) * TAU * delta
+		# 步频：按「本帧实际位移」推进相位（而非平滑速度），步频与真实移速严格同步
+		phase += minf(moved, 1.5) / maxf(stride, 0.2) * TAU
 		if phase > TAU * 64.0:
 			phase = fmod(phase, TAU)
 		model.position.y = base_pos.y + sin(phase) * bob_amp * f

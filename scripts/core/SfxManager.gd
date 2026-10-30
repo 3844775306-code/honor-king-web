@@ -406,14 +406,14 @@ func try_tower_destroyed_sfx(tower_team: int, tower_pos: Vector3) -> void:
 	var h := _own_hero_node()
 	if h == null or h.global_position.distance_to(tower_pos) > 34.0:
 		return
-	_play_sfx("tower_down_own" if tower_team == Config.Team.PLAYER else "tower_down_enemy")
+	_play_sfx("tower_down_own" if Config.is_ally(tower_team) else "tower_down_enemy")
 
 # 主宰先锋/风暴先锋/暗影先锋被击杀：敌方=奖励音色，我方=低沉；≤34 才响
 func try_vanguard_down_sfx(minion_team: int, pos: Vector3) -> void:
 	var h := _own_hero_node()
 	if h == null or h.global_position.distance_to(pos) > 34.0:
 		return
-	_play_sfx("vanguard_down_own" if minion_team == Config.Team.PLAYER else "vanguard_down_enemy")
+	_play_sfx("vanguard_down_own" if Config.is_ally(minion_team) else "vanguard_down_enemy")
 
 # —— 世界短音（仅本地玩家英雄；Hero/GameEntity 每帧都会调，内部按名字过滤）——
 # 技能施放音：英雄专属音色 > 大招 > 技能类型（0指向/1范围/2增益/3线性/4位移/5多段/6护盾）
@@ -720,7 +720,7 @@ func _dyn_cfg(key: String) -> Dictionary:
 			return _cfg_from(_JUNGLE_SFX, parts[1], "pig")
 		"tw":
 			var tw: Dictionary = (_TOWER_SFX.get(parts[1], _TOWER_SFX["outer"]) as Dictionary).duplicate(true)
-			return _scale_cfg(tw, 0.95 if int(parts[2]) == Config.Team.PLAYER else 1.06)
+			return _scale_cfg(tw, 0.95 if Config.is_ally(int(parts[2])) else 1.06)
 	return {}
 
 func _cfg_from(table: Dictionary, key: String, fallback: String) -> Dictionary:
@@ -928,7 +928,7 @@ func _render_synth(cfg: Dictionary, key: String) -> AudioStreamWAV:
 	return st
 
 func _resolve_key(actor: String, actor_team: int, desc: String, victim: String, victim_team: int) -> String:
-	var my_side := actor_team == Config.Team.PLAYER
+	var my_side := Config.is_ally(actor_team)
 	match desc:
 		"第一滴血":
 			return "first_blood"
@@ -977,9 +977,9 @@ func _resolve_key(actor: String, actor_team: int, desc: String, victim: String, 
 			return "e_kill_you" if (own != "" and victim == own) else "e_kill_ally"
 		"已摧毁":
 			# 塔被摧毁：victim_team 是被摧毁塔的阵营。水晶被破由 胜利/失败 结算播报接管，这里跳过。
-			if victim_team == Config.Team.PLAYER:
+			if Config.is_ally(victim_team):
 				return "" if victim == "crystal" else "tower_lost"
-			if victim_team == Config.Team.ENEMY:
+			if victim_team == Config.Team.ENEMY or victim_team == Config.Team.PLAYER:
 				return "" if victim == "crystal" else "my_push"
 	return ""
 

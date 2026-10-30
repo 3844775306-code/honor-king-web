@@ -6,12 +6,16 @@ const CELL_SIZE: float = 1.0   # must be exactly representable in binary (powers
 const GRID_HALF: int = 65      # 130 cells × 1.0 = 130 units (> 120 map)
 const CELL_MIN: int = -GRID_HALF
 const CELL_MAX: int = GRID_HALF - 1
+const TURRET_BASE_WEIGHT: float = 6.0   # 塔基附近代价：可通行但寻路优先绕行
 const TURRET_DANGER_WEIGHT: float = 4.0  # 塔危险区域代价倍率：可通行但高代价，绕行距离过长时仍会穿过
+
 
 var astar: AStarGrid2D
 var initialized: bool = false
-var _marked_turret_cells: Array = []  # 临时标记高代价的塔危险区域网格
+var _marked_turret_cells: Array = []
+var _turret_base_weight: Dictionary = {}   # 塔基格 -> 基础权重（塔心可通行，但寻路优先绕开）
 var last_marked_count: int = 0  # 最近一次标记的塔危险区域格数（调试输出用）
+
 
 
 func _is_in_bounds(cell: Vector2i) -> bool:
@@ -33,19 +37,23 @@ func build_navigation_map() -> void:
 			continue
 		_mark_solid(wall.global_position.x, wall.global_position.z)
 
+
+	# 塔基：不写死为不可通行（单位可走进来，由 CollisionSystem 推挤挡开），但给高权重让 A* 优先绕行
+	_turret_base_weight.clear()
+	for turret in get_tree().get_nodes_in_group("turrets"):
+		if not is_instance_valid(turret):
+			continue
+		_mark_base_weight(turret.global_position.x, turret.global_position.z, 2.16)
+
 	# Mark map edges as solid
+	# 地图 120×120 之外必须整片不可通行：原来只封了 z=±60 一行，外侧 -61…-65 仍是“可通行”，
+	# 单位被挤到 z=-60 后 _find_nearest_walkable 会挑到墙外的 -61 格 → A* 永远失败 → 小兵贴边卡死。
 	var half = 60
 	for i in range(CELL_MIN, CELL_MAX + 1):
-		var x = i * CELL_SIZE
-		if x < -half or x > half:
-			for j in range(CELL_MIN, CELL_MAX + 1):
+		for j in range(CELL_MIN, CELL_MAX + 1):
+			if absi(i) >= half or absi(j) >= half:
 				astar.set_point_solid(Vector2i(i, j), true)
-		else:
-			for sign in [-1, 1]:
-				var cz = sign * half  # CELL_SIZE=1, world_z == cell_z
-				var cell = Vector2i(i, cz)
-				if _is_in_bounds(cell):
-					astar.set_point_solid(cell, true)
+
 
 	initialized = true
 
@@ -97,7 +105,7 @@ func _mark_turret_danger_zones(team: int, from_pos: Vector3, to_pos: Vector3) ->
 					continue
 				# 只标记原本可通行的网格，避免覆盖墙体
 				if not astar.is_point_solid(cell):
-					astar.set_point_weight_scale(cell, TURRET_DANGER_WEIGHT)
+					astar.set_point_weight_scale(cell, maxf(TURRET_DANGER_WEIGHT, float(_turret_base_weight.get(cell, 1.0))))
 					_marked_turret_cells.append(cell)
 
 	last_marked_count = _marked_turret_cells.size()
@@ -105,8 +113,23 @@ func _mark_turret_danger_zones(team: int, from_pos: Vector3, to_pos: Vector3) ->
 func _unmark_turret_danger_zones() -> void:
 	for cell in _marked_turret_cells:
 		if _is_in_bounds(cell):
-			astar.set_point_weight_scale(cell, 1.0)
+			astar.set_point_weight_scale(cell, float(_turret_base_weight.get(cell, 1.0)))
 	_marked_turret_cells.clear()
+
+# 塔基高权重（可通行）：避免 A* 把路径压进塔基被推挤区域，导致单位顶塔打转
+func _mark_base_weight(wx: float, wz: float, radius: float) -> void:
+	var cx := int(floor(wx / CELL_SIZE))
+	var cz := int(floor(wz / CELL_SIZE))
+	var rc := int(ceil(radius))
+	for dx in range(-rc, rc + 1):
+		for dz in range(-rc, rc + 1):
+			if dx * dx + dz * dz > radius * radius:
+				continue
+			var cell := Vector2i(cx + dx, cz + dz)
+			if _is_in_bounds(cell) and not astar.is_point_solid(cell):
+				astar.set_point_weight_scale(cell, TURRET_BASE_WEIGHT)
+				_turret_base_weight[cell] = TURRET_BASE_WEIGHT
+
 
 func _mark_solid(wx: float, wz: float) -> void:
 	var cx = int(floor(wx / CELL_SIZE))
@@ -126,6 +149,7 @@ func find_path(from: Vector3, to: Vector3, bias_dir: Vector3 = Vector3.ZERO, tea
 	# 对英雄寻路时临时将无己方小兵的敌塔危险区域标记为高代价
 	if team >= 0:
 		_mark_turret_danger_zones(team, from, to)
+
 
 	var from_cell = _world_to_cell(from)
 	var to_cell = _world_to_cell(to)
@@ -162,6 +186,7 @@ func find_path(from: Vector3, to: Vector3, bias_dir: Vector3 = Vector3.ZERO, tea
 		if path_cells.is_empty():
 			if team >= 0:
 				_unmark_turret_danger_zones()
+
 			# A*彻底失败：返回空路径，让 _avoid_walls 使用贴墙滑行策略
 			return PackedVector3Array()
 

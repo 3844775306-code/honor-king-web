@@ -7,6 +7,8 @@ const BUFF_AURA_SHADER := preload("res://assets/shaders/buff_aura.gdshader")
 const CAST_RANGE_SHADER := preload("res://assets/shaders/cast_range.gdshader")
 const CAST_AREA_SHADER := preload("res://assets/shaders/cast_area.gdshader")
 const CAST_LINE_SHADER := preload("res://assets/shaders/cast_line.gdshader")
+const TELEPORT_PORTAL_SHADER := preload("res://assets/shaders/teleport_portal.gdshader")
+const EXP_ORB_SHADER := preload("res://assets/shaders/exp_orb.gdshader")
 
 # 发光能量球（防御塔激光弹体）：核心亮球 + 两层加色光晕，观感比单球亮很多
 static func create_energy_orb(radius: float, color: Color) -> Node3D:
@@ -30,6 +32,94 @@ static func create_energy_orb(radius: float, color: Color) -> Node3D:
 		g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(g)
 	root.set_meta("orb_core", core)
+	return root
+
+# 经验球：亮核 + 双层菲涅尔光晕，飞行时外层能量带持续流动
+static func create_exp_orb(radius: float = 0.16) -> Node3D:
+	var root := Node3D.new()
+	root.name = "ExpOrb"
+	var core := create_sphere(radius * 0.55, Color(0.82, 1.0, 0.88), false)
+	var cmat := StandardMaterial3D.new()
+	cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cmat.albedo_color = Color(0.86, 1.0, 0.90)
+	cmat.emission_enabled = true
+	cmat.emission = Color(0.35, 1.0, 0.45)
+	cmat.emission_energy_multiplier = 2.4
+	core.material_override = cmat
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	core.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	root.add_child(core)
+	for i in range(2):
+		var halo := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = radius * (2.1 if i == 0 else 3.9)
+		sm.height = sm.radius * 2.0
+		sm.radial_segments = 16
+		sm.rings = 8
+		halo.mesh = sm
+		var mat := ShaderMaterial.new()
+		mat.shader = EXP_ORB_SHADER
+		mat.set_shader_parameter("orb_color", Color(0.16, 1.0, 0.38))
+		mat.set_shader_parameter("core_color", Color(0.80, 1.0, 0.86))
+		mat.set_shader_parameter("intensity", 0.85 if i == 0 else 0.34)
+		halo.material_override = mat
+		halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		halo.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		root.add_child(halo)
+	root.set_meta("orb_core", core)
+	return root
+
+# 传送阵：地面漩涡符文贴花 + 三层倾斜旋转能量环（返回 rings 供 TeleportZone 做缓慢转动）
+static func create_teleport_portal(radius: float = 4.0) -> Node3D:
+	var root := Node3D.new()
+	root.name = "TeleportPortal"
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(radius * 2.0, radius * 2.0)
+	mi.mesh = pm
+	var mat := ShaderMaterial.new()
+	mat.shader = TELEPORT_PORTAL_SHADER
+	mat.set_shader_parameter("portal_color", Color(0.20, 0.55, 1.0))
+	mat.set_shader_parameter("accent_color", Color(0.55, 0.95, 1.0))
+	mi.material_override = mat
+	mi.position.y = 0.03
+	mi.scale = Vector3(1.04, 1.0, 1.04)   # 外环视觉半径对齐碰撞半径 4.0
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	root.add_child(mi)
+
+	var rings: Array = []
+	var base_ys: Array = []
+	var tints: Array = [Color(0.35, 0.82, 1.0), Color(0.62, 0.95, 1.0), Color(0.34, 0.70, 1.0)]
+	for i in range(3):
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		var rad := radius * (0.93 - 0.13 * i)
+		torus.inner_radius = rad - 0.045
+		torus.outer_radius = rad + 0.045
+		torus.rings = 32
+		torus.ring_segments = 8
+		ring.mesh = torus
+		var rm := StandardMaterial3D.new()
+		var col: Color = tints[i]
+		rm.albedo_color = Color(col.r, col.g, col.b, 0.42)
+		rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		rm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		rm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		rm.emission_enabled = true
+		rm.emission = col
+		rm.emission_energy_multiplier = 1.8
+		ring.material_override = rm
+		ring.position.y = 0.36 + 0.52 * i
+		ring.rotation = Vector3(0.42 - 0.18 * i, 0.35 * i, 0.24 - 0.20 * i)
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ring.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		root.add_child(ring)
+		rings.append(ring)
+		base_ys.append(ring.position.y)
+	root.set_meta("rings", rings)
+	root.set_meta("ring_base_y", base_ys)
 	return root
 
 # 创建水平放置的圆环
