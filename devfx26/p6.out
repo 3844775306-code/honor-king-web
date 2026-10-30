@@ -1,0 +1,49 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[Debug] AI路径球显示已开启（F4切换）
+[Debug] 击杀奖励调试日志已开启（BattleManager.debug_kill_rewards）
+[A*]己 马超: (-60,60)->(-40,20) 路点40 终点(-40,20) 目标移动 0.1ms 标记0格
+[A*]己 沈梦溪: (-60,60)->(-47,-19) 路点79 终点(-47,-19) 目标移动 0.1ms 标记0格
+[A*]己 狄仁杰: (-60,60)->(-48,53) 路点13 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]己 刘禅: (-60,60)->(-48,53) 路点13 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]敌 孙悟空: (60,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 小乔: (60,-60)->(-3,-9) 失败 目标移动 0.0ms 标记0格
+[A*]敌 元流之子: (60,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+[A*]敌 吕布: (60,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 大禹: (60,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 孙悟空: (59,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 小乔: (59,-60)->(-3,-9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 元流之子: (60,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 吕布: (60,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 大禹: (59,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+L tick=30
+[A*]敌 孙悟空: (59,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 小乔: (59,-60)->(-3,-9) 失败 目标移动 0.0ms 标记0格
+[A*]敌 元流之子: (59,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 吕布: (59,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 大禹: (59,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 孙悟空: (59,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 小乔: (59,-60)->(-3,-9) 失败 目标移动 0.0ms 标记0格
+[A*]敌 元流之子: (59,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 吕布: (59,-60)->(-20,35) 失败 目标移动 0.5ms 标记580格
+[A*]敌 大禹: (59,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+L tick=60
+[A*]敌 孙悟空: (58,-59)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 小乔: (58,-60)->(-3,-9) 失败 目标移动 0.0ms 标记0格
+[A*]敌 元流之子: (58,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 吕布: (58,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 大禹: (58,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+L 亚瑟 parent=WeaponHand grip=(-0.97, 0.34, -0.04) sc=1.0 size=(0.93, 1.8, 0.59)
+L 马超 parent=WeaponHand grip=(0.64, 0.75, 0.83) sc=1.0 size=(0.98, 2.64, 0.53)
+L 沈梦溪 parent=WeaponHand grip=(1.01, 0.72, 0.29) sc=1.0 size=(0.56, 0.59, 0.49)
+L 狄仁杰 parent=HeroModel grip=(-0.14, 1.12, -0.32) sc=1.0 size=(0.28, 0.23, 0.4)
+L 刘禅 parent=WeaponHand grip=(0.67, 0.78, 0.79) sc=1.0 size=(0.44, 0.63, 0.48)
+L 孙悟空 parent=WeaponHand grip=(0.13, 0.73, -1.04) sc=1.0 size=(1.07, 2.57, 0.76)
+L 小乔 parent=WeaponHand grip=(0.74, 0.68, -1.04) sc=1.0 size=(0.51, 0.6, 0.51)
+L 元流之子 parent=WeaponHand grip=(0.68, 0.7, -0.81) sc=1.0 size=(0.36, 1.56, 0.5)
+L 吕布 parent=WeaponHand grip=(0.4, 0.79, -0.96) sc=1.0 size=(0.99, 2.61, 0.68)
+L 大禹 parent=WeaponHand grip=(0.67, 0.71, -0.81) sc=1.0 size=(0.69, 1.4, 0.62)
+ERROR: 34 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 1 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 12 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 12 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.

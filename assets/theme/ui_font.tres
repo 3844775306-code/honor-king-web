@@ -1,0 +1,8 @@
+[gd_resource type="SystemFont" format=3]
+
+[resource]
+font_names = PackedStringArray("Microsoft YaHei UI", "Microsoft YaHei", "HarmonyOS Sans SC", "MiSans", "OPPO Sans", "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Roboto", "Droid Sans Fallback", "sans-serif")
+antialiasing = 1
+subpixel_positioning = 1
+hinting = 1
+allow_system_fallback = true

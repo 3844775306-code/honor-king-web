@@ -1,0 +1,45 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[Debug] AI路径球显示已开启（F4切换）
+[Debug] 击杀奖励调试日志已开启（BattleManager.debug_kill_rewards）
+[A*]己 马超: (-60,60)->(-20,40) 路点41 终点(-20,40) 目标移动 0.1ms 标记0格
+[A*]己 甄姬: (-60,60)->(-48,53) 路点13 终点(-48,53) 目标移动 0.0ms 标记0格
+[A*]己 狄仁杰: (-60,60)->(-48,53) 路点13 终点(-48,53) 目标移动 0.1ms 标记0格
+[SKILL t=0.1] 张飞 casts 恢复(5) Lv1 CD=60.0 cost=0
+[A*]敌 李白: (60,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 不知火舞: (60,-60)->(3,9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 后羿: (60,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+[A*]敌 英睿: (60,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[SKILL t=0.1] 张飞 casts 恢复(5) Lv1 CD=60.0 cost=0
+[A*]敌 李白: (59,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 不知火舞: (59,-60)->(3,9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 后羿: (59,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+[A*]敌 英睿: (59,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 李白: (59,-60)->(40,-20) 失败 目标移动 0.0ms 标记0格
+[A*]敌 不知火舞: (59,-60)->(3,9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 后羿: (59,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+[A*]敌 英睿: (59,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+L tick=30
+[A*]敌 李白: (59,-60)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 不知火舞: (58,-60)->(3,9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 后羿: (58,-60)->(20,-35) 失败 目标移动 0.0ms 标记0格
+[A*]敌 英睿: (58,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+[A*]敌 李白: (58,-59)->(40,-20) 失败 目标移动 0.1ms 标记0格
+[A*]敌 不知火舞: (58,-60)->(3,9) 失败 目标移动 0.1ms 标记0格
+[A*]敌 后羿: (58,-60)->(20,-35) 失败 目标移动 0.1ms 标记0格
+[A*]敌 英睿: (58,-60)->(-20,35) 失败 目标移动 0.4ms 标记580格
+L tick=60
+L 亚瑟 parent=WeaponHand grip=(-1.01, 0.39, 0.09) sc=1.0 size=(1.03, 1.76, 0.63)
+L 马超 parent=WeaponHand grip=(0.42, 0.93, 1.02) sc=1.0 size=(0.98, 2.65, 0.42)
+L 甄姬 parent=WeaponHand grip=(0.91, 0.75, 1.25) sc=1.0 size=(0.63, 0.9, 0.7)
+L 狄仁杰 parent=HeroModel grip=(0.01, 1.17, -0.36) sc=1.0 size=(0.4, 0.23, 0.28)
+L 张飞 parent=WeaponHand grip=(-0.61, 0.98, 0.75) sc=1.0 size=(1.14, 2.73, 0.46)
+L 李白 parent=WeaponHand grip=(0.01, 0.9, -1.11) sc=1.0 size=(0.54, 1.56, 0.27)
+L 不知火舞 parent=WeaponHand grip=(0.28, 0.9, -1.07) sc=1.0 size=(0.42, 0.65, 0.64)
+L 后羿 parent=WeaponHand grip=(0.56, 0.62, -0.89) sc=1.0 size=(0.36, 1.4, 0.44)
+L 英睿 NO_WEAPON
+L 张飞 parent=WeaponHand grip=(-0.61, 0.98, 0.75) sc=1.0 size=(1.14, 2.73, 0.46)
+ERROR: 104 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 24 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 24 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.
