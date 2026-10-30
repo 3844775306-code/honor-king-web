@@ -59,7 +59,7 @@ static func attach(instance: Node3D, hero_name: String) -> void:
 		bone = skel.find_bone("arm-right")
 		if bone < 0:
 			bone = skel.find_bone("arm-left")
-	if skel != null and bone >= 0:
+	if skel != null and bone >= 0 and instance.get_parent() != null and str(instance.get_parent().name) == "HeroModel":
 		var ba := BoneAttachment3D.new()
 		ba.name = "WeaponHand"
 		ba.bone_idx = bone

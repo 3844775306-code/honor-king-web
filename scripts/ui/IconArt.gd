@@ -52,6 +52,11 @@ static func draw_icon(ci: CanvasItem, center: Vector2, radius: float, kind: Stri
 	for i in range(8):
 		var t := 1.0 - float(i) / 7.0
 		ci.draw_circle(center, radius * 0.92 * t, Color(col.r, col.g, col.b, 0.035))
+	# 顶部玻璃高光 + 底部元素色反光（与自绘触控键同一套质感）
+	ci.draw_arc(center - Vector2(0, radius * 0.18), radius * 0.76, -PI * 0.92, -PI * 0.08,
+		22, Color(1, 1, 1, 0.04 if dim else 0.11), maxf(1.5, radius * 0.045), true)
+	ci.draw_arc(center + Vector2(0, radius * 0.12), radius * 0.80, PI * 0.16, PI * 0.84,
+		20, Color(col.r, col.g, col.b, 0.05 if dim else 0.10), maxf(1.2, radius * 0.025), true)
 	ci.draw_arc(center, radius - 1.0, 0, TAU, 40, Color(col.r, col.g, col.b, 0.75 if not dim else 0.35),
 		maxf(radius * 0.05, 1.5), true)
 	var k := radius * 0.60

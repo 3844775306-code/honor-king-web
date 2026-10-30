@@ -4,6 +4,31 @@ extends RefCounted
 var hero: Hero
 
 
+# ==================== 共享实体快照（0.1s） ====================
+# 每个 AI 英雄每帧都遍历一次 "entities" 组，成本随英雄数线性增长；这里按 TTL 缓存组列表，
+# 所有 AiPerception 实例共用一份（距离/队伍/类型过滤仍在调用处逐个做），过期或换场景后重建。
+const CACHE_TTL: float = 0.1
+
+static var _cache_tree_id: int = 0
+static var _cache_nodes: Array = []
+static var _cache_time: float = -1e9
+
+# 防御塔单独缓存：Turret 不走 GameEntity.setup()，因此不在 "entities" 组里，只能查 "turrets"
+static var _turret_tree_id: int = 0
+static var _turret_nodes: Array = []
+static var _turret_time: float = -1e9
+
+
+static func _shared_nodes(tree: SceneTree) -> Array:
+	var now: float = Time.get_ticks_msec() * 0.001
+	var tid: int = tree.get_instance_id()
+	if tid != _cache_tree_id or now - _cache_time > CACHE_TTL:
+		_cache_tree_id = tid
+		_cache_time = now
+		_cache_nodes = tree.get_nodes_in_group("entities")
+	return _cache_nodes
+
+
 # ==================== 初始化 ====================
 func _init(p_hero: Hero) -> void:
 	hero = p_hero
@@ -21,7 +46,7 @@ func query_in_range(radius: float,
 	var tree := hero.get_tree()
 	if not tree:
 		return result
-	for entity in tree.get_nodes_in_group("entities"):
+	for entity in _shared_nodes(tree):
 		if not _is_valid(entity):
 			continue
 		if exclude_self and entity == hero:
@@ -49,7 +74,7 @@ func find_nearest_in_range(radius: float,
 	var tree := hero.get_tree()
 	if not tree:
 		return null
-	for entity in tree.get_nodes_in_group("entities"):
+	for entity in _shared_nodes(tree):
 		if not _is_valid(entity):
 			continue
 		if exclude_self and entity == hero:
@@ -78,7 +103,7 @@ func count_in_range(radius: float,
 	var tree := hero.get_tree()
 	if not tree:
 		return 0
-	for entity in tree.get_nodes_in_group("entities"):
+	for entity in _shared_nodes(tree):
 		if not _is_valid(entity):
 			continue
 		if exclude_self and entity == hero:
@@ -104,7 +129,7 @@ func count_near_center(center: Vector3, radius: float,
 	var tree := hero.get_tree()
 	if not tree:
 		return 0
-	for entity in tree.get_nodes_in_group("entities"):
+	for entity in _shared_nodes(tree):
 		if not _is_valid(entity):
 			continue
 		if not type_filter.is_empty() and not _matches_type(entity, type_filter):
@@ -169,11 +194,42 @@ func count_ally_minions_near(center: Vector3, radius: float) -> int:
 
 # --- 防御塔 ---
 func find_nearest_friendly_turret(radius: float) -> Turret:
-	return find_nearest_in_range(radius, [Turret], hero.team, true) as Turret
+	return _nearest_turret(radius, hero.team)
 
 
 func find_nearest_enemy_turret(radius: float) -> Turret:
-	return find_nearest_in_range(radius, [Turret], _enemy_team(), true, _is_collidable) as Turret
+	return _nearest_turret(radius, _enemy_team())
+
+
+static func _shared_turrets(tree: SceneTree) -> Array:
+	var now: float = Time.get_ticks_msec() * 0.001
+	var tid: int = tree.get_instance_id()
+	if tid != _turret_tree_id or now - _turret_time > CACHE_TTL:
+		_turret_tree_id = tid
+		_turret_time = now
+		_turret_nodes = tree.get_nodes_in_group("turrets")
+	return _turret_nodes
+
+
+# 最近的己方/敌方防御塔（含水晶）
+func _nearest_turret(radius: float, team: int) -> Turret:
+	var tree := hero.get_tree()
+	if not tree:
+		return null
+	var best: Turret = null
+	var best_dist := radius + 1.0
+	for entity in _shared_turrets(tree):
+		if not (entity is Turret) or not is_instance_valid(entity):
+			continue
+		var turret := entity as Turret
+		if turret.health <= 0 or turret.team != team:
+			continue
+		var dist: float = hero.global_position.distance_to(turret.global_position)
+		if dist > radius or dist >= best_dist:
+			continue
+		best_dist = dist
+		best = turret
+	return best
 
 
 # --- 野怪 ---

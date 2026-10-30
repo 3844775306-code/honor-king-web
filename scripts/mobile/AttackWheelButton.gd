@@ -107,7 +107,7 @@ func _gui_input(event):
 func _draw():
 	var p := clampf(_press, 0.0, 1.0)
 	var center := size * 0.5 + Vector2(0, p * 1.8)
-	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.014)
+	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.022)
 	var base_col := color if _active else color.darkened(0.25)
 	# 外圈：强化普攻就绪时外圈与伤害数字转金色（数值也已切换为强化后伤害）
 	var ring_col := Color(1.0, 0.85, 0.3) if enhanced else base_col.lightened(0.3)

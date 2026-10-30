@@ -30,8 +30,7 @@ func _create_visual():
 		add_child(instance)
 		visual = instance
 		_proc_visual = true
-		var strength := float(instance.get_meta("tint_strength", 0.30))
-		UnitVisuals.tint_team(instance, team, strength)
+		# 程序化模型：阵营色/金属度已合并进 2 个材质并烘焙到顶点色，跳过逐面材质染色
 		WalkFeel.attach(self, instance, _walk_opts())
 	else:
 		# 根据兵种加载对应模型

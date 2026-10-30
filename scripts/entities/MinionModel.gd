@@ -75,53 +75,73 @@ static func _build_template(kind: String, team: int) -> Node3D:
 		var s := target_height(kind) / h
 		root.scale = Vector3(s, s, s)
 	root.set_meta("minion_model_kind", kind)
-	root.set_meta("tint_strength", 0.30)
+	root.set_meta("tint_strength", 0.0)   # 阵营色已烘焙进顶点色，无需再复制材质染色
 	return root
 
 
-# ==================== 材质 ====================
+# ==================== 材质（合并为 2~4 个 surface，颜色烘焙进顶点色） ====================
+# 原来每个部件一个材质 → 单个小兵 8~9 个 surface / 材质，实例化时要逐个建 surface override，
+# 是真实渲染下每只 60~230ms 的主要来源。合并后金属/布料各 1 个材质，龙额外 2 个发光面。
+const _GROUP := {
+	"steel": "metal", "dark": "metal", "bronze": "metal", "gold": "metal", "horn": "metal",
+	"leather": "matte", "wood": "matte", "skin": "matte", "cloth": "matte", "black": "matte",
+	"scale": "matte", "membrane": "glow", "eye": "eye",
+}
+const _BASE_COLORS := {
+	"steel": Color(0.54, 0.57, 0.61), "dark": Color(0.20, 0.21, 0.24),
+	"bronze": Color(0.70, 0.51, 0.26), "gold": Color(0.92, 0.71, 0.32),
+	"leather": Color(0.33, 0.23, 0.15), "wood": Color(0.34, 0.23, 0.12),
+	"skin": Color(0.64, 0.49, 0.37), "black": Color(0.045, 0.045, 0.05),
+}
+
+static func _dragon_palette(kind: String) -> Dictionary:
+	var scale_col := Color(0.20, 0.34, 0.24)
+	var memb_col := Color(0.24, 0.36, 0.20)
+	var horn_col := Color(0.78, 0.68, 0.46)
+	var eye_col := Color(1.0, 0.72, 0.18)
+	var memb_emit := Color(0.0, 0.0, 0.0)
+	if kind == "storm":
+		scale_col = Color(0.16, 0.36, 0.48)
+		memb_col = Color(0.20, 0.60, 0.78)
+		horn_col = Color(0.72, 0.82, 0.90)
+		eye_col = Color(0.45, 0.95, 1.0)
+		memb_emit = Color(0.15, 0.62, 0.95)
+	elif kind == "shadow_dragon":
+		scale_col = Color(0.09, 0.07, 0.12)
+		memb_col = Color(0.25, 0.08, 0.34)
+		horn_col = Color(0.42, 0.30, 0.55)
+		eye_col = Color(1.0, 0.35, 0.95)
+		memb_emit = Color(0.55, 0.10, 0.95)
+	return {"scale": scale_col, "membrane": memb_col, "horn": horn_col,
+		"eye": eye_col, "__memb_emit": memb_emit}
 
 static func _materials(team: int, kind: String = "") -> Dictionary:
-	var cloth: Color = TEAM_CLOTH[1] if team == 1 else TEAM_CLOTH[0]
-	var d := {
-		"steel": _mat(Color(0.54, 0.57, 0.61), 0.50, 0.38),
-		"dark": _mat(Color(0.20, 0.21, 0.24), 0.38, 0.55),
-		"bronze": _mat(Color(0.70, 0.51, 0.26), 0.55, 0.34),
-		"gold": _mat(Color(0.92, 0.71, 0.32), 0.65, 0.28),
-		"leather": _mat(Color(0.33, 0.23, 0.15), 0.05, 0.86),
-		"wood": _mat(Color(0.34, 0.23, 0.12), 0.02, 0.90),
-		"skin": _mat(Color(0.64, 0.49, 0.37), 0.0, 0.82),
-		"cloth": _mat(cloth, 0.0, 0.86),
-		"black": _mat(Color(0.045, 0.045, 0.05), 0.10, 0.72),
+	var pal := _dragon_palette(kind) if kind in ["dragon", "storm", "shadow_dragon"] else {}
+	var mem_emit: Color = pal.get("__memb_emit", Color(0.0, 0.0, 0.0))
+	var eye_col: Color = pal.get("eye", Color(1.0, 0.72, 0.18))
+	return {
+		"metal": _mat(Color.WHITE, 0.50, 0.38),
+		"matte": _mat(Color.WHITE, 0.03, 0.86),
+		"glow": _mat_emit(Color.WHITE, mem_emit, 0.8),
+		"eye": _mat_emit(Color.WHITE, eye_col, 3.0),
+		"__team": team, "__kind": kind,
 	}
-	if kind in ["dragon", "storm", "shadow_dragon"]:
-		var scale_col := Color(0.20, 0.34, 0.24)
-		var memb_col := Color(0.24, 0.36, 0.20)
-		var horn_col := Color(0.78, 0.68, 0.46)
-		var eye_col := Color(1.0, 0.72, 0.18)
-		var memb_emit := Color(0.0, 0.0, 0.0)
-		if kind == "storm":
-			scale_col = Color(0.16, 0.36, 0.48)
-			memb_col = Color(0.20, 0.60, 0.78)
-			horn_col = Color(0.72, 0.82, 0.90)
-			eye_col = Color(0.45, 0.95, 1.0)
-			memb_emit = Color(0.15, 0.62, 0.95)
-		elif kind == "shadow_dragon":
-			scale_col = Color(0.09, 0.07, 0.12)
-			memb_col = Color(0.25, 0.08, 0.34)
-			horn_col = Color(0.42, 0.30, 0.55)
-			eye_col = Color(1.0, 0.35, 0.95)
-			memb_emit = Color(0.55, 0.10, 0.95)
-		d["scale"] = _mat(scale_col, 0.18, 0.62)
-		d["membrane"] = _mat_emit(memb_col, memb_emit, 0.8)
-		d["horn"] = _mat(horn_col, 0.42, 0.38)
-		d["eye"] = _mat_emit(eye_col, eye_col, 3.0)
-	return d
+
+static func _color_for(key: String, mats: Dictionary) -> Color:
+	var team := int(mats.get("__team", 0))
+	match key:
+		"cloth":
+			return TEAM_CLOTH[1] if team == 1 else TEAM_CLOTH[0]
+		"scale", "membrane", "horn", "eye":
+			return _dragon_palette(str(mats.get("__kind", ""))).get(key, Color.WHITE)
+		_:
+			return _BASE_COLORS.get(key, Color(0.6, 0.6, 0.6))
 
 
 static func _mat(c: Color, metallic: float, roughness: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
+	m.vertex_color_use_as_albedo = true
 	m.metallic = metallic
 	m.roughness = roughness
 	return m
@@ -457,17 +477,33 @@ static func _dragon(sts: Dictionary, mats: Dictionary, kind: String) -> void:
 
 
 static func _ensure(sts: Dictionary, mats: Dictionary, key: String) -> SurfaceTool:
-	if not sts.has(key):
+	var group := str(_GROUP.get(key, "matte"))
+	if not sts.has(group):
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		st.set_material(mats[key])
-		sts[key] = st
-	return sts[key]
+		st.set_material(mats[group])
+		sts[group] = st
+	return sts[group]
 
 
 static func _append(sts: Dictionary, mats: Dictionary, key: String, mesh: Mesh, xf: Transform3D) -> void:
 	var st: SurfaceTool = _ensure(sts, mats, key)
-	st.append_from(mesh, 0, xf)
+	var col := _color_for(key, mats)
+	var arrays := mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var idx = arrays[Mesh.ARRAY_INDEX] if arrays.size() > Mesh.ARRAY_INDEX else null
+	var b := xf.basis
+	if idx != null and idx.size() > 0:
+		for i in idx:
+			st.set_color(col)
+			st.set_normal((b * normals[i]).normalized())
+			st.add_vertex(xf * verts[i])
+	else:
+		for i in verts.size():
+			st.set_color(col)
+			st.set_normal((b * normals[i]).normalized())
+			st.add_vertex(xf * verts[i])
 
 
 static func _box(sts: Dictionary, mats: Dictionary, key: String, size: Vector3, pos: Vector3,
@@ -537,8 +573,8 @@ static func _tri(sts: Dictionary, mats: Dictionary, key: String,
 
 static func _commit(sts: Dictionary, mats: Dictionary) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
-	for key in mats.keys():
-		if sts.has(key):
-			var st: SurfaceTool = sts[key]
+	for group in ["metal", "matte", "glow", "eye"]:
+		if sts.has(group):
+			var st: SurfaceTool = sts[group]
 			st.commit(mesh)
 	return mesh

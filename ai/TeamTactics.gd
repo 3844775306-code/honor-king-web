@@ -3,13 +3,15 @@ extends RefCounted
 # 4分钟后团队分推协调（集中式，由 BattleManager 统一调用）
 # 每60秒计算一次双方队伍的分路分配，结果分发到各 HeroAI
 
-enum SplitMode { DRAGON, FOUR_ONE, ONE_THREE_ONE }
+enum SplitMode { DRAGON, FOUR_ONE, ONE_THREE_ONE, DEFEND }
 
 var bm: BattleManager
 var current_mode: int = SplitMode.FOUR_ONE
 var assignments: Dictionary = {}       # {Hero: int} 映射
 var dragon_pos: Vector3 = Vector3.ZERO
 var dragon_pos_by_team: Dictionary = {}  # {int: Vector3} 每队各自最近的龙位置
+var defending: Dictionary = {}           # {int: bool} 本秒该队是否收缩防守
+var defend_lane_by_team: Dictionary = {} # {int: int} 防守收缩到哪条分路
 
 func _init(p_bm: BattleManager) -> void:
 	bm = p_bm
@@ -20,6 +22,7 @@ func get_mode_name() -> String:
 		SplitMode.FOUR_ONE: return "4-1分推"
 		SplitMode.ONE_THREE_ONE: return "1-3-1分推"
 		SplitMode.DRAGON: return "集合打龙"
+		SplitMode.DEFEND: return "收缩防守"
 	return "未知"
 
 
@@ -111,6 +114,57 @@ func _get_nearest_dragon_pos(team: int) -> Vector3:
 
 func _enemy_team(team: int) -> int:
 	return Config.Team.ENEMY if team == Config.Team.PLAYER else Config.Team.PLAYER
+
+
+# ==================== 防守判定 ====================
+# 己方高地为防守核心：水晶告急 / 敌方兵力压到水晶附近 / 经济大幅落后且塔数劣势 → 全队收缩
+func _should_defend(team: int) -> bool:
+	if _base_threatened(team):
+		return true
+	var gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
+	return gold_diff <= -AiConfig.GOLD_GAP_DEFEND and _count_turrets_total(team) < _count_turrets_total(_enemy_team(team))
+
+
+func _base_threatened(team: int) -> bool:
+	var crystal: Turret = null
+	for entity in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (entity is Turret) or entity.health <= 0 or entity.team != team:
+			continue
+		if (entity as Turret).display_name == "crystal":
+			crystal = entity as Turret
+			break
+	if crystal == null:
+		return false
+	for entity in bm.get_tree().get_nodes_in_group("heroes"):
+		if entity is Hero and entity.health > 0 and entity.team != team \
+				and entity.global_position.distance_to(crystal.global_position) < 30.0:
+			return true
+	for entity in bm.get_tree().get_nodes_in_group("minions"):
+		if entity is Minion and entity.health > 0 and entity.team != team \
+				and entity.global_position.distance_to(crystal.global_position) < 22.0:
+			return true
+	return false
+
+
+func _count_turrets_total(team: int) -> int:
+	var n := 0
+	for entity in bm.get_tree().get_nodes_in_group("turrets"):
+		if entity is Turret and entity.health > 0 and entity.team == team \
+				and (entity as Turret).display_name != "crystal":
+			n += 1
+	return n
+
+
+# 防守分路：己方剩余塔最少（压力最大）的分路
+func _defend_lane_for(team: int) -> int:
+	var counts := _count_turrets_by_lane(team)
+	var best := AiConfig.Lane.MID
+	var best_cnt := 9999
+	for ln in [AiConfig.Lane.FARM, AiConfig.Lane.MID, AiConfig.Lane.CLASH]:
+		if int(counts[ln]) < best_cnt:
+			best_cnt = int(counts[ln])
+			best = ln
+	return best
 
 
 # ==================== 分路选择 ====================
@@ -222,6 +276,8 @@ func allocate_all() -> Dictionary:
 	var default_mode := SplitMode.FOUR_ONE if randi() % 2 == 0 else SplitMode.ONE_THREE_ONE
 	current_mode = default_mode
 	dragon_pos_by_team.clear()
+	defending.clear()
+	defend_lane_by_team.clear()
 
 	var result: Dictionary = {}
 	var dragon_alive := _is_dragon_alive()
@@ -229,6 +285,17 @@ func allocate_all() -> Dictionary:
 
 	for team in [Config.Team.PLAYER, Config.Team.ENEMY]:
 		var team_label := "玩家方" if team == Config.Team.PLAYER else "敌方"
+		# 防守优先：高地告急 / 大幅落后 → 全队收缩到压力最大的分路
+		if _should_defend(team):
+			var dl := _defend_lane_for(team)
+			defending[team] = true
+			defend_lane_by_team[team] = dl
+			current_mode = SplitMode.DEFEND
+			for h in _get_ally_heroes(team):
+				if h.is_ai:
+					result[h] = dl
+			print("[TeamTactics] t=%.0f %s 进入防守，收缩分路=%d" % [bm.game_time, team_label, dl])
+			continue
 		if dragon_alive:
 			var ally_gold := _get_total_team_gold(team)
 			var enemy_gold := _get_total_team_gold(_enemy_team(team))

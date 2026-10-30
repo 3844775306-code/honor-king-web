@@ -80,9 +80,14 @@ func _process(delta: float) -> void:
 func _draw():
 	var p := clampf(_press, 0.0, 1.0)
 	var center := size * 0.5 + Vector2(0, p * 1.8)
-	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.014)
+	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.022)
 	var base_col := color if _active else color.darkened(0.25)
 	var accent := base_col.lightened(0.35)
+	# 功能键的外圈跟随图标色（回城蓝/恢复绿/召唤师色），不再一律用底色
+	if icon_kind != "":
+		accent = IconArt.color_of(icon_kind).lerp(base_col, 0.40)
+		if dimmed:
+			accent = accent.darkened(0.30)
 	UiKit.touch_button_frame(self, center, radius, accent, p, 3.0, dimmed)
 	# 开关选中态（推塔/小兵等模式键）：外圈金环 + 文字转金色
 	if toggled:

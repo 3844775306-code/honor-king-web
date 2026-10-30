@@ -139,7 +139,7 @@ func _gui_input(event):
 func _draw():
 	var p := clampf(_press, 0.0, 1.0)
 	var center := size * 0.5 + Vector2(0, p * 1.8)
-	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.014)
+	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.022)
 	# 字号/描边/金环等内部固定像素随按钮尺寸等比放大（设计基准 SIZE_V=110）
 	var k := maxf(1.0, minf(size.x, size.y) / SIZE_V)
 	# ---- 可用性/颜色：亮=可用，青=多段重施窗口，灰=不可用(未学/冷却/蓝不足)，红=前置不满足(无枪等) ----

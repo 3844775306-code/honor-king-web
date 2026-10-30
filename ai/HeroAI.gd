@@ -238,8 +238,9 @@ func _process(delta):
 		elif hero.tower_attacker and is_instance_valid(hero.tower_attacker):
 			# 立即沿直线退出塔的攻击范围
 			_retreat_from_turret(hero.tower_attacker)
-	# --- 弹道躲避（每帧） ---
+	# --- 弹道躲避（每帧）：命中威胁时标记 AVOID ---
 	if _dodge_threats():
+		state = State.AVOID
 		return
 	if hero.manual_target and hero.manual_target is Hero and _is_under_enemy_tower(hero.manual_target ):hero.set_manual_target(null)
 
@@ -300,9 +301,14 @@ func _process(delta):
 			hero.move_target = pack.global_position
 			return
 
-	# --- 状态行为分发 ---
-	if state == State.RECALL_SAFE:
-		_recall_safe_behavior(delta)
+	# --- 状态行为分发：RETREAT / RECALL_SAFE 只跑生存行为，不参与输出 ---
+	match state:
+		State.RECALL_SAFE:
+			_recall_safe_behavior(delta)
+		State.RETREAT:
+			_retreat_behavior()
+	if state == State.RECALL_SAFE or state == State.RETREAT:
+		return
 
 
 	# --- 近身目标技能 ---
@@ -320,19 +326,8 @@ func _process(delta):
 
 
 
-# ==================== 决策（六维加权指标） ====================
-# 每0.5秒评估，6项指标加权求和，阈值判定行为
-const SCORE_HERO_DIFF_W: float = 4.0       # 人数差权重
-const SCORE_ECONOMY_W: float = 3.0         # 经济差权重
-const SCORE_SKILL_CD_W: float = 0        # 技能CD差权重
-const SCORE_MINION_W: float = 0          # 小兵战力差权重
-const SCORE_DIVE_W: float = 4.0            # 越塔人数差权重
-const SCORE_TURRET_W: float = 2.0          # 防御塔血量差权重
-
-const SCORE_ATTACK_THRESHOLD: float = 4.0   # >4 攻击残血英雄
-const SCORE_RETREAT_THRESHOLD: float = -4.0 # <-4 向己方塔移动
-const SCORE_SWITCH_THRESHOLD: float = -8.0  # <-8 切换分路/打野
-
+# ==================== 决策 ====================
+# 每个 think tick 评估一次：先处理高地/塔防御与撤退/回城，再交给分路/打野策略
 func _decide():
 	var tree := hero.get_tree()
 	for turret in tree.get_nodes_in_group("turrets"):
@@ -340,6 +335,7 @@ func _decide():
 			for entity in tree.get_nodes_in_group("minions"):
 				if entity.team != hero.team and turret.global_position.distance_to(entity.global_position) < 15:
 					hero.manual_target = entity
+					state = State.PUSH
 					return
 		
 	# P0: 高地塔/水晶防御（覆盖所有状态）
@@ -357,6 +353,13 @@ func _decide():
 
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
 		state = State.RECALL_SAFE
+		return
+
+	# 撤退：低血 + 有敌方英雄压近 + 没站在己方塔下 → 退守（不再主动接战）
+	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
+			and not _is_under_own_tower() \
+			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
+		state = State.RETREAT
 		return
 
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
@@ -395,6 +398,7 @@ func _decide():
 				is_dragon_rally = false
 				_assign_lane()
 			else:
+				state = State.PUSH
 				_dragon_rally_behavior()
 				return
 
@@ -498,6 +502,19 @@ func _move_to_friendly_turret() -> void:
 	var turret := perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_FAR)
 	if turret and is_instance_valid(turret):
 		hero.move_target = turret.global_position
+
+
+# 撤退行为：清目标、往最近的己方塔靠（不主动接战，避免半血边打边退）
+func _retreat_behavior() -> void:
+	hero.manual_target = null
+	_move_to_friendly_turret()
+
+
+# 是否站在己方塔保护范围内
+func _is_under_own_tower() -> bool:
+	var turret: Turret = perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_CLOSE)
+	return turret != null and is_instance_valid(turret) \
+		and hero.global_position.distance_to(turret.global_position) <= AiConfig.FRIENDLY_TURRET_CLOSE
 
 
 func _retreat_from_turret(turret: Turret) -> void:
@@ -835,6 +852,7 @@ func _handle_high_defense() -> bool:
 		# 还没到：先跑过去（只换目标不移动 = 原地补兵，等于没防守）
 		hero.manual_target = null
 		hero.move_target = target.global_position
+	state = State.PUSH
 	return true
 
 func _handle_lane_turret_defense() -> bool:
@@ -849,8 +867,10 @@ func _handle_lane_turret_defense() -> bool:
 	if dist > AiConfig.FRIENDLY_TURRET_CLOSE:
 		hero.manual_target = null
 		hero.move_target = turret.global_position
+		state = State.PUSH
 		return true
 	var attacker = turret.current_target
 	if attacker and is_instance_valid(attacker) and attacker.health > 0:
 		hero.manual_target = attacker
+	state = State.PUSH
 	return true
