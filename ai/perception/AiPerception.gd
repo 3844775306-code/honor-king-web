@@ -319,8 +319,10 @@ func _enemy_team() -> int:
 	return Config.Team.ENEMY if hero.team == Config.Team.PLAYER else Config.Team.PLAYER
 
 
-static func _is_valid(entity: Node) -> bool:
-	return entity is GameEntity and (entity as GameEntity).health > 0
+# 缓存里可能留着上一帧就已被 free 的实体（free 只从组里移除，不会清静态数组），
+# 所以参数必须无类型接收 Variant 并先判 is_instance_valid，直接给 Node 形参会抛 Invalid type。
+static func _is_valid(entity) -> bool:
+	return is_instance_valid(entity) and entity is GameEntity and (entity as GameEntity).health > 0
 
 
 static func _is_collidable(entity: Node) -> bool:

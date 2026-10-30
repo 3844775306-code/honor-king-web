@@ -1769,36 +1769,20 @@ func _set_tower_ring_color(v: Dictionary, st: int) -> void:
 
 # —— 施法预览（同主机 Hero 技能预览三件套：范围圈 / AoE填充圆 / 方向箭头）——
 func _build_cast_preview() -> void:
-	_pv_range = MeshFactory.create_torus_ring(0.97, 1.03, Color(0.4, 0.75, 1.0), false, 0.35)
+	_pv_range = MeshFactory.create_cast_range(Color(0.32, 0.72, 1.0))
 	_pv_range.visible = false
 	add_child(_pv_range)
-	_pv_aoe = MeshFactory.create_cylinder(1.0, 1.0, 0.04, Color(0.2, 0.7, 1.0), 0.35)
+	_pv_aoe = MeshFactory.create_cast_area(Color(0.30, 0.72, 1.0), 0)
 	_pv_aoe.visible = false
 	add_child(_pv_aoe)
 	_pv_arrow = Node3D.new()
 	_pv_arrow.visible = false
-	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.2, 0.75, 1.0, 0.7)
-	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	var box := BoxMesh.new()
-	box.size = Vector3(0.15, 0.02, 1.0)
-	_pv_shaft = MeshInstance3D.new()
-	_pv_shaft.mesh = box
-	_pv_shaft.material_override = smat
+	_pv_shaft = MeshFactory.create_cast_line(Color(0.30, 0.72, 1.0))
+	_pv_shaft.position = Vector3(0, 0, 0.5)
+	_pv_shaft.scale = Vector3(0.9, 1.0, 1.0)
 	_pv_arrow.add_child(_pv_shaft)
-	var hm := CylinderMesh.new()
-	hm.top_radius = 0.0
-	hm.bottom_radius = 0.2
-	hm.height = 0.5
-	_pv_head = MeshInstance3D.new()
-	_pv_head.mesh = hm
-	var hmat := StandardMaterial3D.new()
-	hmat.albedo_color = Color(0.2, 0.75, 1.0, 0.85)
-	hmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	hmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_pv_head.material_override = hmat
-	_pv_head.rotation.x = deg_to_rad(-90.0)
+	_pv_head = MeshFactory.create_cast_reticle(Color(0.36, 0.80, 1.0))
+	_pv_head.position = Vector3(0, 0, 1.0)
 	_pv_arrow.add_child(_pv_head)
 	add_child(_pv_arrow)
 
@@ -1869,13 +1853,14 @@ func _update_cast_preview() -> void:
 	else:
 		_pv_range.visible = false
 	if typ == 1:
-		# 范围技能：落点实心填充圆
+		# 范围技能：柔光落点 + 准星
 		var rad := float(sk.get("rad", 0.0))
 		_pv_aoe.visible = true
+		MeshFactory.set_cast_area_mode(_pv_aoe, 0)
 		_pv_aoe.global_position = Vector3(aim.x, 0.05, aim.z)
 		_pv_aoe.scale = Vector3(maxf(rad, 0.1), 1, maxf(rad, 0.1))
 	elif typ == 3 or typ == 4:
-		# 线性/位移：从自身指向瞄准点的箭头（len：type3 优先子弹射程 br，type4 优先位移 dis）
+		# 线性/位移：贴地能量带 + 终点准星（len：type3 优先子弹射程 br，type4 优先位移 dis）
 		var len := range
 		if typ == 3:
 			len = float(sk.get("br", 0.0))
@@ -1888,17 +1873,18 @@ func _update_cast_preview() -> void:
 		var angle_y := atan2(dir.x, dir.z) if dir.length() > 0.01 else ry
 		_pv_arrow.visible = true
 		_pv_shaft.position = Vector3(0, 0, len * 0.5)
-		(_pv_shaft.mesh as BoxMesh).size = Vector3(0.15, 0.02, len)
+		_pv_shaft.scale = Vector3(0.9, 1.0, len)
 		_pv_head.position = Vector3(0, 0, len)
-		_pv_arrow.global_position = Vector3(self_pos.x, 0.25, self_pos.z)
+		_pv_arrow.global_position = Vector3(self_pos.x, 0.075, self_pos.z)
 		_pv_arrow.rotation.y = angle_y
 		_pv_aoe.visible = false
 	elif typ == 0:
-		# 指向型：拖拽瞄准时在落点放小型标记
+		# 指向型：拖拽瞄准时在落点放四段括号准星
 		if touch_aiming:
 			_pv_aoe.visible = true
+			MeshFactory.set_cast_area_mode(_pv_aoe, 1)
 			_pv_aoe.global_position = Vector3(aim.x, 0.05, aim.z)
-			_pv_aoe.scale = Vector3(0.6, 1, 0.6)
+			_pv_aoe.scale = Vector3(1.2, 1, 1.2)
 		else:
 			_pv_aoe.visible = false
 	else:

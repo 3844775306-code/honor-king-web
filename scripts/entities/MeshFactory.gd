@@ -4,6 +4,9 @@ extends RefCounted
 # 减少在 Hero.gd 和 HeroPassive.gd 中重复的 TorusMesh/SphereMesh + StandardMaterial3D 样板代码
 
 const BUFF_AURA_SHADER := preload("res://assets/shaders/buff_aura.gdshader")
+const CAST_RANGE_SHADER := preload("res://assets/shaders/cast_range.gdshader")
+const CAST_AREA_SHADER := preload("res://assets/shaders/cast_area.gdshader")
+const CAST_LINE_SHADER := preload("res://assets/shaders/cast_line.gdshader")
 
 # 发光能量球（防御塔激光弹体）：核心亮球 + 两层加色光晕，观感比单球亮很多
 static func create_energy_orb(radius: float, color: Color) -> Node3D:
@@ -72,6 +75,70 @@ static func create_buff_aura(mode: int) -> MeshInstance3D:
 		mat.set_shader_parameter("core_color", Color(1.0, 0.72, 0.20))
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
+
+static func _cast_material(shader: Shader, color: Color, mode: float = -1.0) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("tint", color)
+	mat.set_shader_parameter("hot", color.lerp(Color(1, 1, 1, 1), 0.45))
+	if mode >= 0.0:
+		mat.set_shader_parameter("mode", mode)
+	return mat
+
+# 施法范围环：双层亮度弧 + 刻度虚线 + 流转符文（水平面片，半径 1）
+static func create_cast_range(color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(2.0, 2.0)
+	mi.mesh = pm
+	mi.material_override = _cast_material(CAST_RANGE_SHADER, color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return mi
+
+# 施法落点：mode=0 范围填充 / mode=1 目标准星（水平面片，半径 1）
+static func create_cast_area(color: Color, mode: int = 0) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(2.0, 2.0)
+	mi.mesh = pm
+	mi.material_override = _cast_material(CAST_AREA_SHADER, color, float(mode))
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return mi
+
+static func set_cast_area_mode(mi: MeshInstance3D, mode: int) -> void:
+	if mi == null:
+		return
+	var mat := mi.material_override as ShaderMaterial
+	if mat:
+		mat.set_shader_parameter("mode", float(mode))
+
+# 技能预览配色跟随英雄元素（火橙/冰蓝/暗影紫…），外套与内部高光一起改
+static func set_cast_preview_color(mi: MeshInstance3D, color: Color) -> void:
+	if mi == null:
+		return
+	var mat := mi.material_override as ShaderMaterial
+	if mat:
+		mat.set_shader_parameter("tint", color)
+		mat.set_shader_parameter("hot", color.lerp(Color(1, 1, 1, 1), 0.45))
+
+# 线性/位移预览能量带：单位面片，调用方 scale.x=宽度、scale.z=长度
+static func create_cast_line(color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = Vector2(1.0, 1.0)
+	mi.mesh = pm
+	mi.material_override = _cast_material(CAST_LINE_SHADER, color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return mi
+
+# 线性/位移终点准星（水平面片，半径 1.25）
+static func create_cast_reticle(color: Color) -> MeshInstance3D:
+	var mi := create_cast_area(color, 1)
+	mi.scale = Vector3(1.25, 1.0, 1.25)
 	return mi
 
 # 创建球体

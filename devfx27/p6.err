@@ -1,0 +1,24 @@
+ERROR: Failed to open 'user://logs/godot2026-10-30T20.35.07.log'.
+   at: copy (core/io/dir_access.cpp:429)
+ERROR: Failed to open log file for writing: user://logs/godot.log
+   at: rotate_file (core/io/logger.cpp:169)
+SCRIPT ERROR: Parse Error: Identifier "j" not declared in the current scope.
+   at: GDScript::reload (res://scripts/core/BattleManager.gd:3927)
+SCRIPT ERROR: Parse Error: Identifier "j" not declared in the current scope.
+   at: GDScript::reload (res://scripts/core/BattleManager.gd:3927)
+SCRIPT ERROR: Parse Error: Identifier "j" not declared in the current scope.
+   at: GDScript::reload (res://scripts/core/BattleManager.gd:3929)
+SCRIPT ERROR: Parse Error: Identifier "j" not declared in the current scope.
+   at: GDScript::reload (res://scripts/core/BattleManager.gd:3930)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/entities/GameEntity.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/entities/Hero.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/core/SfxManager.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/ui/UiKit.gd:0)
+ERROR: Failed to load script "res://scripts/ui/UiKit.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)

@@ -2611,10 +2611,10 @@ var sel_summ_tab_btn: Button = null
 var sel_build_tab_btn: Button = null
 var sel_summ_panel: Control = null
 var sel_build_panel: Control = null
-var sel_build_rows: VBoxContainer = null
+var sel_build_rows: GridContainer = null
 var sel_build_ids: Array = []
 var sel_build_hero: String = ""
-var sel_build_scheme_row: HBoxContainer = null
+var sel_build_scheme_row: GridContainer = null
 # 对局加载界面（BP 结束 / 网络 host 直接开局）
 var loading_screen: LoadingScreen = null
 var _loading_shown := false
@@ -3106,11 +3106,12 @@ func _show_hero_select_ui():
 	var summ_scroll := ScrollContainer.new()
 	summ_scroll.name = "SelectSummScroll"
 	summ_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	summ_scroll.custom_minimum_size = Vector2(0, 90)
+	summ_scroll.custom_minimum_size = Vector2(0, 164)
 	summ_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	summ_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	sel_summ_panel.add_child(summ_scroll)
 	var summ_grid := GridContainer.new()
-	summ_grid.columns = 2
+	summ_grid.columns = 5
 	summ_grid.add_theme_constant_override("h_separation", 8)
 	summ_grid.add_theme_constant_override("v_separation", 8)
 	summ_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3132,24 +3133,23 @@ func _show_hero_select_ui():
 	# 备战方案选择行：默认推荐 + HeroBuildStore 已保存方案（横向滚动，最多 6 套）
 	var scheme_scroll := ScrollContainer.new()
 	scheme_scroll.name = "SelectBuildSchemes"
-	scheme_scroll.custom_minimum_size = Vector2(0, 44)
+	scheme_scroll.custom_minimum_size = Vector2(0, 92)
 	scheme_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scheme_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	sel_build_panel.add_child(scheme_scroll)
-	sel_build_scheme_row = HBoxContainer.new()
+	sel_build_scheme_row = GridContainer.new()
 	sel_build_scheme_row.name = "SelectBuildSchemeRow"
-	sel_build_scheme_row.add_theme_constant_override("separation", 6)
+	sel_build_scheme_row.columns = 4
+	sel_build_scheme_row.add_theme_constant_override("h_separation", 6)
+	sel_build_scheme_row.add_theme_constant_override("v_separation", 6)
 	scheme_scroll.add_child(sel_build_scheme_row)
-	var build_scroll := ScrollContainer.new()
-	build_scroll.name = "SelectBuildScroll"
-	build_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	build_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	sel_build_panel.add_child(build_scroll)
-	sel_build_rows = VBoxContainer.new()
+	sel_build_rows = GridContainer.new()
 	sel_build_rows.name = "SelectBuildRows"
+	sel_build_rows.columns = 3
 	sel_build_rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sel_build_rows.add_theme_constant_override("separation", 4)
-	build_scroll.add_child(sel_build_rows)
+	sel_build_rows.add_theme_constant_override("h_separation", 6)
+	sel_build_rows.add_theme_constant_override("v_separation", 6)
+	sel_build_panel.add_child(sel_build_rows)
 	var build_bottom := HBoxContainer.new()
 	build_bottom.custom_minimum_size = Vector2(0, 40)
 	build_bottom.add_theme_constant_override("separation", 8)
@@ -3832,7 +3832,7 @@ func _rebuild_build_schemes() -> void:
 		sel_build_scheme_row.remove_child(c)
 		c.queue_free()
 	var active := _current_build_scheme_name()
-	var default_btn := _sel_btn("默认推荐", UiKit.C_GOLD, active == "", Vector2(140, 44))
+	var default_btn := _sel_btn("默认推荐", UiKit.C_GOLD, active == "", Vector2(112, 40))
 	default_btn.name = "BuildScheme_default"
 	default_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	default_btn.pressed.connect(_on_build_scheme_default)
@@ -3841,7 +3841,7 @@ func _rebuild_build_schemes() -> void:
 	var builds: Array = HeroBuildStore.get_builds(sel_build_hero)
 	for i in mini(builds.size(), 6):
 		var bname := str(builds[i].get("name", ""))
-		var btn := _sel_btn(bname, UiKit.C_GOLD, bname == active, Vector2(140, 44))
+		var btn := _sel_btn(bname, UiKit.C_GOLD, bname == active, Vector2(112, 40))
 		btn.name = "BuildScheme_%d" % i
 		btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 		btn.pressed.connect(_on_build_scheme_pressed.bind(i))
@@ -3876,43 +3876,52 @@ func _on_build_scheme_pressed(idx: int) -> void:
 	_rebuild_build_panel()
 
 func _build_row(idx: int, item_id: String) -> PanelContainer:
+	# 紧凑装备卡（序号/名称/价格 + 上下调序）：3 列 × 2 行一屏放下，无需滚动
 	var item: Dictionary = ItemDatabase.get_item(item_id) if item_id != "" else {}
 	var nm := str(item.get("name", item_id))
 	var cost := int(item.get("cost", 0))
-	var row := PanelContainer.new()
-	row.name = "BuildRow_%d" % idx
-	row.custom_minimum_size = Vector2(0, 60)
-	row.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_PANEL_EDGE, 0.8, 10))
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 8)
-	row.add_child(h)
-	var idx_lab := _sel_label(str(idx + 1), _sel_fs(UiKit.FS_SM), SEL_GOLD, false)
-	idx_lab.custom_minimum_size = Vector2(26, 0)
+	var card := PanelContainer.new()
+	card.name = "BuildRow_%d" % idx
+	card.custom_minimum_size = Vector2(0, 84)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_PANEL_EDGE, 0.8, 10))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 3)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	card.add_child(v)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 3)
+	v.add_child(top)
+	var idx_lab := _sel_label("%d." % (idx + 1), _sel_fs(UiKit.FS_XS), SEL_GOLD, false)
 	idx_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(idx_lab)
-	var name_lab := _sel_label(nm, _sel_fs(UiKit.FS_MD), SEL_TEXT, false)
+	top.add_child(idx_lab)
+	var name_lab := _sel_label(nm, _sel_fs(UiKit.FS_XS), SEL_TEXT, false)
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_lab.clip_text = true
-	h.add_child(name_lab)
-	var price_lab := _sel_label("%d 金" % cost, _sel_fs(UiKit.FS_SM), SEL_GOLD, false)
+	top.add_child(name_lab)
+	var price_lab := _sel_label("%d金" % cost, _sel_fs(UiKit.FS_XS), SEL_GOLD, false)
 	price_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	h.add_child(price_lab)
-	var up := _sel_btn("↑", UiKit.C_TEAM0, false, Vector2(44, 44))
+	top.add_child(price_lab)
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	btns.add_theme_constant_override("separation", 4)
+	v.add_child(btns)
+	var up := _sel_btn("↑", UiKit.C_TEAM0, false, Vector2(42, 26))
 	up.name = "BuildUp_%d" % idx
-	up.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_MD))
+	up.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	up.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	up.disabled = idx <= 0
 	up.pressed.connect(_on_build_move.bind(idx, -1))
-	h.add_child(up)
-	var down := _sel_btn("↓", UiKit.C_TEAM0, false, Vector2(44, 44))
+	btns.add_child(up)
+	var down := _sel_btn("↓", UiKit.C_TEAM0, false, Vector2(42, 26))
 	down.name = "BuildDown_%d" % idx
-	down.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_MD))
+	down.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	down.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	down.disabled = idx >= sel_build_ids.size() - 1
 	down.pressed.connect(_on_build_move.bind(idx, 1))
-	h.add_child(down)
-	return row
+	btns.add_child(down)
+	return card
 
 func _on_build_move(idx: int, dir: int) -> void:
 	var j := idx + dir
@@ -4013,25 +4022,29 @@ func _create_hero_card(hero_name: String, role: String, role_color: Color) -> Pa
 	return card
 
 func _create_summ_card(sname: String, sid: String) -> Panel:
+	# 紧凑竖排卡（图标上、名字下）：5 列 × 2 行一屏放下 10 个召唤师技能，无需滚动
 	var card = Panel.new()
 	card.name = "SummCard_" + sid
-	card.custom_minimum_size = Vector2(200, 64)
+	card.custom_minimum_size = Vector2(88, 78)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card.add_theme_stylebox_override("panel", UiKit.skin_card(SEL_SUMM_COLOR, false, 0.72))
-	var row := HBoxContainer.new()
-	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 8)
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	card.add_child(row)
-	row.add_child(SelectArt.SummonerGlyph.new(sname, 36))
+	var col := VBoxContainer.new()
+	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.add_theme_constant_override("separation", 2)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(col)
+	var glyph = SelectArt.SummonerGlyph.new(sname, 30)
+	glyph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	col.add_child(glyph)
 	var lbl = Label.new()
 	lbl.text = sname
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_MD))
+	lbl.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	lbl.add_theme_color_override("font_color", SEL_TEXT)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(lbl)
+	col.add_child(lbl)
 	card.gui_input.connect(_on_summ_card_clicked.bind(sid, sname, card))
 	card.gui_input.connect(_on_summ_preview_input.bind(sname))
 	card.mouse_entered.connect(_on_card_hover.bind(card, true, SEL_SUMM_COLOR))
@@ -4039,7 +4052,6 @@ func _create_summ_card(sname: String, sid: String) -> Panel:
 	card.mouse_entered.connect(_on_summ_hover.bind(sname, sid, card, true))
 	card.mouse_exited.connect(_on_summ_hover.bind(sname, sid, card, false))
 	return card
-
 # 点/触英雄卡时同步 3D 立绘与玩家席位（独立监听，不影响既有选中回调）
 func _on_hero_preview_input(event: InputEvent, hero_name: String) -> void:
 	var is_click: bool = (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT) or (event is InputEventScreenTouch and event.pressed)

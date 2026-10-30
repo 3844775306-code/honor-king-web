@@ -799,43 +799,26 @@ func _ready():
 	# 英雄被动组件
 	hero_passive = HeroPassive.new()
 	add_child(hero_passive)
-	# 技能预览：地面箭头（线性/位移技能用）
+	# 技能预览：贴地能量带（线性/位移技能用）
 	arrow_preview = Node3D.new()
 	arrow_preview.visible = false
-	# 箭身 — 水平扁平方盒，随距离动态拉伸
-	var shaft_mesh = BoxMesh.new()
-	shaft_mesh.size = Vector3(0.15, 0.02, 1.0)  # 加粗箭身
-	arrow_shaft = MeshInstance3D.new()
-	arrow_shaft.mesh = shaft_mesh
-	var smat = StandardMaterial3D.new()
-	smat.albedo_color = Color(0.2, 0.75, 1.0, 0.7)
-	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	arrow_shaft.material_override = smat
+	arrow_shaft = MeshFactory.create_cast_line(Color(0.30, 0.72, 1.0))
+	arrow_shaft.position = Vector3(0, 0, 0.5)
+	arrow_shaft.scale = Vector3(0.9, 1.0, 1.0)
 	arrow_preview.add_child(arrow_shaft)
-	# 箭头 — 水平锥体（CylinderMesh top_radius=0）
-	var head_mesh = CylinderMesh.new()
-	head_mesh.top_radius = 0.0
-	head_mesh.bottom_radius = 0.2  # 加大箭头
-	head_mesh.height = 0.5
-	arrow_head = MeshInstance3D.new()
-	arrow_head.mesh = head_mesh
-	var hmat = StandardMaterial3D.new()
-	hmat.albedo_color = Color(0.2, 0.75, 1.0, 0.85)
-	hmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	hmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	arrow_head.material_override = hmat
-	arrow_head.rotation.x = deg_to_rad(-90)  # 锥体放平
+	# 终点准星：四段括号 + 十字线，替代原来的锥体箭头
+	arrow_head = MeshFactory.create_cast_reticle(Color(0.36, 0.80, 1.0))
+	arrow_head.position = Vector3(0, 0, 1.0)
 	arrow_preview.add_child(arrow_head)
 	add_child(arrow_preview)
 
-	# AOE填充圆（扁平半透明圆柱，代替原 torus 环）
-	aoe_fill = MeshFactory.create_cylinder(1.0, 1.0, 0.04, Color(0.2, 0.7, 1.0), 0.35)
+	# AOE落点：柔和填充 + 外环 + 准星（着色器贴地面片）
+	aoe_fill = MeshFactory.create_cast_area(Color(0.30, 0.72, 1.0), 0)
 	aoe_fill.visible = false
 	add_child(aoe_fill)
 
-	# 施法范围指示圈（围绕英雄的半透明圆环）
-	cast_range_ring = MeshFactory.create_torus_ring(0.97, 1.03, Color(0.4, 0.75, 1.0), false, 0.35)
+	# 施法范围指示：双层光环 + 刻度虚线 + 流转符文
+	cast_range_ring = MeshFactory.create_cast_range(Color(0.32, 0.72, 1.0))
 	cast_range_ring.visible = false
 	add_child(cast_range_ring)
 	# 目标标记环（默认隐藏）
@@ -2921,14 +2904,16 @@ func _show_donghuang_w_preview(aim_pos: Vector3):
 		dir = Vector3(sin(rotation.y), 0, cos(rotation.y))
 	dir = dir.normalized()
 	while donghuang_aim_rings.size() < total:
-		var ring := MeshFactory.create_torus_ring(3.0, 3.25, Color(1.0, 0.33, 0.264, 1.0) if team == 1 else Color(0.0, 0.886, 1.0, 1.0), false, 1.0)
+		var ring := MeshFactory.create_cast_area(
+			Color(1.0, 0.33, 0.264, 1.0) if team == 1 else Color(0.0, 0.886, 1.0, 1.0), 1)
+		ring.scale = Vector3(3.2, 1.0, 3.2)
 		add_child(ring)
 		donghuang_aim_rings.append(ring)
 	for i in range(donghuang_aim_rings.size()):
 		if i < total:
 			var ring: MeshInstance3D = donghuang_aim_rings[i]
 			var landing := aim_pos - dir * (1.5 * i)
-			ring.global_position = Vector3(landing.x, 0.2, landing.z)
+			ring.global_position = Vector3(landing.x, 0.085, landing.z)
 			ring.visible = true
 		else:
 			donghuang_aim_rings[i].visible = false
@@ -2985,6 +2970,15 @@ func _handle_skill_input(delta):
 	# 预览控制
 	if any_held and held_index < skills.size():
 		if skill_cast_ready(held_index):
+			# 预览配色跟随英雄元素色（技能 1/2/3 依次偏向副元素）
+			var pv_key := "%s|%d" % [display_name, held_index]
+			if pv_key != _pv_color_key:
+				_pv_color_key = pv_key
+				var pv_col: Color = Vfx.color_for_hero(display_name)
+				if held_index > 0:
+					pv_col = pv_col.lerp(Vfx.color2_for_hero(display_name), 0.16 * held_index)
+				for mi in [cast_range_ring, aoe_fill, arrow_shaft, arrow_head]:
+					MeshFactory.set_cast_preview_color(mi, pv_col)
 			var dir = target_pos - global_position
 			var dist = dir.length()
 			var angle_y = atan2(dir.x, dir.z) if dist > 0.01 else 0.0
@@ -2995,39 +2989,41 @@ func _handle_skill_input(delta):
 				arrow_preview.visible = false
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
-			elif skill.type == 1:   # 范围技能：实心填充圆 + 施法范围圈
+			elif skill.type == 1:   # 范围技能：柔光落点 + 双层范围圈
 				aoe_fill.visible = true
+				MeshFactory.set_cast_area_mode(aoe_fill, 0)
 				aoe_fill.global_position = Vector3(target_pos.x, ground_y, target_pos.z)
 				aoe_fill.scale = Vector3(skill.radius, 1, skill.radius)
 				cast_range_ring.visible = true
 				cast_range_ring.global_position = Vector3(global_position.x, ground_y + 0.02, global_position.z)
 				cast_range_ring.scale = Vector3(skill.cast_range, skill.cast_range, skill.cast_range)
 				arrow_preview.visible = false
-			elif skill.type == 3: # 线性技能：箭头长度=子弹最远飞行距离
+			elif skill.type == 3: # 线性技能：贴地能量带，长度=子弹最远飞行距离
 				var arrow_len = skill.bullet_range if skill.bullet_range > 0 else skill.cast_range
 				arrow_preview.visible = true
 				arrow_shaft.position = Vector3(0, 0, arrow_len * 0.5)
-				arrow_shaft.mesh.size = Vector3(0.15, 0.02, arrow_len)
+				arrow_shaft.scale = Vector3(0.9, 1.0, arrow_len)
 				arrow_head.position = Vector3(0, 0, arrow_len)
-				arrow_preview.global_position = Vector3(global_position.x, 0.25, global_position.z)
+				arrow_preview.global_position = Vector3(global_position.x, 0.075, global_position.z)
 				arrow_preview.global_rotation.y = angle_y
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
-			elif skill.type == 4: # 位移技能：箭头长度=位移最远距离
+			elif skill.type == 4: # 位移技能：贴地能量带，长度=位移最远距离
 				var dash_len = skill.self_displacement if skill.self_displacement > 0 else skill.cast_range
 				arrow_preview.visible = true
 				arrow_shaft.position = Vector3(0, 0, dash_len * 0.5)
-				arrow_shaft.mesh.size = Vector3(0.15, 0.02, dash_len)
+				arrow_shaft.scale = Vector3(0.9, 1.0, dash_len)
 				arrow_head.position = Vector3(0, 0, dash_len)
-				arrow_preview.global_position = Vector3(global_position.x, 0.25, global_position.z)
+				arrow_preview.global_position = Vector3(global_position.x, 0.075, global_position.z)
 				arrow_preview.global_rotation.y = angle_y
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
-			else:   # 目标类：移动端瞄准时显示小型目标标记 + 施法范围圈
+			else:   # 目标类：移动端瞄准时显示目标准星 + 施法范围圈
 				arrow_preview.visible = false
 				if touch_aiming:
 					aoe_fill.visible = true
-					aoe_fill.scale = Vector3(0.6, 1, 0.6)
+					MeshFactory.set_cast_area_mode(aoe_fill, 1)
+					aoe_fill.scale = Vector3(1.2, 1, 1.2)
 					aoe_fill.global_position = Vector3(target_pos.x, 0.05, target_pos.z)
 					cast_range_ring.visible = true
 					cast_range_ring.global_position = Vector3(global_position.x, 0.07, global_position.z)

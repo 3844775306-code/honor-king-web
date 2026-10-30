@@ -1,0 +1,13 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+L summ_scroll=(472.0, 164.0) grid=(472.0, 164.0) cards=10 need_scroll=false
+L summ_card=(88.0, 78.0) cols=5
+L build_rows_type=GridContainer count=6 rows_size=(0.0, 0.0) panel=(129.0, 145.0)
+L right_body=(0.0, 0.0) summ_panel=(472.0, 528.0) build_panel=(129.0, 145.0) root=(2400.0, 2400.0)
+L first_card=(119.0, 90.0) last_card=(119.0, 90.0)
+L schemes=1 size=(0.0, 0.0) cols=4
+L reorder=true count=6
+ERROR: 32 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 24 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 24 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.
