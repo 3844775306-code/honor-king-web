@@ -4,6 +4,7 @@ extends Control
 ## 文字：合成粗体 + 阴影 + 描边；名称在上、数值在下，居中。
 
 var rows: Array = []          # 本帧可见行（HUD 直接复用 row 字典，不新建）
+var _had_rows: bool = false   # 上一帧是否画过血条（用于“清空后补一次重绘”）
 var _font: Font = null
 var _font_bold: FontVariation = null
 var _t := 0.0
@@ -24,7 +25,14 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	# 有血条要画；或上一帧还有血条、这一帧没了 → 必须再重绘一次把旧血条擦掉。
+	# 否则最后一个可见单位死亡/离开视野后，它的血条会一直留在屏幕上，
+	# 直到下一次有血条出现触发重绘（表现就是“单位死了血条残留一会”）。
 	if not rows.is_empty():
+		_had_rows = true
+		queue_redraw()
+	elif _had_rows:
+		_had_rows = false
 		queue_redraw()
 
 func _draw() -> void:
