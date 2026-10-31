@@ -17,6 +17,12 @@ var continuous_len: float = 0.0
 var pillar: bool = false          # 连续墙两端的小柱
 var open_end: bool = false        # 开放端：龙坑等故意不封口的墙，不参与自动补柱
 var open_end: bool = false        # 开放端：龙坑等故意不封口的墙，不参与自动补柱
+# 野区连续墙：>0 表示一段端面平齐的墙体（长度=该值），相邻段首尾相接、无缝隙
+var continuous_len: float = 0.0
+var pillar: bool = false          # 连续墙两端的小柱
+var open_end: bool = false        # 开放端：龙坑等故意不封口的墙，不参与自动补柱
+var open_end: bool = false        # 开放端：龙坑等故意不封口的墙，不参与自动补柱
+var open_end: bool = false        # 开放端：龙坑等故意不封口的墙，不参与自动补柱
 var thick: float = 1.0            # 厚度倍率：不同墙段的厚度差异化（由 BattleManager 按位置哈希分配）
 
 func _ready():

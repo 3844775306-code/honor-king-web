@@ -267,6 +267,7 @@ var shen_fuse_active: bool = false   # W疾跑引燃中：窗口内可手动引�
 var shen_barrage_active: bool = false   # 1技能猫咪炸弹连发进行中：防重入，禁止并发连发（同帧叠多段伤害）
 var player_name: String = ""   # 玩家/本局 AI 昵称（血条上方与选人界面显示）
 var player_name: String = ""   # 玩家/本局 AI 昵称（血条上方与选人界面显示）
+var player_name: String = ""   # 玩家/本局 AI 昵称（血条上方与选人界面显示）
 var donghuang_orbs: int = 0
 var donghuang_orb_angle: float = 0.0
 var donghuang_suppress_target: Hero = null
@@ -2190,7 +2191,8 @@ func _physics_process(delta):
 		if not is_ai and not ui_block:
 			if Input.is_key_pressed(KEY_CTRL):
 				for i in range(3):
-					if Input.is_action_just_pressed("skill_%d" % i): upgrade_skill(i)
+	_handle_attack_priority_input()
+	_update_dash_preview()
 			_handle_skill_input(delta)
 			_handle_desktop_type0_aim()
 			_handle_attack_wheel_input()
@@ -5552,4 +5554,5 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		spike_bullet.life_time = 1.5
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
-			await get_tree().create_timer(0.15).timeout
+	_handle_attack_priority_input()
+	_update_dash_preview()

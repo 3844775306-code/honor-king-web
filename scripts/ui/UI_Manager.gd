@@ -138,10 +138,10 @@ var surrender_status_label: Label = null
 var surrender_vote_running: bool = false
 const SURRENDER_MIN_TIME := 360.0            # 6 分钟后才能发起投降
 const SURRENDER_MIN_YES := 4                 # 本队 5 人中需 4 票通过
-# 推荐位自选卡：与上方推荐卡同宽（246）、同 UiKit.rec_card 卡片格式
+# 推荐位：两件素材都可买时，直接把两张「推荐卡」并排占据推荐卡位置（不再在卡下方加购买按钮）
 const REC_OPTION_W := 246.0
-const REC_OPTION_H := 84.0
-const REC_OPTION_TOP := 196.0
+const REC_OPTION_H := 120.0
+const REC_OPTION_TOP := 70.0
 var cached_recommended_list: Array = []
 var cached_recommended_for: String = ""
 
@@ -718,12 +718,12 @@ func _create_info_labels():
 	buy_plus_btn.offset_right = -12; buy_plus_btn.offset_bottom = 181
 	buy_plus_btn.visible = false              # 初始隐藏，_update_recommended_equip 按金币刷新
 	add_child(buy_plus_btn)
-	# 多件素材都买得起时：推荐卡下方竖排自选卡（与推荐卡同宽 246、同卡片格式，玩家自己选买哪件）
+	# 两件都买得起时：直接在推荐卡位置竖排两张推荐卡（各推荐一件装备，点卡即买）
 	rec_option_row = Control.new()
 	rec_option_row.anchor_left = 1.0; rec_option_row.anchor_top = 0.0; rec_option_row.anchor_right = 1.0
 	rec_option_row.offset_left = -362.0; rec_option_row.offset_top = REC_OPTION_TOP
 	rec_option_row.offset_right = -362.0 + REC_OPTION_W
-	rec_option_row.offset_bottom = REC_OPTION_TOP + (REC_OPTION_H + 6.0) * 2.0
+	rec_option_row.offset_bottom = REC_OPTION_TOP + (REC_OPTION_H + 8.0) * 2.0
 	rec_option_row.visible = false
 	add_child(rec_option_row)
 	# 设置按钮：推荐装下面，点开调音量 / 发起投降
@@ -1962,10 +1962,16 @@ func _update_recommended_equip():
 		can_buy = affordable_now
 	if buy_plus_btn:
 		buy_plus_btn.visible = can_buy and not (rec_card != null and rec_card.collapsed)
-	_sync_rec_options(b.get("options", []), int(battle.hero.gold))
+	# 两件素材都可买：两张推荐卡顶替单卡位置（各推荐一件装备），单卡与“+”都收起
+	var opts_arr: Array = b.get("options", [])
+	_sync_rec_options(opts_arr, int(battle.hero.gold))
+	if rec_card:
+		rec_card.visible = opts_arr.is_empty()
+	if buy_plus_btn and not opts_arr.is_empty():
+		buy_plus_btn.visible = false
 
-# 推荐位自选选项：素材组合变化才重建；金币变化只刷新可点状态。
-# 版式与上方推荐卡完全一致（同宽 246 / 同 UiKit.rec_card 卡片 + 收起态），不再用一排普通按钮
+# 推荐位双卡：两件素材都买得起时，在推荐卡位置竖排两张完整推荐卡（各推荐一件装备，点卡即买）。
+# 只有 1 件可选时不走这里（单推荐卡 + “+” 已经能表达）。
 func _sync_rec_options(opts: Array, gold: int) -> void:
 	if rec_option_row == null:
 		return
@@ -1977,18 +1983,22 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 		for c in rec_option_row.get_children():
 			rec_option_row.remove_child(c)
 			c.queue_free()
+		for e in rec_option_btns:
+			var old_plus = e.get("plus")
+			if old_plus != null and is_instance_valid(old_plus):
+				old_plus.queue_free()
 		rec_option_btns.clear()
 		var pi := 0
 		for o in opts:
 			var card := RecItemCard.new()
 			card.name = "RecOption_%d" % pi
 			card.mouse_filter = Control.MOUSE_FILTER_STOP
-			# 右锚定：收起态（offset_left=-208）与推荐卡同款，从右往左收，不会跑出屏幕
+			# 右锚定：与单推荐卡同宽 246（-362..-116），收起态从右往左收
 			card.anchor_left = 1.0
 			card.anchor_right = 1.0
 			card.offset_left = -REC_OPTION_W
 			card.offset_right = 0.0
-			card.offset_top = float(pi) * (REC_OPTION_H + 6.0)
+			card.offset_top = float(pi) * (REC_OPTION_H + 8.0)
 			card.offset_bottom = card.offset_top + REC_OPTION_H
 			card.item_name = str(o["name"])
 			card.tier = int(o.get("tier", 1))
@@ -2001,7 +2011,23 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 			card.set_collapsed_for_gold(gold < int(o["cost"]))
 			card.buy_requested.connect(_shop_quick_buy.bind(str(o["id"])))
 			rec_option_row.add_child(card)
-			rec_option_btns.append({"card": card, "cost": int(o["cost"])})
+			# 每张卡右侧配同款黄色“+”快速购买（和单推荐卡一致）
+			var plus := TouchActionButton.new()
+			plus.name = "RecOptionPlus_%d" % pi
+			plus.label_text = "+"
+			plus.label_font_size = 76.0
+			plus.color = Color(0.98, 0.84, 0.25, 0.95)
+			plus.hold_to_act = false
+			plus.emit_activated_on_press = true
+			plus.anchor_left = 1.0; plus.anchor_top = 0.0
+			plus.anchor_right = 1.0
+			plus.offset_left = -108.0
+			plus.offset_right = -12.0
+			plus.offset_top = REC_OPTION_TOP + float(pi) * (REC_OPTION_H + 8.0) + 9.0
+			plus.offset_bottom = plus.offset_top + 102.0
+			plus.activated.connect(_shop_quick_buy.bind(str(o["id"])))
+			add_child(plus)
+			rec_option_btns.append({"card": card, "plus": plus, "cost": int(o["cost"])})
 			pi += 1
 		rec_option_row.visible = not opts.is_empty()
 	for e in rec_option_btns:
@@ -2009,12 +2035,15 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 		c2.gold = gold
 		c2.set_collapsed_for_gold(gold < int(e["cost"]))
 		c2.queue_redraw()
-	# 设置按钮跟随推荐位高度下移，避免压住自选卡
+		var p2 = e.get("plus")
+		if p2 != null and is_instance_valid(p2):
+			p2.visible = gold >= int(e["cost"])   # 与单卡“+”同规则：买得起才显示
+	# 设置按钮跟着双卡高度下移（单卡时保持原位）
 	if settings_btn != null:
 		var rows: int = rec_option_btns.size()
 		var st_top: float = 308.0
 		if rows > 0:
-			st_top = REC_OPTION_TOP + float(rows) * (REC_OPTION_H + 6.0) + 8.0
+			st_top = REC_OPTION_TOP + float(rows) * (REC_OPTION_H + 8.0) + 8.0
 		settings_btn.offset_top = st_top
 		settings_btn.offset_bottom = st_top + 36.0
 

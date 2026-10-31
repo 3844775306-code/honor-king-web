@@ -1,6 +1,7 @@
 class_name  BattleManager
 extends Node3D
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
+const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
 var hero_selected: bool = false
 var selected_summoner: String = "flash"
@@ -408,6 +409,10 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 
 	# 初始化小地图等
 	# ... 其他初始化
+# 三路兵线正常交汇处（= 河道与各路的交叉口）的圆形青砖擂台
+const ARENA_SPOTS: Array = [Vector3(43, 0, 43), Vector3(0, 0, 0), Vector3(-43, 0, -43)]
+const ARENA_RADIUS: float = 7.2
+
 func _create_map():
 	# 1. 野外基底（300x300，延伸到雾里，避免看到地图边缘断崖）
 	var wild = MeshInstance3D.new()
@@ -739,7 +744,8 @@ func is_on_shadow_path(team: int, pos: Vector3) -> bool:
 			return true
 	return false
 
-func _create_fan_plane(center: Vector3, radius: float, start_angle: float, end_angle: float, color: Color) -> Node3D:
+func _create_fan_plane(center: Vector3, radius: float, start_angle: float, end_angle: float, color: Color,
+		brick_center: Vector3 = Vector3.ZERO) -> Node3D:
 	var csg = CSGPolygon3D.new()
 	var poly = PackedVector2Array()
 	poly.append(Vector2.ZERO)
@@ -963,6 +969,8 @@ void fragment() {
 	mat.shader = sh
 	mat.set_shader_parameter("tint", color)
 	return mat
+
+const LingbaoScript = preload("res://scripts/entities/Lingbao.gd")
 
 func _create_player_hero(type: String, summoner_id: String = "flash"):
 	var config = hero_configs[type].duplicate()
@@ -3137,7 +3145,7 @@ func _show_hero_select_ui():
 	var summ_scroll := ScrollContainer.new()
 	summ_scroll.name = "SelectSummScroll"
 	summ_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	summ_scroll.custom_minimum_size = Vector2(0, 164)
+	summ_scroll.custom_minimum_size = Vector2(0, 236)
 	summ_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	summ_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	sel_summ_panel.add_child(summ_scroll)

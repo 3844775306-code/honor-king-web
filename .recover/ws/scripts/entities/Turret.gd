@@ -591,3 +591,5 @@ func _activate_tower_shield(stage: float):
 	tower_shield_active = true
 
 const TOTAL_PER_SIDE: int = 10   # 每方 9 塔 + 1 水晶（对战纪录统计用）
+
+const TOTAL_PER_SIDE: int = 10   # 每方 9 塔 + 1 水晶（对战纪录统计用）

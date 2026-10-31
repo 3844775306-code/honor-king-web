@@ -454,6 +454,64 @@ static func _build_wall_mesh_hq(rng: RandomNumberGenerator) -> ArrayMesh:
 	st.append_from(_disc(0.92, 0.06, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
 	return st.commit()
 
+
+static var _hq_variants: Array = []
+
+## 高地外周墙：更高规格的石墙（双层基座 + 8 层错缝方石 + 檐口压顶 + 边柱）
+static func wall_visual_hq(seed_val: int = 0) -> Node3D:
+	var root := Node3D.new()
+	root.name = "WallVisualHQ"
+	var slot: int = absi(seed_val) % 4
+	while _hq_variants.size() <= slot:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 31337 + _hq_variants.size() * 2654435
+		_hq_variants.append(_build_wall_mesh_hq(rng))
+	var mi := MeshInstance3D.new()
+	mi.mesh = _hq_variants[slot]
+	mi.material_override = rock_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(mi)
+	return root
+
+static func _build_wall_mesh_hq(rng: RandomNumberGenerator) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	# 双层基座（外挑，压住地面）
+	_append(st, box, Vector3(0, 0.16, 0), Vector3(1.42, 0.32, 1.06), Vector3(0, rng.randf_range(-0.05, 0.05), 0))
+	_append(st, box, Vector3(0, 0.44, 0), Vector3(1.26, 0.24, 0.96), Vector3(0, rng.randf_range(-0.04, 0.04), 0))
+	# 8 层错缝方石
+	var y: float = 0.56
+	for course in range(8):
+		var n: int = 3 if course % 2 == 0 else 2
+		var h: float = 0.25
+		var seg: float = 1.12 / float(n)
+		for i in range(n):
+			var xoff: float = (float(i) - float(n - 1) * 0.5) * seg
+			var w: float = seg * rng.randf_range(0.90, 1.02)
+			_append(st, box, Vector3(xoff + rng.randf_range(-0.015, 0.015), y + h * 0.5, rng.randf_range(-0.02, 0.02)),
+				Vector3(w, h * rng.randf_range(0.95, 1.02), 0.88 + rng.randf_range(-0.04, 0.04)),
+				Vector3(0, rng.randf_range(-0.02, 0.02), 0))
+		y += h
+	# 檐口压顶（两级外挑）
+	_append(st, box, Vector3(0, y + 0.10, 0), Vector3(1.34, 0.20, 1.04), Vector3.ZERO)
+	_append(st, box, Vector3(0, y + 0.27, 0), Vector3(1.12, 0.14, 0.88), Vector3.ZERO)
+	y += 0.34
+	# 两侧边柱（竖向石条，增加层次）
+	for sx in [-1.0, 1.0]:
+		_append(st, box, Vector3(sx * 0.50, y * 0.46, 0.0), Vector3(0.20, y * 0.88, 0.99), Vector3.ZERO)
+	# 基底碎石 + 苔藓土盘
+	var rock := _rock_sphere()
+	for i in range(4):
+		var a: float = rng.randf_range(0.0, TAU)
+		var d: float = rng.randf_range(0.44, 0.72)
+		var rr: float = rng.randf_range(0.09, 0.16)
+		_append(st, rock, Vector3(cos(a) * d, rr * 0.5, sin(a) * d), Vector3(rr, rr * 0.7, rr),
+			Vector3(rng.randf_range(0.0, TAU), rng.randf_range(0.0, TAU), 0.0))
+	st.append_from(_disc(0.92, 0.06, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
+	return st.commit()
+
 # ==================== 内部工具 ====================
 
 static func _append(st: SurfaceTool, mesh: Mesh, pos: Vector3, sc: Vector3, rot: Vector3) -> void:
