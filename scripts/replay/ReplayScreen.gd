@@ -98,6 +98,15 @@ func _ready() -> void:
 	_apply_frame(0.0)
 
 
+func _exit_tree() -> void:
+	# fake hero 只是给 HeroInfoControl 提供字段，没进树，退出时手动释放
+	for ui in _hero_uis:
+		var fake = ui.get("fake")
+		if fake != null and is_instance_valid(fake):
+			fake.free()
+	_hero_uis.clear()
+
+
 func _latest_replay_path() -> String:
 	var arr: Array = Repo.load_index()
 	if arr.is_empty():
