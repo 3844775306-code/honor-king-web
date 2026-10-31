@@ -2,8 +2,19 @@ class_name  BattleManager
 extends Node3D
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
+const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
+const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
+const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 var hero_selected: bool = false
+# 开局运镜：由远及近拉到泉水，期间暂停整棵场景树并隐藏 HUD/小地图，结束后再开始计时与 AI
+var intro_active: bool = false
+var building_battle: bool = false   # 真实加载：加载界面显示期间同步搭建战场
+var _intro_waiting: bool = false   # 加载界面仍覆盖、等待战场渲染就绪
+var _intro_time: float = 0.0
+var _intro_start: Vector3 = Vector3.ZERO
+var _intro_end: Vector3 = Vector3.ZERO
+const INTRO_DURATION: float = 2.8
 var selected_summoner: String = "flash"
 var selected_hero_type: String = ""
 var select_ui: CanvasLayer = null
@@ -33,6 +44,8 @@ var SUMMONER_DESCRIPTIONS = {
 	"弱化": "减少周围敌人攻击力，提升自身防御",
 	"惩击": "对野怪造成巨额伤害并减速",
 }
+# 视野之灵（己方边路二塔摧毁后生成）
+var vision_spirits: Array = []
 # 记录分路高地塔状态：{ team: { "farm": bool, "mid": bool, "clash": bool } }
 var high_tower_destroyed = {
 	Config.Team.PLAYER: { "farm": false, "mid": false, "clash": false },
@@ -67,7 +80,6 @@ var _jungle_group_queue: Array = []
 # 核心实体
 var hero: Hero
 var enemy_hero: Hero
-var spectate_hero: Hero = null   # 阵亡后点击复活条队友时的观战目标（UI 读取）
 var _pfx_hp: float = -1.0   # PostFX 受击红晕：上一帧本地英雄血量（-1=未初始化）
 var turrets: Array = []
 var minions: Array = []
@@ -129,6 +141,8 @@ var cam_pan_prev_screen: Vector2 = Vector2.ZERO
 var _cam_mid_drag: bool = false
 var _cam_touch_decay: bool = false
 var _cam_snap: bool = false
+# 阵亡观战：玩家阵亡后可点击存活队友头像，镜头切到该队友；复活自动收回
+var spectate_hero: Hero = null
 # P0 镜头反馈（本地表现层，不参与联机判定）
 var _shake_amp: float = 0.0
 var _shake_dur: float = 0.0
@@ -158,7 +172,8 @@ func request_teleport(hero: Hero, target: Node3D) -> void:
 	if target is Turret and target.team == hero.team:
 		hero.start_teleport(target.global_position)
 	elif target is Minion and target.team == hero.team:
-		hero.start_teleport(target.global_position)
+		# 选中的小兵作为传送锚点：引导期间站定、停手、免伤
+		hero.start_teleport(target.global_position, target as Minion)
 
 func add_recall_line(hero: Hero, spring: Vector3):
 	recall_lines[hero] = {"hero_pos": hero.global_position, "spring_pos": spring}
@@ -207,8 +222,8 @@ func _ready():
 
 	# 小地图 (添加到 UI 层，但这里简单直接加在主树)
 	minimap = Minimap.new()
-	# 两端统一：放大 1.5 倍（200 → 300），与手机布局完全一致
-	var mm_size := 300
+	# 两端统一：再放大 1.5 倍（200 → 300 → 450），手机端看得更清
+	var mm_size := 450
 	minimap.MINIMAP_SIZE = mm_size
 	# 左上角锚定（稍向中心收，避免贴死角落）
 	var mm_inset := 40
@@ -260,6 +275,7 @@ func _start_net_lineup(picks: Dictionary) -> void:
 	_create_player_hero(host_hero, host_summ)          # host 本人
 	# 其余人类席：PLAYER 队、is_ai=true 但不挂 HeroAI（等接管）
 	var occupied_roles := [str(host_pick.get("role", ""))]
+	var used_heroes: Array = [host_hero]
 	for pid in picks:
 		var pn := int(pid)
 		if pn == 1:
@@ -285,10 +301,23 @@ func _start_net_lineup(picks: Dictionary) -> void:
 			gh.yuanliu_pick = ["生机", "穿心", "迅疾", "凝神"][randi() % 4]
 			gh._recalculate_attributes()
 		occupied_roles.append(str(p.get("role", "")))
+		used_heroes.append(htype)
+	# 顺序选人里展示的 AI/红方席位按 BP 结果生成（避免「看到 X 实际是 Y」）；无 draft 时退回随机
+	var drafted: Dictionary = NetSession.get_draft_teams()
+	var ally_forced: Array = []
+	var enemy_forced: Array = []
+	for h in drafted.get("ally", []):
+		var hn := str(h)
+		if hn != "" and not used_heroes.has(hn):
+			ally_forced.append(hn)
+	for h in drafted.get("enemy", []):
+		var hn2 := str(h)
+		if hn2 != "" and not used_heroes.has(hn2) and not ally_forced.has(hn2):
+			enemy_forced.append(hn2)
 	# 蓝方 AI 补齐到 5：人类已占的职责不重复选（_create_team_ai 内部再排除 host.role）
 	var human_count := picks.size()
-	_create_team_ai(Config.Team.PLAYER, maxi(0, 5 - human_count), occupied_roles)
-	_create_team_ai(Config.Team.ENEMY, 5)   # 红方 5 AI 不变
+	_create_team_ai(Config.Team.PLAYER, maxi(0, 5 - human_count), occupied_roles, ally_forced)
+	_create_team_ai(Config.Team.ENEMY, 5, [], enemy_forced)   # 红方 5 AI：优先用 BP 展示阵容
 	_create_turrets()
 	_create_jungle()
 	# 元流之子·万物为流：host 泉水四选一（AI 已在生成时随机）
@@ -301,39 +330,109 @@ func _start_net_lineup(picks: Dictionary) -> void:
 	# 把 guest 英雄按锁定阵容分发给人（复用接管流程，晚加入兜底仍走 _scan_assignments）
 	NetSession.assign_lineup()
 
+# 选人结束倒计时：全部玩家选定英雄后停留 5 秒（数字 5→1），再切到加载界面
+const PICK_COUNTDOWN: float = 5.0
+
+func _play_pick_countdown() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 128
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(layer)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(root)
+	var dim := ColorRect.new()
+	dim.color = Color(0.02, 0.03, 0.06, 0.58)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(dim)
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(vb)
+	var tip := Label.new()
+	tip.text = "全部玩家已选定英雄"
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tip.add_theme_font_size_override("font_size", 34)
+	tip.add_theme_color_override("font_color", Color(0.93, 0.95, 1.0))
+	tip.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	tip.add_theme_constant_override("outline_size", 6)
+	vb.add_child(tip)
+	var num := Label.new()
+	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	num.add_theme_font_size_override("font_size", 132)
+	num.add_theme_color_override("font_color", Color(1.0, 0.84, 0.30))
+	num.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	num.add_theme_constant_override("outline_size", 10)
+	vb.add_child(num)
+	var timer := get_tree().create_timer(PICK_COUNTDOWN)
+	while timer.time_left > 0.0 and is_inside_tree():
+		num.text = str(maxi(1, int(ceil(timer.time_left))))
+		await get_tree().process_frame
+	if is_instance_valid(layer):
+		layer.queue_free()
+
 func _start_game(hero_type: String, summoner_id: String = "flash"):
 	# 先显示王者式加载界面：BP 用双方 picks，网络 host / --net-test 无 BP 数据时占位
 	if _loading_shown: return
 	_loading_shown = true
+	spectate_hero = null
+	rank_result = {}
+	# 选人页当前展示的出装顺序（含自动套用的已保存方案）就是本局推荐出装
+	if sel_build_hero == hero_type and not sel_build_ids.is_empty():
+		ItemDatabase.set_recommended_override(hero_type, sel_build_ids)
+	# 随机分配玩家阵营（加载界面/出生点/镜头都由 Config.player_team 决定；联机保持蓝方）
+	if NetSession.mode == NetSession.Mode.NONE:
+		Config.roll_player_team()
+	# 全部玩家选定英雄后：先走 5 秒倒计时，再进入加载界面
+	await _play_pick_countdown()
 	var heroes: Array = []
 	if sel_ally_picks.size() == 5 and sel_enemy_picks.size() == 5:
 		for i in 5:
 			var hn := str(sel_ally_picks[i])
 			if i == sel_player_seat and hn == "": hn = hero_type
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 0})
+			var ent := {"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.player_team}
+			if i == sel_player_seat:
+				ent["is_player"] = true
+			heroes.append(ent)
 		for i in 5:
 			var hn := str(sel_enemy_picks[i])
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 1})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.foe_team()})
 	else:
-		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": 0})
+		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": Config.player_team, "is_player": true})
 		for i in 4:
-			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": 0})
+			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": Config.player_team})
 		for i in 5:
-			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": 1})
+			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": Config.foe_team()})
+	# 兜底：保证加载界面至少有一张卡按本机真实段位显示
+	var has_player_card := false
+	for h in heroes:
+		if h is Dictionary and bool(h.get("is_player", false)):
+			has_player_card = true
+			break
+	if not has_player_card and not heroes.is_empty():
+		heroes[0]["is_player"] = true
 	loading_screen = LoadingScreen.new()
-	loading_screen.setup(heroes, "对局加载中", "王者峡谷 · 5v5", 2.2)
-	loading_screen.finished.connect(_on_loading_finished.bind(hero_type, summoner_id))
+	loading_screen.manual_progress = true
+	loading_screen.hold_full = true
+	loading_screen.process_mode = Node.PROCESS_MODE_ALWAYS
+	loading_screen.setup(heroes, "对局加载中", "王者峡谷 · 5v5", 0.1)
 	add_child(loading_screen)
+	loading_screen.set_progress(0.0)
 	if select_ui:
 		select_ui.visible = false
-
-func _hero_role(hero_name: String) -> String:
-	if hero_name == "" or not hero_configs.has(hero_name): return ""
-	return str(hero_configs[hero_name].get("role", ""))
-
-func _on_loading_finished(hero_type: String, summoner_id: String) -> void:
-	loading_screen = null
-	_loading_shown = false
+	# 加载界面出现即开始搭建战场：暂停游戏逻辑，让加载层作为唯一活动的 UI
+	if ui:
+		ui.visible = false
+	if minimap:
+		minimap.visible = false
+	if is_instance_valid(TouchController):
+		TouchController.set_intro_hidden(true)
+	building_battle = true
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().paused = true
 	_start_game_body(hero_type, summoner_id)
 
 # 预热：各兵种×阵营建 1 个原型并各渲染 2 帧，既填充 MinionModel 模板缓存，
@@ -359,15 +458,35 @@ func _clear_prewarm_protos() -> void:
 			p.queue_free()
 	_prewarm_protos.clear()
 
+func _hero_role(hero_name: String) -> String:
+	if hero_name == "" or not hero_configs.has(hero_name): return ""
+	return str(hero_configs[hero_name].get("role", ""))
+
+# 加载条到 100% 时战场仍未创建：保持加载界面覆盖，构建完成后再销毁加载层并进入运镜
+func _on_loading_progress_full(hero_type: String, summoner_id: String) -> void:
+	_start_game_body(hero_type, summoner_id)
+
+func _on_loading_finished(hero_type: String, summoner_id: String) -> void:
+	loading_screen = null
+	_loading_shown = false
+	_start_game_body(hero_type, summoner_id)
+
+func _set_loading_progress(p: float) -> void:
+	if loading_screen:
+		loading_screen.set_progress(clampf(p, 0.0, 1.0))
+
+# 每个构建阶段推一次真实进度，并让加载界面渲染一帧
+func _load_step(p: float) -> void:
+	_set_loading_progress(p)
+	await get_tree().process_frame
+
 func _start_game_body(hero_type: String, summoner_id: String = "flash"):
+	await _load_step(0.04)
 	# 进入对局：淡出大厅环境音乐
 	SfxManager.stop_menu_music()
 	_clear_prewarm_protos()
 	selected_hero_type = hero_type
 	hero_selected = true
-	# 随机分配玩家阵营：红方出生时镜头整体旋转 180°，手感与蓝方一致
-	if NetSession.mode == NetSession.Mode.NONE:
-		Config.roll_player_team()
 	cam_yaw = PI if Config.player_team == Config.Team.ENEMY else 0.0
 	cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
 	# 调试：默认开启AI路径小球显示（F4可切换）
@@ -378,6 +497,7 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	if select_ui:
 		select_ui.queue_free()
 		select_ui = null
+	await _load_step(0.12)
 
 	# 创建实体：BP 结果传入（我方 AI 按号位顺序排除玩家席位；网络 host 路径数组为空→原随机）
 	_create_player_hero(hero_type, summoner_id)          # 玩家英雄
@@ -386,13 +506,18 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		for i in 5:
 			if i != sel_player_seat and str(sel_ally_picks[i]) != "":
 				sel_ally_ai_picks.append(str(sel_ally_picks[i]))
+	await _load_step(0.26)
 	_create_team_ai(Config.player_team, 4, [], sel_ally_ai_picks)  # 4个己方AI
+	await _load_step(0.44)
 	_create_team_ai(Config.foe_team(), 5, [], sel_enemy_picks)    # 5个敌方AI
 	sel_ally_picks = []
 	sel_enemy_picks = []
 	sel_taken = {}
+	await _load_step(0.56)
 	_create_turrets()
+	await _load_step(0.66)
 	_create_jungle()
+	await _load_step(0.74)
 
 	# 元流之子·万物为流：玩家开局泉水四选一（弹出面板，AI 已在生成时随机选好）
 	if hero and hero.display_name == "元流之子":
@@ -400,43 +525,55 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 
 	# 野区弧形墙体（必须在 _create_jungle() 之后，营地位置已知）
 	_generate_jungle_arc_walls()
+	await _load_step(0.84)
 
 	# 重建A*导航网格（包含野区墙体）
 	PathFinder.build_navigation_map()
+	await _load_step(0.96)
+	await _load_step(1.0)
+	# 加载完成后停留 2 秒（进度条 100% 展示完整）再进入战斗
+	if loading_screen != null and is_instance_valid(loading_screen):
+		await get_tree().create_timer(2.0).timeout
+	building_battle = false
 
-	# 开局语音链：欢迎→准备→全军出击（host 经战报通道转发给接管客户端）
-	SfxManager.announce_chain(["welcome", "ready", "attack"])
-
-	# 初始化小地图等
-	# ... 其他初始化
+	# 开局运镜：镜头由远及近拉向泉水，期间隐藏 UI、暂停 AI 与全部计时
+	_begin_intro()
 # 三路兵线正常交汇处（= 河道与各路的交叉口）的圆形青砖擂台
 const ARENA_SPOTS: Array = [Vector3(43, 0, 43), Vector3(0, 0, 0), Vector3(-43, 0, -43)]
 const ARENA_RADIUS: float = 7.2
 
 func _create_map():
-	# 1. 野外基底（300x300，延伸到雾里，避免看到地图边缘断崖）
+	# 1. 浮空岛顶面（圆岛外由 shader discard，露出天空；岛缘/树林在背景层生成）
 	var wild = MeshInstance3D.new()
 	wild.mesh = PlaneMesh.new()
-	wild.mesh.size = Vector2(300, 300)
+	wild.mesh.size = Vector2(220, 220)
 	# 细分网格：给地面 shader 的顶点起伏（野区微地形）提供顶点
-	wild.mesh.subdivide_width = 100
-	wild.mesh.subdivide_depth = 100
+	wild.mesh.subdivide_width = 120
+	wild.mesh.subdivide_depth = 120
 	wild.position = Vector3(0, -0.02, 0)
-	wild.material_override = MapVisuals.ground_material(0.28)
+	wild.material_override = MapVisuals.island_ground_material()
 	add_child(wild)
 
 	# 2. 分路浅绿色（宽度16，沿三路路径绘制，这里简化为三个长矩形平面）
-	_add_lane_plane(Vector3(-55,0,0), Vector2(16, 80), 2)   # 对抗路
-	_add_lane_plane(Vector3(-30,0,30), Vector2(16, 80), 1)     # 中路（沿对角线旋转45度）
-	_add_lane_plane(Vector3(0,0,55), Vector2(80, 16), 0) # 发育路
-	_add_lane_plane(Vector3(55,0,0), Vector2(16, 80), 0)   # 发育路
-	_add_lane_plane(Vector3(30,0,-30), Vector2(16, 80), 1)     # 中路（沿对角线旋转45度）
-	_add_lane_plane(Vector3(0,0,-55), Vector2(80, 16), 2) # 对抗路
+	# 边路一直铺到 ±63 外墙脚下，避免路端悬在墙前留下一条草缝
+	# 外侧留 0.3m 让石路缘收进外墙内，不把路缘挑到悬崖外
+	_add_lane_plane(Vector3(-55,0,0), Vector2(15.4, 126), 2)   # 对抗路
+	# 中路两块正好在 (0,0) 对接，不再留中间草缝（半长 = √(30²+30²) = 42.426）
+	_add_lane_plane(Vector3(-30,0,30), Vector2(16, 84.85), 1)     # 中路（沿对角线旋转45度）
+	_add_lane_plane(Vector3(0,0,55), Vector2(126, 15.4), 0) # 发育路
+	_add_lane_plane(Vector3(55,0,0), Vector2(15.4, 126), 0)   # 发育路
+	_add_lane_plane(Vector3(30,0,-30), Vector2(16, 84.85), 1)     # 中路（沿对角线旋转45度）
+	_add_lane_plane(Vector3(0,0,-55), Vector2(126, 15.4), 2) # 对抗路
 	# 3. 高地青砖色扇形（90度扇形，以地图顶点为中心，面向地图内部）
-	var high_player = _create_fan_plane(Vector3(-60,0.2,60), 35, -90, 0, Color.CHARTREUSE)
-	var high_enemy = _create_fan_plane(Vector3(60,0.2,-60), 35, 90, 180, Color.CHARTREUSE)
+	var high_player = _create_fan_plane(Vector3(-60,0.2,60), 35, -90, 0, Color.CHARTREUSE, Vector3(-53, 0, 53))
+	var high_enemy = _create_fan_plane(Vector3(60,0.2,-60), 35, 90, 180, Color.CHARTREUSE, Vector3(53, 0, -53))
 	add_child(high_player)
 	add_child(high_enemy)
+	# 高地与外墙之间的 3m 石质台沿补齐，并把高地弧边做成斜面石裙
+	_add_high_ground_aprons(Vector3(-60,0,60), Vector3(-1,0,0), Vector3(0,0,1), Vector3(-53, 0, 53))
+	_add_high_ground_aprons(Vector3(60,0,-60), Vector3(1,0,0), Vector3(0,0,-1), Vector3(53, 0, -53))
+	_add_high_ground_rim(Vector3(-60,0,60), -90.0, 0.0)
+	_add_high_ground_rim(Vector3(60,0,-60), 90.0, 180.0)
 
 	# 3.5 泉水视觉：基地角上的喷泉广场（圆心沿中路对角线外移，避开水晶攻击范围）
 	_add_fountain(Vector3(-62, 0.0, 62), Color(0.2, 0.55, 1.0, 0.35))
@@ -457,6 +594,12 @@ func _create_map():
 	add_child(river)
 	# 两岸装饰：湿沙河滩 + 半浸礁石 + 芦苇 + 睡莲
 	MapVisuals.spawn_river_banks(self)
+	# 三条分路兵线正常交汇处（= 河道与各路的交叉口）：铺圆形青砖擂台
+	for i in range(ARENA_SPOTS.size()):
+		var arena := DecorMesh.arena_visual(ARENA_SPOTS[i], ARENA_RADIUS)
+		arena.name = "LaneArena%d" % i
+		arena.position = ARENA_SPOTS[i]
+		add_child(arena)
 
 	# 地面碰撞（射线检测用）
 	var ground_body = StaticBody3D.new()
@@ -643,9 +786,12 @@ func _create_map():
 
 	# 装饰物（草丛 / 河岸石墙 / 陶罐，MultiMesh 批量，移动端友好）
 	MapVisuals.scatter_decorations(self)
+	# 浮空岛：岛缘岩壁、岛底倒锥、墙外树林/草坡/碎石与远处浮岩
+	MapVisuals.spawn_floating_island(self)
 
 # 分路平面登记表：{lane: [MeshInstance3D]}（0发育路 1中路 2对抗路）
 var lane_plane_nodes: Dictionary = {}
+var _lane_plane_idx := 0
 # 暗影之径计时：{team: {lane: 剩余秒数}}（固定60秒，与先锋存活无关）
 var shadow_path_timers: Dictionary = {}
 
@@ -657,47 +803,158 @@ func _add_lane_plane(center: Vector3, size: Vector2, lane: int):
 	plane.position = center
 	if center.x+center.z==0:
 		plane.rotation_degrees = Vector3(0, -45, 0)
-	plane.position.y = 0.14
+	# 不同走向的路面错开 1~2mm，交叉口不出现同高面 z-fighting
+	plane.position.y = 0.14 + 0.0012 * float(_lane_plane_idx % 6)
+	_lane_plane_idx += 1
 	plane.material_override = MapVisuals.ground_material()
-	# 分路两侧石质路缘：把分路平面与河道水面的硬接缝收进石头边里
+	# 分路两侧石质路缘：沿长边铺满，把路/河/草地的硬接缝收进石头边里。
+	# 经过兵线交汇擂台的路缘必须断开，否则那条石台会直接架在青砖擂台上。
 	var curb_mat: Material = DecorMesh.rock_material()
+	var along_x: bool = size.x >= size.y
+	var curb_len: float = size.x if along_x else size.y
 	for s in [-1.0, 1.0]:
-		var cm := BoxMesh.new()
-		cm.size = Vector3(size.x + 1.0, 0.22, 0.6)
-		var curb := MeshInstance3D.new()
-		curb.mesh = cm
-		curb.material_override = curb_mat
-		curb.position = Vector3(0.0, -0.04, (size.y * 0.5 + 0.25) * s)
-		plane.add_child(curb)
+		var offset: float = (size.y * 0.5 + 0.25) * s if along_x else (size.x * 0.5 + 0.25) * s
+		for seg in _curb_segments(center, plane.rotation.y, along_x, offset, curb_len):
+			var cm := BoxMesh.new()
+			var curb := MeshInstance3D.new()
+			var span: float = seg.y - seg.x
+			if span < 0.3:
+				continue
+			if along_x:
+				cm.size = Vector3(span, 0.22, 0.6)
+				curb.position = Vector3((seg.x + seg.y) * 0.5, -0.04, offset)
+			else:
+				cm.size = Vector3(0.6, 0.22, span)
+				curb.position = Vector3(offset, -0.04, (seg.x + seg.y) * 0.5)
+			curb.mesh = cm
+			curb.material_override = curb_mat
+			plane.add_child(curb)
 	add_child(plane)
 	if not lane_plane_nodes.has(lane):
 		lane_plane_nodes[lane] = []
 	lane_plane_nodes[lane].append(plane)
 
 
+## 路缘被擂台挖断后的剩余区间（平面局部沿轴坐标，Vector2(起, 止)）
+func _curb_segments(plane_pos: Vector3, yaw: float, along_x: bool, offset: float, length: float) -> Array:
+	var half: float = length * 0.5
+	var inv := Basis(Vector3.UP, yaw).inverse()
+	var r: float = ARENA_RADIUS + 0.35
+	var gaps: Array = []
+	for spot in ARENA_SPOTS:
+		var lp: Vector3 = inv * (spot - plane_pos)
+		var across: float = lp.z if along_x else lp.x
+		var along: float = lp.x if along_x else lp.z
+		var d: float = absf(across - offset)
+		if d >= r:
+			continue
+		var dx: float = sqrt(r * r - d * d)
+		gaps.append(Vector2(along - dx, along + dx))
+	var segs: Array = []
+	if gaps.is_empty():
+		segs.append(Vector2(-half, half))
+		return segs
+	gaps.sort_custom(func(a, b): return a.x < b.x)
+	var cursor: float = -half
+	for g in gaps:
+		var a: float = maxf(g.x, -half)
+		var b: float = minf(g.y, half)
+		if b <= a:
+			continue
+		if a > cursor + 0.3:
+			segs.append(Vector2(cursor, a))
+		cursor = maxf(cursor, b)
+	if half > cursor + 0.3:
+		segs.append(Vector2(cursor, half))
+	# 擂台把路缘断开后，落在路平面末端的那半截露头台阶直接不要，只保留靠里侧的长段
+	if segs.size() > 1:
+		var longest: Vector2 = segs[0]
+		for sgm in segs:
+			if (sgm.y - sgm.x) > (longest.y - longest.x):
+				longest = sgm
+		return [longest]
+	return segs
+
+
+# 暗影之径视觉：分路平面淡淡染紫 + 路面暗影能量覆盖层（流动脉络 / 发光路缘，淡入淡出）
+var shadow_path_overlays: Dictionary = {}   # lane -> [MeshInstance3D]
+var shadow_path_mats: Dictionary = {}       # lane -> ShaderMaterial（同路共享，整路一起淡入淡出）
+var shadow_path_fade: Dictionary = {}       # lane -> [当前强度, 目标强度]
+const SHADOW_PATH_SHADER := preload("res://shaders/fx_shadow_path.gdshader")
+
+
+# 首次激活时按分路平面尺寸铺一层暗影覆盖贴片（子节点，随分路平面一起变换）
+func _ensure_shadow_path_overlay(lane: int) -> void:
+	if shadow_path_mats.has(lane):
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = SHADOW_PATH_SHADER
+	mat.set_shader_parameter("intensity", 0.0)
+	shadow_path_mats[lane] = mat
+	var nodes: Array = []
+	for plane in lane_plane_nodes.get(lane, []):
+		var pm := plane.mesh as PlaneMesh
+		if pm == null:
+			continue
+		var ov := MeshInstance3D.new()
+		var om := PlaneMesh.new()
+		om.size = pm.size
+		ov.mesh = om
+		ov.material_override = mat
+		ov.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ov.position = Vector3(0.0, 0.03, 0.0)
+		ov.visible = false
+		plane.add_child(ov)
+		nodes.append(ov)
+	shadow_path_overlays[lane] = nodes
+
+
+# 每帧推进覆盖层淡入淡出（与计时分离，保证结束后也能平滑淡出）
+func _update_shadow_path_fades(delta: float) -> void:
+	if shadow_path_fade.is_empty():
+		return
+	for lane in shadow_path_fade.keys():
+		var st: Array = shadow_path_fade[lane]
+		var cur: float = move_toward(float(st[0]), float(st[1]), delta / 0.45)
+		st[0] = cur
+		var mat: ShaderMaterial = shadow_path_mats.get(lane, null)
+		if mat:
+			mat.set_shader_parameter("intensity", cur)
+		if cur <= 0.002 and float(st[1]) <= 0.0:
+			for ov in shadow_path_overlays.get(lane, []):
+				ov.visible = false
+			shadow_path_fade.erase(lane)
+
+
 # 暗影之径视觉：分路平面变紫/恢复
 func _set_shadow_path_visual(lane: int, active: bool):
+	_ensure_shadow_path_overlay(lane)
+	for ov in shadow_path_overlays.get(lane, []):
+		if active:
+			ov.visible = true
+	var prev: Array = shadow_path_fade.get(lane, [0.0, 0.0])
+	shadow_path_fade[lane] = [float(prev[0]), 1.0 if active else 0.0]
 	for plane in lane_plane_nodes.get(lane, []):
 		var mat = plane.material_override
 		if mat == null:
 			continue
 		if mat is ShaderMaterial:
-			# 地面视觉层用的是地面着色器：靠 tint / emission 参数染紫
+			# 地面视觉层用的是地面着色器：靠 tint / emission 参数染紫（淡染，主要光效交给覆盖层）
 			var sm := mat as ShaderMaterial
 			if active:
-				sm.set_shader_parameter("tint", Color(0.62, 0.40, 1.0, 1.0))
+				sm.set_shader_parameter("tint", Color(0.80, 0.66, 1.0, 1.0))
 				sm.set_shader_parameter("emission_color", Color(0.42, 0.22, 0.85, 1.0))
-				sm.set_shader_parameter("emission_strength", 0.55)
+				sm.set_shader_parameter("emission_strength", 0.22)
 			else:
 				sm.set_shader_parameter("tint", Color(1.0, 1.0, 1.0, 1.0))
 				sm.set_shader_parameter("emission_strength", 0.0)
 		elif mat is StandardMaterial3D:
 			var std := mat as StandardMaterial3D
 			if active:
-				std.albedo_color = Color(0.45, 0.25, 0.7)
+				std.albedo_color = Color(0.62, 0.42, 0.85)
 				std.emission_enabled = true
 				std.emission = Color(0.35, 0.2, 0.55)
-				std.emission_energy_multiplier = 0.5
+				std.emission_energy_multiplier = 0.22
 			else:
 				std.albedo_color = Color.FOREST_GREEN
 				std.emission_enabled = false
@@ -744,6 +1001,83 @@ func is_on_shadow_path(team: int, pos: Vector3) -> bool:
 			return true
 	return false
 
+## 高地到外墙之间的 3m 石台：out_a/out_b 为两条朝外墙的方向，补齐高地直边与城墙间的草缝
+## 材质与高度跟高地扇形砖完全一致（同一套以水晶为圆心的同心环砖、砖顶 0.177），
+## 这样高地砖 → 台沿 → 外周城墙是一条连续的砖面，直边处不再出现材质/高差错缝
+func _add_high_ground_aprons(center: Vector3, out_a: Vector3, out_b: Vector3, brick_center: Vector3) -> void:
+	var mat := DecorMesh.hq_ring_brick_material(brick_center)
+	var inward_a := -out_a
+	var inward_b := -out_b
+	# 两条 3m 宽石台，长度取高地半径 35；转角再补 3×3
+	_add_flat_quad(center + out_a * 1.5 + inward_b * 17.5, Vector2(3.0, 35.0), mat, 0.177)
+	_add_flat_quad(center + out_b * 1.5 + inward_a * 17.5, Vector2(35.0, 3.0), mat, 0.177)
+	_add_flat_quad(center + out_a * 1.5 + out_b * 1.5, Vector2(3.0, 3.0), mat, 0.177)
+
+
+func _add_flat_quad(pos: Vector3, size_v: Vector2, mat: Material, y: float) -> void:
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = size_v
+	mi.mesh = pm
+	# PlaneMesh 本身就是水平 XZ 面，不能再绕 X 转 90°，否则石台会竖起来
+	mi.position = Vector3(pos.x, y, pos.z)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+
+## 高地弧形边缘的石质斜裙：从砖面外沿落到草地；压在分路上时只落到路面高度（0.146），
+## 这样高地砖与分路平面的接壤处是一段缓坡石阶，不再是 5cm 高的硬切口。
+func _add_high_ground_rim(center: Vector3, start_deg: float, end_deg: float) -> void:
+	var steps := 96
+	var raw: Array = []
+	for i in steps + 1:
+		var a := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
+		var wx: float = center.x + cos(a) * 36.0
+		var wz: float = center.z + sin(a) * 36.0
+		raw.append(0.146 if MapVisuals._lane_mask(wx, wz) > 0.05 else 0.025)
+	# 只把"压在分路上"的那几段抬到路面高度（外扩一格），草地部分仍落到地面，免得斜裙悬空
+	var out_ys: Array = []
+	for i in raw.size():
+		var v: float = float(raw[i])
+		v = maxf(v, float(raw[clampi(i - 1, 0, raw.size() - 1)]))
+		v = maxf(v, float(raw[clampi(i + 1, 0, raw.size() - 1)]))
+		out_ys.append(v)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in steps:
+		var a0 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
+		var a1 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i + 1) / float(steps))
+		var y0: float = float(out_ys[i])
+		var y1: float = float(out_ys[i + 1])
+		# 内沿必须与高地砖面齐平(砖顶 0.175)：原来 0.198 会让石裙内沿比砖面高 2.3cm，
+		# 低机位能看到砖面与石裙之间那条缝，故压到 0.176 与砖面贴合
+		var in0 := center + Vector3(cos(a0) * 34.5, 0.176, sin(a0) * 34.5)
+		var in1 := center + Vector3(cos(a1) * 34.5, 0.176, sin(a1) * 34.5)
+		var out0 := center + Vector3(cos(a0) * 36.4, y0, sin(a0) * 36.4)
+		var out1 := center + Vector3(cos(a1) * 36.4, y1, sin(a1) * 36.4)
+		st.add_vertex(in0); st.add_vertex(in1); st.add_vertex(out0)
+		st.add_vertex(in1); st.add_vertex(out1); st.add_vertex(out0)
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.name = "HighGroundRim"
+	mi.mesh = st.commit()
+	mi.material_override = _double_sided_rock()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(mi)
+
+
+func _double_sided_rock() -> ShaderMaterial:
+	var base := DecorMesh.rock_material()
+	var sh := (base.shader as Shader).duplicate() as Shader
+	sh.code = sh.code.replace(
+		"render_mode diffuse_burley, specular_schlick_ggx;",
+		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	return mat
+
+
 func _create_fan_plane(center: Vector3, radius: float, start_angle: float, end_angle: float, color: Color,
 		brick_center: Vector3 = Vector3.ZERO) -> Node3D:
 	var csg = CSGPolygon3D.new()
@@ -757,7 +1091,11 @@ func _create_fan_plane(center: Vector3, radius: float, start_angle: float, end_a
 	csg.depth = 0.05
 	csg.position = center + Vector3(0, -0.025, 0)
 	csg.rotation_degrees = Vector3(90, 0, 0)
-	csg.material_override = MapVisuals.high_ground_material()
+	# 高地青砖：整体是以水晶为圆心的同心圆环（无水晶圆心时退回旧材质）
+	if brick_center != Vector3.ZERO:
+		csg.material_override = DecorMesh.hq_ring_brick_material(brick_center)
+	else:
+		csg.material_override = MapVisuals.high_ground_material()
 	return csg
 
 # 泉水视觉：石砌池沿 + 波纹水面 + 中央喷泉柱 + 溅水粒子 + 旋转符文环 + 顶光（纯程序化）
@@ -971,17 +1309,21 @@ void fragment() {
 	return mat
 
 const LingbaoScript = preload("res://scripts/entities/Lingbao.gd")
+const ReplayScript = preload("res://scripts/core/ReplayRecorder.gd")   # 对局录像（P1）
 
 func _create_player_hero(type: String, summoner_id: String = "flash"):
 	var config = hero_configs[type].duplicate()
 	config["team"] = Config.player_team
 	hero = Hero.new()
 	hero.setup(config)
+	hero.player_name = NameStore.player_name()
 	hero.position = Vector3(-60, 0, 60) if Config.player_team == Config.Team.PLAYER else Vector3(60, 0, -60)
 	hero.setup_skills_from_database(config.get("skills", []), summoner_id)
 	hero.gold = 500
 	add_child(hero)
 	TouchController.set_hero(hero)
+	LingbaoScript.ensure(self)
+	ReplayScript.ensure(self)
 
 func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_heroes: Array = []):
 	# 只有apply_skills实现的英雄
@@ -1034,6 +1376,11 @@ func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_he
 		var ai_hero = Hero.new()
 		ai_hero.setup(config)
 		ai_hero.is_ai = true
+		if _match_ai_names.is_empty():
+			_match_ai_names = sel_ai_names.duplicate() if not sel_ai_names.is_empty() else NameStore.random_ai_names(10, [NameStore.player_name()])
+			_ai_name_cursor = 0
+		ai_hero.player_name = str(_match_ai_names[_ai_name_cursor % _match_ai_names.size()])
+		_ai_name_cursor += 1
 		ai_hero.gold = 500
 		if team == Config.Team.PLAYER:
 			ai_hero.position = Vector3(-60 + randf_range(-0.4,0.4), 0, 60 + randf_range(-0.4,0.4))
@@ -1190,6 +1537,7 @@ func _create_turrets():
 		t.position = data["pos"]
 		add_child(t)
 		turrets.append(t)
+		_add_turret_ring_pave(data["pos"], str(data["type"]), Config.Team.PLAYER)
 
 	# 敌方防御塔（镜像位置 + 类型反转）
 	# 敌方对抗路：对应玩家发育路
@@ -1218,6 +1566,22 @@ func _create_turrets():
 		t.position = data["pos"]
 		add_child(t)
 		turrets.append(t)
+		_add_turret_ring_pave(data["pos"], str(data["type"]), Config.Team.ENEMY)
+
+# 防御塔底座的圆环状青砖：独立挂在 BattleManager 下（不随塔销毁而消失），
+# 以塔心为圆心的同心环砖，中间留洞给塔基；塔被摧毁后这圈砖仍然留在原地。
+func _add_turret_ring_pave(pos: Vector3, tier: String, team: int) -> void:
+	var outer: float = 5.8 if tier == "crystal" else 4.7
+	# 内圈留洞只到塔基中心（塔基台半径约 2.1），塔倒后残柱(半径≈1.2)也能盖住洞口
+	var inner: float = 1.45 if tier == "crystal" else 1.15
+	var hq_center := Vector3(-60, 0, 60) if team == Config.Team.PLAYER else Vector3(60, 0, -60)
+	var on_high_ground: bool = Vector2(pos.x - hq_center.x, pos.z - hq_center.z).length() < 35.0
+	# 顶面：高地砖面 0.177 / 分路路面之上 0.152，都只抬高 1~2mm，避免像旧圆盘那样浮起来露缝
+	var top_y: float = 0.177 if on_high_ground else 0.152
+	var pave := DecorMesh.turret_ring_pave(pos, inner, outer, top_y)
+	pave.name = "TurretRingPave_%d_%d" % [int(round(pos.x)), int(round(pos.z))]
+	pave.add_to_group("turret_paves")
+	add_child(pave)
 
 # 在 BattleManager.gd 中批量生成一组相同类型的野怪
 # delay>0：开局只登记营地中心（弧形墙/导航用），野怪实体延后到 game_time>=delay 才物化（出生）
@@ -1303,22 +1667,9 @@ func _materialize_jungle_group(type: String, config: Dictionary, center: Vector3
 		if type == "spatial_spirit":
 			monster.respawn_time = 60.0   # 空间之灵：刷新间隔只有60秒
 		add_child(monster)
-		# 固定活动范围环
-		var ring = MeshInstance3D.new()
-		var torus = TorusMesh.new()
-		var radius = 4.0
-		torus.inner_radius = radius - 0.1
-		torus.outer_radius = radius + 0.1
-		ring.mesh = torus
-		ring.rotation_degrees = Vector3(0,0,0)
-		ring.position = center + Vector3(0, 0.02, 0)
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color.YELLOW
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.albedo_color.a = 0.25
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		ring.material_override = mat
-		add_child(ring)
+		# 活动范围环：与史诗怪同一套（默认隐藏，只有玩家正在攻击它时显示，出圈变红）。
+		# 旧逻辑在这里挂了一个常亮黄色 Torus，导致"全场野怪一直有黄圈"，已删除。
+		_add_activity_ring(monster, maxf(monster.activity_radius, 4.0))
 		jungle_monsters.append(monster)
 		# 野怪不需要提供视野（或可提供较小视野），此处省略
 func _create_jungle():
@@ -1343,7 +1694,7 @@ func _create_jungle():
 	_spawn_jungle_group("monkey", {"max_health": 2800, "attack": 120, "armor": 180}, Vector3(-16,0,38), 1)
 
 	# 河道之灵（边路）
-	_spawn_jungle_group("spatial_spirit", {"max_health": 2500, "attack": 0, "armor": 100, "magic_resist": 100}, Vector3(-58,0,-58), 1, SPATIAL_FIRST_SPAWN)
+	_spawn_jungle_group("spatial_spirit", {"max_health": 2500, "attack": 120, "armor": 100, "magic_resist": 100}, Vector3(-58,0,-58), 1, SPATIAL_FIRST_SPAWN)
 
 	# 山豪（三猪）
 
@@ -1360,7 +1711,7 @@ func _create_jungle():
 	_spawn_jungle_group("monkey", {"max_health": 2800, "attack": 120, "armor": 180}, Vector3(--16,0,-38), 1)
 
 	# 河道之灵（边路）
-	_spawn_jungle_group("river_spirit", {"max_health": 2500, "attack": 0, "armor": 100, "magic_resist": 100}, Vector3(--58,0,--58), 1)
+	_spawn_jungle_group("river_spirit", {"max_health": 2500, "attack": 120, "armor": 100, "magic_resist": 100}, Vector3(--58,0,--58), 1)
 # 主宰/暴君龙坑中心（开局即生成围墙；阶段进化风暴龙王随机选坑）
 var epic_pit_centers: Array = [Vector3(24, 0, 26), Vector3(-24, 0, -26)]
 var tyrant_timer: float = 0.0
@@ -1388,6 +1739,24 @@ var evolution_decided: bool = false
 var dragon_minion_type: String = "dragon"
 var dragon_minion_budget: int = 9
 var dragon_minion_boost: bool = false
+var vanguard_ever: bool = false   # 是否已有队伍击败过主宰/风暴龙（用于对局面板显示）
+
+## 先锋波数名称（主宰先锋/暗影先锋/风暴先锋）
+func vanguard_wave_name() -> String:
+	if dragon_minion_type == "storm":
+		return "风暴先锋"
+	if dragon_minion_type == "shadow":
+		return "暗影先锋"
+	return "主宰先锋"
+
+## 该队剩余未出动的先锋波数（budget 按"路次"计，一波 = 3 路）
+func vanguard_waves_left(team: int) -> int:
+	if dominant_buff_team != team:
+		return 0
+	var left := dragon_minion_budget - dragon_count
+	if left <= 0:
+		return 0
+	return int(ceil(float(left) / 3.0))
 
 
 func _get_epic_phase() -> int:
@@ -1535,20 +1904,17 @@ func _spawn_epic(display_name: String, phase: int, pos: Vector3):
 
 
 # 固定活动范围环（挂在怪物子节点，随怪物销毁）
+# 默认隐藏：只有玩家英雄正在攻击该野怪时，JungleMonster 才会把它显出来
+# 位置固定回营地圆心（不随怪移动）；怪在圈内=白色，走出圈外=红色（见 JungleMonster._update_activity_ring）
 func _add_activity_ring(monster: JungleMonster, radius: float):
-	var ring := MeshInstance3D.new()
-	var torus := TorusMesh.new()
-	torus.inner_radius = radius - 0.1
-	torus.outer_radius = radius + 0.1
-	ring.mesh = torus
-	ring.position = Vector3(0, 0.02, 0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color.YELLOW
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color.a = 0.25
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring.material_override = mat
+	# 贴地活动范围圈：与地面起伏贴合、柔化边缘 + 磨损斑驳（原来是一条纯色 Torus）
+	var ring := MeshFactory.create_ground_ring(radius, Color(1.0, 1.0, 1.0, 0.42), 0.0)
+	ring.name = "ActivityRing"
+	ring.top_level = true   # 世界坐标固定：不跟随怪物移动/转向，圆心固定在营地
+	ring.visible = false
 	monster.add_child(ring)
+	monster.activity_ring = ring
+	monster.activity_ring_radius = radius
 
 
 # 风暴龙王：20:00 降临随机龙坑
@@ -1583,7 +1949,13 @@ func on_epic_died(monster: JungleMonster, killer: Hero):
 	if killer:
 		var r: Array = rewards.get(mname, [0, 0])
 		_grant_team_reward(killer.team, r[0], r[1])
-		ui.show_kill_feed(killer.display_name, killer.team, "已击败", name_cn[mname])
+		# 击败主宰/暴君助攻：龙坑 12m 内同队英雄（只列英雄，不列小兵）
+		var e_assists: Array = []
+		for e in get_tree().get_nodes_in_group("heroes"):
+			if e is Hero and e != killer and e.team == killer.team and e.health > 0.0 \
+					and e.global_position.distance_to(monster.global_position) < 12.0:
+				e_assists.append({"name": e.display_name, "team": e.team})
+		ui.show_kill_feed(killer.display_name, killer.team, "已击败", name_cn[mname], Config.Team.NEUTRAL, e_assists)
 		match mname:
 			"tyrant", "shadow_tyrant":
 				# 击杀暴君 → 羁绊：对主宰伤害降低
@@ -1603,6 +1975,7 @@ func on_epic_died(monster: JungleMonster, killer: Hero):
 					dragon_minion_type = "dragon"
 					dragon_minion_budget = 6   # 先知主宰：2波×3路
 					dragon_minion_boost = dragon_evolution_part >= 0 and dragon_evolution_part <= 2
+					vanguard_ever = true
 				else:
 					dragon_minion_type = "shadow"
 					dragon_minion_budget = 9   # 暗影主宰：3波×3路
@@ -1612,6 +1985,7 @@ func on_epic_died(monster: JungleMonster, killer: Hero):
 				dominant_buff_team = killer.team
 				dragon_count = 0
 				dragon_minion_type = "storm"
+				vanguard_ever = true
 				dragon_minion_budget = 9
 				dragon_minion_boost = false
 				_apply_storm_buff(killer.team)
@@ -2014,7 +2388,8 @@ func distribute_gold(source:GameEntity, killer: GameEntity):
 		if NetSession.is_assigned(hero):
 			NetSession.push_net_gold(hero.global_position, lane_gold, hero == killer)
 		if bm.ui and hero == bm.hero:
-			bm.ui.show_gold_popup(hero.global_position, lane_gold, hero == killer)
+			bm.ui.show_gold_popup(hero.global_position, lane_gold, hero == killer,
+				hero == killer and source is Minion)
 func _get_nearby_heroes(center: Vector3, radius: float,team) -> Array:
 	var result = []
 	for entity in get_tree().get_nodes_in_group("heroes"):
@@ -2088,87 +2463,61 @@ var dominant_buff_team: int = -1
 
 func _generate_lane_edge_walls():
 	var step = 2.0
-	# 发育路 蓝方: x=-63 (外缘, 朝内+X), x=-47 (内缘, 朝外-X)
+	# ---- 地图最外圈边缘墙：保持外周城墙样式（2m 段、端面平齐）----
 	var z = -37.0
 	while z <= 37.0:
-		var t = z + 40.0
-		var in_gap = (t >= 22.0 and t <= 31.0) or (t >= 49.0 and t <= 58.0)
-		# 地图最外周墙(x=-63)整段连续，缺口只留在内缘作野区入口
 		_add_wall(Vector3(-63, 0, z), Vector3(1, 0, 0), false, false, true)
-		if not in_gap:
-			_add_wall(Vector3(-47, 0, z), Vector3(-1, 0, 0))
-		z += step
-	# 发育路 红方: x=47 (内缘, 朝外+X), x=63 (外缘, 朝内-X)
-	z = -37.0
-	while z <= 37.0:
-		var t = z + 40.0
-		var in_gap = (t >= 22.0 and t <= 31.0) or (t >= 49.0 and t <= 58.0)
-		# 地图最外周墙(x=63)整段连续
 		_add_wall(Vector3(63, 0, z), Vector3(-1, 0, 0), false, false, true)
-		if not in_gap:
-			_add_wall(Vector3(47, 0, z), Vector3(1, 0, 0))
 		z += step
-	# 对抗路 蓝方: z=47 (内缘, 朝外-Z), z=63 (外缘, 朝内+Z)
 	var x = -37.0
 	while x <= 37.0:
-		var t = x + 40.0
-		var in_gap = (t >= 22.0 and t <= 31.0) or (t >= 49.0 and t <= 58.0)
-		# 地图最外周墙(z=63)整段连续
 		_add_wall(Vector3(x, 0, 63), Vector3(0, 0, 1), false, false, true)
-		if not in_gap:
-			_add_wall(Vector3(x, 0, 47), Vector3(0, 0, -1))
-		x += step
-	# 对抗路 红方: z=-63 (外缘, 朝内+Z), z=-47 (内缘, 朝外-Z)
-	x = -37.0
-	while x <= 37.0:
-		var t = x + 40.0
-		var in_gap = (t >= 22.0 and t <= 31.0) or (t >= 49.0 and t <= 58.0)
-		# 地图最外周墙(z=-63)整段连续
 		_add_wall(Vector3(x, 0, -63), Vector3(0, 0, 1), false, false, true)
-		if not in_gap:
-			_add_wall(Vector3(x, 0, -47), Vector3(0, 0, -1))
 		x += step
-	# 中路 蓝方: 中心(-30,30), 方向(0.707,0,-0.707), 垂直(0.707,0,0.707), 半宽8
-	var fwd_x = 0.707; var fwd_z = -0.707
-	var right_x = 0.707; var right_z = 0.707
-	var mc = Vector3(-30, 0, 30)
-	var t = -36.0
-	while t <= 36.0:
-		var lane_t = t + 40.0
-		var in_gap = (lane_t >= 22.0 and lane_t <= 31.0) or (lane_t >= 49.0 and lane_t <= 58.0)
-		if not in_gap:
-			# 左侧墙（朝右=朝内）
-			var wx1 = mc.x + (-8) * right_x + t * fwd_x
-			var wz1 = mc.z + (-8) * right_z + t * fwd_z
-			var pos1 = Vector3(wx1, 0, wz1)
-			if pos1.distance_to(Vector3(-60, 0, 60)) >= 38.0:
-				_add_wall(pos1, Vector3(right_x, 0, right_z))
-			# 右侧墙（朝左=朝内）
-			var wx2 = mc.x + 8 * right_x + t * fwd_x
-			var wz2 = mc.z + 8 * right_z + t * fwd_z
-			var pos2 = Vector3(wx2, 0, wz2)
-			if pos2.distance_to(Vector3(-60, 0, 60)) >= 38.0:
-				_add_wall(pos2, Vector3(-right_x, 0, -right_z))
-		t += step
-	# 中路 红方: 中心(30,-30), 方向(-0.707,0,0.707), 垂直(0.707,0,0.707)
-	fwd_x = -0.707; fwd_z = 0.707
-	mc = Vector3(30, 0, -30)
-	t = -36.0
-	while t <= 36.0:
-		var lane_t = t + 40.0
-		var in_gap = (lane_t >= 22.0 and lane_t <= 31.0) or (lane_t >= 49.0 and lane_t <= 58.0)
-		if not in_gap:
-			var wx1 = mc.x + (-8) * right_x + t * fwd_x
-			var wz1 = mc.z + (-8) * right_z + t * fwd_z
-			var pos1 = Vector3(wx1, 0, wz1)
-			if pos1.distance_to(Vector3(60, 0, -60)) >= 38.0:
-				_add_wall(pos1, Vector3(right_x, 0, right_z))
-			var wx2 = mc.x + 8 * right_x + t * fwd_x
-			var wz2 = mc.z + 8 * right_z + t * fwd_z
-			var pos2 = Vector3(wx2, 0, wz2)
-			if pos2.distance_to(Vector3(60, 0, -60)) >= 38.0:
-				_add_wall(pos2, Vector3(-right_x, 0, -right_z))
-		t += step
+	# ---- 分路内缘墙（非外周）：与野区墙同一标准，实段=连续墙链 + 两端小柱 ----
+	_lane_inner_wall(-47.0, "z")
+	_lane_inner_wall(47.0, "z")
+	_lane_inner_wall(47.0, "x")
+	_lane_inner_wall(-47.0, "x")
+	# ---- 中路两侧墙：同样按连续墙链重建（三路入口处断开）----
+	_mid_lane_inner_walls(Vector3(-30, 0, 30), 0.707, -0.707, Vector3(-60, 0, 60))
+	_mid_lane_inner_walls(Vector3(30, 0, -30), -0.707, 0.707, Vector3(60, 0, -60))
+
+## 分路内缘：沿轴每 2m 采样，野区入口缺口处断开，实段连成连续墙链（两端小柱）
+func _lane_inner_wall(fixed: float, axis: String) -> void:
+	var step := 2.0
+	var run: Array = []
+	var v := -37.0
+	while v <= 37.0:
+		var t := v + 40.0
+		var in_gap := (t >= 22.0 and t <= 31.0) or (t >= 49.0 and t <= 58.0)
+		if in_gap:
+			_flush_wall_run(run); run = []
+		else:
+			run.append(Vector3(fixed, 0.0, v) if axis == "z" else Vector3(v, 0.0, fixed))
+		v += step
+	_flush_wall_run(run)
+
+## 中路两侧墙：沿路方向每 2m 采样，入口缺口/高地内侧断开，实段连成连续墙链
+func _mid_lane_inner_walls(center: Vector3, fwd_x: float, fwd_z: float, base: Vector3) -> void:
+	var right_x := 0.707
+	var right_z := 0.707
+	var step := 2.0
+	for side in [-1.0, 1.0]:
+		var run: Array = []
+		var t := -36.0
+		while t <= 36.0:
+			var lane_t := t + 40.0
+			var in_gap := (lane_t >= 22.0 and lane_t <= 31.0) or (lane_t >= 49.0 and lane_t <= 58.0)
+			var pos := Vector3(center.x + side * 8.0 * right_x + t * fwd_x, 0.0,
+				center.z + side * 8.0 * right_z + t * fwd_z)
+			if in_gap or pos.distance_to(base) < 38.0:
+				_flush_wall_run(run); run = []
+			else:
+				run.append(pos)
+			t += step
+		_flush_wall_run(run)
+
 # 地图外周城墙：沿 |x|=63 / |z|=63 整圈围合（已有分路外墙的中段不重复放），
 # 野区两个外角圆弧倒角；泉水半径内让开，避免城墙插进喷泉池
 
@@ -2223,30 +2572,29 @@ func _add_outer_wall(pos: Vector3, facing: Vector3, len: float = 2.0, outer_styl
 	_add_wall(pos, facing, true, false, outer_style, len)
 
 func _generate_high_ground_walls():
-	# 蓝方高地扇形弧线: center(-60,60), radius 35, angles -90° to 0°
-	# 三路入口留空: 发育路[-21°,0°], 中路[-58°,-32°], 对抗路[-90°,-69°]
-	var center = Vector3(-60, 0, 60)
-	var angle = -90.0
-	while angle <= 0.0:
-		var in_gap = (angle >= -90.0 and angle <= -69.0) or (angle >= -58.0 and angle <= -32.0) or (angle >= -21.0 and angle <= 0.0)
-		if not in_gap:
-			var a = deg_to_rad(angle)
-			var pos = center + Vector3(cos(a) * 35, 0, sin(a) * 35)
-			var facing = Vector3(cos(a), 0, sin(a))
-			_add_wall(pos, facing, false, true)
-		angle += 3.0
-	# 红方高地扇形弧线: center(60,-60), radius 35, angles 90° to 180°
-	# 三路入口留空: 发育路[159°,180°], 中路[122°,148°], 对抗路[90°,111°]
-	center = Vector3(60, 0, -60)
-	angle = 90.0
-	while angle <= 180.0:
-		var in_gap = (angle >= 90.0 and angle <= 111.0) or (angle >= 122.0 and angle <= 148.0) or (angle >= 159.0 and angle <= 180.0)
-		if not in_gap:
-			var a = deg_to_rad(angle)
-			var pos = center + Vector3(cos(a) * 35, 0, sin(a) * 35)
-			var facing = Vector3(cos(a), 0, sin(a))
-			_add_wall(pos, facing, false, true)
-		angle += 3.0
+	# 高地扇形弧线（非外周）：与野区墙同一标准 —— 连续弧墙链，三路入口处断开，链端加小柱
+	for spec in [
+		{"c": Vector3(-60, 0, 60), "a0": -90.0, "a1": 0.0,
+			"gaps": [[-90.0, -69.0], [-58.0, -32.0], [-21.0, 0.0]]},
+		{"c": Vector3(60, 0, -60), "a0": 90.0, "a1": 180.0,
+			"gaps": [[90.0, 111.0], [122.0, 148.0], [159.0, 180.0]]},
+	]:
+		var c: Vector3 = spec.c
+		var run: Array = []
+		var angle: float = spec.a0
+		while angle <= spec.a1:
+			var in_gap := false
+			for g in spec.gaps:
+				if angle >= float(g[0]) and angle <= float(g[1]):
+					in_gap = true
+					break
+			if in_gap:
+				_flush_wall_run(run); run = []
+			else:
+				var a := deg_to_rad(angle)
+				run.append(c + Vector3(cos(a) * 35.0, 0.0, sin(a) * 35.0))
+			angle += 3.0
+		_flush_wall_run(run)
 
 func _generate_jungle_arc_walls():
 	for camp_center in jungle_camp_positions:
@@ -2255,29 +2603,142 @@ func _generate_jungle_arc_walls():
 	# 史诗龙坑墙（主宰/暴君）：开局即出现，留朝向最近分路的开口，方便英雄进坑/野怪被勾出
 	for pit_center in epic_pit_centers:
 		_add_epic_pit_walls(pit_center)
+	_cap_arc_wall_ends()
 
 # 单个龙坑围墙：半径8.5环绕，仅留 mouth±45° 的开口
 func _add_epic_pit_walls(center: Vector3):
+	# 龙坑墙=开放型：只做背向最近分路的半圈连续矮墙，两端不补柱、不封口
 	var mouth := _get_nearest_lane_direction(center)
 	var radius := 8.5
+	var pts: Array = []
 	var angle := 0.0
 	while angle < 360.0:
 		var rel := fmod(angle - mouth + 360.0, 360.0)
-		# 180° 半圈围墙（背向最近分路的一面），开口 180°，进坑与被勾出都更顺
 		if rel > 90.0 and rel < 270.0:
 			var a := deg_to_rad(angle)
-			var pos := center + Vector3(cos(a) * radius, 0, sin(a) * radius)
-			_add_wall(pos, Vector3(cos(a), 0, sin(a)))
+			pts.append(center + Vector3(cos(a) * radius, 0, sin(a) * radius))
 		angle += 5.0
+	_add_wall_chain(pts, false, true)
 
+## 连续墙链：把一串采样点连成端面平齐的连续墙（非外周墙统一标准）。
+## pillar=true → 链首尾各补一根小柱；open_ends=true → 故意敞开（龙坑口），不补柱也不参与自动收口。
+## 相邻采样点距离 >6m 视为断口，自动拆成多条链。
+func _add_wall_chain(pts: Array, pillar: bool = true, open_ends: bool = false) -> void:
+	if pts.size() < 2:
+		if pts.size() == 1:
+			_add_wall(pts[0], Vector3.ZERO, false, false, false, 2.0, 0.0, false, open_ends)
+		return
+	var chain: Array = [pts[0]]
+	for i in range(1, pts.size()):
+		var prev: Vector3 = chain[chain.size() - 1]
+		if prev.distance_to(pts[i]) > 6.0:
+			_emit_wall_chain(chain, pillar, open_ends)
+			chain = [pts[i]]
+		else:
+			chain.append(pts[i])
+	_emit_wall_chain(chain, pillar, open_ends)
+
+## 墙体厚度差异化：按位置哈希分三档（1.0 / 1.2 / 1.4），用 abs 保证镜像对称
+func _wall_thickness_for(p: Vector3) -> float:
+	var h := int(round(absf(p.x) * 13.0 + absf(p.z) * 7.0))
+	return 1.0 + 0.2 * float(h % 3)
+
+func _emit_wall_chain(pts: Array, pillar: bool, open_ends: bool) -> void:
+	if pts.size() < 2:
+		return
+	# 整段墙共用一个厚度：按起点位置哈希取 1.0/1.2/1.4，镜像对称且不同墙段厚薄不一
+	var thick := _wall_thickness_for(pts[0])
+	# 记录“实际落位”的连续段：被过滤掉的段会断开链，端柱只补在真实端头，避免悬空柱子
+	var run_start := Vector3.ZERO
+	var run_end := Vector3.ZERO
+	var in_run := false
+	for i in range(pts.size() - 1):
+		var p0: Vector3 = pts[i]
+		var p1: Vector3 = pts[i + 1]
+		var delta := p1 - p0
+		var seg := delta.length()
+		if seg < 0.05:
+			continue
+		var mid := (p0 + p1) * 0.5
+		var tangent := delta / seg
+		# 墙面法线：切线绕 Y 轴转 90°（墙长沿局部 X、局部 +Z 为正面朝向）
+		var normal := Vector3(tangent.z, 0.0, -tangent.x)
+		var placed := _add_wall(mid, normal.normalized(), false, false, false, 2.0, seg + 0.12, false, open_ends, thick)
+		if placed:
+			if not in_run:
+				in_run = true
+				run_start = p0
+			run_end = p1
+		elif in_run:
+			if pillar and not open_ends:
+				_add_wall(run_start, Vector3.ZERO, true, false, false, 2.0, 0.0, true)
+				_add_wall(run_end, Vector3.ZERO, true, false, false, 2.0, 0.0, true)
+			in_run = false
+	if in_run and pillar and not open_ends:
+		_add_wall(run_start, Vector3.ZERO, true, false, false, 2.0, 0.0, true)
+		_add_wall(run_end, Vector3.ZERO, true, false, false, 2.0, 0.0, true)
+
+## 采样段落位：≥2 点走连续墙链（两端小柱），单点退回旧式单块墙
+func _flush_wall_run(run: Array) -> void:
+	if run.size() >= 2:
+		_add_wall_chain(run, true, false)
+	elif run.size() == 1:
+		_add_wall(run[0], Vector3.ZERO)
+
+## 连续墙收口：没有相邻墙段接合的“开放端头”各补一根小柱（open_end 墙跳过）
+func _cap_arc_wall_ends() -> void:
+	var segs: Array = []
+	for w in get_tree().get_nodes_in_group("walls"):
+		if w is Wall and absf(w.continuous_len) > 0.01 and not w.open_end and not w.pillar:
+			segs.append(w)
+	if segs.is_empty():
+		return
+	var pillar_pts: Array = []
+	for w in get_tree().get_nodes_in_group("walls"):
+		if w is Wall and w.pillar:
+			pillar_pts.append(w.position)
+	var ends: Array = []
+	for w in segs:
+		var th: float = w.rotation.y
+		var half: float = absf(w.continuous_len) * 0.5
+		var dir := Vector3(cos(th), 0.0, -sin(th))
+		ends.append(w.position - dir * half)
+		ends.append(w.position + dir * half)
+	var added: Array = []
+	for i in range(ends.size()):
+		var e: Vector3 = ends[i]
+		var joined := false
+		for j in range(ends.size()):
+			if j == i:
+				continue
+			if e.distance_to(ends[j]) < 0.50:
+				joined = true
+				break
+		if not joined:
+			for pp in pillar_pts:
+				if e.distance_to(pp) < 0.45:
+					joined = true
+					break
+		if joined:
+			continue
+		var too_close := false
+		for pp in added:
+			if e.distance_to(pp) < 0.70:
+				too_close = true
+				break
+		if too_close:
+			continue
+		added.append(e)
+		_add_wall(e, Vector3.ZERO, true, false, false, 2.0, 0.0, true)
+
+## 野区弧墙：采样点连成一段段连续墙（端面平齐、无缝），两端各一根小柱。
 func _add_arc_walls(center: Vector3, facing_angle: float, arc_span: float, radius: float, count: int):
-	if count <= 1: return
+	if count < 2: return
+	var pts: Array = []
 	for i in range(count):
 		var a = deg_to_rad(facing_angle - arc_span / 2.0 + arc_span * i / (count - 1))
-		var pos = center + Vector3(cos(a) * radius, 0, sin(a) * radius)
-		# 墙体朝向：从营地中心向外
-		var out_dir = Vector3(cos(a), 0, sin(a))
-		_add_wall(pos, out_dir)
+		pts.append(center + Vector3(cos(a) * radius, 0, sin(a) * radius))
+	_add_wall_chain(pts, true, false)
 
 func _get_nearest_lane_direction(pos: Vector3) -> float:
 	var lane_centers = [
@@ -2301,21 +2762,27 @@ func _get_teleport_zone_for_hero(hero: Hero):
 			return zone
 	return null
 
-func _add_wall(pos: Vector3, facing: Vector3 = Vector3.ZERO, force: bool = false, hq: bool = false, outer: bool = false, outer_len: float = 2.0):
+func _add_wall(pos: Vector3, facing: Vector3 = Vector3.ZERO, force: bool = false, hq: bool = false, outer: bool = false, outer_len: float = 2.0,
+		continuous_len: float = 0.0, pillar: bool = false, open_end: bool = false, thick: float = 1.0) -> bool:
 	if not force and _is_inside_high_ground(pos):
-		return
-	# 跳过距离草丛<1m的墙体
+		return false
+	# 跳过距离草丛<1m的墙体（force=true 时强制落位：弧墙端柱不被草丛吃掉）
 	for bp in _bush_positions:
-		if pos.distance_to(bp) < 1.0:
-			return
+		if not force and pos.distance_to(bp) < 1.0:
+			return false
 	var wall = Wall.new()
 	wall.hq = hq
 	wall.outer = outer
 	wall.outer_len = outer_len
+	wall.continuous_len = continuous_len
+	wall.pillar = pillar
+	wall.open_end = open_end
+	wall.thick = thick
 	wall.position = pos
 	if facing != Vector3.ZERO:
 		wall.rotation.y = atan2(facing.x, facing.z)
 	add_child(wall)
+	return true
 
 func _is_inside_high_ground(pos: Vector3) -> bool:
 	# 仅过滤高地内部（半径33以内），保留半径35处的弧线墙体；
@@ -2593,6 +3060,11 @@ const SEL_DRAFT_TURN_TIME := 20.0
 # 10 步选人顺序：[队伍(0=我方,1=敌方), 队伍内号位(0-based)]
 const SEL_DRAFT_ORDER := [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2], [1, 2], [1, 3], [0, 3], [0, 4], [1, 4]]
 var sel_player_seat: int = 0
+var sel_ai_names: Array = []            # 本局 9 个 AI 的随机昵称（选人席位 ↔ 对局内同名）
+var sel_name_edit: LineEdit = null      # 昵称输入框
+var sel_player_name_label: Label = null # 玩家席位昵称（输入时实时刷新）
+var _match_ai_names: Array = []         # 本局实际分配的 AI 昵称序列
+var _ai_name_cursor: int = 0
 var sel_draft_active: bool = false
 var sel_draft_done: bool = false
 var sel_draft_step: int = 0
@@ -2640,6 +3112,7 @@ var loading_screen: LoadingScreen = null
 var _loading_shown := false
 # 召唤师卡悬停浮层
 var sel_hover_panel: PanelContainer = null
+var sel_build_hover: PanelContainer = null   # 出装卡悬浮详情（选人界面）
 # 塔被摧毁后原地的永久塔墩（key = 塔位坐标）
 var _tower_stumps: Dictionary = {}
 # —— 选人两阶段：true=未选英雄（中央英雄面板）/ false=已选英雄（3D 立绘 + 底部召唤·出装） ——
@@ -2785,20 +3258,20 @@ func _refresh_sel_preview(hero_name: String) -> void:
 			var row := HBoxContainer.new()
 			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_theme_constant_override("separation", 7)
-			var glyph := SelectArt.SkillGlyph.new(hero_name, sk, i, 38)
+			var glyph := SelectArt.SkillGlyph.new(hero_name, sk, i, 62)
 			glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_child(glyph)
 			var info := VBoxContainer.new()
 			info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			info.add_theme_constant_override("separation", 0)
-			var name_lbl := _sel_label("%d  %s" % [i + 1, str(sk.skill_name) if sk != null else str(skills[i])], _sel_fs(UiKit.FS_MD), SEL_TEXT, false)
+			var name_lbl := _sel_label("%d  %s" % [i + 1, str(sk.skill_name) if sk != null else str(skills[i])], _sel_fs(UiKit.FS_SM), SEL_TEXT, false)
 			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			info.add_child(name_lbl)
 			var meta := _sel_skill_type(int(sk.type) if sk != null else 0)
 			if sk != null:
 				meta += " · 冷却 %ds" % int(round(sk.cooldown))
 				if sk.mana_cost > 0: meta += " · 法力 %d" % sk.mana_cost
-			var meta_lbl := _sel_label(meta, _sel_fs(UiKit.FS_XS), SEL_DIM, false)
+			var meta_lbl := _sel_label(meta, int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)), SEL_DIM, false)
 			meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			info.add_child(meta_lbl)
 			row.add_child(info)
@@ -2823,6 +3296,11 @@ func _show_hero_select_ui():
 	sel_player_seat = randi() % 5
 	sel_ally_picks = ["", "", "", "", ""]
 	sel_enemy_picks = ["", "", "", "", ""]
+	# 昵称：玩家从缓存读（空则必须先取名才能开始），AI 每局随机 9 个不重名
+	var cached_name := NameStore.player_name()
+	sel_ai_names = NameStore.random_ai_names(9, [cached_name])
+	_match_ai_names = []
+	_ai_name_cursor = 0
 	sel_taken = {}
 	sel_ally_hero_labels = [null, null, null, null, null]
 	sel_ally_summ_labels = [null, null, null, null, null]
@@ -2935,7 +3413,7 @@ func _show_hero_select_ui():
 	page.add_child(mid)
 	var our_seats := VBoxContainer.new()
 	our_seats.name = "SelectOurSeats"
-	our_seats.custom_minimum_size = Vector2(176, 0)
+	our_seats.custom_minimum_size = Vector2(218, 0)
 	our_seats.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	our_seats.add_theme_constant_override("separation", 8)
 	mid.add_child(our_seats)
@@ -2977,7 +3455,7 @@ func _show_hero_select_ui():
 	ov_v.size_flags_vertical = Control.SIZE_SHRINK_END
 	ov_v.add_theme_constant_override("separation", 10)
 	overlay.add_child(ov_v)
-	sel_prev_name = _sel_label("—", int(round(UiKit.FS_HUGE * 1.5 * UiKit.scale())), SEL_GOLD, false)
+	sel_prev_name = _sel_label("—", int(round(UiKit.FS_HUGE * 1.12 * UiKit.scale())), SEL_GOLD, false)
 	sel_prev_name.name = "SelectPreviewName"
 	sel_prev_name.add_theme_constant_override("outline_size", 8)
 	sel_prev_name.add_theme_color_override("font_outline_color", Color(0.10, 0.07, 0.02, 0.9))
@@ -2987,16 +3465,16 @@ func _show_hero_select_ui():
 	ov_v.add_child(chip_row)
 	sel_prev_role_chip = PanelContainer.new()
 	sel_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.95, 12))
-	sel_prev_role_label = _sel_label("定位 · —", _sel_fs(UiKit.FS_MD), UiKit.C_TEAM0, false)
+	sel_prev_role_label = _sel_label("定位 · —", _sel_fs(UiKit.FS_SM), UiKit.C_TEAM0, false)
 	sel_prev_role_chip.add_child(sel_prev_role_label)
 	chip_row.add_child(sel_prev_role_chip)
 	sel_prev_info_chip = PanelContainer.new()
 	sel_prev_info_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_GOLD, 0.9, 12))
 	var info_row := HBoxContainer.new()
 	info_row.add_theme_constant_override("separation", 6)
-	sel_prev_summ_icon = SelectArt.SummonerGlyph.new("", 30)
+	sel_prev_summ_icon = SelectArt.SummonerGlyph.new("", 48)
 	info_row.add_child(sel_prev_summ_icon)
-	sel_prev_info_label = _sel_label("推荐召唤师 · —", _sel_fs(UiKit.FS_MD), UiKit.C_GOLD, false)
+	sel_prev_info_label = _sel_label("推荐召唤师 · —", _sel_fs(UiKit.FS_SM), UiKit.C_GOLD, false)
 	info_row.add_child(sel_prev_info_label)
 	sel_prev_info_chip.add_child(info_row)
 	chip_row.add_child(sel_prev_info_chip)
@@ -3026,7 +3504,7 @@ func _show_hero_select_ui():
 	center.add_child(sel_tip_label)
 	var foe_seats := VBoxContainer.new()
 	foe_seats.name = "SelectFoeSeats"
-	foe_seats.custom_minimum_size = Vector2(176, 0)
+	foe_seats.custom_minimum_size = Vector2(218, 0)
 	foe_seats.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	foe_seats.add_theme_constant_override("separation", 8)
 	mid.add_child(foe_seats)
@@ -3100,10 +3578,10 @@ func _show_hero_select_ui():
 	sel_hero_strip.add_theme_constant_override("separation", 8)
 	strip_scroll.add_child(sel_hero_strip)
 	root.add_child(sel_pick_layer)
-	# 右 520：召唤 / 出装 双 tab + 内容区 + 返回/确定
+	# 右 760：召唤 / 出装 双 tab + 内容区 + 返回/确定（出装卡要放得下图标+名称+价格）
 	var right := VBoxContainer.new()
 	right.name = "SelectRight"
-	right.custom_minimum_size = Vector2(520, 0)
+	right.custom_minimum_size = Vector2(860, 0)
 	right.add_theme_constant_override("separation", 6)
 	bottom.add_child(right)
 	var sp_l := Control.new()
@@ -3119,14 +3597,15 @@ func _show_hero_select_ui():
 	right_tabs.add_theme_constant_override("separation", 8)
 	right.add_child(right_tabs)
 	sel_right_tabs = right_tabs
-	sel_summ_tab_btn = _sel_btn("召唤", UiKit.C_GOLD, true, Vector2(252, 40))
+	sel_summ_tab_btn = _sel_btn("召唤", UiKit.C_GOLD, true, Vector2(200, 40))
 	sel_summ_tab_btn.name = "SelectSummTab"
+	sel_summ_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sel_summ_tab_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	sel_summ_tab_btn.pressed.connect(_on_right_tab_pressed.bind("召唤"))
 	right_tabs.add_child(sel_summ_tab_btn)
-	sel_build_tab_btn = _sel_btn("出装", UiKit.C_PANEL_EDGE, false, Vector2(260, 40))
+	sel_build_tab_btn = _sel_btn("出装", UiKit.C_PANEL_EDGE, false, Vector2(200, 40))
 	sel_build_tab_btn.name = "SelectBuildTab"
-	sel_build_tab_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	sel_build_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sel_build_tab_btn.pressed.connect(_on_right_tab_pressed.bind("出装"))
 	right_tabs.add_child(sel_build_tab_btn)
 	_style_right_tab(sel_summ_tab_btn, true)
@@ -3216,7 +3695,29 @@ func _show_hero_select_ui():
 	side_left.add_child(sel_back_btn)
 	leave.custom_minimum_size = Vector2(190, 86)
 	side_left.add_child(leave)
-	select_confirm_btn = _sel_btn("✔  开始游戏", UiKit.C_GOLD, true, Vector2(190, 100))
+	# 昵称输入：必填，输入即写缓存；未取名时确定/开始按钮不可用
+	var name_box := VBoxContainer.new()
+	name_box.name = "SelectNameBox"
+	name_box.add_theme_constant_override("separation", 4)
+	name_box.add_child(_sel_label("我的昵称（必填）", _sel_fs(UiKit.FS_XS), SEL_DIM, false))
+	var name_edit := LineEdit.new()
+	name_edit.name = "SelectNameEdit"
+	name_edit.max_length = 12
+	name_edit.placeholder_text = "输入昵称后开始游戏"
+	name_edit.text = cached_name
+	name_edit.custom_minimum_size = Vector2(190, 56)
+	name_edit.add_theme_font_override("font", UiKit.font())
+	name_edit.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	name_edit.add_theme_color_override("font_color", SEL_TEXT)
+	name_edit.add_theme_color_override("font_placeholder_color", SEL_DIM)
+	name_edit.add_theme_color_override("caret_color", SEL_GOLD)
+	name_edit.add_theme_stylebox_override("normal", UiKit.skin_chip(UiKit.C_GOLD, 0.85))
+	name_edit.add_theme_stylebox_override("focus", UiKit.skin_chip(UiKit.C_GOLD, 1.0))
+	name_edit.text_changed.connect(_on_select_name_changed)
+	name_box.add_child(name_edit)
+	side_right.add_child(name_box)
+	sel_name_edit = name_edit
+	select_confirm_btn = _sel_btn("√  开始游戏", UiKit.C_GOLD, true, Vector2(190, 100))
 	select_confirm_btn.name = "SelectConfirm"
 	select_confirm_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	select_confirm_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
@@ -3269,7 +3770,7 @@ func _sel_disc(letter: String, color: Color, disc_size: int) -> Panel:
 func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	var slot := PanelContainer.new()
 	slot.name = ("MiniFoe_%d" % (idx + 1)) if kind == 2 else ("MiniOur_%d" % (idx + 1))
-	slot.custom_minimum_size = Vector2(150, 72)
+	slot.custom_minimum_size = Vector2(136, 84)
 	slot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var sty: StyleBoxFlat
 	if kind == 0:
@@ -3286,7 +3787,7 @@ func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	h.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slot.add_child(h)
 	var accent := UiKit.C_GOLD if kind == 0 else (sel_side_col() if kind == 1 else sel_foe_col())
-	var avatar = SelectArt.Avatar.new("", accent, 34)
+	var avatar = SelectArt.Avatar.new("", accent, 56)
 	h.add_child(avatar)
 	if kind == 2:
 		sel_foe_mini_avatars[idx] = avatar
@@ -3297,8 +3798,8 @@ func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	v.add_theme_constant_override("separation", 0)
 	h.add_child(v)
 	var nm := ("我 · %s" % sel_lane_name) if kind == 0 else ("队友 %d" % (idx + 1) if kind == 1 else "AI %d" % (idx + 1))
-	v.add_child(_sel_label(nm, _sel_fs(UiKit.FS_XS), SEL_DIM, false))
-	var hero := _sel_label("选择中" if kind == 0 else ("待定" if kind == 1 else "未知"), _sel_fs(UiKit.FS_SM), SEL_GOLD if kind == 0 else SEL_SUB, false)
+	v.add_child(_sel_label(nm, int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)), SEL_DIM, false))
+	var hero := _sel_label("选择中" if kind == 0 else ("待定" if kind == 1 else "未知"), _sel_fs(UiKit.FS_XS), SEL_GOLD if kind == 0 else SEL_SUB, false)
 	v.add_child(hero)
 	if kind == 2:
 		sel_foe_mini_hero_labels[idx] = hero
@@ -3309,10 +3810,37 @@ func _create_mini_slot(idx: int, kind: int) -> PanelContainer:
 	return slot
 
 # 中部竖排席位：kind 0=玩家 1=我方AI 2=敌方AI
+## 席位 → AI 昵称：己方 AI 用前 4 个（按非玩家席位顺序），敌方用后 5 个
+func _sel_ai_name(kind: int, idx: int) -> String:
+	if sel_ai_names.is_empty():
+		return "AI"
+	if kind == 2:
+		var fi: int = 4 + idx
+		return str(sel_ai_names[fi]) if fi < sel_ai_names.size() else "AI"
+	var ai_ord: int = idx - (1 if idx > sel_player_seat else 0)
+	var ai_i: int = clampi(ai_ord, 0, 3)
+	return str(sel_ai_names[ai_i]) if ai_i < sel_ai_names.size() else "AI"
+
+## 当前是否已有昵称（输入框实时文本优先，其次缓存）
+func _has_player_name() -> bool:
+	if sel_name_edit != null and is_instance_valid(sel_name_edit):
+		return sel_name_edit.text.strip_edges() != ""
+	return NameStore.player_name() != ""
+
+## 昵称输入：写缓存 + 实时刷新自己席位文字 + 刷新按钮可用态
+func _on_select_name_changed(t: String) -> void:
+	var nm := t.strip_edges()
+	if nm != "":
+		NameStore.save_player_name(nm)
+	if sel_player_name_label != null and is_instance_valid(sel_player_name_label):
+		sel_player_name_label.text = "我 · %s" % (nm if nm != "" else "未取名")
+		sel_player_name_label.add_theme_color_override("font_color", SEL_TEXT if nm != "" else Color(1.0, 0.58, 0.45))
+	_update_confirm_button_style()
+
 func _create_team_seat(idx: int, kind: int) -> PanelContainer:
 	var slot := PanelContainer.new()
 	slot.name = ("SeatFoe_%d" % (idx + 1)) if kind == 2 else ("SeatOur_%d" % (idx + 1))
-	slot.custom_minimum_size = Vector2(196, 130)
+	slot.custom_minimum_size = Vector2(214, 138)
 	slot.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var seat_sty: StyleBoxFlat
 	if kind == 0:
@@ -3331,7 +3859,7 @@ func _create_team_seat(idx: int, kind: int) -> PanelContainer:
 	seat_h.add_theme_constant_override("separation", 6)
 	seat_h.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	slot.add_child(seat_h)
-	var avatar = SelectArt.Avatar.new("", accent, 48)
+	var avatar = SelectArt.Avatar.new("", accent, 76)
 	seat_h.add_child(avatar)
 	if kind == 2:
 		sel_foe_avatars[idx] = avatar
@@ -3342,18 +3870,32 @@ func _create_team_seat(idx: int, kind: int) -> PanelContainer:
 	v.add_theme_constant_override("separation", 1)
 	seat_h.add_child(v)
 	var head := HBoxContainer.new()
-	head.add_child(_sel_label("%d 号位" % (idx + 1), _sel_fs(UiKit.FS_XS), SEL_DIM, false))
+	head.add_child(_sel_label("%d 号位" % (idx + 1), int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)), SEL_DIM, false))
 	var gap := Control.new()
 	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(gap)
-	head.add_child(_sel_label("我" if kind == 0 else ("队友" if kind == 1 else "敌方"), _sel_fs(UiKit.FS_XS), accent.lightened(0.3), false))
+	head.add_child(_sel_label("我" if kind == 0 else ("队友" if kind == 1 else "敌方"), int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)), accent.lightened(0.3), false))
 	v.add_child(head)
-	var pname := ("我 · %s" % sel_lane_name) if kind == 0 else ("队友 %d" % (idx + 1) if kind == 1 else "对手 %d" % (idx + 1))
-	v.add_child(_sel_label(pname, _sel_fs(UiKit.FS_XS), SEL_TEXT, false))
-	var hero_lab := _sel_label("选择中" if kind == 0 else ("待选" if kind == 1 else "未知"), _sel_fs(UiKit.FS_SM), SEL_GOLD if kind == 0 else SEL_SUB, false)
+	# 席位显示昵称：自己=缓存昵称；队友/对手=本局随机 AI 名
+	var pname := ""
+	var pname_col := SEL_TEXT
+	if kind == 0:
+		var pn := NameStore.player_name()
+		pname = "我 · %s" % (pn if pn != "" else "未取名")
+		if pn == "":
+			pname_col = Color(1.0, 0.58, 0.45)
+	elif kind == 1:
+		pname = "队友 %d · %s" % [idx + 1, _sel_ai_name(1, idx)]
+	else:
+		pname = "对手 %d · %s" % [idx + 1, _sel_ai_name(2, idx)]
+	var pname_lab := _sel_label(pname, _sel_fs(UiKit.FS_XS), pname_col, false)
+	v.add_child(pname_lab)
+	if kind == 0:
+		sel_player_name_label = pname_lab
+	var hero_lab := _sel_label("选择中" if kind == 0 else ("待选" if kind == 1 else "未知"), _sel_fs(UiKit.FS_XS), SEL_GOLD if kind == 0 else SEL_SUB, false)
 	hero_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(hero_lab)
-	var summ_lab := _sel_label("召唤师 · " + (_sel_summ_name(selected_summoner) if kind == 0 else ("待定" if kind == 1 else "未知")), _sel_fs(UiKit.FS_XS), SEL_DIM, false)
+	var summ_lab := _sel_label("召唤师 · " + (_sel_summ_name(selected_summoner) if kind == 0 else ("待定" if kind == 1 else "未知")), int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)), SEL_DIM, false)
 	v.add_child(summ_lab)
 	if kind == 2:
 		sel_foe_hero_labels[idx] = hero_lab
@@ -3828,7 +4370,7 @@ func _finish_draft() -> void:
 	sel_draft_time = 0.0
 	if sel_stage_title_label: sel_stage_title_label.text = "双方阵容已定"
 	if sel_stage_sub_label: sel_stage_sub_label.text = "进入对局加载…"
-	if sel_stage_ring_label: sel_stage_ring_label.text = "✓"
+	if sel_stage_ring_label: sel_stage_ring_label.text = "√"
 	_update_confirm_button_style()
 	_flash_tip("双方阵容已定")
 	# 直接进入加载界面，加载完成后再真正开局
@@ -4013,17 +4555,48 @@ func _style_right_tab(btn: Button, active: bool) -> void:
 			flat_sb.content_margin_bottom = 0
 			btn.add_theme_stylebox_override(state, flat_sb)
 
-# 切换英雄时载入出装顺序：有自定义用自定义，否则职业默认
-func _load_build_for_hero(hero_name: String) -> void:
+# 切换英雄时载入出装顺序：本局 override > 已保存方案（默认套第一套）> 内置推荐方案1
+func _load_build_for_hero(hero_name: String, prefer_saved: bool = true) -> void:
 	if sel_build_rows == null or not hero_configs.has(hero_name): return
 	sel_build_hero = hero_name
 	var ov: Array = ItemDatabase.get_recommended_override(hero_name)
-	if ov.is_empty():
-		var role := str(hero_configs[hero_name].get("role", "战士"))
-		sel_build_ids = ItemDatabase.get_recommended_items(role).duplicate()
-	else:
+	if not ov.is_empty():
 		sel_build_ids = ov.duplicate()
+	elif prefer_saved and not HeroBuildStore.get_builds(hero_name).is_empty():
+		# 选人页直接沿用玩家保存的第一套方案，不再无条件回落到职业默认
+		sel_build_ids = _clean_build_items(HeroBuildStore.get_builds(hero_name)[0].get("items", []))
+	else:
+		sel_build_ids = _preset_build(hero_name, 0)
 	_rebuild_build_panel()
+
+# 内置推荐方案（每英雄 3 套，直接给玩家选；不足时回落职业方案）
+func _preset_builds(hero_name: String) -> Array:
+	if hero_name == "" or not hero_configs.has(hero_name): return []
+	var vs: Array = ItemDatabase.get_recommended_variants(hero_name)
+	if vs.is_empty():
+		vs = ItemDatabase.get_recommended_variants(str(hero_configs[hero_name].get("role", "战士")))
+	return vs
+
+func _preset_build(hero_name: String, idx: int) -> Array:
+	var vs := _preset_builds(hero_name)
+	if vs.is_empty(): return []
+	return _clean_build_items(vs[clampi(idx, 0, vs.size() - 1)])
+
+# 方案按钮 tooltip：列出 6 件装备名
+func _build_items_tooltip(items: Array) -> String:
+	var names: PackedStringArray = []
+	for id in items:
+		var it: Dictionary = ItemDatabase.get_item(str(id))
+		names.append(str(it.get("name", id)))
+	return " · ".join(names)
+
+func _clean_build_items(src: Array) -> Array:
+	var out: Array = []
+	for it in src:
+		var id := str(it)
+		if id != "" and not out.has(id) and not ItemDatabase.get_item(id).is_empty():
+			out.append(id)
+	return out.slice(0, 6)
 
 func _rebuild_build_panel() -> void:
 	if sel_build_rows == null: return
@@ -4034,33 +4607,44 @@ func _rebuild_build_panel() -> void:
 		sel_build_rows.add_child(_build_row(i, str(sel_build_ids[i])))
 	_rebuild_build_schemes()
 
-# 备战方案按钮行：默认推荐 + 已保存方案；与当前列表完全一致的方案高亮金 filled
+# 备战方案按钮行：内置推荐方案（每英雄 3 套）+ 已保存方案 + 恢复推荐；与当前列表一致的高亮金 filled
 func _rebuild_build_schemes() -> void:
 	if sel_build_scheme_row == null: return
 	for c in sel_build_scheme_row.get_children():
 		sel_build_scheme_row.remove_child(c)
 		c.queue_free()
-	var active := _current_build_scheme_name()
-	var default_btn := _sel_btn("默认推荐", UiKit.C_GOLD, active == "", Vector2(112, 40))
-	default_btn.name = "BuildScheme_default"
-	default_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
-	default_btn.pressed.connect(_on_build_scheme_default)
-	sel_build_scheme_row.add_child(default_btn)
 	if sel_build_hero == "": return
+	var current_scheme := _current_build_scheme_name()
+	var presets := _preset_builds(sel_build_hero)
+	for i in presets.size():
+		var pitems: Array = _clean_build_items(presets[i])
+		var pbtn := _sel_btn("推荐方案%d" % (i + 1), UiKit.C_TEAM0, pitems == sel_build_ids, Vector2(180, 40))
+		pbtn.name = "BuildPreset_%d" % i
+		pbtn.tooltip_text = _build_items_tooltip(pitems)
+		pbtn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+		pbtn.pressed.connect(_on_build_preset_pressed.bind(i))
+		sel_build_scheme_row.add_child(pbtn)
 	var builds: Array = HeroBuildStore.get_builds(sel_build_hero)
 	for i in mini(builds.size(), 6):
 		var bname := str(builds[i].get("name", ""))
-		var btn := _sel_btn(bname, UiKit.C_GOLD, bname == active, Vector2(112, 40))
+		var btn := _sel_btn(bname, UiKit.C_GOLD, bname == current_scheme, Vector2(180, 40))
 		btn.name = "BuildScheme_%d" % i
+		btn.tooltip_text = _build_items_tooltip(_clean_build_items(builds[i].get("items", [])))
 		btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 		btn.pressed.connect(_on_build_scheme_pressed.bind(i))
 		sel_build_scheme_row.add_child(btn)
 	# 恢复推荐（并入方案网格末尾，省掉底部一行）
-	var reset_btn := _sel_btn("恢复推荐", UiKit.C_GOLD, false, Vector2(112, 40))
+	var reset_btn := _sel_btn("恢复推荐", UiKit.C_GOLD, false, Vector2(180, 40))
 	reset_btn.name = "SelectBuildRestore"
+	reset_btn.tooltip_text = "回到内置推荐方案1"
 	reset_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	reset_btn.pressed.connect(_on_build_restore)
 	sel_build_scheme_row.add_child(reset_btn)
+	# 方案行按行数撑高（4 列一行；3 套内置 + 6 套自存 + 恢复 = 最多 3 行），避免被裁掉
+	var rows := int(ceil(float(sel_build_scheme_row.get_child_count()) / 4.0))
+	var sc := sel_build_scheme_row.get_parent()
+	if sc is ScrollContainer:
+		(sc as ScrollContainer).custom_minimum_size = Vector2(0, 6 + rows * 46)
 
 func _current_build_scheme_name() -> String:
 	if sel_build_hero == "": return ""
@@ -4073,80 +4657,92 @@ func _current_build_scheme_name() -> String:
 func _on_build_scheme_default() -> void:
 	if sel_build_hero == "": return
 	ItemDatabase.set_recommended_override(sel_build_hero, [])
-	_load_build_for_hero(sel_build_hero)
+	_load_build_for_hero(sel_build_hero, false)
+
+# 套用内置推荐方案：载入 6 件 + 写 override，对局内推荐/快买即按该方案
+func _on_build_preset_pressed(idx: int) -> void:
+	if sel_build_hero == "": return
+	var items := _preset_build(sel_build_hero, idx)
+	if items.is_empty(): return
+	sel_build_ids = items
+	ItemDatabase.set_recommended_override(sel_build_hero, sel_build_ids)
+	_rebuild_build_panel()
 
 # 套用备战方案：载入 6 件 + 写 override，对局内推荐/快买即按此方案
 func _on_build_scheme_pressed(idx: int) -> void:
 	if sel_build_hero == "": return
 	var builds: Array = HeroBuildStore.get_builds(sel_build_hero)
 	if idx < 0 or idx >= builds.size(): return
-	var items: Array = []
-	for it in (builds[idx].get("items", []) as Array):
-		var id := str(it)
-		if id != "" and not items.has(id):
-			items.append(id)
+	var items: Array = _clean_build_items(builds[idx].get("items", []))
 	if items.is_empty(): return
-	sel_build_ids = items.slice(0, 6)
+	sel_build_ids = items
 	ItemDatabase.set_recommended_override(sel_build_hero, sel_build_ids)
 	_rebuild_build_panel()
 
 func _build_row(idx: int, item_id: String) -> PanelContainer:
-	# 紧凑装备卡（序号/名称/价格 + 上下调序）：3 列 × 2 行一屏放下，无需滚动
+	# 装备卡（卡宽 256）：左侧大图标 68 + 右侧「序号·名称」/「价格 · ↑↓」，名称与价格都完整显示
 	var item: Dictionary = ItemDatabase.get_item(item_id) if item_id != "" else {}
 	var nm := str(item.get("name", item_id))
 	var cost := int(item.get("cost", 0))
+	var tier := int(item.get("tier", 1))
 	var card := PanelContainer.new()
 	card.name = "BuildRow_%d" % idx
-	card.custom_minimum_size = Vector2(0, 84)
+	card.custom_minimum_size = Vector2(0, 96)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_PANEL_EDGE, 0.8, 10))
+	var cs: StyleBoxFlat = UiKit.skin_chip(UiKit.C_PANEL_EDGE, 0.8, 10)
+	cs.content_margin_left = 8
+	cs.content_margin_right = 8
+	cs.content_margin_top = 4
+	cs.content_margin_bottom = 4
+	card.add_theme_stylebox_override("panel", cs)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	card.add_child(row)
+	row.add_child(SelectArt.ItemIcon.new(nm, tier, 64))
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 3)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.add_theme_constant_override("separation", 2)
 	v.alignment = BoxContainer.ALIGNMENT_CENTER
-	card.add_child(v)
+	row.add_child(v)
+	# 第一行：序号 + 装备名（字号 FS_SM，不再截断）
 	var top := HBoxContainer.new()
-	top.add_theme_constant_override("separation", 3)
+	top.add_theme_constant_override("separation", 4)
 	v.add_child(top)
 	var idx_lab := _sel_label("%d." % (idx + 1), _sel_fs(UiKit.FS_XS), SEL_GOLD, false)
 	idx_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	top.add_child(idx_lab)
-	var name_lab := _sel_label(nm, _sel_fs(UiKit.FS_XS), SEL_TEXT, false)
+	var name_lab := _sel_label(nm, _sel_fs(UiKit.FS_SM), SEL_TEXT, false)
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_lab.custom_minimum_size = Vector2(0, 18)
-	name_lab.tooltip_text = nm
+	name_lab.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	top.add_child(name_lab)
-	# 价格挪到第二行，把整行宽度让给装备名，长名称不再被价格和序号挤到截断
-	var meta := HBoxContainer.new()
-	meta.add_theme_constant_override("separation", 4)
-	v.add_child(meta)
-	var price_lab := _sel_label("%d金" % cost, _sel_fs(UiKit.FS_XS), SEL_GOLD, false)
+	# 第二行：价格（金色独立一行）+ 上调/下调
+	var bot := HBoxContainer.new()
+	bot.add_theme_constant_override("separation", 6)
+	v.add_child(bot)
+	var price_lab := _sel_label("%d 金" % cost, _sel_fs(UiKit.FS_SM), SEL_GOLD, false)
+	price_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	price_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	meta.add_child(price_lab)
-	var meta_spacer := Control.new()
-	meta_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	meta.add_child(meta_spacer)
-	var btns := HBoxContainer.new()
-	btns.alignment = BoxContainer.ALIGNMENT_CENTER
-	btns.add_theme_constant_override("separation", 4)
-	meta.add_child(btns)
-	var up := _sel_btn("↑", UiKit.C_TEAM0, false, Vector2(42, 26))
+	bot.add_child(price_lab)
+	var up := _sel_btn("↑", UiKit.C_TEAM0, false, Vector2(44, 26))
 	up.name = "BuildUp_%d" % idx
 	up.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	up.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	up.disabled = idx <= 0
 	up.pressed.connect(_on_build_move.bind(idx, -1))
-	btns.add_child(up)
-	var down := _sel_btn("↓", UiKit.C_TEAM0, false, Vector2(42, 26))
+	bot.add_child(up)
+	var down := _sel_btn("↓", UiKit.C_TEAM0, false, Vector2(44, 26))
 	down.name = "BuildDown_%d" % idx
 	down.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
 	down.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	down.disabled = idx >= sel_build_ids.size() - 1
 	down.pressed.connect(_on_build_move.bind(idx, 1))
-	btns.add_child(down)
+	bot.add_child(down)
+	# 鼠标悬浮：弹出装备详情（属性 / 被动 / 主动 / 合成路径 / 价格）
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	card.mouse_entered.connect(_show_build_hover.bind(str(item_id), card))
+	card.mouse_exited.connect(_hide_build_hover)
 	return card
-
 func _on_build_move(idx: int, dir: int) -> void:
 	var j := idx + dir
 	if idx < 0 or j < 0 or idx >= sel_build_ids.size() or j >= sel_build_ids.size(): return
@@ -4160,7 +4756,7 @@ func _on_build_move(idx: int, dir: int) -> void:
 func _on_build_restore() -> void:
 	if sel_build_hero == "": return
 	ItemDatabase.set_recommended_override(sel_build_hero, [])
-	_load_build_for_hero(sel_build_hero)
+	_load_build_for_hero(sel_build_hero, false)
 
 # —— 召唤师卡悬停浮层 ——
 func _on_summ_hover(sname: String, sid: String, card: Panel, hover: bool) -> void:
@@ -4173,6 +4769,97 @@ func _hide_summ_hover() -> void:
 	if sel_hover_panel != null and is_instance_valid(sel_hover_panel):
 		sel_hover_panel.queue_free()
 	sel_hover_panel = null
+
+# 字符串数组拼接（避免 String.join 的 PackedStringArray 类型限制）
+func _join_dot(parts: Array) -> String:
+	var out := ""
+	for p in parts:
+		out = str(p) if out == "" else out + " · " + str(p)
+	return out
+
+func _join_plus(parts: Array) -> String:
+	var out := ""
+	for p in parts:
+		out = str(p) if out == "" else out + " + " + str(p)
+	return out
+
+# —— 出装卡悬浮：装备详细信息浮层（属性 / 被动 / 主动 / 合成 / 价格）——
+func _hide_build_hover() -> void:
+	if sel_build_hover != null and is_instance_valid(sel_build_hover):
+		sel_build_hover.queue_free()
+	sel_build_hover = null
+
+func _show_build_hover(item_id: String, card: Control) -> void:
+	_hide_build_hover()
+	if select_ui == null or card == null or item_id == "":
+		return
+	var item: Dictionary = ItemDatabase.get_item(item_id)
+	if item.is_empty():
+		return
+	var root := select_ui.get_node_or_null("SelectRoot")
+	if root == null:
+		return
+	var tier := int(item.get("tier", 1))
+	var qcol: Color = UiKit.QUALITY_COLORS[clampi(tier, 1, 5)] if tier >= 1 else SEL_GOLD
+	var panel := PanelContainer.new()
+	panel.name = "BuildHover"
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.custom_minimum_size = Vector2(430, 0)
+	panel.add_theme_stylebox_override("panel", UiKit.skin_card(qcol, true, 0.97))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	panel.add_child(v)
+	v.add_child(_sel_label(str(item.get("name", item_id)), _sel_fs(UiKit.FS_LG), qcol.lightened(0.25), false))
+	var meta := "T%d · %d 金" % [tier, int(item.get("cost", 0))]
+	var cls_map := {"attack": "物理", "magic": "法术", "defense": "防御", "boots": "鞋子",
+		"jungle": "打野", "support": "游走", "survival": "保命", "attack_speed": "攻速"}
+	var cls := str(item.get("class", ""))
+	if cls != "":
+		meta += " · " + str(cls_map.get(cls, cls))
+	v.add_child(_sel_label(meta, _sel_fs(UiKit.FS_SM), SEL_SUB, false))
+	# 属性行
+	var stat_names := {"attack": "攻击", "magic_attack": "法强", "health": "生命", "armor": "物防",
+		"magic_resist": "法防", "attack_speed": "攻速%", "crit_chance": "暴击%", "cooldown": "冷缩%",
+		"speed": "移速", "lifesteal": "吸血%", "mana": "蓝量", "hp_regen": "回血",
+		"armor_pen_percent": "物穿%", "magic_pen": "法穿"}
+	var parts: Array = []
+	for k in stat_names:
+		var val := int(item.get(str(k), 0))
+		if val != 0:
+			parts.append("%s+%d" % [str(stat_names[k]), val])
+	if not parts.is_empty():
+		var sl := _sel_label("属性：" + _join_dot(parts), _sel_fs(UiKit.FS_SM), SEL_TEXT, false)
+		sl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		sl.custom_minimum_size = Vector2(390, 0)
+		v.add_child(sl)
+	var passive := str(item.get("passive", ""))
+	if passive != "":
+		var pl := _sel_label("被动：" + passive, _sel_fs(UiKit.FS_SM), SEL_GOLD, false)
+		pl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		pl.custom_minimum_size = Vector2(390, 0)
+		v.add_child(pl)
+	var active := str(item.get("active", ""))
+	if active != "":
+		var al := _sel_label("主动：" + active, _sel_fs(UiKit.FS_SM), Color(0.55, 0.85, 1.0), false)
+		al.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		al.custom_minimum_size = Vector2(390, 0)
+		v.add_child(al)
+	var reqs: Array = item.get("requires", [])
+	if not reqs.is_empty():
+		var names: Array = []
+		for rid in reqs:
+			names.append(str(ItemDatabase.get_item(str(rid)).get("name", rid)))
+		v.add_child(_sel_label("合成：" + _join_plus(names), _sel_fs(UiKit.FS_SM), SEL_SUB, false))
+	(root as Control).add_child(panel)
+	panel.size = panel.get_combined_minimum_size()
+	var r: Rect2 = card.get_global_rect()
+	var pos := Vector2(r.position.x - panel.size.x - 14.0, r.position.y)
+	if pos.x < 16.0:
+		pos.x = r.end.x + 14.0
+	pos.x = clampf(pos.x, 16.0, 2400.0 - panel.size.x - 16.0)
+	pos.y = clampf(pos.y, 16.0, 1400.0 - panel.size.y - 16.0)
+	panel.position = pos
+	sel_build_hover = panel
 
 func _show_summ_hover(sname: String, sid: String, card: Panel) -> void:
 	_hide_summ_hover()
@@ -4218,25 +4905,25 @@ func _show_summ_hover(sname: String, sid: String, card: Panel) -> void:
 func _create_hero_card(hero_name: String, role: String, role_color: Color) -> Panel:
 	var card = Panel.new()
 	card.name = "HeroCard_" + hero_name
-	card.custom_minimum_size = Vector2(180, 118)
+	card.custom_minimum_size = Vector2(150, 152)
 	card.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	card.add_theme_stylebox_override("panel", UiKit.skin_card(role_color, false, 0.72))
 	var inner_v = VBoxContainer.new()
 	inner_v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	inner_v.alignment = BoxContainer.ALIGNMENT_CENTER
-	inner_v.add_theme_constant_override("separation", 1)
+	inner_v.add_theme_constant_override("separation", 0)
 	card.add_child(inner_v)
-	inner_v.add_child(SelectArt.Avatar.new(hero_name, role_color, 36))
+	inner_v.add_child(SelectArt.Avatar.new(hero_name, role_color, 72))
 	var name_label = Label.new()
 	name_label.text = hero_name
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	name_label.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	name_label.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_XS))
 	name_label.add_theme_color_override("font_color", SEL_TEXT)
 	inner_v.add_child(name_label)
 	var role_label = Label.new()
 	role_label.text = role
 	role_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	role_label.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_XS))
+	role_label.add_theme_font_size_override("font_size", int(round(float(_sel_fs(UiKit.FS_XS)) * 0.85)))
 	role_label.add_theme_color_override("font_color", role_color.lightened(0.35))
 	inner_v.add_child(role_label)
 	card.gui_input.connect(_on_hero_card_clicked.bind(hero_name, card, role_color))
@@ -4249,23 +4936,23 @@ func _create_summ_card(sname: String, sid: String) -> Panel:
 	# 紧凑竖排卡（图标上、名字下）：5 列 × 2 行一屏放下 10 个召唤师技能，无需滚动
 	var card = Panel.new()
 	card.name = "SummCard_" + sid
-	card.custom_minimum_size = Vector2(88, 78)
+	card.custom_minimum_size = Vector2(96, 112)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card.add_theme_stylebox_override("panel", UiKit.skin_card(SEL_SUMM_COLOR, false, 0.72))
 	var col := VBoxContainer.new()
 	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
-	col.add_theme_constant_override("separation", 2)
+	col.add_theme_constant_override("separation", 1)
 	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(col)
-	var glyph = SelectArt.SummonerGlyph.new(sname, 30)
+	var glyph = SelectArt.SummonerGlyph.new(sname, 60)
 	glyph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	col.add_child(glyph)
 	var lbl = Label.new()
 	lbl.text = sname
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	lbl.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_XS))
 	lbl.add_theme_color_override("font_color", SEL_TEXT)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(lbl)
@@ -4356,6 +5043,9 @@ func _on_hero_selected(type: String, card: Panel = null, role_color: Color = Col
 	# 未手动改过召唤师时，换英雄自动跟随该英雄的推荐召唤师
 	_apply_default_summoner(type)
 	_refresh_sel_preview(type)
+	# 选定英雄后：中央立绘支持滑动查看视角（拖动绕角色水平旋转 + 上下俯仰）
+	if sel_preview_3d:
+		sel_preview_3d.set_orbit_enabled(true)
 	_load_build_for_hero(type)   # 右栏「出装」按该英雄载入推荐/已保存备战方案（切换英雄同刷）
 	_set_sel_stage(false)
 	_update_selection_summary()
@@ -4409,9 +5099,12 @@ func _update_confirm_button_style():
 	elif _is_player_turn():
 		if _can_player_pick(selected_hero_type):
 			can = true
-			text = "✔  确定选择"
+			text = "√  确定选择"
 		else:
 			text = "请选择分路英雄"
+	if can and not _has_player_name():
+		can = false
+		text = "请先输入昵称"
 	select_confirm_btn.text = text
 	select_confirm_btn.disabled = not can
 	# 金色实心主按钮（hover 同色辉光，pressed 压暗）；不可点时走 disabled 皮肤
@@ -4436,6 +5129,16 @@ func _on_select_leave():
 	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
 # 「确定选择」：玩家回合落位；非 BP 状态下保持原开始游戏语义
 func _on_confirm():
+	# 以输入框当前文本为准（程序赋值不会触发 text_changed），空名不可开始
+	if sel_name_edit != null and is_instance_valid(sel_name_edit):
+		var typed := sel_name_edit.text.strip_edges()
+		if typed != "":
+			NameStore.save_player_name(typed)
+	if not _has_player_name():
+		_flash_tip("请先在右侧输入你的昵称")
+		if sel_name_edit != null and is_instance_valid(sel_name_edit):
+			sel_name_edit.grab_focus()
+		return
 	if sel_draft_done: return
 	if sel_draft_active:
 		if _is_player_turn() and not sel_player_picked and selected_hero_type != "":
@@ -4527,10 +5230,6 @@ func _refresh_mvp() -> void:
 		best.is_mvp = true
 
 # ---- P0 镜头/画面反馈（本地表现层，不改伤害与判定时序） ----
-## 阵亡观战：复活条点击存活队友时记录目标，供 UI 高亮/后续镜头扩展；传 null 取消
-func set_spectate_target(target: Hero) -> void:
-	spectate_hero = target if is_instance_valid(target) else null
-
 func camera_shake(amp: float = 0.12, dur: float = 0.22) -> void:
 	_shake_amp = maxf(_shake_amp, amp)
 	_shake_dur = maxf(_shake_dur, dur)
@@ -4580,9 +5279,15 @@ func on_big_cast(hero: Hero) -> void:
 		hitstop(0.03)
 	Vfx.screen_flash(Vfx.color_for_hero(hero.display_name).lerp(Color.WHITE, 0.55), 0.20)
 
-# PostFX：离开战斗场景时复位死亡去饱和，避免大厅/选人界面被压暗
+# PostFX：离开战斗场景时复位死亡去饱和/低血红屏，避免大厅/选人界面被压暗
 func _exit_tree() -> void:
+	# 若在加载/开局运镜暂停中退出场景，必须恢复场景树，避免大厅/选人界面被冻结
+	if intro_active or building_battle:
+		intro_active = false
+		building_battle = false
+		get_tree().paused = false
 	PostFX.set_dead(false)
+	PostFX.set_low_hp(1.0)
 	# 离开对局：停掉播报/短音/回城循环，取消未播完的开局链
 	if is_instance_valid(SfxManager):
 		SfxManager.stop_all()
@@ -4590,21 +5295,288 @@ func _exit_tree() -> void:
 	if is_instance_valid(UiManager):
 		UiManager.exit_battle()
 
-# PostFX：本地英雄受击红晕 + 阵亡去饱和（纯表现，不参与战斗逻辑）
+# PostFX：本地英雄受击红晕 + 阵亡去饱和 + 低血量屏幕血光（纯表现，不参与战斗逻辑）
 func _sync_postfx() -> void:
 	if not is_instance_valid(hero):
+		PostFX.set_low_hp(1.0)
 		return
 	if hero.is_dead:
 		PostFX.set_dead(true)
+		PostFX.set_low_hp(0.0)
 		_pfx_hp = -1.0
 		return
 	PostFX.set_dead(false)
+	# 低血量：护盾算有效生命，有盾时不弹血光
+	PostFX.set_low_hp(clampf((hero.health + hero.shield_remaining) / maxf(hero.actual_max_health, 1.0), 0.0, 1.0))
 	if _pfx_hp >= 0.0 and hero.health < _pfx_hp:
 		var lost := (_pfx_hp - hero.health) / maxf(hero.actual_max_health, 1.0)
 		PostFX.damage(clampf(0.3 + lost * 4.0, 0.0, 1.0), clampf(lost * 3.0, 0.0, 0.6))
 	_pfx_hp = hero.health
 
+# 阵亡观战选择：仅玩家阵亡时可选存活友方；复活时由 _process 自动清空并回正镜头
+func set_spectate_target(target: Hero) -> void:
+	if not is_instance_valid(hero) or not hero.is_dead:
+		return
+	if target == null or not is_instance_valid(target) or target == hero:
+		return
+	if target.is_dead or not Config.is_ally(target.team):
+		return
+	spectate_hero = target
+	cam_pan_offset = Vector3.ZERO
+	_cam_snap = true
+
+func _follow_camera_unit(unit: Hero, delta: float) -> void:
+	if not is_instance_valid(unit):
+		return
+	var follow_offset := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
+	if unit.display_name == "兰陵王" and unit.lanling_stealth_active:
+		follow_offset *= 1.25
+	var target: Vector3 = unit.global_position + follow_offset + cam_pan_offset
+	if _cam_snap or cam.global_position.distance_to(target) > 25.0:
+		cam.global_position = target
+		_cam_snap = false
+	else:
+		cam.global_position = cam.global_position.lerp(target, 1.0 - exp(-12.0 * delta))
+	_apply_camera_shake(delta)
+
+func _begin_intro() -> void:
+	if intro_active or not is_instance_valid(hero):
+		return
+	intro_active = true
+	_intro_waiting = true
+	_intro_time = 0.0
+	var follow := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
+	_intro_end = hero.global_position + follow
+	# 起始机位沿同一俯视方向拉远、抬高；随后插值回正常跟随位
+	_intro_start = _intro_end + Vector3(0, 70, 130).rotated(Vector3.UP, cam_yaw)
+	cam.global_position = _intro_start
+	cam.rotation_degrees = Vector3(-72, rad_to_deg(cam_yaw), 0)
+	cam.fov = 52.0
+	if ui:
+		ui.visible = false
+	if minimap:
+		minimap.visible = false
+	if is_instance_valid(TouchController):
+		TouchController.set_intro_hidden(true)
+	# 暂停整棵场景树：AI/英雄/小兵/野怪/计时全部停住；本节点自身继续跑运镜
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().paused = true
+	MapVisuals.update_backlight_for_camera(cam)
+	# 战场已构建完，但加载层仍覆盖：先渲染两帧让网格/材质/相机全部就绪，再撤加载层
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not intro_active:
+		return
+	if loading_screen:
+		loading_screen.visible = false
+		loading_screen.queue_free()
+		loading_screen = null
+	_intro_waiting = false
+	_intro_time = 0.0
+
+func _process_intro(delta: float) -> void:
+	_intro_time += delta
+	var t := clampf(_intro_time / INTRO_DURATION, 0.0, 1.0)
+	var e := 1.0 - pow(1.0 - t, 3.0)
+	cam.global_position = _intro_start.lerp(_intro_end, e)
+	cam.rotation_degrees = Vector3(lerpf(-72.0, -60.0, e), rad_to_deg(cam_yaw), 0)
+	cam.fov = lerpf(52.0, 70.0, e)
+	MapVisuals.update_backlight_for_camera(cam)
+	if t >= 1.0:
+		_finish_intro()
+
+func _finish_intro() -> void:
+	intro_active = false
+	cam.global_position = _intro_end
+	cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
+	cam.fov = 70.0
+	if ui:
+		ui.visible = true
+	if minimap:
+		minimap.visible = true
+	if is_instance_valid(TouchController):
+		TouchController.set_intro_hidden(false)
+	get_tree().paused = false
+	process_mode = Node.PROCESS_MODE_INHERIT
+	_cam_snap = true
+	# 运镜结束再播开局播报：欢迎→准备→全军出击
+	SfxManager.announce_chain(["welcome", "ready", "attack"])
+	_spawn_lane_guides()
+
+
+# ---------------- 开局地面推荐分路指引 ----------------
+# 蓝（我方）/ 红（敌方）各画三条路的地面光带 + 方向箭头，玩家英雄对应分路加粗高亮；
+# 12 秒后淡出释放，避免干扰对线期视野。
+const LANE_GUIDE_HOLD := 12.0
+const LANE_GUIDE_FADE := 1.6
+# 分路光带着色器：柔边光带 + 中线亮带 + 沿线流动的虚线 + 箭头感前缘（沿路方向有流动感）
+const LANE_GUIDE_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
+
+uniform vec4 lane_color : source_color = vec4(0.30, 0.68, 1.0, 1.0);
+uniform float intensity = 1.0;
+uniform float dash_count = 24.0;
+uniform float flow_speed = 0.7;
+
+void fragment() {
+	float v = abs(UV.y - 0.5) * 2.0;                        // 0=中线 1=外缘
+	float edge = 1.0 - smoothstep(0.60, 1.0, v);             // 外缘柔化
+	float core = 1.0 - smoothstep(0.04, 0.55, v);            // 中线亮带
+	float f = fract(UV.x * dash_count - TIME * flow_speed);  // 沿线流动
+	float dash = smoothstep(0.02, 0.22, f) * (1.0 - smoothstep(0.70, 0.98, f));
+	float chev = (1.0 - smoothstep(0.0, 0.55, abs(fract(UV.x * dash_count * 0.5) - 0.5)))
+		* smoothstep(0.78, 1.0, f);                          // 箭头前缘
+	float a = (edge * 0.14 + core * (0.16 + 0.5 * dash) + chev * 0.26) * intensity * lane_color.a;
+	a *= smoothstep(0.0, 0.04, UV.x) * (1.0 - smoothstep(0.95, 1.0, UV.x));   // 两端渐隐
+	vec3 col = mix(lane_color.rgb, vec3(1.0), dash * 0.35 + chev * 0.30);
+	ALBEDO = col;
+	EMISSION = lane_color.rgb * (0.5 + 1.5 * dash);
+	ALPHA = clamp(a, 0.0, 0.92);
+}
+"""
+
+func _spawn_lane_guides() -> void:
+	if not is_instance_valid(hero):
+		return
+	var root := Node3D.new()
+	root.name = "LaneGuide"
+	add_child(root)
+	var blue := Color(0.30, 0.68, 1.0)
+	var red := Color(1.0, 0.34, 0.28)
+	# 只给"本端玩家"画一条指引：分路取选人页选的分路（打野/游走也有各自的走法）
+	var our_team: bool = Config.player_team == Config.Team.PLAYER
+	var col: Color = blue if our_team else red
+	var lane: String = PlayerPrefs.get_lane()
+	if not HeroPickData.LANES.has(lane):
+		lane = HeroPickData.role_lane(str(hero.role))
+	# 红蓝双方镜像：红方的发育路/对抗路与蓝方相反（敌方对抗路=我方发育路）。
+	# 先换成蓝方视角的同一条路，再做点镜像，才不会把红方玩家指到错误的分路。
+	var route_lane: String = lane if our_team else _opposite_lane(lane)
+	var pts: Array = _lane_route(route_lane)
+	if not our_team:
+		var mirrored: Array = []
+		for p: Vector3 in pts:
+			mirrored.append(Vector3(-p.x, p.y, -p.z))
+		pts = mirrored
+	_add_lane_guide(root, pts, col, true)
+	var tw := create_tween()
+	tw.tween_interval(LANE_GUIDE_HOLD)
+	tw.tween_method(Callable(self, "_lane_guide_fade").bind(root), 0.0, 1.0, LANE_GUIDE_FADE)
+	tw.tween_callback(root.queue_free)
+
+## 红方镜像后的分路名：发育路 ↔ 对抗路，中路/打野/游走保持同名。
+func _opposite_lane(lane: String) -> String:
+	match lane:
+		"发育路":
+			return "对抗路"
+		"对抗路":
+			return "发育路"
+	return lane
+
+## 玩家分路的地面路线（坐标以蓝方基地 (-53,53) 为起点；红方先换相反分路再镜像）
+func _lane_route(lane: String) -> Array:
+	match lane:
+		"发育路":
+			return [Vector3(-53, 0, 53), Vector3(-35, 0, 55), Vector3(-15, 0, 56), Vector3(28, 0, 58)]
+		"中路":
+			return [Vector3(-53, 0, 53), Vector3(-40, 0, 40), Vector3(-27, 0, 27), Vector3(-14, 0, 14), Vector3(0, 0, 0)]
+		"对抗路":
+			return [Vector3(-53, 0, 53), Vector3(-55, 0, 35), Vector3(-56, 0, 15), Vector3(-58, 0, -28)]
+		"打野":
+			# 蓝 buff → 河道岔口 → 红 buff：从自家野区刷起，不走线上
+			return [Vector3(-53, 0, 53), Vector3(-40, 0, 20), Vector3(-28, 0, -5), Vector3(-8, 0, 18), Vector3(3, 0, 38)]
+		_:
+			# 游走：中路起手 → 河道游走（配合中路/发育路）
+			return [Vector3(-53, 0, 53), Vector3(-40, 0, 40), Vector3(-27, 0, 27), Vector3(-14, 0, 14),
+				Vector3(0, 0, 0), Vector3(14, 0, -14)]
+
+func _lane_guide_fade(v: float, root: Node3D) -> void:
+	if not is_instance_valid(root):
+		return
+	var k: float = 1.0 - clampf(v, 0.0, 1.0)
+	for c in root.get_children():
+		if not (c is MeshInstance3D):
+			continue
+		var mi := c as MeshInstance3D
+		var mat := mi.material_override
+		if mat is ShaderMaterial and (mat as ShaderMaterial).get_meta("lane_fade", false):
+			(mat as ShaderMaterial).set_shader_parameter("intensity", k)
+			continue
+		if mi.has_meta("lane_ring"):
+			var bc: Color = mi.get_meta("lane_ring")
+			MeshFactory.set_ground_ring_color(mi, Color(bc.r, bc.g, bc.b, bc.a * k))
+			continue
+		mi.transparency = clampf(v, 0.0, 1.0)
+
+func _add_lane_guide(parent: Node3D, pts: Array, color: Color, highlight: bool) -> void:
+	var width: float = 4.6 if highlight else 2.8
+	var alpha: float = 0.95 if highlight else 0.55
+	# 必须高于高地砖面(0.2)与台裙(0.176)，否则光带会被高地压住看不见
+	var y: float = 0.26
+	# 累计长度 → UV.x（0..1 沿线），UV.y 横跨光带（0..1）
+	var total := 0.0
+	for i in range(pts.size() - 1):
+		total += Vector2(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z).length()
+	total = maxf(total, 0.01)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var acc := 0.0
+	for i in range(pts.size() - 1):
+		var a: Vector3 = pts[i]
+		var b: Vector3 = pts[i + 1]
+		var d := Vector3(b.x - a.x, 0.0, b.z - a.z)
+		var seg := d.length()
+		if seg < 0.05:
+			continue
+		d = d / seg
+		var n := Vector3(-d.z, 0.0, d.x) * width * 0.5
+		var u0 := acc / total
+		var u1 := (acc + seg) / total
+		acc += seg
+		var a0 := Vector3(a.x, y, a.z) + n
+		var a1 := Vector3(a.x, y, a.z) - n
+		var b0 := Vector3(b.x, y, b.z) + n
+		var b1 := Vector3(b.x, y, b.z) - n
+		st.set_normal(Vector3.UP)
+		st.set_uv(Vector2(u0, 0.0)); st.add_vertex(a0)
+		st.set_uv(Vector2(u1, 0.0)); st.add_vertex(b0)
+		st.set_uv(Vector2(u1, 1.0)); st.add_vertex(b1)
+		st.set_uv(Vector2(u0, 0.0)); st.add_vertex(a0)
+		st.set_uv(Vector2(u1, 1.0)); st.add_vertex(b1)
+		st.set_uv(Vector2(u0, 1.0)); st.add_vertex(a1)
+	st.index()
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	var sh := Shader.new()
+	sh.code = LANE_GUIDE_SHADER
+	var sm := ShaderMaterial.new()
+	sm.shader = sh
+	sm.set_shader_parameter("lane_color", Color(color.r, color.g, color.b, alpha))
+	sm.set_shader_parameter("intensity", 1.0)
+	sm.set_shader_parameter("dash_count", 26.0 if highlight else 22.0)
+	sm.set_shader_parameter("flow_speed", 0.8 if highlight else 0.55)
+	sm.set_meta("lane_fade", true)
+	mi.material_override = sm
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	# 终点柔光环：标出这条路要去的方向（不是终点塔，只是视觉落点）
+	var endp: Vector3 = pts[pts.size() - 1]
+	var ring_col := Color(color.r, color.g, color.b, 0.5 * alpha)
+	var ring := MeshFactory.create_ground_ring(2.6, ring_col, 0.0)
+	ring.name = "LaneGoal"
+	ring.position = Vector3(endp.x, y, endp.z)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.set_meta("lane_ring", ring_col)
+	parent.add_child(ring)
+
 func _process(delta):
+	if building_battle:
+		return
+	if intro_active:
+		if not _intro_waiting:
+			_process_intro(delta)
+		return
 	if select_ui != null:
 		_update_sel_draft(delta)
 		if select_ui == null:
@@ -4614,7 +5586,14 @@ func _process(delta):
 	_sync_postfx()
 	# 金币自动增长
 		# 摄像机控制
-		# 更新回城连线
+	if spectate_hero != null:
+		var spectate_invalid := not is_instance_valid(spectate_hero) or spectate_hero.is_dead
+		var player_alive := is_instance_valid(hero) and not hero.is_dead
+		if spectate_invalid or player_alive:
+			spectate_hero = null
+			if player_alive:
+				_cam_snap = true
+	# 更新回城连线
 	for hero in recall_lines.keys():
 		if is_instance_valid(hero) and hero.is_recalling:
 			recall_lines[hero]["hero_pos"] = hero.global_position
@@ -4645,20 +5624,12 @@ func _process(delta):
 		cam.global_position.z = minimap_drag_pos.z
 		minimap_jump_requested = false
 		_cam_snap = true
-	elif hero and is_instance_valid(hero) and not hero.is_dead:
+	elif is_instance_valid(hero) and hero.is_dead and is_instance_valid(spectate_hero) and not spectate_hero.is_dead:
+		# 阵亡观战：镜头跟随被点选的存活队友，画面仍由 PostFX 阵亡去饱和保持灰白
+		_follow_camera_unit(spectate_hero, delta)
+	elif is_instance_valid(hero) and not hero.is_dead:
 		# 正常跟随英雄：跟随偏移（还原初始镜头 (0,12,8)，无放大；沿 -70° 视角射线）
-		var _follow_offset := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
-		# 玩家为兰陵王且隐身中：相机拉远/拉高25%（看得更广）；隐身结束自动恢复
-		if hero.display_name == "兰陵王" and hero.lanling_stealth_active:
-			_follow_offset *= 1.25
-		var target: Vector3 = hero.global_position + _follow_offset + cam_pan_offset
-		# 目标跳变（小地图跳转/复活传送）直接硬设，正常跟随走指数平滑
-		if _cam_snap or cam.global_position.distance_to(target) > 25.0:
-			cam.global_position = target
-			_cam_snap = false
-		else:
-			cam.global_position = cam.global_position.lerp(target, 1.0 - exp(-12.0 * delta))
-		_apply_camera_shake(delta)
+		_follow_camera_unit(hero, delta)
 	# 逆光：主光始终在相机水平正前方，补光在相机后方（随第一人称/换边旋转同步）
 	MapVisuals.update_backlight_for_camera(cam)
 	if not hero_selected:
@@ -4695,6 +5666,7 @@ func _process(delta):
 		_mvp_interval = _mvp_interval_now
 		_refresh_mvp()
 	_update_shadow_paths(delta)
+	_update_shadow_path_fades(delta)
 	# 集中式团队分推协调（4分钟后，每60s分配一次）
 	if game_time >= 240 and team_tactics:
 		team_tactics_timer -= delta
@@ -4754,6 +5726,66 @@ func _distribute_lane_assignments(assignments: Dictionary) -> void:
 		elif lane >= 0:
 			hero_ai.is_dragon_rally = false
 			hero_ai.apply_team_lane(lane)
+# ---- 视野之灵 ----
+# 己方边路二塔被摧毁 60 秒后，在二塔原位置生成 1 个视野之灵。
+func schedule_vision_spirit(pos: Vector3, lane: String, delay: float = 60.0) -> void:
+	if game_over or lane == "mid":
+		return
+	var timer := Timer.new()
+	timer.one_shot = true
+	timer.wait_time = delay
+	add_child(timer)
+	timer.timeout.connect(func():
+		if is_instance_valid(timer):
+			timer.queue_free()
+		if not game_over:
+			_spawn_vision_spirit(pos))
+	timer.start()
+
+func _spawn_vision_spirit(pos: Vector3) -> void:
+	var spirit = VisionSpiritScript.new()
+	spirit.team = Config.player_team
+	spirit.spawn_pos = Vector3(pos.x, 0.0, pos.z)
+	spirit.bush_pos = _pick_vision_spirit_bush(pos)
+	add_child(spirit)
+	vision_spirits.append(spirit)
+
+# 选择离生成点最近的 buff，再选该 buff 周围最近的草丛。
+func _pick_vision_spirit_bush(spawn_pos: Vector3) -> Vector3:
+	var buff_pos: Vector3 = spawn_pos
+	var best_buff_d := INF
+	for m in get_tree().get_nodes_in_group("jungle_monsters"):
+		if not is_instance_valid(m) or not (m is JungleMonster):
+			continue
+		var jm := m as JungleMonster
+		if jm.buff_type not in ["red", "blue"]:
+			continue
+		var d := Vector2(spawn_pos.x, spawn_pos.z).distance_to(Vector2(jm.global_position.x, jm.global_position.z))
+		if d < best_buff_d:
+			best_buff_d = d
+			buff_pos = jm.global_position
+	var best_bush: Vector3 = spawn_pos
+	var best_bush_d := INF
+	for bp in _bush_positions:
+		var d2 := Vector2(bp.x, bp.z).distance_to(Vector2(buff_pos.x, buff_pos.z))
+		if d2 < best_bush_d:
+			best_bush_d = d2
+			best_bush = bp
+	return Vector3(best_bush.x, 0.0, best_bush.z)
+
+func _vision_spirit_sources() -> Array:
+	var out: Array = []
+	for s in get_tree().get_nodes_in_group("vision_spirits"):
+		if is_instance_valid(s) and s.team == Config.player_team and s.vision_active:
+			out.append(s)
+	return out
+
+func _seen_by_vision_spirit(pos: Vector3, spirits: Array) -> bool:
+	for s in spirits:
+		if is_instance_valid(s) and s.global_position.distance_to(pos) <= s.vision_radius:
+			return true
+	return false
+
 # ---- vision update: enemy entities visible only within friendly vision ----
 var _vision_timer: float = 0.0
 
@@ -4772,8 +5804,9 @@ func _update_vision(delta: float) -> void:
 			continue
 		if entity.team != player_team:
 			continue
-		if entity is Hero or entity is Minion or entity is Turret:
+		if entity is Hero or entity is Minion or entity is Turret or entity is Tripod:
 			vision_sources.append(entity)
+	var spirit_sources := _vision_spirit_sources()
 
 	# Update visibility for enemy minions (heroes handled by HeroAI stealth system)
 	for entity in get_tree().get_nodes_in_group("minions"):
@@ -4801,11 +5834,15 @@ func _update_vision(delta: float) -> void:
 					vr = 12.0
 			elif src is Minion:
 				vr = 8.0
+			elif src is Tripod:
+				vr = 8.0   # 大禹的鼎：照亮周围 8 米（比小兵略广、弱于视野之灵）
 			else:
 				vr = 10.0
 			if src.global_position.distance_to(entity.global_position) <= vr:
 				in_vision = true
 				break
+		if not in_vision:
+			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision
 
 	# Update visibility for jungle monsters (neutral, visible only within vision)
@@ -4831,11 +5868,15 @@ func _update_vision(delta: float) -> void:
 					vr = 12.0
 			elif src is Minion:
 				vr = 8.0
+			elif src is Tripod:
+				vr = 8.0   # 大禹的鼎：照亮周围 8 米（比小兵略广、弱于视野之灵）
 			else:
 				vr = 10.0
 			if src.global_position.distance_to(entity.global_position) <= vr:
 				in_vision = true
 				break
+		if not in_vision:
+			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision
 
 	# 敌方英雄同样遵守战争迷雾：仅当被我方任一视野源（英雄12/小兵8/塔10）看到、或被出手/受击暴露时才可见。
@@ -4854,9 +5895,10 @@ func _update_vision(delta: float) -> void:
 		if entity.vision_expose_timer > 0:
 			entity.visible = true
 			continue
-		# 草丛隐藏：身在草丛且同排无敌方英雄互相暴露时，草丛会遮挡视野
+		# 草丛隐藏：身在草丛且同排无敌方英雄互相暴露时，草丛会遮挡视野；
+		# 但视野之灵的 20 米视野可以直接照亮草丛内的敌人。
 		if entity.hidden_in_bush:
-			entity.visible = false
+			entity.visible = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 			continue
 		# 草丛同区互见：与己方英雄共享同一连片草丛(region) → 区域级互相暴露，不看距离
 		# （与 Hero._update_bush_stealth 语义一致；不收敛到 12m，否则长草两端会产生帧级竞态）
@@ -4874,11 +5916,15 @@ func _update_vision(delta: float) -> void:
 					vr = 12.0
 			elif src is Minion:
 				vr = 8.0
+			elif src is Tripod:
+				vr = 8.0   # 大禹的鼎：照亮周围 8 米（比小兵略广、弱于视野之灵）
 			else:
 				vr = 10.0
 			if src.global_position.distance_to(entity.global_position) <= vr:
 				in_vision = true
 				break
+		if not in_vision:
+			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision
 func _apply_natural_gold():
 	var gold_per_sec = 0
@@ -5131,10 +6177,9 @@ func spawn_single_minion(type: String, team: int, pos: Vector3, waypoints: Array
 	else:
 		lane = "mid"
 
-	# 如果该分路高地被摧毁，替换为超级兵
+	# 如果该分路高地被摧毁，替换为超级兵；出动播报只在高地塔摧毁时触发一次
 	if high_tower_destroyed[1-team].get(lane, false) and type in ["siege"]:
 		type = "super"
-		ui.show_kill_feed("超级兵",team,"出动！")
 	# 获取动态属性
 	var stats = _get_minion_stats(type, game_time / 60.0, is_mid)
 
@@ -5224,7 +6269,8 @@ func _update_cam_pan():
 	if cam_pan_prev_valid:
 		var ga := _ground_from_screen(cam_pan_prev_screen, hero.global_position.y)
 		var gb := _ground_from_screen(cur, hero.global_position.y)
-		cam_pan_offset += Vector3(ga.x - gb.x, 0.0, ga.z - gb.z)
+		var _cam_sens: float = PlayerPrefs.opt_float("cam_sens", 1.0)
+		cam_pan_offset += Vector3(ga.x - gb.x, 0.0, ga.z - gb.z) * _cam_sens
 		# 限制拖拽距离，避免把镜头甩到地图另一端
 		if cam_pan_offset.length() > 45.0:
 			cam_pan_offset = cam_pan_offset.normalized() * 45.0
@@ -5242,7 +6288,7 @@ func _ground_from_screen(screen: Vector2, plane_y: float) -> Vector3:
 	return origin + dir * t
 
 func _unhandled_input(event):
-	if not hero_selected:
+	if not hero_selected or intro_active or building_battle:
 		return
 
 	# 中键：桌面自由镜头拖动平移（松手保持偏移，按 Y 回正）
@@ -5252,9 +6298,9 @@ func _unhandled_input(event):
 			cam_pan_prev_valid = false
 		return
 	if event is InputEventMouseMotion and _cam_mid_drag:
-		# 约 60px = 1m；方向与手机右半屏拖拽一致
-		cam_pan_offset.x -= event.relative.x / 60.0
-		cam_pan_offset.z += event.relative.y / 60.0
+		var _cs: float = PlayerPrefs.opt_float("cam_sens", 1.0)
+		cam_pan_offset.x -= event.relative.x / 60.0 * _cs
+		cam_pan_offset.z += event.relative.y / 60.0 * _cs
 		if cam_pan_offset.length() > 45.0:
 			cam_pan_offset = cam_pan_offset.normalized() * 45.0
 		_cam_touch_decay = false
@@ -5353,6 +6399,7 @@ func _set_camera_mode(first_person: bool):
 			hero.visual_mesh.visible = true
 var game_over: bool = false
 var winner: int = -1
+var rank_result: Dictionary = {}   # 本局单机排位结算（升/降星、晋升信息），联机为空
 
 func crystal_destroyed(team: int):
 	if game_over: return
@@ -5370,26 +6417,520 @@ func crystal_destroyed(team: int):
 	# 胜负语音（host/离线；接管客户端由 NetResultPanel 收到结算广播时各自播）
 	SfxManager.play_announce("victory" if winner == Config.player_team else "defeat")
 	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看）
-	BattleHistory.record(BattleHistory.payload_from_battle(self), "联机" if NetSession.is_online() else "单机")
-	_show_game_over()
+	# 排位结算：胜 +1 星、负 -1 星；联机客户端由 NetResultPanel 各自结算
+	var local_rank_match := not ("--net-test" in OS.get_cmdline_user_args())
+	if local_rank_match:
+		var player_mvp := is_instance_valid(hero) and hero.is_mvp
+		# 奖牌：铜 +12 / 银 +33 / 金 +100；评分 >90 额外 +200（均叠加在基础胜负积分上）
+		var pm_team: Array = _pm_team_list(Config.player_team)
+		var pm_rating: float = _pm_rating(hero, pm_team) if is_instance_valid(hero) else 0.0
+		var pm_medal: int = _pm_medal_by_rating(pm_rating) if is_instance_valid(hero) else -1
+		var medal_bonus: int = RankSystem.medal_bonus(pm_medal)
+		var top_bonus: int = 200 if pm_rating > 90.0 else 0
+		var pm_bonus: int = medal_bonus + top_bonus
+		rank_result = RankSystem.apply_result(winner == Config.player_team, player_mvp, pm_bonus)
+		rank_result["medal"] = pm_medal
+		rank_result["medal_bonus"] = medal_bonus
+		rank_result["top_bonus"] = top_bonus
+		rank_result["rating"] = pm_rating
+	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看，含段位/推塔/分项数据）
+	var __hist := BattleHistory.payload_from_battle(self)
+	__hist["rank"] = rank_result
+	BattleHistory.record(__hist, "联机" if NetSession.is_online() else "单机")
+	# 云端存档：开启「赛后自动上传」时把段位+对战纪录同步到云端（未配置则空操作）
+	CloudSyncScript.auto_upload(get_tree())
+	# 终局：先播 5 秒水晶爆炸 → 中央美术字（胜利/失败）→ 再进结算面板并冻结战场
+	if not NetSession.is_online():
+		_play_end_sequence(team, winner == Config.player_team)
+	else:
+		_show_game_over()
 
-func _show_game_over():
+var _end_seq_on: bool = false
+var _pm_view: Control = null
+var _pm_layer: CanvasLayer = null
+var _pm_heroes: Array = []
+var _pm_player: Hero = null
+var _pm_stage: Vector3 = Vector3.ZERO
+var _pm_inward: Vector3 = Vector3.ZERO
+var _pm_right: Vector3 = Vector3.ZERO
+var _pm_env: Environment = null
+var _pm_key: DirectionalLight3D = null
+var _pm_hidden: Array = []
+var _pm_lights: Array = []
+
+## 终局演出（单机/离线 host）：won=true 为胜利（敌方水晶炸），false 为失败（我方水晶炸）
+func _play_end_sequence(team: int, won: bool) -> void:
+	_end_seq_on = true
+	var pos := _crystal_world_pos(team)
+	_focus_camera_on(pos, 1.1)
+	_crystal_explosion(pos, won)
+	var tw := create_tween()
+	tw.tween_interval(5.0)
+	tw.tween_callback(func(): _show_end_banner(won))
+
+func _show_end_banner(won: bool) -> void:
+	var banner: Control = EndBannerScript.new()
+	banner.name = "EndBanner"
+	banner.set("won", won)
+	var host: Node = ui if ui != null else self
+	host.add_child(banner)
+	banner.finished.connect(func():
+		_enter_post_match(won)
+		# 兜底：聚光灯层没建起来（或英雄都没收集到）就直接进结算，避免停在黑屏且点击无反应
+		if _pm_view == null or not is_instance_valid(_pm_view):
+			_show_game_over(true))
+## 聚光灯舞台（终局第一幕）：己方 5 人 V 字站位（玩家居中）→ 点击 → 玩家个人表现 → 再点击 → 结算
+func _enter_post_match(won: bool) -> void:
+	if not is_instance_valid(hero):
+		_show_game_over(true)
+		return
+	_pm_player = hero
+	get_tree().paused = true
+	if ui != null:
+		ui.visible = false
+	if is_instance_valid(TouchController):
+		TouchController.set_intro_hidden(true)
+	# 战场退场：隐藏其余所有场景物件（只留己方 5 人），镜头背景改为纯黑
+	_pm_hidden.clear()
+	for child in get_children():
+		if child is Hero or child == cam:
+			continue
+		# CanvasLayer / 3D 场景物件 / 普通 Control（小地图等直挂在 BattleManager 上的 HUD）全部退场
+		if child is CanvasLayer or child is Node3D or child is Control:
+			child.visible = false
+			_pm_hidden.append(child)
+	if cam != null and is_instance_valid(cam):
+		_pm_env = Environment.new()
+		_pm_env.background_mode = Environment.BG_COLOR
+		_pm_env.background_color = Color(0.0, 0.0, 0.0)
+		_pm_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		_pm_env.ambient_light_color = Color(0.24, 0.27, 0.34)
+		_pm_env.ambient_light_energy = 1.05
+		_pm_env.glow_enabled = true
+		_pm_env.glow_intensity = 0.55
+		cam.environment = _pm_env
+		# 主光：从镜头方向斜上方打一盏平行光，保证 5 个英雄轮廓清晰（单纯聚光灯偏暗）
+		var key := DirectionalLight3D.new()
+		key.light_color = Color(0.98, 0.95, 0.90)
+		key.light_energy = 1.35
+		key.shadow_enabled = false
+		add_child(key)
+		_pm_key = key
+		_pm_lights.append(key)
+	var base: Vector3 = Vector3(-53.0, 0.0, 53.0) if Config.player_team == Config.Team.PLAYER else Vector3(53.0, 0.0, -53.0)
+	_pm_inward = Vector3(-base.x, 0.0, -base.z).normalized()
+	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
+	_pm_stage = base + _pm_inward * 22.0
+	_pm_stage.y = 0.0
+	# V 字站位：玩家居中垫前，两侧各两人逐级后退
+	var slots: Array = [
+		Vector3.ZERO,
+		_pm_right * 4.6 - _pm_inward * 2.6,
+		_pm_right * -4.6 - _pm_inward * 2.6,
+		_pm_right * 9.2 - _pm_inward * 5.2,
+		_pm_right * -9.2 - _pm_inward * 5.2,
+	]
+	_pm_heroes.clear()
+	_pm_heroes.append(_pm_player)
+	for h in get_tree().get_nodes_in_group("heroes"):
+		if h is Hero and h != _pm_player and h.team == Config.player_team and _pm_heroes.size() < 5:
+			_pm_heroes.append(h)
+	for i in range(_pm_heroes.size()):
+		var eh: Hero = _pm_heroes[i]
+		var off: Vector3 = slots[i]
+		# 阵亡的（对局结束时正在死亡/等待复活）也要上台：恢复存活外观，否则死亡会把整个人隐藏
+		eh.is_dead = false
+		eh.is_reviving = false
+		eh.revive_timer = 0.0
+		eh.respawn_timer = 0.0
+		eh.health = eh.max_health
+		eh.visible = true
+		eh.scale = Vector3.ONE
+		eh.global_position = _pm_stage + off
+		eh.velocity = Vector3.ZERO
+		# 面向镜头：相机在 stage + inward*d，英雄朝 +inward 才是正脸（此前取了反方向）
+		eh.rotation = Vector3(0.0, atan2(_pm_inward.x, _pm_inward.z), 0.0)
+		# 冻结站位：停掉 AI 与英雄物理，避免铭牌/人物在舞台上持续漂移
+		for ch in eh.get_children():
+			if ch is HeroAI:
+				ch.set_physics_process(false)
+				ch.set_process(false)
+		eh.set_physics_process(false)
+		if eh.anim_player != null and eh.anim_player.has_animation("idle"):
+			eh.anim_player.play("idle")
+		_pm_add_spotlight(eh.global_position, i == 0)
+	# 评分与奖牌：MVP = 队伍对战评分最高者；金/银/铜牌按评分门槛，评分不够则无奖牌
+	var team_list: Array = _pm_team_list(Config.player_team)
+	var medal_of: Dictionary = {}
+	var mvp_hero: Hero = _pm_player
+	var best_r := -1.0
+	for eh3 in _pm_heroes:
+		var rh: Hero = eh3
+		var rr: float = _pm_rating(rh, team_list)
+		medal_of[rh] = _pm_medal_by_rating(rr)
+		if rr > best_r:
+			best_r = rr
+			mvp_hero = rh
+	# 叠层 UI（独立 CanvasLayer，压在 HUD 之上）
+	_pm_layer = CanvasLayer.new()
+	_pm_layer.layer = 90
+	add_child(_pm_layer)
+	_pm_view = PostMatchViewScript.new()
+	_pm_layer.add_child(_pm_view)
+	_pm_view.set_camera(cam)
+	var entries: Array = []
+	for eh2 in _pm_heroes:
+		var hh: Hero = eh2
+		entries.append({
+			"world": hh.global_position,
+			"hero": str(hh.display_name),
+			"nick": str(hh.player_name),
+			"lane": HeroPickData.role_lane(str(hh.role)),
+			"mvp": hh == mvp_hero,
+			"medal": int(medal_of.get(hh, -1)),
+			"node": hh,
+		})
+	_pm_view.set_stage(won, entries)
+	_pm_view.advance.connect(_on_pm_advance)
+	_pm_view.finished.connect(_on_pm_finished)
+	# 镜头推到 V 字正面（再拉近一档，人物占满画面）
+	if cam != null and is_instance_valid(cam):
+		var look: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
+		var cam_end: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		# 主光方向：与镜头同侧、略俯视，正面照亮 5 人
+		if _pm_key != null and is_instance_valid(_pm_key):
+			var light_dir: Vector3 = (-_pm_inward + Vector3(0.0, -0.85, 0.0)).normalized()
+			_pm_key.global_rotation = Basis.looking_at(light_dir, Vector3.UP).get_euler()
+		var tw: Tween = _pm_view.create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(cam, "global_position", cam_end, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(cam, "rotation", rot, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		# 兜底：补间若被中断/暂停，结束帧直接把镜头锁到目标机位，避免停在半空看不到人
+		tw.finished.connect(func():
+			if cam != null and is_instance_valid(cam):
+				cam.global_position = cam_end
+				cam.rotation = rot)
+
+
+## 单盏聚光灯：顶光 + 地面光圈（不打体积光柱，避免糊住人物）
+func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
+	var root := Node3D.new()
+	root.position = pos
+	add_child(root)
+	_pm_lights.append(root)
+	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
+	var sl := SpotLight3D.new()
+	sl.position = Vector3(0.0, 7.5, 0.0)
+	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+	sl.spot_range = 18.0
+	sl.spot_angle = 32.0
+	sl.light_energy = 4.5 if is_player else 3.2
+	sl.light_color = col
+	root.add_child(sl)
+	# 只保留地面光圈：不放体积光柱，避免光柱糊住人物轮廓看不清
+	var disc := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 1.25
+	cm.bottom_radius = 1.25
+	cm.height = 0.02
+	cm.radial_segments = 40
+	disc.mesh = cm
+	disc.position = Vector3(0.0, 0.02, 0.0)
+	var dm := StandardMaterial3D.new()
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	dm.albedo_color = Color(col.r, col.g, col.b, 0.34 if is_player else 0.22)
+	disc.material_override = dm
+	root.add_child(disc)
+
+
+## 某一方队伍英雄列表（评分归一化用）
+func _pm_team_list(team: int) -> Array:
+	var out: Array = []
+	for n in get_tree().get_nodes_in_group("heroes"):
+		if n is Hero and int(n.team) == team:
+			out.append(n)
+	return out
+
+
+## 对战评分 0~100（与结算页评分同公式：队伍内归一化后加权）
+func _pm_rating(h: Hero, team_heroes: Array) -> float:
+	if h == null or not is_instance_valid(h):
+		return 0.0
+	var t_max_kills := 1
+	var t_max_dmg := 1.0
+	var t_max_gold := 1
+	var t_max_taken := 1.0
+	var t_total_kills := 0
+	var t_max_deaths := 1
+	for n in team_heroes:
+		if n is Hero:
+			var th: Hero = n
+			t_max_kills = maxi(t_max_kills, th.kills)
+			t_max_dmg = maxf(t_max_dmg, th.damage_dealt_to_heroes)
+			t_max_gold = maxi(t_max_gold, th.total_gold_earned)
+			t_max_taken = maxf(t_max_taken, th.damage_taken_from_heroes)
+			t_total_kills += th.kills
+			t_max_deaths = maxi(t_max_deaths, th.deaths)
+	var kill_score := float(h.kills) / float(t_max_kills) * 100.0
+	var assist_score := float(h.assists) / float(maxi(1, t_total_kills)) * 100.0
+	var death_score := maxf(0.0, 1.0 - float(h.deaths) / float(maxi(1, t_max_deaths))) * 100.0
+	var gold_score := float(h.total_gold_earned) / float(t_max_gold) * 100.0
+	var dmg_score := h.damage_dealt_to_heroes / t_max_dmg * 100.0
+	var taken_score := h.damage_taken_from_heroes / t_max_taken * 100.0
+	var part := float(h.kills + h.assists) / float(maxi(1, t_total_kills)) * 100.0
+	var total := kill_score * 0.15 + assist_score * 0.10 + death_score * 0.05 + gold_score * 0.15 \
+		+ dmg_score * 0.25 + taken_score * 0.10 + part * 0.20
+	return clampf(total, 0.0, 100.0)
+
+
+## 奖牌门槛（依据对战评分，评分不够没有奖牌）：0=金 1=银 2=铜 -1=无
+func _pm_medal_by_rating(r: float) -> int:
+	if r >= 78.0:
+		return 0
+	if r >= 64.0:
+		return 1
+	if r >= 52.0:
+		return 2
+	return -1
+
+
+## 奖牌额外积分：铜 +12 / 银 +33 / 金 +100（顶级评分另加 +200）
+func _pm_medal_bonus(medal: int) -> int:
+	return RankSystem.medal_bonus(medal)
+
+
+## 第一次点击：镜头把玩家推到屏幕左侧，右侧出个人表现面板（其余英雄留在台上不退场）
+func _on_pm_advance() -> void:
+	var p: Hero = _pm_player
+	if p == null or not is_instance_valid(p):
+		return
+	if _pm_view == null or not is_instance_valid(_pm_view):
+		return
+	if cam != null and is_instance_valid(cam):
+		# 适当后撤，让玩家在左三分之一的同时，其余 4 名队友仍留在画面里（不退出舞台）
+		var look: Vector3 = p.global_position - _pm_right * 5.8 + Vector3(0.0, 1.45, 0.0)
+		var cam_end: Vector3 = p.global_position + _pm_inward * 9.6 - _pm_right * 5.8 + Vector3(0.0, 5.6, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		var tw2: Tween = _pm_view.create_tween()
+		tw2.set_parallel(true)
+		tw2.tween_property(cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw2.tween_property(cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw2.finished.connect(func():
+			if cam != null and is_instance_valid(cam):
+				cam.global_position = cam_end
+				cam.rotation = rot)
+	_pm_view.show_player_detail(_pm_player_detail(p))
+
+
+## 玩家个人表现数据（右侧面板 + 本局上/掉分）
+func _pm_player_detail(h: Hero) -> Dictionary:
+	var rows: Array = [
+		["K / D / A", "%d / %d / %d" % [h.kills, h.deaths, h.assists]],
+		["总经济", "%d" % h.total_gold_earned],
+		["英雄伤害", "%d" % int(h.damage_dealt_to_heroes)],
+		["承受伤害", "%d" % int(h.damage_taken_from_heroes)],
+		["治疗量", "%d" % int(h.healing_done)],
+		["补刀", "%d" % h.last_hits],
+		["推塔伤害", "%d" % int(h.turret_damage)],
+		["控制时长", "%.1f s" % h.cc_duration_dealt],
+		["野区经济", "%d" % h.jungle_gold],
+	]
+	var rank_lines: Array = []
+	if not rank_result.is_empty():
+		var rr: Dictionary = rank_result
+		var old_s: Dictionary = rr.get("old_state", {})
+		var new_s: Dictionary = rr.get("new_state", {})
+		var pts: int = int(rr.get("point_change", int(new_s.get("points", 0)) - int(old_s.get("points", 0))))
+		rank_lines.append("本局积分 %+d" % pts)
+		var mb: int = int(rr.get("medal_bonus", 0))
+		if mb > 0:
+			rank_lines.append("奖牌加成 %+d 积分" % mb)
+		var tb: int = int(rr.get("top_bonus", 0))
+		if tb > 0:
+			rank_lines.append("顶级评价 %+d 积分" % tb)
+		rank_lines.append("本局星数 %+d★" % int(rr.get("star_change", 0)))
+		rank_lines.append("段位 %s → %s" % [str(rr.get("old_label", "")), str(rr.get("new_label", ""))])
+		if bool(rr.get("promoted", false)):
+			rank_lines.append("↑ 晋升")
+		elif bool(rr.get("demoted", false)):
+			rank_lines.append("↓ 降级")
+		elif bool(rr.get("floor_protected", false)):
+			rank_lines.append("最低段位保护")
+	else:
+		rank_lines.append("本局不计排位星")
+	rank_lines.append("对局时长 %02d:%02d" % [int(game_time) / 60, int(game_time) % 60])
+	return {
+		"hero": str(h.display_name),
+		"nick": str(h.player_name),
+		"lane": HeroPickData.role_lane(str(h.role)),
+		"mvp": bool(h.is_mvp),
+		"rating": _pm_rating(h, _pm_team_list(int(h.team))),
+		"medal": int(rank_result.get("medal", -1)) if not rank_result.is_empty() else -1,
+		"rows": rows,
+		"rank_lines": rank_lines,
+	}
+
+
+## 第二次点击：收掉舞台层，进结算面板
+func _on_pm_finished() -> void:
+	if _pm_view != null and is_instance_valid(_pm_view):
+		_pm_view.queue_free()
+	_pm_view = null
+	if _pm_layer != null and is_instance_valid(_pm_layer):
+		_pm_layer.queue_free()
+	_pm_layer = null
+	for n in _pm_lights:
+		if is_instance_valid(n):
+			n.queue_free()
+	_pm_lights.clear()
+	_pm_key = null
+	for n in _pm_hidden:
+		if is_instance_valid(n):
+			n.visible = true
+	_pm_hidden.clear()
+	if cam != null and is_instance_valid(cam):
+		cam.environment = null
+	_pm_env = null
+	if ui != null:
+		ui.visible = true
+	if is_instance_valid(TouchController):
+		TouchController.set_intro_hidden(false)
+	_show_game_over(true)
+
+
+func _crystal_world_pos(team: int) -> Vector3:
+	for t in turrets:
+		if is_instance_valid(t) and t.team == team and str(t.display_name) == "crystal":
+			return t.global_position
+	return Vector3(-53, 0, 53) if team == Config.Team.PLAYER else Vector3(53, 0, -53)
+
+## 演出期间把镜头锁到水晶（game_over 后 _physics_process 已停跟镜头，这里直接补间）
+func _focus_camera_on(pos: Vector3, dur: float) -> void:
+	if cam == null or not is_instance_valid(cam):
+		return
+	var dir := Vector3(-pos.x, 0.0, -pos.z).normalized()   # 从地图内侧看水晶，避免被外墙挡住
+	if dir == Vector3.ZERO:
+		dir = Vector3(0, 0, 1)
+	var cam_end: Vector3 = pos + dir * 24.0 + Vector3(0, 24.0, 0)
+	var rot: Vector3 = Basis.looking_at((pos + Vector3(0, 2.5, 0) - cam_end).normalized(), Vector3.UP).get_euler()
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(cam, "global_position", cam_end, dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(cam, "rotation", rot, dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+## 水晶爆炸：碎石四散 + 地面焦痕 + 5 秒递增冲击波/闪光/震屏，最后白闪收尾
+## won=true 时整体走金白色调，失败走冷蓝+橙火色调
+func _crystal_explosion(pos: Vector3, won: bool) -> void:
+	var root := Node3D.new()
+	root.name = "EndCrystalFX"
+	root.position = pos
+	add_child(root)
+	var core: Color = Color(1.0, 0.93, 0.62) if won else Color(0.65, 0.88, 1.0)
+	var warm: Color = Color(1.0, 0.98, 0.88) if won else Color(1.0, 0.72, 0.30)
+	# 碎石粒子（延迟到光柱打出后才喷）
+	var debris := CPUParticles3D.new()
+	debris.amount = 90
+	debris.one_shot = true
+	debris.explosiveness = 1.0
+	debris.lifetime = 3.4
+	debris.position = Vector3(0, 1.4, 0)
+	debris.direction = Vector3.UP
+	debris.spread = 180.0
+	debris.initial_velocity_min = 4.0
+	debris.initial_velocity_max = 17.0
+	debris.gravity = Vector3(0, -14, 0)
+	debris.scale_amount_min = 0.7
+	debris.scale_amount_max = 2.6
+	debris.angular_velocity_min = -220.0
+	debris.angular_velocity_max = 220.0
+	var rock := BoxMesh.new()
+	rock.size = Vector3(0.6, 0.6, 0.6)
+	debris.mesh = rock
+	debris.material_override = DecorMesh.rock_material()
+	debris.emitting = false
+	root.add_child(debris)
+	# 地面焦痕（压在水晶青砖之上）
+	var scorch := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 6.4
+	cyl.bottom_radius = 6.8
+	cyl.height = 0.02
+	cyl.radial_segments = 48
+	scorch.mesh = cyl
+	var sm := StandardMaterial3D.new()
+	sm.albedo_color = Color(0.06, 0.05, 0.05)
+	sm.roughness = 1.0
+	scorch.material_override = sm
+	scorch.position.y = 0.215
+	scorch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(scorch)
+
+	var tw := root.create_tween()
+	# 注意：水晶本身的光柱与零件爆裂由 Turret.play_collapse 的水晶分支在 t≈0.1~0.3s 完成，
+	# 这里只负责「镜头聚焦后的余爆与终章」，不重复打光束/碎片，避免两次光柱叠在一起。
+	# 1) 蓄能：地面收束环 + 中心亮起来
+	tw.tween_callback(func() -> void:
+		Vfx.shockwave(pos + Vector3(0, 0.22, 0), 6.0, core, 0.5)
+		Vfx._light(pos + Vector3(0, 2.0, 0), core, 6.0, 0.35)
+		Vfx.camera_shake(0.28, 0.45)
+		Vfx.screen_flash(Color(1.0, 0.97, 0.9), 0.14))
+	# 2) 水晶炸开后的碎石与冲击环
+	tw.tween_interval(1.05)
+	tw.tween_callback(func() -> void:
+		debris.emitting = true
+		Vfx.shockwave(pos + Vector3(0, 0.3, 0), 12.0, core, 0.8)
+		Vfx.shockwave(pos + Vector3(0, 0.25, 0), 7.5, warm, 0.6)
+		Vfx.hit_spark(pos + Vector3(0, 2.0, 0), warm, Vector3.UP, 3.0)
+		Vfx.camera_shake(0.5, 0.4))
+	# 4) 余爆：4 次递增（不再每 0.5s 抖一下，节奏更自然）
+	for i in range(4):
+		var k: float = float(i + 1) / 4.0
+		tw.tween_interval(0.52)
+		tw.tween_callback(func() -> void: _crystal_burst(pos, 0.35 + 0.65 * k, core, warm))
+	# 5) 终章大爆
+	tw.tween_interval(0.65)
+	tw.tween_callback(func() -> void: _crystal_final_blast(pos, core, warm))
+	tw.tween_callback(func() -> void: root.queue_free())
+
+func _crystal_burst(pos: Vector3, k: float, core: Color, warm: Color) -> void:
+	var q: Vector3 = pos + Vector3(randf_range(-1.6, 1.6), randf_range(0.6, 3.2), randf_range(-1.6, 1.6))
+	Vfx.shockwave(pos + Vector3(0, 0.25, 0), lerpf(3.0, 13.0, k), core.lerp(warm, k), 0.55)
+	Vfx.hit_spark(q, warm, Vector3.UP, 1.2 + 2.4 * k)
+	Vfx._light(q, core, 3.0 + 5.0 * k, 0.55)
+	Vfx.camera_shake(0.10 + 0.45 * k, 0.24)
+
+func _crystal_final_blast(pos: Vector3, core: Color, warm: Color) -> void:
+	Vfx.screen_flash(Color(1.0, 0.96, 0.88), 0.55)
+	Vfx.shockwave(pos + Vector3(0, 0.3, 0), 26.0, Color(1.0, 0.86, 0.55), 1.0)
+	Vfx.shockwave(pos + Vector3(0, 0.2, 0), 16.0, core, 0.8)
+	Vfx.pillar(pos, Color(1.0, 0.92, 0.75), 4.2, 30.0, 1.2)
+	Vfx.camera_shake(0.85, 1.0)
+	Vfx._light(pos + Vector3(0, 3.0, 0), Color(1.0, 0.9, 0.7), 18.0, 1.4)
+
+func _show_game_over(halt: bool = false):
 	get_tree().paused = false  # 取消暂停以便结算面板交互
 	if ui and ui.death_overlay:
 		ui.death_overlay.visible = false
 	var panel = ResultsPanel.new()
 	add_child(panel)
 	panel.setup(self)
+	if halt:
+		# 终局：冻结战场上的所有进程（结算面板自身是 PROCESS_MODE_ALWAYS，不受影响）
+		get_tree().paused = true
 func spawn_exp_orb(world_pos: Vector3, target: Hero, amount: int):
-	# 亮核 + 双层菲涅尔光晕；生成时弹性放大，再飞向目标英雄
-	var orb: Node3D = MeshFactory.create_exp_orb(0.16)
+	# 亮核 + 双层菲涅尔光晕；生成时弹性放大，再飞向目标英雄（尺寸再收一档、飞行更慢、带拖尾）
+	var orb: Node3D = MeshFactory.create_exp_orb(0.085)
 	orb.position = world_pos + Vector3.UP * 1.0
-	orb.scale = Vector3(0.35, 0.35, 0.35)
+	orb.scale = Vector3(0.26, 0.26, 0.26)
 	add_child(orb)
+	Vfx.attach_trail(orb, Color(0.42, 1.0, 0.60), 0.12, 0.24, 8, Color(0.86, 1.0, 0.90, 0.55))
 
 	var tween = create_tween()
-	tween.tween_property(orb, "scale", Vector3.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tween.parallel().tween_property(orb, "position", target.global_position + Vector3.UP * 1.5, 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tween.tween_property(orb, "scale", Vector3(0.62, 0.62, 0.62), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.parallel().tween_property(orb, "position", target.global_position + Vector3.UP * 1.5, 0.9).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tween.tween_callback(func():
 		target.add_exp(amount)
 		orb.queue_free()

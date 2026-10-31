@@ -53,6 +53,8 @@ const CATEGORIES := [
 var _heroes: Array = []
 var _item_ids_by_cat: Dictionary = {}
 var _hero_name := ""
+## 从「英雄图鉴」跳转过来时指定要配置的英雄（用完清空；空=默认第一个）
+static var open_hero := ""
 var _role_filter := ROLE_ALL
 var _cat_label := "物理"
 var _slot_ids: Array = ["", "", "", "", "", ""]
@@ -123,7 +125,11 @@ func _ready() -> void:
 	_refresh_hero_grid()
 	_refresh_item_grid()
 	if not _heroes.is_empty():
-		_select_hero(str(_heroes[0]))
+		var first := str(_heroes[0])
+		if open_hero != "" and _heroes.has(open_hero):
+			first = open_hero
+		open_hero = ""
+		_select_hero(first)
 	SfxManager.start_menu_music()
 
 

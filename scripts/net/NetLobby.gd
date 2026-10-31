@@ -24,6 +24,11 @@ enum UIState { MENU, ROOM, SELECT }
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
 const MenuBackdropScript = preload("res://scripts/ui/MenuBackdrop.gd")
 const TacticalMapScript = preload("res://scripts/ui/TacticalMap.gd")
+const ReplayBrowserPanelScript = preload("res://scripts/ui/ReplayBrowserPanel.gd")
+const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
+const BootIntroScript = preload("res://scripts/ui/GameBootIntro.gd")
+const BootIntro3DScript = preload("res://scripts/ui/GameBootIntro3D.gd")
+const LoginPanelScript = preload("res://scripts/ui/LoginPanel.gd")
 const BTN_W := 640.0
 const BTN_H := 96.0
 const PAGE_PAD_X := 64          # 页面左右内边距
@@ -142,6 +147,9 @@ var _build_row: HBoxContainer = null         # 出装方案按钮行（内置推
 var _build_hero := ""                        # 当前出装方案归属英雄
 var _build_ids: Array = []                   # 当前套用的出装 id 列表
 var _hero_cfg_cache := {}                    # BattleManager.hero_configs 懒加载缓存（只读）
+static var _boot_intro_played := false       # 本次进程只播一次开机动画（战斗返回大厅不重播）
+static var _login_completed := false         # 本次进程已完成登录/开始过渡，回到大厅直接进菜单
+var _login_layer: CanvasLayer = null
 
 
 func _ready() -> void:
@@ -156,6 +164,72 @@ func _ready() -> void:
 	_connect_signals()
 	_show_menu()
 	SfxManager.start_menu_music()
+	# 主菜单前的电影感启动界面：首次进入大厅播放，之后回大厅直接进菜单
+	if not _boot_intro_played:
+		_boot_intro_played = true
+		_show_boot_intro()
+	elif not _login_completed:
+		_show_login_panel()
+
+
+func _show_boot_intro() -> void:
+	# 独立 CanvasLayer 高于灵宝悬浮层，保证开机动画期间不被常驻 UI 穿透
+	var layer := CanvasLayer.new()
+	layer.name = "BootIntroLayer"
+	layer.layer = 150
+	add_child(layer)
+	_mount_boot_intro(layer, true)
+
+
+func _mount_boot_intro(layer: CanvasLayer, use_3d: bool) -> void:
+	for c in layer.get_children():
+		if c is Control:
+			(c as Control).visible = false
+			(c as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+		c.queue_free()
+	var boot: Node = BootIntro3DScript.new() if use_3d else BootIntroScript.new()
+	boot.name = "BootIntro3D" if use_3d else "BootIntro2D"
+	layer.add_child(boot)
+	boot.finished.connect(func() -> void:
+		layer.queue_free()
+		if not _login_completed:
+			_show_login_panel())
+	# 启动界面内按 V：2D / 3D 两个版本即时切换，方便对比
+	boot.toggle_requested.connect(func() -> void:
+		_mount_boot_intro(layer, not use_3d))
+
+
+func _show_login_panel() -> void:
+	if _login_completed:
+		return
+	if _login_layer != null and is_instance_valid(_login_layer):
+		return
+	_login_layer = CanvasLayer.new()
+	_login_layer.name = "LoginLayer"
+	_login_layer.layer = 160
+	add_child(_login_layer)
+	var panel: Control = LoginPanelScript.new()
+	panel.name = "LoginPanel"
+	_login_layer.add_child(panel)
+	panel.start_requested.connect(func() -> void:
+		if _login_layer != null and is_instance_valid(_login_layer):
+			_login_layer.queue_free()
+			_login_layer = null
+		_play_2d_transition())
+
+
+func _play_2d_transition() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "StartTransitionLayer"
+	layer.layer = 150
+	add_child(layer)
+	var intro: Control = BootIntroScript.new()
+	intro.set("transition_mode", true)
+	intro.name = "StartTransition2D"
+	layer.add_child(intro)
+	intro.finished.connect(func() -> void:
+		layer.queue_free()
+		_login_completed = true)
 
 
 func _connect_signals() -> void:
@@ -391,9 +465,9 @@ func _show_menu() -> void:
 	var r_stars := _mk_label(RankSystem.star_text(rs), _fs(UiKit.FS_MD), RankSystem.tier_color(rs).lightened(0.25))
 	r_stars.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	rv.add_child(r_stars)
-	var r_meta := _mk_label("胜 %d · 负 %d · 勇者积分 %d/%d" % [
+	var r_meta := _mk_label("胜 %d · 负 %d · 排位积分 %d/%d" % [
 		int(rs.get("wins", 0)), int(rs.get("losses", 0)),
-		int(rs.get("points", 0)), RankSystem.MAX_POINTS,
+		int(rs.get("points", 0)), RankSystem.STAR_POINTS,
 	], _fs(UiKit.FS_XS), COL_SUB)
 	r_meta.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	rv.add_child(r_meta)
@@ -404,12 +478,13 @@ func _show_menu() -> void:
 
 	# —— 右栏：操作按钮列 ——
 	var right := VBoxContainer.new()
-	right.anchor_left = 0.740
+	# 右栏给足按钮内容宽度，并留出右侧安全边距；内容按两列重排，避免最小宽度把整栏顶出屏幕
+	right.anchor_left = 0.725
 	right.anchor_top = 0.130
-	right.anchor_right = 0.962
+	right.anchor_right = 0.980
 	right.anchor_bottom = 0.900
 	right.alignment = BoxContainer.ALIGNMENT_CENTER
-	right.add_theme_constant_override("separation", 16)
+	right.add_theme_constant_override("separation", 14)
 	stage.add_child(right)
 
 	var b_single := _mk_btn("▶  单机开局", UiKit.C_GOLD, true, Vector2(420, 88))
@@ -455,34 +530,59 @@ func _show_menu() -> void:
 	_ip_edit = ip_edit
 	_port_edit = port_edit
 
-	var act_row := HBoxContainer.new()
-	act_row.add_theme_constant_override("separation", 10)
-	right.add_child(act_row)
-	var b_loadout := _mk_btn("≡  备战", UiKit.C_TEAM0, false, Vector2(1, 60))
+	# 功能按钮拆成两行两列：原来 4 个挤一行，最小宽度会把右栏撑出屏幕
+	var act_row1 := HBoxContainer.new()
+	act_row1.add_theme_constant_override("separation", 10)
+	right.add_child(act_row1)
+	var b_loadout := _mk_btn("≡  备战", UiKit.C_TEAM0, false, Vector2(1, 56))
 	b_loadout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_loadout.pressed.connect(_open_loadout)
-	act_row.add_child(b_loadout)
-	var b_history := _mk_btn("★  纪录", UiKit.C_TEAM0, false, Vector2(1, 60))
+	act_row1.add_child(b_loadout)
+	var b_history := _mk_btn("★  纪录", UiKit.C_TEAM0, false, Vector2(1, 56))
 	b_history.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_history.pressed.connect(_open_history)
-	act_row.add_child(b_history)
-	var b_controls := _mk_btn("⚙  设置", UiKit.C_TEAM0, false, Vector2(1, 60))
+	act_row1.add_child(b_history)
+
+	var act_row2 := HBoxContainer.new()
+	act_row2.add_theme_constant_override("separation", 10)
+	right.add_child(act_row2)
+	var b_controls := _mk_btn("⚙  设置", UiKit.C_TEAM0, false, Vector2(1, 56))
 	b_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_controls.pressed.connect(_open_controls)
-	act_row.add_child(b_controls)
-	_menu_btns = [b_single, b_host, b_join, b_loadout, b_history, b_controls]
+	act_row2.add_child(b_controls)
+	var b_cloud := _mk_btn("☁  云端", UiKit.C_TEAM0, false, Vector2(1, 56))
+	b_cloud.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_cloud.pressed.connect(_open_cloud)
+	act_row2.add_child(b_cloud)
+
+	# 录像回放：单独一行，避免和功能按钮挤在一起
+	var rec_row := HBoxContainer.new()
+	rec_row.add_theme_constant_override("separation", 10)
+	right.add_child(rec_row)
+	var b_heroes := _mk_btn("英  雄", UiKit.C_GOLD, false, Vector2(1, 52))
+	b_heroes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_heroes.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_heroes.pressed.connect(_open_hero_codex)
+	rec_row.add_child(b_heroes)
+	var b_replay := _mk_btn("▶  录像回放", UiKit.C_TEAM0, false, Vector2(1, 52))
+	b_replay.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_replay.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_replay.pressed.connect(_open_replays)
+	rec_row.add_child(b_replay)
+	_menu_btns = [b_single, b_host, b_join, b_loadout, b_history, b_controls, b_cloud, b_heroes, b_replay]
 
 	var diff_row := HBoxContainer.new()
 	diff_row.add_theme_constant_override("separation", 10)
 	right.add_child(diff_row)
-	_diff_btn = _mk_btn("", UiKit.C_GOLD, false, Vector2(1, 52))
+	_diff_btn = _mk_btn("", UiKit.C_GOLD, false, Vector2(1, 48))
 	_diff_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_diff_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	_diff_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_XS))
 	_diff_btn.pressed.connect(_cycle_difficulty)
 	diff_row.add_child(_diff_btn)
 	_refresh_difficulty_btn()
 
 	_status = _mk_label("", _fs(UiKit.FS_SM), COL_TEXT)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	right.add_child(_status)
 
 	var hint := _mk_label("点沙盘上的路 = 选分路；建房后点「开始选人」，全员锁定自动开局。",
@@ -542,9 +642,8 @@ func _refresh_difficulty_btn() -> void:
 	var d := PlayerPrefs.get_ai_difficulty()
 	var t: Dictionary = AiConfig.DIFF_TABLE.get(d, {})
 	if _diff_btn != null:
-		_diff_btn.text = "AI难度 · %s · 反应%.2fs · 命中%d%%" % [
+		_diff_btn.text = "AI 难度 · %s · 命中%d%%" % [
 			AiConfig.difficulty_name(d),
-			float(t.get("reaction_delay", 0.0)),
 			int(round(float(t.get("skill_accuracy", 1.0)) * 100.0)),
 		]
 
@@ -616,6 +715,136 @@ func _open_history() -> void:
 	add_child(panel)
 
 
+# 录像回放列表（user://replays/index.json）
+# 英雄模块：3D 模型 + 属性 / 技能 / 玩法 / 出装，可直接跳到该英雄的备战界面
+func _open_hero_codex() -> void:
+	if _connecting:
+		return
+	var panel: Control = HeroCodexPanel.new()
+	add_child(panel)
+
+
+func _open_replays() -> void:
+	if _connecting:
+		return
+	var panel: Control = ReplayBrowserPanelScript.new()
+	add_child(panel)
+
+
+# ---------- 云端存档（段位 + 对战纪录；需自备 HTTP 服务） ----------
+
+func _open_cloud() -> void:
+	if _connecting:
+		return
+	_clear_stack()
+	_set_page_pad(int(PAGE_PAD_X), int(PAGE_PAD_Y))
+
+	var panel := _panel_block(UiKit.C_TEAM0, 0.42)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_stack.add_child(panel)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 14)
+	panel.add_child(col)
+
+	var title := _mk_label("云端存档", int(_fs(UiKit.FS_HUGE) * 1.6), COL_TITLE)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(title)
+	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n服务端约定：POST {地址}/upload 上传、GET {地址}/download?pid=玩家ID 下载（Bearer Token 可选）。",
+		_fs(UiKit.FS_SM), COL_DIM)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(tip)
+
+	var cfg := PlayerPrefs.cloud_cfg()
+	col.add_child(_cloud_edit_row("服务器地址", "https://example.com/hk", str(cfg.get("url", "")), false))
+	col.add_child(_cloud_edit_row("访问令牌", "可留空", str(cfg.get("token", "")), true))
+	var pid_lab := _mk_label("玩家 ID：%s" % CloudSyncScript.player_id(), _fs(UiKit.FS_SM), COL_TEXT)
+	col.add_child(pid_lab)
+
+	var status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
+	col.add_child(status)
+
+	var auto_btn := _mk_btn("", UiKit.C_GOLD, false, Vector2(520, 48))
+	auto_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	col.add_child(auto_btn)
+	var _refresh_auto := func() -> void:
+		auto_btn.text = "赛后自动上传：" + ("开启" if bool(PlayerPrefs.cloud_cfg().get("auto", false)) else "关闭")
+	_refresh_auto.call()
+	auto_btn.pressed.connect(func() -> void:
+		_save_cloud_cfg()
+		var c := PlayerPrefs.cloud_cfg()
+		c["auto"] = not bool(c.get("auto", false))
+		PlayerPrefs.set_cloud_cfg(c)
+		_refresh_auto.call())
+
+	var act := HBoxContainer.new()
+	act.add_theme_constant_override("separation", 16)
+	col.add_child(act)
+	var b_up := _mk_btn("↑  上传到云端", UiKit.C_GOLD, true, Vector2(320, 60))
+	b_up.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_up.pressed.connect(func() -> void:
+		_save_cloud_cfg()
+		status.text = "上传中…"
+		CloudSyncScript.upload(get_tree(), func(ok: bool, code: int, msg: String) -> void:
+			status.text = "上传成功" if ok else "上传失败（%d）%s" % [code, msg.left(60)]))
+	act.add_child(b_up)
+	var b_down := _mk_btn("↓  从云端恢复", UiKit.C_TEAM0, false, Vector2(320, 60))
+	b_down.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_down.pressed.connect(func() -> void:
+		_save_cloud_cfg()
+		status.text = "下载中…"
+		CloudSyncScript.download(get_tree(), func(ok: bool, code: int, msg: String) -> void:
+			status.text = msg if ok else "下载失败（%d）%s" % [code, msg.left(60)]))
+	act.add_child(b_down)
+
+	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
+	back.pressed.connect(_show_menu)
+	col.add_child(back)
+
+
+# 云端页的一行输入：左说明 + 右 LineEdit
+func _cloud_edit_row(label_txt: String, placeholder: String, value: String, secret: bool) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 24)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var lab := _mk_label(label_txt, _fs(UiKit.FS_MD), COL_TEXT)
+	lab.custom_minimum_size = Vector2(200, 0)
+	lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(lab)
+	var edit := LineEdit.new()
+	edit.text = value
+	edit.placeholder_text = placeholder
+	edit.secret = secret
+	edit.custom_minimum_size = Vector2(0, 50)
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	edit.add_theme_font_override("font", UiKit.font())
+	edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	edit.name = "edit"
+	row.add_child(edit)
+	return row
+
+
+# 把当前页面两个输入框写回 PlayerPrefs（pid/auto 保留原值）
+func _save_cloud_cfg() -> void:
+	var url := ""
+	var token := ""
+	if _stack != null:
+		var edits := _stack.find_children("*", "LineEdit", true, false)
+		if edits.size() > 0:
+			url = (edits[0] as LineEdit).text
+		if edits.size() > 1:
+			token = (edits[1] as LineEdit).text
+	var old := PlayerPrefs.cloud_cfg()
+	PlayerPrefs.set_cloud_cfg({
+		"url": url.strip_edges(),
+		"token": token.strip_edges(),
+		"pid": str(old.get("pid", CloudSyncScript.player_id())),
+		"auto": bool(old.get("auto", false)),
+	})
+
+
 # ---------- 操作设置（页内切换，不弹独立窗口） ----------
 
 # 9 行：左说明 Label + 右循环切换按钮；点按钮立即写 PlayerPrefs（进对局生效）
@@ -671,6 +900,21 @@ func _open_controls() -> void:
 		ctrl_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 		ctrl_btn.pressed.connect(_cycle_ctrl.bind(key, ctrl_btn))
 		row.add_child(ctrl_btn)
+
+	# 键位布局：按钮位置/大小需在对局内直接拖动（能看到真实按钮），这里只说明入口
+	var lay_row := HBoxContainer.new()
+	lay_row.add_theme_constant_override("separation", 24)
+	lay_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_child(lay_row)
+	var lay_lab := _mk_label("键位布局（按钮位置 / 大小）", _fs(UiKit.FS_MD), COL_TEXT)
+	lay_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lay_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lay_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lay_row.add_child(lay_lab)
+	var lay_btn := _mk_btn("对局内「设置 → 自定义键位布局」", UiKit.C_GOLD, false, Vector2(520, 48))
+	lay_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	lay_btn.disabled = true
+	lay_row.add_child(lay_btn)
 
 	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
 	back.pressed.connect(_show_menu)

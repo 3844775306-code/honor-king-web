@@ -2074,7 +2074,13 @@ func _update_summoner_preview() -> void:
 	var self_pos := _self_pos()
 	var aim_dir := Vector3(sin(ry), 0.0, cos(ry))
 	if drag.length() > 12.0:
-		aim_dir = Vector3(drag.x, 0.0, drag.y).normalized()
+		# 屏幕拖拽 → 反投影到地面，取世界方向（按本机镜头，红方镜头转 180° 同样正确）
+		var sc := get_viewport().get_visible_rect().size * 0.5 + drag.normalized() * 500.0
+		var wpv: Vector3 = _ground_hit(sc)
+		var dvv: Vector3 = wpv - self_pos
+		dvv.y = 0.0
+		if dvv.length() > 0.2:
+			aim_dir = dvv.normalized()
 	else:
 		var md := _ground_hit(_mouse_screen) - self_pos
 		md.y = 0.0
@@ -2849,6 +2855,8 @@ func _apply_map_if_ready() -> void:
 		var wall_model := NetModels.wall(hq, outer, outer_len)
 		if wall_model == null:
 			continue
+		# 与主机同源的墙脚贴地抬升（分路/高地台面不埋墙根）
+		wall_model.position.y = DecorMesh.wall_ground_y(root.position)
 		root.add_child(wall_model)
 		_static_root.add_child(root)
 		# 程序化石墙已自带基底碎石与苔藓（与主机同源），不再叠加旧装饰
@@ -3142,8 +3150,7 @@ func _build_recall() -> void:
 	var cl := CanvasLayer.new()
 	cl.layer = 42
 	add_child(cl)
-	_rk = NetRecallScript.new()
-	cl.add_child(_rk)
+	# 回城/传送中央方框已按需求移除：不再创建 NetRecall 指示器（_rk 保持 null，下面的 feed 自动跳过）
 
 # —— P3e 死亡回放：host 死亡跃迁推送；模态，盖过战报/回城，Esc/点遮罩/×可关 ——
 func _build_death_recap() -> void:
@@ -3523,9 +3530,17 @@ func _poll_aux_input() -> void:
 			if str(_own.get("summoner_name", "")) != "":
 				var aim2: Vector2 = sum_rel.get("drag", Vector2.ZERO)
 				if aim2.length() <= 20.0:
-					# 点按：退化为自身朝向（主机 _resolve_flash_dir 长度≤20 走移动/面朝，接管英雄落面朝）
+					# 点按：退化为自身朝向（世界方向）
 					var ry := float(_own.get("ry", 0.0))
 					aim2 = Vector2(sin(ry), cos(ry)) * 100.0
+				else:
+					# 拖拽：按本机镜头把屏幕方向反投影成世界方向，主机按世界方向施放
+					var sc2 := get_viewport().get_visible_rect().size * 0.5 + aim2.normalized() * 500.0
+					var wp2: Vector3 = _ground_hit(sc2)
+					var dv2: Vector3 = wp2 - _self_pos()
+					dv2.y = 0.0
+					if dv2.length() > 0.2:
+						aim2 = Vector2(dv2.x, dv2.z).normalized() * 100.0
 				NetSession.send_command([NetSession.C_SUMMONER, -1, aim2.x, aim2.y])
 				_summoner_local_feedback()
 	# 恢复：点按 → C_RECOVER（cd 预检；主机同款 index4=恢复槽）
@@ -3637,6 +3652,8 @@ func _kbd_summoner() -> void:
 	if dir.length() < 1.0:
 		var ry := float(_own.get("ry", 0.0))
 		dir = Vector2(sin(ry), cos(ry)) * 100.0
+	else:
+		dir = dir.normalized() * 100.0   # 主机以长度>20 判定“有方向”
 	NetSession.send_command([NetSession.C_SUMMONER, -1, dir.x, dir.y])
 	_summoner_local_feedback()
 

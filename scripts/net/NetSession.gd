@@ -969,7 +969,8 @@ func _apply_command(h: Hero, cmd: Array, pid: int) -> void:
 		C_SUMMONER:
 			# aim_dir=世界方向(x,z)，长度>20 即用于位移类；否则主机内部兜底（移动方向/面朝）
 			if h.summoner_skill and h.summoner_cooldown <= 0.0:
-				h._use_summoner(Vector2(float(cmd[2]), float(cmd[3])))
+				# 客户端已按自己的镜头把拖拽换算成世界方向，主机按世界方向施放（不能再按主机阵营翻转）
+				h._use_summoner(Vector2(float(cmd[2]), float(cmd[3])), true)
 			print("[Net] 指令 summoner from ", pid)
 		C_RECOVER:
 			# 恢复槽固定 index 4（Hero.setup_skills_from_database 追加）；与主机键盘/触控同式
@@ -2056,6 +2057,7 @@ func _build_result_payload(bm: Node) -> Dictionary:
 		"winner": int(bm.get("winner")),
 		"dur": float(bm.get("game_time")),
 		"turrets": turrets,
+		"player_team": int(Config.player_team),
 		"rows": rows,
 	}
 

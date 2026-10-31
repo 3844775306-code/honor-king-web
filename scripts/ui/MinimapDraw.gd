@@ -166,6 +166,26 @@ static func _dead_x(ci: CanvasItem, pos: Vector2, r: float) -> void:
 # ==================== 精英小兵 / 先锋 ====================
 
 ## 主宰先锋 / 风暴先锋 / 暗影先锋：带角有翼的小标记
+## 大禹的鼎：圆腹 + 口沿 + 三足 + 双耳的小地图标记（约 10px 大小）
+static func draw_tripod(ci: CanvasItem, pos: Vector2, col: Color, ready: bool = true) -> void:
+	var r := 4.6
+	ci.draw_circle(pos, r, Color(0.05, 0.045, 0.03, 0.92))
+	ci.draw_circle(pos, r * 0.82, Color(col.r * 0.5, col.g * 0.5, col.b * 0.5, 0.95))
+	# 口沿
+	ci.draw_line(pos + Vector2(-r * 1.02, -r * 0.42), pos + Vector2(r * 1.02, -r * 0.42), col, 1.6, true)
+	# 双立耳
+	ci.draw_line(pos + Vector2(-r * 0.95, -r * 0.95), pos + Vector2(-r * 0.62, -r * 0.42), col, 1.4, true)
+	ci.draw_line(pos + Vector2(r * 0.95, -r * 0.95), pos + Vector2(r * 0.62, -r * 0.42), col, 1.4, true)
+	# 三足
+	for i in 3:
+		var a := PI * 0.5 + TAU * float(i) / 3.0
+		var d := Vector2(cos(a), sin(a))
+		ci.draw_line(pos + d * r * 0.7, pos + d * r * 1.28, col, 1.5, true)
+	# 治疗就绪：外圈微光
+	if ready:
+		ci.draw_arc(pos, r + 2.2, 0.0, TAU, 20, Color(col.r, col.g, col.b, 0.55), 1.3, true)
+
+
 static func draw_dragon(ci: CanvasItem, pos: Vector2, col: Color, kind: String = "dragon") -> void:
 	var s := 7.0
 	if kind == "storm":

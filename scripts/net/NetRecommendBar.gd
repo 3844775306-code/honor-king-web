@@ -89,9 +89,10 @@ func feed(o: Dictionary) -> void:
 	_card.maxed = bool(rb.get("maxed", false)) if rb is Dictionary else false
 	_card.slot_full = bool(rb.get("slot_full", false)) if rb is Dictionary else false
 	_card.gold = _gold
+	_card.desc = str(rb.get("desc", "")) if rb is Dictionary else ""
 	# 金币不足自动收起成图标；买得起后自动展开（以卡片自身可买判定兜底）
 	var can_show: bool = _rec_show or _card.affordable()
-	_card.set_collapsed_for_gold(not can_show and _rec_id != "" and not _card.maxed)
+	_card.set_collapsed_for_gold(false)
 	_card.queue_redraw()
 	_plus.visible = can_show and _rec_id != "" and not _card.collapsed
 	_chip.set_gold(_gold)
@@ -112,6 +113,7 @@ class RecCard extends Control:
 	var gold := 0
 	var maxed := false
 	var slot_full := false
+	var desc := ""                  # 装备效果一行简介（host 烘焙进 rb.desc）
 	var collapsed := false          # 点按收起：只留右侧装备图标（灰=暂不可买）
 	var _last_should_collapse := false
 	var _glow_t := 0.0              # 可购买发光拖尾相位
@@ -163,8 +165,14 @@ class RecCard extends Control:
 				draw_circle(ir.get_center(), s * 0.5, Color(0.10, 0.11, 0.14, 0.60))
 				UiKit.text(self, Vector2(ir.position.x, ir.position.y + s * 0.5 + 8.0), "缺",
 					22, Color(0.78, 0.80, 0.86), HORIZONTAL_ALIGNMENT_CENTER, s)
+			# 收起态也把缺额写出来：还差 N 金
+			if cost > 0 and gold < cost and not maxed:
+				var dfs := int(size.y * 0.16)
+				draw_string(UiKit.font(), Vector2(10.0, size.y * 0.5 + float(dfs) * 0.35),
+					"还差 %d 金" % (cost - gold), HORIZONTAL_ALIGNMENT_LEFT,
+					size.x - s - 22.0, dfs, Color(1.0, 0.84, 0.35, 0.95))
 			return
-		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full)
+		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full, desc)
 		if affordable():
 			var ic := UiKit.rec_icon_rect(Rect2(Vector2.ZERO, size))
 			_glow_ring(ic.get_center(), ic.size.x * 0.5 + 5.0)

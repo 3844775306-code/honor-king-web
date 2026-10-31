@@ -48,14 +48,16 @@ var icon_aa := false
 
 # 状态动效：技能冷却结束的一圈清亮“就绪”波纹；升级时一圈金色爆闪；
 # 可升级期间技能图标外沿持续金色呼吸，和上方升级键的旋转光弧互相呼应。
-const READY_ANIM_TIME := 0.55
+const READY_ANIM_TIME := 0.75
 const UPGRADE_ANIM_TIME := 0.65
 var upgrade_ready := false       # TouchController 每帧推送：当前技能可升级
 var _ready_anim := 0.0
+var _ready_punch := 0.0          # 就绪弹跳 1→0（按钮整体缩放）
 var _upgrade_anim := 0.0
 var _upgrade_ready_t := 0.0
 var _prev_cd_ratio := 0.0
 var _last_skill_level := -1
+var _blocked_t := 0.0            # 不可用呼吸相位
 
 var _active := false
 var _active_touch := -1
@@ -98,22 +100,37 @@ func _process(delta: float) -> void:
 	_held_time = _held_time + delta if _active else 0.0
 	if upgrade_ready:
 		_upgrade_ready_t += delta
+	if blocked and not _active:
+		_blocked_t += delta
 	# 冷却从有到无：触发一次“就绪”波纹（只在刚结束冷却时触发，开局/学技能不闪）
 	var learned := skill_level > 0 or max_level == 0
 	var ready_now := learned and cd_ratio <= 0.001 and not in_window and not blocked and mana_ok
-	if ready_now and _prev_cd_ratio > 0.02:
+	if ready_now and _prev_cd_ratio > 0.0001:   # 上一帧还有一丁点冷却（末帧剩余比极小，不能卡 0.02）
 		_ready_anim = READY_ANIM_TIME
+		# 就绪弹跳：按钮先微放大再回弹（中心为轴），与光圈波纹同时出现
+		_ready_punch = 1.0
+		pivot_offset = size * 0.5
+		# 就绪提示音：短促“叮”，同类 200ms 内合并，避免几个技能同时好叠成噪音
+		if SfxManager != null:
+			SfxManager.play_ui_sfx("skill_ready")
 	_prev_cd_ratio = cd_ratio
 	# 技能等级上升：金色爆闪（首次设置等级不触发）
 	if skill_level != _last_skill_level:
 		if _last_skill_level >= 0 and skill_level > _last_skill_level:
 			_upgrade_anim = UPGRADE_ANIM_TIME
 		_last_skill_level = skill_level
-	var animating := _ready_anim > 0.0 or _upgrade_anim > 0.0 or upgrade_ready
+	var animating := _ready_anim > 0.0 or _upgrade_anim > 0.0 or upgrade_ready or _ready_punch > 0.0 \
+		or (blocked and not _active)
 	if _ready_anim > 0.0:
 		_ready_anim = maxf(0.0, _ready_anim - delta)
 	if _upgrade_anim > 0.0:
 		_upgrade_anim = maxf(0.0, _upgrade_anim - delta)
+	if _ready_punch > 0.0:
+		_ready_punch = maxf(0.0, _ready_punch - delta / 0.34)
+		var sp := 1.0 + 0.17 * sin(_ready_punch * PI)
+		scale = Vector2(sp, sp)
+		if _ready_punch <= 0.0:
+			scale = Vector2.ONE
 	var target := 1.0 if _active else 0.0
 	if absf(_press - target) < 0.003:
 		if animating:
@@ -280,19 +297,18 @@ func _draw():
 	if charge_skill:
 		_draw_charge_pips(center, radius, k)
 	# 前置状态门槛不可用（李白大招侠客 / 沈梦溪1、2炸弹 / 马超R枪 / 东皇2能量 / 兰陵王大招隐身）：
-	# 非冷却/重施窗口期间在按钮中央斜切一道红色禁用斜杠（下方 block_cue 小字仍叠在斜杠上层）
+	# 不做粗暴斜杠：整键压暗 + 内圈暗红细环 + 呼吸微光，保持图标可读、气质统一
 	if blocked and not in_window and not on_cd:
-		var sd := radius * 0.74
-		var sa := center + Vector2(-sd, -sd)
-		var sb := center + Vector2(sd, sd)
-		var slw := maxf(6.0, radius * 0.12) * k
-		draw_line(sa, sb, Color(0, 0, 0, 0.5), slw + 3.0 * k)
-		draw_line(sa, sb, Color(1.0, 0.5, 0.45, 0.96), slw)
+		var pulse := 0.5 + 0.5 * sin(_blocked_t * 3.2)
+		draw_circle(center, radius, Color(0.02, 0.03, 0.05, 0.42))
+		draw_arc(center, radius - 1.0 * k, 0.0, TAU, 48,
+			Color(0.95, 0.42, 0.36, 0.35 + 0.18 * pulse), maxf(1.6, 2.2 * k), true)
+		draw_arc(center, radius + 3.0 * k, 0.0, TAU, 48,
+			Color(0.95, 0.42, 0.36, 0.16 + 0.10 * pulse), maxf(1.0, 1.6 * k), true)
 
-	# 前置不满足提示（如马超身边无枪）→ 无冷却遮罩期间显示在按钮中下方
+	# 前置不满足提示（如马超身边无枪）：深色圆角小胶囊 + 细红描边，字小但清晰
 	if blocked and not in_window and not on_cd and block_cue != "":
-		_draw_txt(center + Vector2(-radius * 0.8, radius * 0.28), block_cue,
-			HORIZONTAL_ALIGNMENT_CENTER, radius * 1.6, int(16.0 * k), Color(1.0, 0.5, 0.42))
+		_draw_block_chip(center, radius, k)
 	# 下方小字说明（惩击伤害等，不受冷却遮罩影响）
 	if sub_text != "":
 		_draw_txt(center + Vector2(-radius * 0.7, radius * 0.7), sub_text,
@@ -313,11 +329,27 @@ func _draw_state_fx(center: Vector2, radius: float, k: float) -> void:
 	if _ready_anim > 0.0:
 		var t := 1.0 - _ready_anim / READY_ANIM_TIME
 		var a := (1.0 - t) * (1.0 - t)
-		var rr := radius + (3.0 + t * 12.0) * k
-		draw_arc(center, rr, 0.0, TAU, 48, Color(0.78, 0.95, 1.0, 0.70 * a),
-			maxf(1.0, 2.8 * k * (1.0 - t) + 0.8), true)
-		# 内层微弱提亮，只闪一下，不盖住图标细节
-		draw_circle(center, radius, Color(0.85, 0.97, 1.0, 0.075 * a))
+		# 双层光环：外层金色（技能可用） + 内层青白（清亮感）
+		var rr := radius + (3.0 + t * 16.0) * k
+		draw_arc(center, rr, 0.0, TAU, 48, Color(1.0, 0.86, 0.36, 0.88 * a),
+			maxf(1.4, 3.4 * k * (1.0 - t) + 0.9), true)
+		draw_arc(center, radius + (2.0 + t * 8.0) * k, 0.0, TAU, 48,
+			Color(0.80, 0.96, 1.0, 0.75 * a), maxf(1.0, 2.4 * k * a + 0.6), true)
+		# 8 方向短光线，随波纹一起外扩淡出
+		for i in range(8):
+			var dir := Vector2.from_angle(TAU * float(i) / 8.0)
+			var p0 := center + dir * (radius + (4.0 + t * 6.0) * k)
+			var p1 := center + dir * (radius + (11.0 + t * 14.0) * k)
+			draw_line(p0, p1, Color(1.0, 0.93, 0.62, 0.75 * a), maxf(1.0, 2.0 * k * a), true)
+		# 内层提亮闪一下
+		draw_circle(center, radius, Color(1.0, 0.95, 0.75, 0.30 * a))
+		# 外沿暖光扩散（让“刚好能用”在一堆图标里也能一眼看到）
+		draw_circle(center, radius + (3.0 + t * 9.0) * k, Color(1.0, 0.88, 0.50, 0.12 * a))
+		# 四角星点（不再浮出“就绪”文字，保持按钮干净）
+		for i in range(4):
+			var ang2 := TAU * float(i) / 4.0 + PI * 0.25
+			var sp2 := center + Vector2(cos(ang2), sin(ang2)) * (radius + (2.0 + t * 20.0) * k)
+			draw_circle(sp2, maxf(1.2, 3.0 * k * a), Color(1.0, 0.95, 0.7, 0.85 * a))
 	if _upgrade_anim > 0.0:
 		var t := 1.0 - _upgrade_anim / UPGRADE_ANIM_TIME
 		var a := 1.0 - t
@@ -348,6 +380,23 @@ func _draw_cd_sector(center: Vector2, radius: float, ratio: float,
 		pts.append(center + Vector2(cos(a), sin(a)) * radius)
 	draw_colored_polygon(pts, fill)
 	draw_arc(center, radius, a0, a1, 16, edge, 2.0, true)
+
+# 不可用原因胶囊：深色圆角底 + 细红描边 + 居中文字，替代原来粗糙的红字
+func _draw_block_chip(center: Vector2, radius: float, k: float) -> void:
+	var font := UiKit.font()
+	var fs := maxi(12, int(15.0 * k))
+	var tw := font.get_string_size(block_cue, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var pad := 8.0 * k
+	var h := float(fs) + 9.0 * k
+	var w := tw + pad * 2.0
+	var rect := Rect2(center + Vector2(-w * 0.5, radius * 0.26), Vector2(w, h))
+	var sb := UiKit.flat(0.88, int(maxf(6.0, h * 0.5)), 1,
+		Color(0.95, 0.44, 0.36, 0.60), Color(0.10, 0.035, 0.03, 0.90), 0.0, 0.0)
+	draw_style_box(sb, rect)
+	var ascent := font.get_ascent(fs)
+	var ty := rect.position.y + (h + ascent * 0.72) * 0.5
+	UiKit.text(self, Vector2(rect.position.x, ty), block_cue, fs,
+		Color(1.0, 0.88, 0.84), HORIZONTAL_ALIGNMENT_CENTER, w)
 
 # 存储型技能的充能层数点：底部一排小圆点，实心=当前已存层数，空心=待回充的空位。
 # 当技能被“无枪”等前置卡住时整排置灰，明确告诉玩家层数在、但暂时放不出去。

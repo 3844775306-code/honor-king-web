@@ -69,6 +69,11 @@ func set_battle(bm: BattleManager):
 	battle = bm
 
 func _process(delta):
+	# 传送已经真正开始（召唤师传送/传送阵）：立即退出放大的选点模式，
+	# 不等传送动画结束；否则小地图会一直停在放大状态。
+	if battle and battle.hero and (battle.hero.is_teleporting or battle.hero.dayu_teleport_channeling):
+		if is_teleport_mode:
+			exit_teleport_mode()
 	if is_teleport_mode:
 		if summoner_teleport:
 			pass  # 召唤师传送不检查传送阵
@@ -183,6 +188,8 @@ func enter_teleport_mode():
 
 func exit_teleport_mode():
 	summoner_teleport = false
+	if not is_teleport_mode:
+		return
 	is_teleport_mode = false
 	position = original_position
 	scale = original_scale
@@ -282,6 +289,18 @@ func _draw():
 		var spos := _world_to_minimap(s.global_position)
 		var range_px := 20.0 / float(MAP_SIZE) * MINIMAP_SIZE
 		MinimapDraw.draw_vision_spirit(self, spos, range_px, s.vision_active)
+
+	# ---- 大禹的鼎：图标常显；我方鼎另画 8 米视野圈（与战场战争迷雾口径一致） ----
+	for tr in get_tree().get_nodes_in_group("tripods"):
+		if not is_instance_valid(tr) or not (tr is Tripod):
+			continue
+		var tpos := _world_to_minimap(tr.global_position)
+		var tcol: Color = Color(0.0, 0.886, 1.0) if tr.team == player_team else Color(1.0, 0.33, 0.264)
+		if tr.team == player_team and tr.health > 0.0:
+			var vr := 8.0 / float(MAP_SIZE) * MINIMAP_SIZE
+			draw_circle(tpos, vr, Color(tcol.r, tcol.g, tcol.b, 0.10))
+			draw_arc(tpos, vr, 0.0, TAU, 44, Color(tcol.r, tcol.g, tcol.b, 0.42), 1.2, true)
+		MinimapDraw.draw_tripod(self, tpos, tcol, bool(tr.heal_ready))
 
 	# ---- 防御塔（外塔方 / 内塔带框 / 高地菱形 / 水晶六边形；血量底部填充；摧毁灰 X） ----
 	for t in turrets:
@@ -627,6 +646,9 @@ func _fog_sources() -> Array:
 	for t in turrets:
 		if is_instance_valid(t) and t.team == player_team and t.health > 0.0:
 			out.append({"p": t.global_position, "r": 18.0})
+	for tr in get_tree().get_nodes_in_group("tripods"):
+		if is_instance_valid(tr) and tr.team == player_team and tr.health > 0.0:
+			out.append({"p": tr.global_position, "r": 8.0})
 	if battle != null and is_instance_valid(battle):
 		for s in battle.get_tree().get_nodes_in_group("vision_spirits"):
 			if is_instance_valid(s) and s.team == player_team and s.vision_active:

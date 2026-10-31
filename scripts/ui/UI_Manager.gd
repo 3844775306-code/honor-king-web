@@ -108,6 +108,7 @@ var target_detail_accent: ColorRect      # 顶部队色强调条（每帧按目�
 var target_detail_team_dot: ColorRect    # 姓名前的队色小方块
 var target_detail_hp_fill: StyleBoxFlat  # 血条填充样式，填充色跟随阵营
 var target_detail_hp_gloss: Control     # 血条质感层（高光/刻度/末端亮边）
+var target_detail_hp_pill: Panel        # 血条读数底衬（深色圆角，保证数字清晰）
 var target_detail_icons: Dictionary = {} # 属性徽章图标（键=属性名）
 var target_detail_entity_icon: Control   # 目标实体图标（英雄头像/塔/小兵/野怪）
 var kda_label: Label
@@ -120,6 +121,7 @@ var skill_info_labels: Array = []
 var skill_detail_label: Label
 
 var team_stats_label: RichTextLabel
+var vanguard_label: Label        # 顶部信息带第三行：主宰/暗影/风暴先锋剩余波次
 var team_stats_bg: Panel
 var gold_label: Label
 var game_time_label: Label
@@ -200,10 +202,9 @@ var team_decision_refresh_timer: float = 0.0
 var team_decision_labels: Dictionary = {}
 
 var entity_health_bars: Dictionary = {}
-var recall_indicator: Control = null
-var recall_progress_bar: TextureProgressBar = null
-var recall_label: Label = null
 var _popup_offsets: Dictionary = {}  # 伤害数值错开：{Vector3: {count:int, timer:float}}
+var _device_status: Control = null   # 顶部信息带：电量/网络小组件
+var _dev_poll := 0.0                 # 电量/网络轮询计时（1s 一次，避免每帧读系统接口）
 var _yl_switch_btn: Button = null    # 元流之子「流派·切换」钮：自家泉水中常驻，点击重开万物为流面板
 var _yl_panel_open: bool = false     # 万物为流选择面板是否打开（打开时隐藏切换钮、防重复叠开面板）
 
@@ -315,7 +316,6 @@ func _ready():
 	_create_buff_icons()
 	_create_attribute_panel()
 	_create_hero_detail_panel()
-	_create_recall_indicator()
 	_create_yuanliu_switch_btn()
 	_create_death_recap_panel()
 	_create_team_decision_panel()
@@ -349,8 +349,6 @@ func _clear_battle_hud() -> void:
 		death_overlay.visible = false
 	if death_recap_panel != null:
 		death_recap_panel.visible = false
-	if recall_indicator != null:
-		recall_indicator.visible = false
 	if target_detail_panel != null:
 		target_detail_panel.visible = false
 
@@ -375,44 +373,6 @@ func _process(delta: float):
 			expired.append(key)
 	for key in expired:
 		_popup_offsets.erase(key)
-
-func _create_recall_indicator():
-	recall_indicator = Control.new()
-	recall_indicator.visible = false
-	recall_indicator.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	var rs := ui_scale()
-	# 中心锚点下必须用 offset 居中；直接写 position 会被当作父级绝对坐标，导致面板跑到屏幕外
-	var half := 50.0 * rs
-	recall_indicator.offset_left = -half
-	recall_indicator.offset_top = -half
-	recall_indicator.offset_right = half
-	recall_indicator.offset_bottom = half
-	add_child(recall_indicator)
-
-	# 背景暗色圆
-	var bg = ColorRect.new()
-	bg.size = Vector2(100, 100) * rs
-	bg.color = Color(0, 0, 0, 0.55)
-	recall_indicator.add_child(bg)
-
-	# 进度条（环形用 TextureProgressBar）
-	recall_progress_bar = TextureProgressBar.new()
-	recall_progress_bar.size = Vector2(100, 100) * rs
-	recall_progress_bar.min_value = 0.0
-	recall_progress_bar.max_value = 100.0
-	recall_progress_bar.value = 100.0
-	recall_progress_bar.fill_mode = TextureProgressBar.FILL_CLOCKWISE
-	# 用 StyleBox 模拟环形进度（简单方式：彩色 Bar + 文字）
-	var bar_style = StyleBoxFlat.new()
-	bar_style.bg_color = Color(0.15, 0.4, 0.95, 0.75)
-	recall_progress_bar.add_theme_stylebox_override("fill", bar_style)
-	var bg_style = StyleBoxFlat.new()
-	bg_style.bg_color = Color(0.1, 0.1, 0.1, 0.5)
-	recall_progress_bar.add_theme_stylebox_override("background", bg_style)
-	recall_indicator.add_child(recall_progress_bar)
-
-	# 回城/传送：只留环形进度，不再在屏幕中央显示「回城/传送」字样
-	recall_label = null
 
 # ---------- UI 创建函数 ----------
 func _create_target_detail_panel():
@@ -485,35 +445,48 @@ func _create_target_detail_panel():
 	_apply_label_style(lv_label, 14, Color(1.0, 0.82, 0.35))
 	target_detail_panel.add_child(lv_label); target_detail_labels["level"] = lv_label
 
-	# 血条：圆角底 + 阵营色填充（填充色每帧跟随目标）
+	# 血条：外描边圆角底 + 阵营色填充（更高更厚，读数清晰）
 	target_detail_hp_bar = ProgressBar.new()
-	target_detail_hp_bar.position = Vector2(16, 44) * rs
-	target_detail_hp_bar.size = Vector2(298, 17) * rs
+	target_detail_hp_bar.position = Vector2(16, 43) * rs
+	target_detail_hp_bar.size = Vector2(298, 22) * rs
 	target_detail_hp_bar.show_percentage = false
 	var hp_bg = StyleBoxFlat.new()
-	hp_bg.bg_color = Color(0, 0, 0, 0.6)
-	hp_bg.set_corner_radius_all(8)
+	hp_bg.bg_color = Color(0.02, 0.03, 0.05, 0.85)
+	hp_bg.set_corner_radius_all(11)
+	hp_bg.set_border_width_all(1)
+	hp_bg.border_color = Color(1, 1, 1, 0.14)
 	target_detail_hp_bar.add_theme_stylebox_override("background", hp_bg)
 	target_detail_hp_fill = StyleBoxFlat.new()
 	target_detail_hp_fill.bg_color = Color(0.2, 0.9, 1.0)
-	target_detail_hp_fill.set_corner_radius_all(8)
+	target_detail_hp_fill.set_corner_radius_all(11)
+	target_detail_hp_fill.border_width_bottom = 2
+	target_detail_hp_fill.border_color = Color(0, 0, 0, 0.25)
 	target_detail_hp_bar.add_theme_stylebox_override("fill", target_detail_hp_fill)
 	target_detail_panel.add_child(target_detail_hp_bar)
-	# 血条质感层：顶部高光、每 1000 点刻度、填充末端亮边、细描边（在文字之下）
+	# 血条质感层：顶部高光、底部内阴影、10% 刻度、填充末端亮边（在文字之下）
 	var hp_gloss := TargetHpGloss.new()
-	hp_gloss.position = Vector2(16, 44) * rs
-	hp_gloss.size = Vector2(298, 17) * rs
+	hp_gloss.position = Vector2(16, 43) * rs
+	hp_gloss.size = Vector2(298, 22) * rs
 	hp_gloss.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	target_detail_panel.add_child(hp_gloss)
 	target_detail_hp_gloss = hp_gloss
+	# 读数底衬：深色半透明圆角胶囊，宽度随文字自适应（文字压在任意亮色填充上都清晰）
+	target_detail_hp_pill = Panel.new()
+	target_detail_hp_pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_detail_hp_pill.add_theme_stylebox_override("panel",
+		UiKit.flat(0.66, 8, 1, Color(1, 1, 1, 0.10), Color(0.01, 0.02, 0.035, 0.78)))
+	target_detail_hp_pill.size = Vector2(110, 17) * rs
+	target_detail_panel.add_child(target_detail_hp_pill)
 	var hp_text = Label.new()
-	hp_text.position = Vector2(16, 44) * rs; hp_text.size = Vector2(298, 17) * rs
+	hp_text.position = Vector2(16, 43) * rs; hp_text.size = Vector2(298, 22) * rs
 	hp_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hp_text.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_apply_label_style(hp_text, 11, Color(1, 1, 1, 0.92))
-	hp_text.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.65))
+	_apply_label_style(hp_text, 14, Color(1, 1, 1, 0.98))
+	hp_text.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	hp_text.add_theme_constant_override("outline_size", 3)
+	hp_text.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
 	hp_text.add_theme_constant_override("shadow_offset_x", 1)
-	hp_text.add_theme_constant_override("shadow_offset_y", 1)
+	hp_text.add_theme_constant_override("shadow_offset_y", 2)
 	target_detail_panel.add_child(hp_text); target_detail_labels["hp"] = hp_text
 
 	# 属性区：2×2 的「彩色圆徽章 + 属性色数值」；两行各垫一条低对比底片分出层次
@@ -621,7 +594,7 @@ func _create_info_labels():
 	team_stats_bg.anchor_left = RIGHT_X; team_stats_bg.anchor_right = RIGHT_X
 	# 2400 宽画布：右缘 2029（推荐装备左缘 2038），左缘 1619；目标面板占 1200..1605
 	team_stats_bg.offset_left = -781; team_stats_bg.offset_top = 6
-	team_stats_bg.offset_right = -371; team_stats_bg.offset_bottom = 150
+	team_stats_bg.offset_right = -371; team_stats_bg.offset_bottom = 196
 	_apply_panel_style(team_stats_bg, 0.62)
 	_connect_tap_to_action(team_stats_bg, Callable(self, "toggle_hero_detail"))
 	add_child(team_stats_bg)
@@ -662,6 +635,17 @@ func _create_info_labels():
 	_apply_rich_label_style(team_stats_label, 24)
 	add_child(team_stats_label)
 
+	# 主宰先锋波次（顶部信息带第三行，替代原先只在英雄面板底部显示的信息）
+	vanguard_label = Label.new()
+	vanguard_label.anchor_left = RIGHT_X; vanguard_label.anchor_right = RIGHT_X
+	vanguard_label.offset_left = -781; vanguard_label.offset_top = 148
+	vanguard_label.offset_right = -371; vanguard_label.offset_bottom = 186
+	vanguard_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vanguard_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	vanguard_label.visible = false
+	_apply_label_style(vanguard_label, 20, UiKit.C_TEXT_DIM)
+	add_child(vanguard_label)
+
 	# FPS：顶部信息带内、计时下方留白处（不挡 K/D/A 与比分行）
 	fps_label = Label.new()
 	fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -672,6 +656,15 @@ func _create_info_labels():
 	_apply_label_style(fps_label, 14, Color(0.55, 0.95, 0.65))
 	fps_label.text = "FPS --"
 	team_stats_bg.add_child(fps_label)
+
+	# 电量 / 网络：顶部战况带内、FPS 右侧空白处（132..398 × 48..82 局部坐标，不压比分行）
+	if _device_status == null:
+		var ds := DeviceStatusArt.new()
+		ds.name = "DeviceStatus"
+		ds.position = Vector2(132, 48)
+		ds.size = Vector2(266, 34)
+		team_stats_bg.add_child(ds)
+		_device_status = ds
 
 	# === 金币（右上角，可点击打开商店）===
 	# 稍向中心收，避免贴死角落
@@ -1913,14 +1906,57 @@ func _get_best_recommended_item(hero: Hero) -> String:
 		if ItemDatabase.can_build(id, hero.equipment_slots):
 			return id
 
-	# 2. 递归找到最底层缺失的基础装备
+	# 2. 按合成路径推荐：沿路径从大件往叶子走，优先「素材齐、现在就能合成」的中间件，
+	#    其次买得起的中间件，最后才退回最便宜的缺失叶子（不再一上来就推低级散件）
 	for id in list:
 		if hero.equipment_slots.has(id): continue
-		var missing = _find_missing_basic(hero, id)
-		if missing != "":
-			return missing
+		var path: Array = []
+		_collect_missing_path(hero, str(id), path)
+		if path.is_empty(): continue
+		for pid in path:
+			if ItemDatabase.can_build(str(pid), hero.equipment_slots):
+				return str(pid)
+		for pid in path:
+			if hero.gold >= _shop_pay_for(str(pid), hero):
+				return str(pid)
+		return str(path[path.size() - 1])
 
 	return ""
+
+# 合成路径上仍缺的节点（大件 → 叶子顺序），按每个父件里的需求份数计缺失
+func _collect_missing_path(hero: Hero, id: String, out: Array) -> void:
+	var item: Dictionary = ItemDatabase.get_item(id)
+	if item.is_empty(): return
+	var reqs: Array = item.get("requires", [])
+	if reqs.is_empty():
+		if not hero.equipment_slots.has(id):
+			out.append(id)
+		return
+	var missing_child := false
+	for r in reqs:
+		if not _owns_enough(hero, str(r), reqs):
+			missing_child = true
+			break
+	if not hero.equipment_slots.has(id):
+		out.append(id)
+	if not missing_child:
+		return
+	for r in reqs:
+		var rid := str(r)
+		if not _owns_enough(hero, rid, reqs):
+			_collect_missing_path(hero, rid, out)
+
+# 该件是否已按父件需求份数备齐（同名素材可能要求 2 份）
+func _owns_enough(hero: Hero, id: String, reqs: Array) -> bool:
+	var need := 0
+	for r in reqs:
+		if str(r) == id:
+			need += 1
+	var have := 0
+	for oid in hero.equipment_slots:
+		if str(oid) == id:
+			have += 1
+	return have >= need
 
 func _find_missing_basic(hero: Hero, target_id: String) -> String:
 	var target = ItemDatabase.get_item(target_id)
@@ -1954,10 +1990,12 @@ func _update_recommended_equip():
 		rec_card.cost = int(b.get("cost", 0))
 		rec_card.maxed = bool(b.get("maxed", false))
 		rec_card.slot_full = bool(b.get("slot_full", false))
+		rec_card.desc = str(b.get("desc", ""))
 		rec_card.gold = int(battle.hero.gold) if battle.hero else 0
 		# 金币不足自动收起成图标；买得起后自动展开（以卡片自身可买判定兜底）
 		var affordable_now: bool = can_buy or rec_card.affordable()
-		rec_card.set_collapsed_for_gold(not affordable_now and str(b.get("id", "")) != "" and not rec_card.maxed)
+		# 金币不足保持展开，卡面直接显示「还差 N 金」；收起只由玩家手动点按触发
+		rec_card.set_collapsed_for_gold(false)
 		rec_card.queue_redraw()
 		can_buy = affordable_now
 	if buy_plus_btn:
@@ -2005,10 +2043,11 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 			card.cost = int(o["cost"])
 			card.gold = gold
 			card.slot_full = false
+			card.desc = str(o.get("desc", ""))
 			card.tap_buy = true
 			card.left_full = -REC_OPTION_W
 			card.left_collapsed = -minf(REC_OPTION_W, 208.0)
-			card.set_collapsed_for_gold(gold < int(o["cost"]))
+			card.set_collapsed_for_gold(false)
 			card.buy_requested.connect(_shop_quick_buy.bind(str(o["id"])))
 			rec_option_row.add_child(card)
 			# 每张卡右侧配同款黄色“+”快速购买（和单推荐卡一致）
@@ -2033,7 +2072,7 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 	for e in rec_option_btns:
 		var c2: RecItemCard = e["card"]
 		c2.gold = gold
-		c2.set_collapsed_for_gold(gold < int(e["cost"]))
+		c2.set_collapsed_for_gold(false)
 		c2.queue_redraw()
 		var p2 = e.get("plus")
 		if p2 != null and is_instance_valid(p2):
@@ -2086,7 +2125,7 @@ func _open_settings() -> void:
 	var card := Panel.new()
 	card.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	card.offset_left = -250.0; card.offset_right = 250.0
-	card.offset_top = -170.0; card.offset_bottom = 170.0
+	card.offset_top = -215.0; card.offset_bottom = 215.0
 	card.add_theme_stylebox_override("panel", UiKit.panel_style(0.98, 18.0))
 	settings_panel.add_child(card)
 	var vb := VBoxContainer.new()
@@ -2112,6 +2151,20 @@ func _open_settings() -> void:
 	vol_val.custom_minimum_size = Vector2(56.0, 0.0)
 	vol_row.add_child(vol_val)
 	vb.add_child(vol_row)
+	# 键位布局：进入编辑模式后可直接拖动各个战斗按钮、调大小，保存后永久生效
+	var layout_btn := Button.new()
+	layout_btn.text = "自定义键位布局"
+	layout_btn.custom_minimum_size = Vector2(0.0, 44.0)
+	layout_btn.add_theme_font_override("font", UiKit.font())
+	layout_btn.add_theme_font_size_override("font_size", 20)
+	layout_btn.add_theme_color_override("font_color", UiKit.C_TEXT)
+	layout_btn.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, false))
+	layout_btn.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, false))
+	layout_btn.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_GOLD, false))
+	layout_btn.pressed.connect(func():
+		_close_settings()
+		TouchController.enter_layout_edit())
+	vb.add_child(layout_btn)
 	slider.value_changed.connect(func(v: float) -> void:
 		vol_val.text = "%d%%" % int(v)
 		_apply_master_volume(v))
@@ -2270,9 +2323,9 @@ func _compute_recommended_bundle(hero: Hero, with_options: bool = true) -> Dicti
 				if best in req_reqs:
 					parent_name = pitem["name"] + "(via " + ItemDatabase.get_item(req_id)["name"] + ")"; break
 			if parent_name != "": break
-		# 计算素材的花费（自身也可能有合成）
+		# 计算素材的花费（自身也可能有合成，按已拥有素材抵差价）
 		var best_cost = item["cost"]
-		if item.has("requires") and ItemDatabase.can_build(best, hero.equipment_slots):
+		if item.has("requires"):
 			best_cost = _shop_pay_for(best, hero)
 		out_cost = best_cost
 		var cost_text = "%d金" % best_cost
@@ -2280,11 +2333,12 @@ func _compute_recommended_bundle(hero: Hero, with_options: bool = true) -> Dicti
 		var suffix = " → " + parent_name if parent_name != "" else ""
 		out_text = "推荐: %s (%s)%s" % [item["name"], cost_text, suffix]
 	# 加号购买按钮：仅在金币足够买下推荐项时显示
-	# 多件可选：目标大件缺的素材里金币买得起的有 2 件以上时，全列出来让玩家自己挑
-	var opts: Array = [] if (not with_options or (is_final and hero.gold >= out_cost)) else _recommended_options(hero, best, list)
-	return {"id": best, "text": out_text, "cost": out_cost, "show": hero.gold >= out_cost, "name": str(item["name"]), "tier": int(item.get("tier", 2)), "maxed": false, "slot_full": hero.equipment_slots.size() >= Hero.MAX_EQUIPMENT_SLOTS, "options": opts}
+	# 双卡自选：大件还买不起、而合成路径上有 2 件以上买得起时，列出最接近大件的两件让玩家挑
+	var opts: Array = _recommended_options(hero, best, list) if with_options else []
+	return {"id": best, "text": out_text, "cost": out_cost, "show": hero.gold >= out_cost, "name": str(item["name"]), "tier": int(item.get("tier", 2)), "maxed": false, "slot_full": hero.equipment_slots.size() >= Hero.MAX_EQUIPMENT_SLOTS, "options": opts,
+		"desc": UiKit.item_effect(item)}
 
-# 目标大件缺失的素材中「现在买得起」的清单（≥2 件才返回，让玩家自选）
+# 合成路径上「现在买得起」的节点清单（≥2 件才返回）：钱够大件时不给自选，直接推大件
 func _recommended_options(hero: Hero, best_id: String, list: Array) -> Array:
 	if best_id == "":
 		return []
@@ -2298,25 +2352,55 @@ func _recommended_options(hero: Hero, best_id: String, list: Array) -> Array:
 				break
 	if target_id == "":
 		return []
-	var missing: Array = []
-	_collect_missing_leaves(hero, target_id, missing)
+	# 大件已经买得起：单卡直推大件，不弹自选
+	if hero.gold >= _shop_pay_for(target_id, hero):
+		return []
+	var path: Array = []
+	_collect_missing_path(hero, target_id, path)
 	var opts: Array = []
 	var seen := {}
-	for mid in missing:
-		if seen.has(mid):
+	var order := 0
+	for mid in path:
+		var oid := str(mid)
+		if seen.has(oid) or hero.equipment_slots.has(oid):
+			order += 1
 			continue
-		seen[mid] = true
-		var mi = ItemDatabase.get_item(mid)
+		seen[oid] = true
+		var mi = ItemDatabase.get_item(oid)
 		if mi.is_empty():
 			continue
-		if hero.gold < float(mi.get("cost", 0)):
-			continue
-		opts.append({"id": mid, "name": str(mi.get("name", mid)), "cost": int(mi.get("cost", 0)), "tier": int(mi.get("tier", 1))})
+		var pay := _shop_pay_for(oid, hero)
+		if hero.gold >= pay:
+			opts.append({"id": oid, "name": str(mi.get("name", oid)), "cost": pay, "tier": int(mi.get("tier", 1)),
+				"order": order, "desc": UiKit.item_effect(mi)})
+		order += 1
+	# 按合成路径顺序（越靠近大件越前）排序，不再按散件品质乱排
+	opts.sort_custom(_opts_path_first)
+	# 若某件是前面已列装备的合成件，就不再重复列（买大件已包含它）
+	var kept: Array = []
+	for o in opts:
+		var oid := str(o.get("id", ""))
+		var covered := false
+		for k in kept:
+			if _item_depends_on(str(k.get("id", "")), oid):
+				covered = true
+				break
+		if not covered:
+			kept.append(o)
+	opts = kept
 	if opts.size() < 2:
 		return []
 	if opts.size() > 2:
 		opts.resize(2)   # 最多同时推荐 2 件
 	return opts
+
+# 推荐自选项排序：合成路径越靠前（越接近大件）越优先，同位置按差价大的排前
+func _opts_path_first(a: Dictionary, b: Dictionary) -> bool:
+	var oa := int(a.get("order", 99))
+	var ob := int(b.get("order", 99))
+	if oa != ob:
+		return oa < ob
+	return int(a.get("cost", 0)) > int(b.get("cost", 0))
 
 func _item_depends_on(id: String, comp: String) -> bool:
 	if id == comp:
@@ -3118,25 +3202,29 @@ func _refresh_hero_detail_panel():
 		var row: Dictionary = _roster_row(e as Hero, battle)
 		row["own"] = e == battle.hero
 		rows.append(row)
-	hero_detail_panel.set_rows(rows, "attr", _vanguard_info(battle))
+	hero_detail_panel.set_rows(rows, "attr", {})   # 先锋波次已挪到顶部对局信息带
 
 ## 对局信息：主宰/暗影/风暴被击败后的先锋波数（我方/敌方）
 func _vanguard_info(battle) -> Dictionary:
 	if battle == null:
 		return {}
 	var my_w: int = battle.vanguard_waves_left(Config.player_team)
-	var en_w: int = battle.vanguard_waves_left(Config.Team.ENEMY)
+	var en_w: int = battle.vanguard_waves_left(Config.foe_team())
 	var nm: String = battle.vanguard_wave_name()
 	var txt := ""
 	var col: Color = UiKit.C_TEXT_DIM
-	if my_w > 0:
+	if my_w > 0 and en_w > 0:
 		txt = "%s 我方 %d 波 · 敌方 %d 波" % [nm, my_w, en_w]
 		col = UiKit.C_GOLD
+	elif my_w > 0:
+		txt = "%s 我方 %d 波" % [nm, my_w]
+		col = UiKit.C_GOLD
 	elif en_w > 0:
-		txt = "%s 我方 %d 波 · 敌方 %d 波" % [nm, my_w, en_w]
+		txt = "%s 敌方 %d 波" % [nm, en_w]
 		col = UiKit.C_TEAM1
 	else:
-		txt = ("%s 已出完" % nm) if bool(battle.vanguard_ever) else "主宰先锋 未出动"
+		# 两方都没有待出动的先锋波次 → 这一行直接留空（信息带只在有待出动波次时显示）
+		return {}
 	return {"vanguard": txt, "vanguard_color": col}
 
 ## 单英雄行数据（供 RosterView 双列对位绘制；与客户端 NetSession 行载荷字段同名）
@@ -3521,20 +3609,13 @@ func update(battle: BattleManager):
 		fps_label.text = "FPS %d" % fps
 		fps_label.add_theme_color_override("font_color",
 			Color(1.0, 0.42, 0.38) if fps < 30 else (Color(1.0, 0.82, 0.35) if fps < 50 else Color(0.55, 0.95, 0.65)))
+	# 电量/网络：1s 轮询一次系统状态
+	_dev_poll -= get_process_delta_time()
+	if _dev_poll <= 0.0:
+		_dev_poll = 1.0
+		_refresh_device_status()
+
 	# 刷新Buff显示
-	# 回城指示器
-	if hero.is_recalling or hero.is_teleporting or hero.dayu_teleport_channeling:
-		recall_indicator.visible = true
-		var pct := 0.0
-		if hero.is_recalling:
-			pct = (1.0 - hero.recall_timer / Hero.RECALL_DURATION) * 100.0
-		elif hero.is_teleporting:
-			pct = clampf(hero.teleport_progress, 0.0, 1.0) * 100.0
-		else:
-			pct = clampf(hero.dayu_teleport_progress, 0.0, 1.0) * 100.0
-		recall_progress_bar.value = pct
-	else:
-		recall_indicator.visible = false
 	_update_buff_icons(hero)
 	_update_attribute_panel(hero)
 	_update_yuanliu_switch_btn(hero)
@@ -3553,6 +3634,17 @@ func update(battle: BattleManager):
 	var tw := UiKit.font().get_string_size(plain, HORIZONTAL_ALIGNMENT_LEFT, -1, int(round(24 * ui_scale()))).x
 	team_stats_label.offset_left = -576.0 - tw * 0.5
 	team_stats_label.offset_right = -576.0 + tw * 0.5 + 4.0
+	# 主宰先锋波次：顶部对局信息带常显（我方/敌方各剩几波）
+	if vanguard_label != null:
+		var vg: Dictionary = _vanguard_info(battle)
+		var vtxt := str(vg.get("vanguard", ""))
+		# 只有「还有先锋波次没出」时才占位；波次出完立即隐藏，
+		# 不再用 vanguard_ever 让这一行永久挂「暗影先锋 已出完」
+		var vg_live: bool = int(battle.vanguard_waves_left(Config.player_team)) > 0 \
+			or int(battle.vanguard_waves_left(Config.foe_team())) > 0
+		vanguard_label.visible = vtxt != "" and vg_live
+		vanguard_label.text = vtxt
+		vanguard_label.add_theme_color_override("font_color", vg.get("vanguard_color", UiKit.C_TEXT_DIM))
 
 	_update_recommended_equip()
 	_update_death_recap()
@@ -3584,7 +3676,19 @@ func update(battle: BattleManager):
 			target_detail_hp_gloss.max_hp = maxf(1.0, target.max_health)
 			target_detail_hp_gloss.hp = target.health
 			target_detail_hp_gloss.queue_redraw()
-		target_detail_labels["hp"].text = "%d / %d" % [int(target.health), int(target.max_health)]
+		var hp_txt := "%d / %d" % [int(target.health), int(target.max_health)]
+		var hp_lab: Label = target_detail_labels["hp"]
+		hp_lab.text = hp_txt
+		# 读数底衬随文字宽度自适应，并居中贴合血条
+		if target_detail_hp_pill != null and is_instance_valid(target_detail_hp_pill):
+			var rs2 := ui_scale()
+			var tw2 := UiKit.font().get_string_size(hp_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+			var ph := 18.0 * rs2
+			var pw := tw2 + 20.0 * rs2
+			target_detail_hp_pill.size = Vector2(pw, ph)
+			target_detail_hp_pill.position = Vector2(
+				16.0 * rs2 + (298.0 * rs2 - pw) * 0.5,
+				43.0 * rs2 + (22.0 * rs2 - ph) * 0.5)
 		target_detail_labels["攻击"].text = "%d" % int(target.attack)
 		target_detail_labels["法强"].text = "%d" % int(target.ability_power if target is Hero else 0)
 		target_detail_labels["护甲"].text = "%d" % int(target.armor)
@@ -3704,6 +3808,7 @@ class RecItemCard extends Control:
 	var gold := 0
 	var maxed := false
 	var slot_full := false
+	var desc := ""                  # 装备效果一行简介（passive 首句，卡上小字显示）
 	var tap_buy := false            # true=点一下直接买（推荐位自选卡）；false=点按只收/展（主推荐卡）
 	var left_full := -362.0         # 展开态左偏移（右锚定；主卡 246 宽：-362..-116）
 	var left_collapsed := -208.0    # 收起态左偏移（只留图标宽度）
@@ -3763,8 +3868,14 @@ class RecItemCard extends Control:
 				draw_circle(ir.get_center(), s * 0.5, Color(0.10, 0.11, 0.14, 0.60))
 				UiKit.text(self, Vector2(ir.position.x, ir.position.y + s * 0.5 + 8.0), "缺",
 					22, Color(0.78, 0.80, 0.86), HORIZONTAL_ALIGNMENT_CENTER, s)
+			# 收起态也把缺额写出来：还差 N 金
+			if cost > 0 and gold < cost and not maxed:
+				var dfs := int(size.y * 0.16)
+				draw_string(UiKit.font(), Vector2(10.0, size.y * 0.5 + float(dfs) * 0.35),
+					"还差 %d 金" % (cost - gold), HORIZONTAL_ALIGNMENT_LEFT,
+					size.x - s - 22.0, dfs, Color(1.0, 0.84, 0.35, 0.95))
 			return
-		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full)
+		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full, desc)
 		if affordable():
 			# 图标矩形与 UiKit.rec_card 内部一致（窄卡会收缩图标）
 			var ic := UiKit.rec_icon_rect(Rect2(Vector2.ZERO, size))
@@ -3791,7 +3902,18 @@ class SkillIcon extends Control:
 	var active_equip_id: String = ""
 	var blue: bool = false
 	var _glow_t := 0.0              # 可升级“+”发光相位
+	var _last_cd := 0.0             # 上一帧冷却（检测「刚好转好」）
+	var _ready_t := 0.0             # 就绪动画剩余时间
+	const READY_ANIM := 0.55
 	func _process(delta: float) -> void:
+		# 冷却刚好归零 → 播一次就绪动画（金环扩散 + 白闪）
+		var cd := maxf(0.0, cd_remaining)
+		if _last_cd > 0.0005 and cd <= 0.01 and max_cd > 0.05 and skill_level > 0:
+			_ready_t = READY_ANIM
+		_last_cd = cd
+		if _ready_t > 0.0:
+			_ready_t = maxf(0.0, _ready_t - delta)
+			queue_redraw()
 		if hero and hero.skill_points > 0 and slot < 3 and hero.can_upgrade_skill(slot):
 			_glow_t += delta
 			queue_redraw()
@@ -3813,6 +3935,15 @@ class SkillIcon extends Control:
 			var ratio = cd_remaining / max_cd
 			var end_angle = -PI/2 + 2 * PI * ratio
 			draw_arc(center, radius + 4, -PI/2, end_angle, 32, Color(0, 0, 0, 0.6), 4.0)
+		# 冷却就绪动画：白闪 + 两圈金色扩散环（不挡技能图标，纯叠加绘制）
+		if _ready_t > 0.0:
+			var p: float = 1.0 - _ready_t / READY_ANIM
+			var a: float = 1.0 - p
+			draw_circle(center, radius, Color(1.0, 0.97, 0.86, 0.28 * a))
+			draw_arc(center, radius * (1.0 + 0.55 * p), 0.0, TAU, 48,
+				Color(1.0, 0.86, 0.36, 0.92 * a), maxf(1.0, 5.5 * a), true)
+			draw_arc(center, radius * (0.92 + 0.30 * p), 0.0, TAU, 40,
+				Color(1.0, 1.0, 0.94, 0.5 * a), maxf(1.0, 2.5 * a), true)
 		# 方案A：就绪不写字，冷却只显示整数秒；文字统一描边并真正居中
 		var font = UiKit.font()
 		var text := ""
@@ -4491,18 +4622,168 @@ class TargetHpGloss extends Control:
 		if w <= 2.0 or h <= 2.0:
 			return
 		var ratio := clampf(hp / maxf(max_hp, 1.0), 0.0, 1.0)
-		# 上部高光带（内收 8px 避开圆角）
-		draw_rect(Rect2(8.0, 1.0, maxf(w - 16.0, 0.0), h * 0.42), Color(1, 1, 1, 0.12))
-		# 填充末端亮边
-		var fx := w * ratio
-		if fx > 2.0:
-			draw_rect(Rect2(maxf(fx - 3.0, 1.0), 1.5, 2.0, h - 3.0), Color(1, 1, 1, 0.28))
-		# 每 1000 生命一条刻度
-		var step_w := 1000.0 / maxf(max_hp, 1.0) * w
-		if step_w >= 3.0:
-			var x := step_w
-			while x < w - 8.0:
-				draw_rect(Rect2(x, 3.0, 1.0, h - 6.0), Color(0, 0, 0, 0.22))
-				x += step_w
-		# 细描边
-		draw_rect(Rect2(0.5, 0.5, w - 1.0, h - 1.0), Color(1, 1, 1, 0.08), false, 1.0)
+		var fill_w: float = maxf(3.0, w * ratio)
+		# 1) 填充区竖向渐变高光（上亮下暗，做出金属/玻璃厚度）
+		var steps := 6
+		for i in range(steps):
+			var t := float(i) / float(steps)
+			draw_rect(Rect2(0.0, t * h * 0.55, fill_w, h * 0.55 / float(steps) + 1.0),
+				Color(1, 1, 1, 0.11 * (1.0 - t)))
+		# 2) 填充底部内阴影
+		draw_rect(Rect2(0.0, h * 0.68, fill_w, h * 0.32), Color(0, 0, 0, 0.20))
+		# 3) 末端亮边 + 向后柔光，血条推进方向更醒目
+		if fill_w > 5.0:
+			draw_rect(Rect2(fill_w - 2.0, 2.0, 1.6, h - 4.0), Color(1, 1, 1, 0.55))
+			for gi in 3:
+				draw_rect(Rect2(fill_w - 5.0 - gi * 2.0, 3.5, 1.2, h - 7.0),
+					Color(1, 1, 1, maxf(0.0, 0.13 - gi * 0.035)))
+		# 4) 10% 刻度（细线，填充/空白区都可见，用来快速判读血量）
+		var step_w := w * 0.1
+		var x := step_w
+		while x < w - 2.0:
+			draw_rect(Rect2(x, 2.0, 1.0, h - 4.0), Color(0, 0, 0, 0.20))
+			x += step_w
+		# 5) 上下边缘的玻璃反光 / 内暗线，让条体更立体
+		draw_rect(Rect2(10.0, 1.4, maxf(w - 20.0, 0.0), 1.2), Color(1, 1, 1, 0.18))
+		draw_rect(Rect2(10.0, h - 2.8, maxf(w - 20.0, 0.0), 1.2), Color(0, 0, 0, 0.28))
+# ==================== 顶部信息带：电量 / 网络 ====================
+
+func _refresh_device_status() -> void:
+	if _device_status == null or not is_instance_valid(_device_status):
+		return
+	# 电池接口按引擎版本动态取（4.x 起 OS 上已没有 get_power_state；直接调用会解析失败）
+	# 取不到就显示 -1（组件画成“--/PC”），不要假装 100% 误导玩家
+	var pct: float = -1.0
+	var charging := false
+	var os: Object = Engine.get_singleton("OS")
+	if os != null:
+		if os.has_method("get_power_percent_left"):
+			pct = float(os.call("get_power_percent_left"))
+		if os.has_method("get_power_state"):
+			var st := int(os.call("get_power_state"))
+			charging = st == 3 or st == 4   # 3=CHARGING 4=CHARGED
+	# Android：部分机型 OS 接口取不到电量时，退到 sysfs 直接读电池容量
+	if pct < 0.0 and OS.get_name() == "Android":
+		var cap := _read_sysfs_int("/sys/class/power_supply/battery/capacity")
+		if cap >= 0:
+			pct = float(cap)
+		var sts := _read_sysfs_text("/sys/class/power_supply/battery/status")
+		if sts.contains("Charg") or sts.contains("Full"):
+			charging = true
+	var mode := 0          # 0 本地 / 1 主机 / 2 客户端
+	var ping_ms := -1.0
+	if NetSession != null and NetSession.mode != NetSession.Mode.NONE:
+		mode = 1 if NetSession.mode == NetSession.Mode.HOST else 2
+		var mp = multiplayer.multiplayer_peer
+		if mp is ENetMultiplayerPeer:
+			var ids: Array = (mp as ENetMultiplayerPeer).get_peers()
+			if mode == 2:
+				ids = [1]
+			var best := -1.0
+			for pid in ids:
+				var peer = (mp as ENetMultiplayerPeer).get_peer(int(pid))
+				if peer != null and peer.has_method("get_statistic"):
+					var rtt: float = float(peer.call("get_statistic", ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+					if rtt > 0.0 and (best < 0.0 or rtt < best):
+						best = rtt
+			ping_ms = best
+	_device_status.call("set_data", pct, charging, mode, ping_ms)
+
+
+func _read_sysfs_int(path: String) -> int:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return -1
+	var t := f.get_as_text().strip_edges()
+	f.close()
+	if t == "":
+		return -1
+	return int(t)
+
+
+func _read_sysfs_text(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return ""
+	var t := f.get_as_text().strip_edges()
+	f.close()
+	return t
+
+
+class DeviceStatusArt extends Control:
+	var batt_pct := -1.0
+	var charging := false
+	var net_mode := 0          # 0 本地 / 1 主机 / 2 客户端
+	var ping_ms := -1.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func set_data(pct: float, chg: bool, mode: int, ping: float) -> void:
+		if absf(pct - batt_pct) < 0.5 and chg == charging and mode == net_mode and absf(ping - ping_ms) < 1.0:
+			return
+		batt_pct = pct
+		charging = chg
+		net_mode = mode
+		ping_ms = ping
+		queue_redraw()
+
+	func _draw() -> void:
+		var bright := Color(0.93, 0.97, 1.0, 0.94)
+		var dim := Color(0.60, 0.67, 0.78, 0.92)
+		# —— 电量：电池外框 + 电量填充 + 充电闪电 + 百分比 ——
+		var bx := 0.0
+		var by := 7.0
+		var bw := 34.0
+		var bh := 17.0
+		var known: bool = batt_pct >= 0.0
+		var pct: float = clampf(batt_pct, 0.0, 100.0) if known else 0.0
+		var col := Color(0.55, 0.95, 0.62)
+		if known:
+			if pct <= 20.0:
+				col = Color(1.0, 0.42, 0.38)
+			elif pct <= 50.0:
+				col = Color(1.0, 0.80, 0.36)
+		if charging:
+			col = Color(0.48, 0.87, 1.0)
+		draw_rect(Rect2(bx, by, bw, bh), Color(1, 1, 1, 0.22), false, 1.6)
+		draw_rect(Rect2(bx + bw, by + bh * 0.32, 3.0, bh * 0.36), Color(1, 1, 1, 0.38))
+		if known and pct > 0.5:
+			draw_rect(Rect2(bx + 2.4, by + 2.4, maxf(1.0, (bw - 4.8) * pct / 100.0), bh - 4.8), col)
+		if charging:
+			var bolt := PackedVector2Array([
+				Vector2(bx + bw * 0.56, by + 2.0), Vector2(bx + bw * 0.40, by + bh * 0.56),
+				Vector2(bx + bw * 0.53, by + bh * 0.56), Vector2(bx + bw * 0.42, by + bh - 1.5),
+				Vector2(bx + bw * 0.68, by + bh * 0.40), Vector2(bx + bw * 0.55, by + bh * 0.40),
+				Vector2(bx + bw * 0.66, by + 2.0)])
+			draw_colored_polygon(bolt, Color(0.04, 0.10, 0.16, 0.88))
+		var btxt: String = ("%d%%" % int(round(pct))) if known else ("充电中" if charging else "--")
+		UiKit.text(self, Vector2(bx + bw + 8.0, by + bh - 1.5), btxt, 17, bright if known else dim)
+
+		# —— 分隔线 ——
+		draw_line(Vector2(112.0, 4.0), Vector2(112.0, 30.0), Color(1, 1, 1, 0.14), 1.0)
+
+		# —— 网络：四格信号 + 本地/联机/延迟 ——
+		var nx := 124.0
+		var net_col := dim
+		var net_txt := "本地"
+		var level := 0
+		if net_mode > 0:
+			net_txt = "联机"
+			if ping_ms >= 0.0:
+				level = 4 if ping_ms < 60.0 else (3 if ping_ms < 120.0 else (2 if ping_ms < 220.0 else 1))
+				net_txt = "%dms" % int(round(ping_ms))
+			else:
+				level = 4
+			if level >= 3:
+				net_col = Color(0.55, 0.95, 0.62)
+			elif level == 2:
+				net_col = Color(1.0, 0.80, 0.36)
+			else:
+				net_col = Color(1.0, 0.42, 0.38)
+		for i in range(4):
+			var hh: float = 6.0 + 4.5 * float(i)
+			var rx: float = nx + float(i) * 8.0
+			var ry: float = 25.0 - hh
+			draw_rect(Rect2(rx, ry, 5.5, hh), net_col if i < level else Color(1, 1, 1, 0.16))
+		UiKit.text(self, Vector2(nx + 38.0, 24.0), net_txt, 17, bright if net_mode > 0 else dim)

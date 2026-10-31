@@ -160,9 +160,9 @@ func rec_icon_rect(rect: Rect2) -> Rect2:
 		s = minf(s, 78.0)
 	return Rect2(rect.position + Vector2(pad, (rect.size.y - s) * 0.5), Vector2(s, s))
 
-## 推荐装备卡：品质图标 + 名称 + 状态行（可买/还差/槽满/已成型）+ 金币进度条
+## 推荐装备卡：品质图标 + 名称 + 状态行（可买/还差/槽满/已成型）+ 装备效果一行简介 + 金币进度条
 func rec_card(ci: CanvasItem, rect: Rect2, item_name: String, tier: int, cost: int, gold: int,
-		maxed: bool, slot_full: bool) -> void:
+		maxed: bool, slot_full: bool, desc: String = "") -> void:
 	var can := cost > 0 and gold >= cost
 	var compact := rect.size.x < 300.0
 	var accent := C_GOLD if can else (C_DANGER if slot_full else C_PANEL_EDGE)
@@ -174,26 +174,33 @@ func rec_card(ci: CanvasItem, rect: Rect2, item_name: String, tier: int, cost: i
 	var avail := rect.position.x + rect.size.x - tx - 6.0
 	var nm := item_name if item_name != "" else ("已成型" if maxed else "无推荐")
 	var fs := int(rect.size.y * (0.22 if compact else 0.27))
-	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.40), nm,
+	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.34), nm,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, fs, 3, Color(0, 0, 0, 0.8))
-	ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.40), nm,
+	ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.34), nm,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, fs, Color(1, 1, 1, 0.96))
 	var sub := "-"
 	if maxed: sub = "已成型"
 	elif cost > 0:
 		if compact:
-			sub = "可买" if can else ("还差 %d" % (cost - gold))
+			sub = "可买" if can else ("还差 %d 金" % (cost - gold))
 		else:
 			sub = ("%d 金 · 可买" % cost) if can else ("还差 %d 金" % (cost - gold))
 	var sfs := int(rect.size.y * (0.155 if compact else 0.20))
 	var sc := C_GOLD if can else (Color(1, 0.62, 0.35) if cost > 0 else Color(0.70, 0.72, 0.80))
-	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.68), sub,
+	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.58), sub,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, sfs, 2, Color(0, 0, 0, 0.8))
-	ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.68), sub,
+	ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.58), sub,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, sfs, sc)
+	# 效果简介：一行小字（超宽自动省略号）；槽满提示优先占这一行
+	var dfs := int(rect.size.y * (0.125 if compact else 0.15))
+	var line_y := rect.position.y + rect.size.y * 0.84
 	if slot_full and not maxed:
-		ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.90), "槽满·需合成",
+		ci.draw_string(font(), Vector2(tx, line_y), "槽满·需合成",
 			HORIZONTAL_ALIGNMENT_LEFT, avail, sfs, Color(1, 0.55, 0.35))
+	elif desc != "":
+		var dt := fit_text(font(), desc, avail, dfs)
+		ci.draw_string(font(), Vector2(tx, line_y), dt,
+			HORIZONTAL_ALIGNMENT_LEFT, avail, dfs, Color(0.74, 0.77, 0.85, 0.95))
 	if cost > 0:
 		var pr := clampf(float(gold) / float(cost), 0.0, 1.0)
 		var bar := Rect2(rect.position + Vector2(pad, rect.size.y - 5.0),
@@ -201,6 +208,51 @@ func rec_card(ci: CanvasItem, rect: Rect2, item_name: String, tier: int, cost: i
 		ci.draw_rect(bar, Color(1, 1, 1, 0.12))
 		ci.draw_rect(Rect2(bar.position, Vector2(bar.size.x * pr, bar.size.y)),
 			C_GOLD if can else Color(1, 0.55, 0.25))
+
+## 装备效果简介：passive/active 首句；没有被动就用主要属性拼一句（小件也有东西可看）
+func item_effect(item: Dictionary) -> String:
+	var t := short_effect(str(item.get("passive", item.get("active", ""))))
+	if t != "":
+		return t
+	var parts: Array = []
+	for e in [["attack", "攻击"], ["magic_attack", "法强"], ["health", "生命"], ["armor", "物防"],
+			["magic_resist", "法防"], ["attack_speed", "攻速%"], ["crit_chance", "暴击%"],
+			["cooldown", "冷缩%"], ["speed", "移速"], ["lifesteal", "吸血%"],
+			["armor_pen_percent", "物穿%"], ["magic_pen", "法穿"], ["mana", "蓝量"]]:
+		var v := int(item.get(str(e[0]), 0))
+		if v != 0:
+			parts.append("%s+%d" % [str(e[1]), v])
+		if parts.size() >= 3:
+			break
+	var out := ""
+	for p in parts:
+		out = str(p) if out == "" else out + " · " + str(p)
+	return out
+
+## 装备效果简介：取 passive（无则 active），截到第一个标点，只留一句短语
+func short_effect(text: String) -> String:
+	var t := text.strip_edges()
+	if t == "":
+		return ""
+	for sep in ["，", "；", ",", ";", "。"]:
+		var i := t.find(sep)
+		if i > 0:
+			t = t.substr(0, i)
+			break
+	return t.strip_edges()
+
+## 按可用像素宽度裁剪字符串，超宽补省略号
+func fit_text(f: Font, text: String, max_w: float, fs: int) -> String:
+	if text == "" or max_w <= 0.0:
+		return ""
+	if f.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= max_w:
+		return text
+	var t := text
+	while t.length() > 1:
+		t = t.substr(0, t.length() - 1)
+		if f.get_string_size(t + "…", HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x <= max_w:
+			return t + "…"
+	return ""
 
 ## 统一 9-slice 面板底板（深色渐变 + 描边 + 顶部高光）。
 ## alpha：整体透明度，替代原先的纯黑 StyleBoxFlat。
