@@ -113,11 +113,20 @@ func setup(battle: BattleManager):
 	team_player_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
 	team_enemy_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
 
-	# 段位结算：单机结算唯一入口（原代码读 bm.rank_result，但 BattleManager 上没有这个字段）
-	if _rank_result.is_empty():
-		var mp := _find_mvp(team_player_heroes)
-		_self_is_mvp = mp != null and is_instance_valid(bm.hero) and mp == bm.hero
-		_rank_result = RankSystem.apply_result(Config.is_ally(bm.winner), _self_is_mvp)
+	# 段位结算：优先用 BattleManager.crystal_destroyed() 里已经算好的结果；
+	# 只有在没有结果时才兜底自算（否则会重复加/减星）
+	var mp0 := _find_mvp(team_player_heroes)
+	_self_is_mvp = mp0 != null and is_instance_valid(bm.hero) and mp0 == bm.hero
+	if bm.rank_result is Dictionary and not (bm.rank_result as Dictionary).is_empty():
+		_rank_result = bm.rank_result
+	elif _rank_result.is_empty():
+		var rating := _calculate_rating(bm.hero) if is_instance_valid(bm.hero) else 0.0
+		var medal := _medal_index(bm.hero) if is_instance_valid(bm.hero) else -1
+		var bonus := RankSystem.medal_bonus(medal) + (200 if rating > 90.0 else 0)
+		_rank_result = RankSystem.apply_result(Config.is_ally(bm.winner), _self_is_mvp, bonus)
+		_rank_result["medal"] = medal
+		_rank_result["medal_bonus"] = RankSystem.medal_bonus(medal)
+		_rank_result["top_bonus"] = 200 if rating > 90.0 else 0
 
 	_create_ui()
 
@@ -188,6 +197,12 @@ func _create_ui():
 	var spacer = Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_bar.add_child(spacer)
+
+	var back_btn = Button.new()
+	back_btn.text = "返回大厅"
+	_skin_btn(back_btn, UiKit.C_PANEL_EDGE, false, UiKit.FS_MD, Vector2(176, 66))
+	back_btn.pressed.connect(_on_back_lobby)
+	top_bar.add_child(back_btn)
 
 	var play_again_btn = Button.new()
 	play_again_btn.text = "再来一局"
@@ -266,6 +281,11 @@ func _on_play_again():
 func _on_return():
 	queue_free()
 	get_tree().quit()
+
+## 返回大厅（主菜单）：解除暂停后切换场景
+func _on_back_lobby():
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
 
 # ==================== 小队汇总 ====================
 func _team_kills(heroes: Array) -> int:
@@ -463,14 +483,12 @@ func _create_mvp_mini(mvp: Hero, is_enemy: bool, wide: int = 190) -> Control:
 		return box
 
 	var hb = _fill(HBoxContainer.new(), box, 10, 0, 10, 0)
-	var disc = RoleDisc.new()
-	disc.custom_minimum_size = Vector2(54, 54)
-	disc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var rs = _role_style(mvp.role)
-	disc.glyph = rs[0]
-	disc.glyph_color = rs[1]
-	disc.ring = team_color
-	hb.add_child(disc)
+	var face = HeroFace.new()
+	face.custom_minimum_size = Vector2(54, 54)
+	face.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	face.hero_name = str(mvp.display_name)
+	face.ring = team_color
+	hb.add_child(face)
 
 	var vcol = VBoxContainer.new()
 	vcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -492,6 +510,12 @@ func _create_mvp_mini(mvp: Hero, is_enemy: bool, wide: int = 190) -> Control:
 	info.text = "%s · Lv.%d" % [mvp.role, mvp.level]
 	_apply_label_style(info, UiKit.FS_XS, Color(0.7, 0.75, 0.85))
 	vcol.add_child(info)
+	var mi2 := _medal_index(mvp)
+	if mi2 >= 0:
+		var mrow = HBoxContainer.new()
+		mrow.add_theme_constant_override("separation", 4)
+		mrow.add_child(_medal_chip(mi2))
+		vcol.add_child(mrow)
 	hb.add_child(vcol)
 	return box
 
@@ -499,8 +523,8 @@ func _create_mvp_mini(mvp: Hero, is_enemy: bool, wide: int = 190) -> Control:
 func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	var team_color = RED_TEAM if is_enemy else BLUE_TEAM
 	var card = Panel.new()
-	# 高度随整体字号缩放（118 基准保证 5 张卡整屏可见）；宽度下限 480，由所在列拉伸铺满
-	card.custom_minimum_size = Vector2(480, int(114 * _ui_scale()))
+	# 高度随整体字号缩放；136 基准保证三行（头像/KDA/装备）都完整落在卡片内
+	card.custom_minimum_size = Vector2(480, int(136 * _ui_scale()))
 
 	var style = _box_style(
 		Color(0.05, 0.08, 0.16, 0.72) if not is_enemy else Color(0.2, 0.05, 0.06, 0.72),
@@ -517,16 +541,15 @@ func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 
 	# ---- 第一行：角色圆盘 + 信息 + 评分 ----
 	var row1 = HBoxContainer.new()
-	row1.add_theme_constant_override("separation", 16)
+	# ---- 第一行：英雄头像 + 信息 + 评分 ----
 
-	var disc = RoleDisc.new()
-	disc.custom_minimum_size = Vector2(54, 54)
-	disc.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var rs = _role_style(hero.role)
-	disc.glyph = rs[0]
-	disc.glyph_color = rs[1]
-	disc.ring = team_color
-	row1.add_child(disc)
+	var face = HeroFace.new()
+	face.custom_minimum_size = Vector2(54, 54)
+	face.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	face.hero_name = str(hero.display_name)
+	face.ring = team_color
+	face.dead = hero.health <= 0.0
+	row1.add_child(face)
 
 	var info_col = VBoxContainer.new()
 	info_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -582,6 +605,12 @@ func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	score_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_apply_label_style(score_tag, UiKit.FS_XS, _rating_grade_color(score))
 	score_col.add_child(score_tag)
+	# 奖牌放进名字行：原来叠在评分块下方会把第三行装备栏挤出卡片
+	var mi := _medal_index(hero)
+	if mi >= 0:
+		var medal_chip = _medal_chip(mi)
+		medal_chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		nm_row.add_child(medal_chip)
 	row1.add_child(score_col)
 
 	inner.add_child(row1)
@@ -613,6 +642,28 @@ func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	inner.add_child(eq_row)
 
 	return card
+
+## 奖牌小胶囊：金/银/铜亮色底 + 深色文字 + 白描边，任何背景上都醒目
+func _medal_chip(i: int) -> Panel:
+	var col := _medal_color(i)
+	var txt := _medal_name(i)
+	var fs := _fs(UiKit.FS_SM)
+	var pill = Panel.new()
+	pill.custom_minimum_size = Vector2(maxi(76, txt.length() * fs + int(18 * _ui_scale())),
+		fs + int(12 * _ui_scale()))
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill.add_theme_stylebox_override("panel",
+		_box_style(col, Color(1, 1, 1, 0.8), 1, int(7 * _ui_scale())))
+	var lbl = _fill(Label.new(), pill, 4, 0, 4, 0)
+	lbl.text = txt
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", fs)
+	lbl.add_theme_color_override("font_color", Color(0.13, 0.09, 0.02))
+	lbl.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.55))
+	lbl.add_theme_constant_override("outline_size", 1)
+	return pill
+
 
 func _tag_label(text: String, bg: Color, fg: Color, wide: int = 0, accent: bool = false) -> Panel:
 	var pill = Panel.new()
@@ -657,20 +708,18 @@ func _make_equip_slot(item_id: String) -> Control:
 	var info = ItemDatabase.get_item(item_id) if item_id != "" else {}
 	var has = not info.is_empty()
 	var tier = int(info.get("tier", 1)) if has else 1
-	var inner = _fill(Label.new(), slot, 0, 0, 0, 0)
-	inner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	inner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	if has:
-		var nm = str(info.get("name", item_id))
-		inner.text = nm.substr(0, 1)
 		slot.add_theme_stylebox_override("panel", _box_style(
 			Color(0.9, 0.88, 0.6, 0.15) if tier >= 3 else Color(1, 1, 1, 0.09),
 			_tier_color(tier), 1, 7))
-		_apply_label_style(inner, UiKit.FS_SM, UiKit.C_TEXT)
+		var ic = ItemSlotIcon.new()
+		ic.item_name = str(info.get("name", item_id))
+		ic.tier = tier
+		ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ic.tooltip_text = str(info.get("name", item_id))
+		_fill(ic, slot, 3, 3, 3, 3)
 	else:
-		inner.text = "·"
 		slot.add_theme_stylebox_override("panel", _box_style(Color(1, 1, 1, 0.035), Color(1, 1, 1, 0.16), 1, 7))
-		_apply_label_style(inner, UiKit.FS_XS, Color(0.4, 0.44, 0.54))
 	return slot
 
 func _rating_grade(score: float) -> String:
@@ -687,6 +736,32 @@ func _rating_grade_color(score: float) -> Color:
 	if score >= 70: return Color(0.6, 0.9, 0.5)
 	if score >= 60: return Color(0.5, 0.8, 0.9)
 	return Color(0.7, 0.72, 0.8)
+
+# ==================== 奖牌（按对战评分，与局内结算一致） ====================
+# 0=金牌 1=银牌 2=铜牌 -1=无奖牌；门槛与 BattleManager._pm_medal_by_rating 保持一致
+func _medal_index(hero: Hero) -> int:
+	if hero == null or not is_instance_valid(hero):
+		return -1
+	var s := _calculate_rating(hero)
+	if s >= 78.0: return 0
+	if s >= 64.0: return 1
+	if s >= 52.0: return 2
+	return -1
+
+func _medal_name(i: int) -> String:
+	match i:
+		0: return "金牌"
+		1: return "银牌"
+		2: return "铜牌"
+	return ""
+
+func _medal_color(i: int) -> Color:
+	match i:
+		0: return Color(1.0, 0.84, 0.32)
+		1: return Color(0.86, 0.91, 1.0)
+		2: return Color(0.92, 0.64, 0.38)
+	return Color(0.7, 0.74, 0.84)
+
 
 # ==================== Tab 2: 数据 ====================
 # 每行统计：图标字形 / 主题色 / 名称
@@ -1047,6 +1122,31 @@ func _calculate_rating(hero: Hero) -> float:
 
 	return clamp(total, 0.0, 100.0)
 
+# ==================== 内部类：英雄头像（程序化立绘）====================
+class HeroFace extends Control:
+	var hero_name: String = ""
+	var ring: Color = Color.WHITE
+	var dead := false
+	var ring_width: float = 3.0
+
+	func _draw():
+		var r = min(size.x, size.y) * 0.5
+		if r <= 2: return
+		var c = size * 0.5
+		var art = preload("res://scripts/ui/HeroArt.gd")
+		art.draw_portrait(self, c, maxf(1.0, r - ring_width * 0.5), hero_name, ring, dead)
+		draw_arc(c, r - ring_width * 0.5, 0.0, TAU, 48, ring, ring_width)
+
+# ==================== 内部类：装备图标 ====================
+class ItemSlotIcon extends Control:
+	var item_name: String = ""
+	var tier: int = 1
+
+	func _draw():
+		var s: float = minf(size.x, size.y)
+		if s <= 2.0: return
+		UiKit.item_icon(self, Rect2(Vector2.ZERO, Vector2(s, s)), tier, item_name)
+
 # ==================== 内部类：角色/符号圆盘 ====================
 class RoleDisc extends Control:
 	var glyph: String = ""
@@ -1314,8 +1414,9 @@ func _build_reward_band() -> Control:
 		r1.add_child(dl)
 	var p_old: int = int(old_state.get("points", 0))
 	var p_new: int = int(rs.get("points", 0))
+	var p_delta: int = int(_rank_result.get("point_change", 0))
 	var pl := Label.new()
-	pl.text = "勇者积分 %d/%d" % [p_new, RankSystem.MAX_POINTS]
+	pl.text = "排位积分 %d/%d · 本局 %+d" % [p_new, RankSystem.STAR_POINTS, p_delta]
 	_apply_label_style(pl, UiKit.FS_XS, UiKit.C_TEXT_DIM)
 	c1.add_child(pl)
 
@@ -1326,7 +1427,7 @@ func _build_reward_band() -> Control:
 	c2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	hb.add_child(c2)
 	var pcap := Label.new()
-	pcap.text = "勇者积分进度"
+	pcap.text = "积分进度 · 每星 100 分"
 	_apply_label_style(pcap, UiKit.FS_XS, UiKit.C_TEXT_DIM)
 	c2.add_child(pcap)
 	var bar_bg := Panel.new()
@@ -1342,12 +1443,12 @@ func _build_reward_band() -> Control:
 	bar_fill.offset_top = 2.0
 	bar_fill.offset_bottom = -2.0
 	bar_fill.offset_left = 2.0
-	bar_fill.anchor_right = clampf(float(p_old) / float(RankSystem.MAX_POINTS), 0.0, 1.0)
+	bar_fill.anchor_right = clampf(float(p_old) / float(RankSystem.STAR_POINTS), 0.0, 1.0)
 	bar_bg.add_child(bar_fill)
 	var tw := create_tween()
 	tw.tween_interval(0.40)
 	tw.tween_property(bar_fill, "anchor_right",
-		clampf(float(p_new) / float(RankSystem.MAX_POINTS), 0.0, 1.0), 0.7)
+		clampf(float(p_new) / float(RankSystem.STAR_POINTS), 0.0, 1.0), 0.7)
 
 	# 3) 本局结算 + 成就
 	var hero: Hero = bm.hero if is_instance_valid(bm.hero) else null
@@ -1374,8 +1475,16 @@ func _build_reward_band() -> Control:
 	_apply_label_style(gv, UiKit.FS_LG, grade_col)
 	gv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	c3.add_child(gv)
+	# 本局奖牌：优先用局内结算算出的奖牌（含积分加成），没算过就按评分兜底
+	var pm_medal := -1
+	if not _rank_result.is_empty():
+		pm_medal = int(_rank_result.get("medal", -1))
+	if pm_medal < 0 and hero != null:
+		pm_medal = _medal_index(hero)
+	if pm_medal >= 0:
+		c3.add_child(_medal_chip(pm_medal))
 	for a in _achievements():
-		c3.add_child(_tag_label(str(a), UiKit.C_GOLD, Color(0.12, 0.09, 0.03), 0, true))
+		c3.add_child(_achievement_tag(str(a)))
 
 	# 4) 灵宝点评（单行，超长省略）
 	var c4 := HBoxContainer.new()
@@ -1401,6 +1510,26 @@ func _build_reward_band() -> Control:
 	var tw2 := create_tween()
 	tw2.tween_property(band, "modulate:a", 1.0, 0.35)
 	return band
+
+
+## 成就称号胶囊：深底 + 金描边 + 亮金大字（比原灰金小标签清晰得多）
+func _achievement_tag(txt: String) -> Panel:
+	var fs := _fs(UiKit.FS_SM)
+	var pill = Panel.new()
+	pill.custom_minimum_size = Vector2(maxi(84, txt.length() * fs + int(20 * _ui_scale())),
+		fs + int(14 * _ui_scale()))
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill.add_theme_stylebox_override("panel",
+		_box_style(Color(0.13, 0.10, 0.03, 0.95), Color(1.0, 0.82, 0.35, 0.92), 1, int(8 * _ui_scale())))
+	var lbl = _fill(Label.new(), pill, 6, 0, 6, 0)
+	lbl.text = txt
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", fs)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.90, 0.55))
+	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	lbl.add_theme_constant_override("outline_size", 2)
+	return pill
 
 
 func _achievements() -> Array:

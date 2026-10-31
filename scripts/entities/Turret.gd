@@ -29,6 +29,7 @@ var shield_stage_25: bool = false
 var shield_protected_no_minion: bool = false   # 塔下无敌方小兵：英雄对其伤害×0.45（供血条盾图标）
 var under_attack_timer: float = 0.0   # 近 1.5s 内持续被攻击（供小地图警告圈检测，见 Minimap.gd）
 const UNDER_ATTACK_WINDOW: float = 1.5
+const HERO_AGGRO_WINDOW: float = 2.0   # 敌方英雄在塔内打我方英雄后的仇恨记忆
 var _anchor := Vector3.ZERO          # 塔出生点：免疫击退/位移用，就地回正
 var _anchor_set := false
 var _body_vis: Node3D = null         # 受击闪光/轻抖只动塔身，不带范围环
@@ -176,6 +177,10 @@ static func play_collapse(root: Node3D, sf: float, fx_parent: Node = null) -> vo
 	if root == null or not is_instance_valid(root):
 		return
 	_ensure_mats()
+	# 水晶：中心朝天打出光柱 → 晶核与碎石四散爆裂（塔保持原来的倾斜倒塌）
+	if str(root.get("display_name")) == "crystal":
+		_play_crystal_blast(root, sf, fx_parent)
+		return
 	var pivot := Node3D.new()
 	pivot.name = "CollapsePivot"
 	root.add_child(pivot)
@@ -208,6 +213,155 @@ static func play_collapse(root: Node3D, sf: float, fx_parent: Node = null) -> vo
 		t2.tween_property(mi, "global_position", Vector3(start.x + randf_range(-2.4, 2.4) * sf, 0.12, start.z + randf_range(-2.4, 2.4) * sf), d).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		t2.tween_property(mi, "rotation", Vector3(randf() * 6.0, randf() * 6.0, randf() * 6.0), d)
 		t2.chain().tween_callback(mi.queue_free)
+
+
+# —— 水晶爆炸（host 与联机客户端共用）：蓄能 → 朝天光柱 → 晶核/碎石爆裂 ——
+static func _play_crystal_blast(root: Node3D, sf: float, fx_parent: Node = null) -> void:
+	var host: Node = fx_parent if fx_parent != null and is_instance_valid(fx_parent) else root
+	var tree := root.get_tree()
+	var base: Vector3 = root.global_position
+	var center: Vector3 = base + Vector3(0.0, 2.1 * sf, 0.0)
+	var cold := Color(0.84, 0.94, 1.0)
+	var warm := Color(1.0, 0.86, 0.46)
+
+	# 把所有可视子节点收进 pivot：蓄能时整体微胀，爆裂时整块塌缩
+	var pivot := Node3D.new()
+	pivot.name = "CrystalBlastPivot"
+	root.add_child(pivot)
+	var kids: Array = []
+	for c in root.get_children():
+		if c != pivot and c is Node3D and not (c is CollisionShape3D):
+			kids.append(c)
+	for c in kids:
+		c.reparent(pivot)
+
+	# 1) 蓄能：地面吸能环 + 晶核轻微膨胀
+	Vfx.shockwave(base + Vector3.UP * 0.25, 2.6 * sf, cold, 0.9)
+	var tw0 := root.create_tween()
+	tw0.set_parallel(true)
+	tw0.tween_property(pivot, "scale", Vector3(1.05, 1.12, 1.05), 0.45).set_ease(Tween.EASE_OUT)
+	tw0.tween_property(pivot, "rotation:y", 1.2, 0.45).set_ease(Tween.EASE_OUT)
+
+	if tree == null:
+		pivot.queue_free()
+		return
+
+	# 2) 光柱：0.14s 起，从水晶中心直冲天空（细亮芯 + 冷白主束 + 金色外辉光）
+	tree.create_timer(0.55, true, false, true).timeout.connect(func() -> void:
+		if not is_instance_valid(root):
+			return
+		var c2: Vector3 = root.global_position + Vector3(0.0, 2.1 * sf, 0.0)
+		Vfx.beam(c2, c2 + Vector3.UP * 90.0, cold, 0.55 * sf, 2.7)
+		Vfx.beam(c2, c2 + Vector3.UP * 90.0, Color(1.0, 0.99, 0.95), 0.20 * sf, 2.2)
+		Vfx.beam(c2, c2 + Vector3.UP * 72.0, warm, 1.35 * sf, 3.0)
+		Vfx.hit_spark(c2, cold, Vector3.UP, 3.6)
+		_spawn_beam_embers(c2, host, cold)
+		Vfx.camera_shake(0.42, 0.85)
+		Vfx.screen_flash(Color(0.86, 0.94, 1.0), 0.22))
+
+	# 3) 爆裂：0.26s 时晶核塌缩 + 碎片向外上方炸开、受重力落回地面
+	tree.create_timer(1.0, true, false, true).timeout.connect(func() -> void:
+		if not is_instance_valid(root):
+			return
+		var b2: Vector3 = root.global_position
+		Vfx.shockwave(b2 + Vector3.UP * 0.3, 7.0 * sf, cold, 1.5)
+		Vfx.shockwave(b2 + Vector3.UP * 0.3, 4.4 * sf, warm, 1.2)
+		Vfx.hit_spark(b2 + Vector3.UP * 2.0 * sf, warm, Vector3.UP, 4.2)
+		var twk := root.create_tween()
+		twk.set_parallel(true)
+		twk.tween_property(pivot, "scale", Vector3(0.04, 0.04, 0.04), 0.5).set_ease(Tween.EASE_IN)
+		twk.tween_property(pivot, "position:y", 0.55 * sf, 0.5).set_ease(Tween.EASE_OUT)
+		twk.tween_property(pivot, "rotation:y", randf_range(-4.0, 4.0), 0.55)
+		_spawn_crystal_shards(root, sf, host))
+
+
+# 爆裂的光柱余烬：沿光柱向上飘的火星
+static func _spawn_beam_embers(center: Vector3, host: Node, col: Color) -> void:
+	var p := CPUParticles3D.new()
+	p.amount = 36
+	p.lifetime = 2.4
+	p.one_shot = true
+	p.explosiveness = 0.9
+	p.position = center
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+	p.emission_ring_axis = Vector3.UP
+	p.emission_ring_radius = 1.5 * 1.0
+	p.emission_ring_height = 0.5
+	p.direction = Vector3.UP
+	p.spread = 16.0
+	p.gravity = Vector3(0.0, 5.0, 0.0)
+	p.initial_velocity_min = 9.0
+	p.initial_velocity_max = 22.0
+	p.scale_amount_min = 0.35
+	p.scale_amount_max = 1.1
+	var sm := SphereMesh.new()
+	sm.radius = 0.06
+	sm.height = 0.12
+	sm.radial_segments = 6
+	sm.rings = 3
+	p.mesh = sm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.albedo_color = Color(col.r, col.g, col.b, 0.95)
+	p.material_override = m
+	host.add_child(p)
+	p.emitting = true
+	var tree := host.get_tree()
+	if tree != null:
+		tree.create_timer(3.2, true, false, true).timeout.connect(func() -> void:
+			if is_instance_valid(p):
+				p.queue_free())
+
+
+# 碎裂的晶体/碎石：向外抛出 → 受重力落回地面 → 淡出
+static func _spawn_crystal_shards(root: Node3D, sf: float, host: Node) -> void:
+	var base: Vector3 = root.global_position
+	var center: Vector3 = base + Vector3(0.0, 2.0 * sf, 0.0)
+	var cold := Color(0.72, 0.90, 1.0)
+	var warm := Color(1.0, 0.88, 0.55)
+	for i in range(24):
+		var mi := MeshInstance3D.new()
+		var sz: Vector3 = Vector3(randf_range(0.16, 0.46), randf_range(0.26, 0.95), randf_range(0.16, 0.46)) * sf
+		if i % 3 == 0:
+			var pm := PrismMesh.new()
+			pm.size = sz
+			mi.mesh = pm
+		else:
+			var bm := BoxMesh.new()
+			bm.size = sz
+			mi.mesh = bm
+		var col: Color = cold.lerp(warm, randf())
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = col
+		mat.emission_enabled = true
+		mat.emission = col
+		mat.emission_energy_multiplier = randf_range(0.9, 2.4)
+		mat.roughness = 0.22
+		mat.metallic = 0.15
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var ang: float = randf() * TAU
+		var out: Vector3 = Vector3(cos(ang), 0.0, sin(ang)) * randf_range(0.8, 2.6) * sf
+		var start: Vector3 = center + Vector3(0.0, randf_range(-1.2, 1.6) * sf, 0.0)
+		mi.global_position = start
+		mi.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
+		host.add_child(mi)
+		var peak: Vector3 = start + out + Vector3(0.0, randf_range(1.8, 4.5) * sf, 0.0)
+		var land: Vector3 = Vector3(peak.x * 1.15 + randf_range(-1.0, 1.0) * sf, 0.12,
+			peak.z * 1.15 + randf_range(-1.0, 1.0) * sf)
+		var up_dur: float = randf_range(0.50, 0.70)
+		var down_dur: float = randf_range(0.85, 1.15)
+		var tw := mi.create_tween()
+		tw.tween_property(mi, "global_position", peak, up_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mi, "global_position", land, down_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(mi, "rotation",
+			mi.rotation + Vector3(randf_range(-7.0, 7.0), randf_range(-7.0, 7.0), randf_range(-7.0, 7.0)),
+			up_dur + down_dur)
+		tw.parallel().tween_property(mat, "albedo_color:a", 0.0, down_dur * 0.9)
+		tw.chain().tween_callback(mi.queue_free)
 
 
 # 主机侧倒塌：几何动画 + 尘环/火花（客户端复用 play_collapse 并放同样的 VFX）
@@ -441,70 +595,66 @@ func _has_enemy_minion_near() -> bool:
 				return true
 	return false
 func _find_target():
-	# 1. 优先攻击正在攻击己方英雄的敌方英雄
-	#    注意：只认「打己方英雄」；打塔不吸仇恨，塔下有小兵时仍先清兵
-	for entity in get_tree().get_nodes_in_group("heroes"):
-		if entity is Hero and entity.team != team and entity.health > 0:
-			if entity is Hero and entity.wd_timer>0:continue
-			if entity.collision_layer == 0: continue
-			if (entity as Hero).is_invisible_to_enemy(): continue  # 兰陵王隐身(保留碰撞)但不可锁定
-			var ct = entity.current_target
-			if ct != null and is_instance_valid(ct) and ct.team == team and ct.health > 0 \
-					and ct is Hero:
-				var dist = global_position.distance_to(entity.global_position) 
-				if dist <= attack_range*0.01:
-					current_target = entity
-					return
+	var reach := attack_range * 0.01
+	# 1. 只认「敌方英雄在塔的攻击范围内实际打到我方英雄」这一事件。
+	#    不使用 enemy.current_target（那只是 AI/玩家的上次目标，可能并未出手，也可能在塔外打人）。
+	var now := Time.get_ticks_msec() * 0.001
+	for victim in get_tree().get_nodes_in_group("heroes"):
+		if not (victim is Hero) or victim.team != team or victim.health <= 0.0:
+			continue
+		var attacker: Hero = victim.last_hero_attacker
+		if attacker == null or not is_instance_valid(attacker) or attacker.health <= 0.0:
+			continue
+		if attacker.team == team:
+			continue
+		if now - victim.last_hero_attacker_at > HERO_AGGRO_WINDOW:
+			continue
+		# 命中发生时，双方都必须处于本塔攻击范围内；之后攻击者仍在范围内才锁
+		if global_position.distance_to(victim.last_hero_attacked_at) > reach + victim.body_radius:
+			continue
+		if global_position.distance_to(victim.last_hero_attacked_from) > reach + attacker.body_radius:
+			continue
+		if global_position.distance_to(attacker.global_position) > reach + attacker.body_radius:
+			continue
+		if attacker.collision_layer == 0 or attacker.is_invisible_to_enemy():
+			continue
+		current_target = attacker
+		return
 	if current_target and current_target.health >0:return
 	# 2. 其次攻击小兵
 	var best_minion: Minion = null
-	var best_minion_dist = attack_range*0.01 + 1.0
+	var best_minion_dist = reach + 1.0
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity is Minion and entity.team != team and entity.health > 0 and entity.collision_layer != 0:
 			var dist = global_position.distance_to(entity.global_position) 
-			if dist <= attack_range*0.01 and dist < best_minion_dist:
+			if dist <= reach and dist < best_minion_dist:
 				best_minion_dist = dist
 				best_minion = entity
 	if best_minion:
 		current_target = best_minion
 		return
 
-	# 2.5 攻击戍鼎
+	# 3. 攻击戍鼎
 	var best_tripod: Tripod = null
-	var best_tripod_dist = attack_range*0.01 + 1.0
+	var best_tripod_dist = reach + 1.0
 	for entity in get_tree().get_nodes_in_group("tripods"):
 		if entity is Tripod and entity.team != team and entity.health > 0:
 			var dist = global_position.distance_to(entity.global_position)
-			if dist <= attack_range*0.01 and dist < best_tripod_dist:
+			if dist <= reach and dist < best_tripod_dist:
 				best_tripod_dist = dist
 				best_tripod = entity
 	if best_tripod:
 		current_target = best_tripod
 		return
 
-	# 3. 最后攻击其他英雄
-	var best_hero: Hero = null
-	var best_hero_dist = attack_range*0.01 + 1.0
-	for entity in get_tree().get_nodes_in_group("heroes"):
-		if entity is Hero and entity.team != team and entity.health > 0 and entity.collision_layer != 0:
-			if (entity as Hero).is_invisible_to_enemy(): continue  # 兰陵王隐身(保留碰撞)但不可锁定
-			var dist = global_position.distance_to(entity.global_position)
-			if dist <= attack_range*0.01 and dist < best_hero_dist:
-				best_hero_dist = dist
-				best_hero = entity
-	current_target = best_hero
+	# 不再兜底攻击「只是站在塔里的敌方英雄」：没有塔内打我方英雄的事件就不锁英雄
+	current_target = null
 func get_hit_flash_root() -> Node3D:
 	return _body_vis if _body_vis != null and is_instance_valid(_body_vis) else self
 
-# 塔身受击轻抖（只动模型局部位置，不影响碰撞/塔位/范围环）
+# 塔身受击不再抖动（用户要求）：受击反馈只保留闪白（GameEntity/UnitVisuals.hit_flash）
 func play_hit_react() -> void:
-	if _body_vis == null or not is_instance_valid(_body_vis) or dying_visual:
-		return
-	if _hit_tween != null and _hit_tween.is_valid():
-		_hit_tween.kill()
-	_hit_tween = create_tween()
-	_hit_tween.tween_property(_body_vis, "position", _body_vis_base + Vector3(0.045, 0.0, 0.0), 0.04)
-	_hit_tween.tween_property(_body_vis, "position", _body_vis_base, 0.12)
+	pass
 
 var _recently_reported
 func _clear_recently_reported() -> void:

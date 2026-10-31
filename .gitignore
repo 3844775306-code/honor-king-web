@@ -26,3 +26,10 @@ ai_chat.cfg
 
 # 灵宝本地存档（user:// 不可写时的兜底）
 lingbao.cfg
+
+# 录像（P1 本地录制；沙箱环境会退到工程目录）
+replays/
+*.rep
+
+# 录像导出（分享副本）
+exports/

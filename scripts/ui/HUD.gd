@@ -183,7 +183,9 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 	# 野怪 / 主宰先锋：血条每 1000 血一条分隔线；塔保持 2000 一格
 	var is_vanguard := false
 	if entity is Minion:
-		is_vanguard = str((entity as Minion).minion_type) in ["dragon", "storm", "shadow_dragon"]
+		# 主宰先锋：minion_type 未赋值（默认 melee），实际类型在 display_name 上
+		var mtype := str((entity as Minion).display_name)
+		is_vanguard = mtype in ["dragon", "storm", "shadow_dragon"]
 	row["ticks"] = is_turret or is_monster or is_vanguard
 	row["tick_step"] = 2000.0 if is_turret else 1000.0
 
