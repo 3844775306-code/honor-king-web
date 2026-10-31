@@ -15,6 +15,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `pwsh -NoProfile -File scripts\dev\notify.ps1 -Title "HonorKing · <任务名>" -Message "<一句话结果>"`
   （脚本已就绪，失败会静默降级，不阻断交付）。
 
+### 强制 Git 与 UI 资产原则（所有会话、所有任务）
+
+1. **每次修改都必须提交 Git**：完成任何代码、场景、资源或文档改动后，立即 `git add` 相关文件并 `git commit`，禁止把改动留在工作区跨任务交付。提交说明必须注明：
+   - **修改时间**：本地时间，格式 `YYYY-MM-DD HH:mm`（精确到分钟）；
+   - **修改内容**：按模块写清本次改了什么。
+   推荐标题格式：`YYYY-MM-DD HH:mm | <模块>：<一句话内容>`，正文补充要点。
+2. **UI 尽可能复用游戏内图标资产**：展示英雄、技能、装备的界面优先使用英雄头像（`HeroArt` / `EntityIconArt`）、技能图标（`SkillArt`）和装备图标（`UiKit.item_icon` / `ItemGlyph`），不要长期只用纯文本堆信息。
+3. **装备图标必须可查看详情**：所有可交互装备图标要支持鼠标悬浮 / 触摸长按查看装备详情（名称、品质、价格、属性、被动/主动效果），数据统一取自 `ItemDatabase`；不能只显示名称或无说明的图标。
+
 ## Project Overview
 
 HonorKing — a 3D MOBA game built with **Godot 4.5** (Forward Plus renderer). All game logic is written in **GDScript**. The game simulates a 5v5 Honor of Kings-style match: one player-controlled hero plus 4 AI teammates versus 5 AI enemies across a three-lane map with jungle, turrets, and epic monsters.
