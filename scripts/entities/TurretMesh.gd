@@ -59,27 +59,27 @@ static func visual(tier: String, team: int) -> Node3D:
 		root.add_child(pivot)
 		var body := MeshInstance3D.new()
 		body.name = "Crystal"
-		body.mesh = _octa(0.72, 2.70)
-		body.position = Vector3(0.0, 3.25, 0.0)
+		body.mesh = _octa(1.50, 1.55)          # 扁平宽体：半径加大、高度压低
+		body.position = Vector3(0.0, 2.45, 0.0)
 		body.material_override = crystal_material(team)
 		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		pivot.add_child(body)
 		var core := MeshInstance3D.new()
 		core.name = "Core"
-		core.mesh = _octa(0.34, 1.30)
-		core.position = Vector3(0.0, 3.25, 0.0)
+		core.mesh = _octa(0.78, 0.88)
+		core.position = Vector3(0.0, 2.42, 0.0)
 		core.material_override = accent_material(team)
 		pivot.add_child(core)
 		var ring := MeshInstance3D.new()
 		ring.name = "Ring"
-		ring.mesh = _torus(1.10, 0.055, 24, 6)
-		ring.position = Vector3(0.0, 2.05, 0.0)
+		ring.mesh = _torus(1.80, 0.06, 28, 6)
+		ring.position = Vector3(0.0, 2.18, 0.0)
 		ring.material_override = accent_material(team)
 		pivot.add_child(ring)
 		var halo := MeshInstance3D.new()
 		halo.name = "Halo"
-		halo.mesh = _torus(1.02, 0.07, 24, 6)
-		halo.position = Vector3(0.0, 1.32, 0.0)
+		halo.mesh = _torus(1.62, 0.08, 28, 6)
+		halo.position = Vector3(0.0, 1.95, 0.0)
 		halo.material_override = accent_material(team)
 		root.add_child(halo)
 	else:
@@ -198,8 +198,8 @@ static func tower_shield_visual(team: int, crystal: bool = false) -> Node3D:
 	var root := Node3D.new()
 	root.name = "TowerShield"
 	root.set_meta("_fx_team_tint", true)
-	var radius: float = 2.02 if crystal else 1.55
-	var height: float = 4.95 if crystal else 3.85
+	var radius: float = 2.12 if crystal else 1.55
+	var height: float = 3.95 if crystal else 3.85
 	var shell := MeshInstance3D.new()
 	shell.name = "Shell"
 	shell.mesh = _build_shield_shell(radius, height)

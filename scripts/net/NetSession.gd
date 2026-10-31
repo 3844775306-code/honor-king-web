@@ -68,6 +68,9 @@ var cli_mode := false   # 命令行直连（--net-host/--net-join），跳过大
 var phase := Phase.LOBBY  # host=当前阶段；client=最近收到的主机阶段
 var players := {}   # peer_id(int) -> { "name": String }
 var _picks := {}    # host：选人阶段 peer_id -> { "hero":String, "summoner":String, "role":String }
+# 顺序选人（host 权威，随大厅状态广播）：{ "step":int, "left":float, "turn":[team,seat], "picks":{ "team-seat":hero } }
+# 空字典 = 无顺序（旧端/未启用 → 退化为原来的同时选人）
+var draft := {}
 
 var is_headless := false
 var _snap_timer := 0.0
@@ -77,7 +80,7 @@ var _last_log_time := 0.0
 var _spectate: SpectatePanel = null
 var _overlay_layer: CanvasLayer = null
 
-# --- M2：实体 net-id 注册（instance_id ↔ net_id，跨帧稳定） ---
+# --- M2：实体 net-id 注册（instance_id ←→ net_id，跨帧稳定） ---
 var _net_seq := 0
 var _net_ids := {}     # instance_id(int) -> net_id(int)
 var _net_by_id := {}   # net_id(int) -> instance_id(int)
@@ -245,8 +248,14 @@ func _parse_args() -> void:
 # ---------- 连接建立 ----------
 
 func _setup_peer() -> void:
+	var is_web := OS.has_feature("web")
 	match mode:
 		Mode.HOST:
+			if is_web:
+				# 浏览器内无法监听 UDP/WS 端口：网页版只能当客户端，房间由桌面主机开
+				printerr("[Net] 网页版不支持创建房间，请用桌面版当主机")
+				mode = Mode.NONE
+				return
 			var peer := ENetMultiplayerPeer.new()
 			var err := peer.create_server(host_port, 8)
 			if err != OK:
@@ -259,13 +268,22 @@ func _setup_peer() -> void:
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 			print("[Net] HOST 端口=", host_port, " 等待玩家加入…")
 		Mode.CLIENT:
-			var peer := ENetMultiplayerPeer.new()
-			var err := peer.create_client(join_address, host_port)
+			var mp: MultiplayerPeer
+			var err: int
+			if is_web:
+				# 网页版：浏览器只支持 WebSocket，连桌面主机的 WS 服务
+				var ws := WebSocketMultiplayerPeer.new()
+				err = ws.create_client(_web_ws_url())
+				mp = ws
+			else:
+				var enet := ENetMultiplayerPeer.new()
+				err = enet.create_client(join_address, host_port)
+				mp = enet
 			if err != OK:
 				printerr("[Net] 客户端创建失败 err=", err)
 				mode = Mode.NONE
 				return
-			multiplayer.multiplayer_peer = peer
+			multiplayer.multiplayer_peer = mp
 			multiplayer.connected_to_server.connect(_on_connected_to_server)
 			multiplayer.connection_failed.connect(_on_connection_failed)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -273,6 +291,22 @@ func _setup_peer() -> void:
 			_ensure_overlay()
 		_:
 			return
+
+# 网页版联机地址：ws://host:port，可用页面 URL 参数 ?host=ip:port 覆盖
+func _web_ws_url() -> String:
+	var addr := join_address
+	var port := host_port
+	if OS.has_feature("web"):
+		var q := str(JavaScriptBridge.eval("window.location.search", true))
+		var m := RegEx.create_from_string("[?&]host=([^&]+)").search(q)
+		if m != null:
+			var hp: String = m.get_string(1).uri_decode()
+			if hp.contains(":"):
+				addr = hp.get_slice(":", 0)
+				port = int(hp.get_slice(":", 1))
+			else:
+				addr = hp
+	return "ws://%s:%d" % [addr, port]
 
 
 func _on_peer_connected(id: int) -> void:
@@ -316,7 +350,11 @@ func _on_connection_failed() -> void:
 func _broadcast_lobby_state() -> void:
 	if mode != Mode.HOST:
 		return
-	var state := { "phase": phase, "players": players.duplicate(true), "picks": _picks.duplicate(true) }
+	var state := { "phase": phase, "players": players.duplicate(true), "picks": _picks.duplicate(true),
+		"draft": draft.duplicate(true) }
+	if multiplayer == null or multiplayer.multiplayer_peer == null:
+		net_lobby_state.emit(state)   # 无连接（单机探针/离线）时只本地 emit
+		return
 	rpc("_rpc_lobby_state", state)
 	net_lobby_state.emit(state)
 
@@ -329,6 +367,7 @@ func _rpc_lobby_state(state: Dictionary) -> void:
 	for id in state.get("players", {}):
 		players[int(id)] = state["players"][id]
 	phase = int(state.get("phase", Phase.LOBBY))
+	draft = state.get("draft", {})   # 旧端无此字段 → 空字典（退化同时选人）
 	print("[Net] 大厅状态 phase=%d 在线=%d" % [phase, players.size()])
 	_update_overlay()
 	net_lobby_state.emit(state)
@@ -342,7 +381,10 @@ func _rpc_set_pick(hero: String, summoner: String) -> void:
 		return
 	var pid := multiplayer.get_remote_sender_id()
 	if not _apply_pick(pid, hero, summoner):
-		rpc_id(pid, "_rpc_pick_rejected", "该职责已被他人选择，或本方席位已满")
+		var msg := "该职责已被他人选择，或本方席位已满"
+		if not draft.is_empty() and not _draft_is_turn_of(pid):
+			msg = "还没轮到你选人，请等待当前席位"
+		rpc_id(pid, "_rpc_pick_rejected", msg)
 
 
 @rpc("any_peer", "reliable", "call_remote")
@@ -379,8 +421,89 @@ func begin_pick() -> void:
 	if mode != Mode.HOST or phase != Phase.LOBBY:
 		return
 	phase = Phase.SELECT
+	draft.clear()   # 顺序由大厅按需重新下发
 	_broadcast_lobby_state()
 	print("[Net] 进入选人阶段：全员选英雄+召唤师，锁齐后可开局")
+
+
+# ---------- 顺序选人（host 权威；无 draft 时旧流程不变） ----------
+
+# host：更新并广播顺序选人状态（step/left/turn/picks 由 NetLobby 计算）
+func set_draft(d: Dictionary) -> void:
+	if mode != Mode.HOST:
+		return
+	draft = d.duplicate(true)
+	_broadcast_lobby_state()
+
+
+func get_draft() -> Dictionary:
+	return draft.duplicate(true)
+
+
+func draft_active() -> bool:
+	return not draft.is_empty()
+
+
+# 顺序选人结果按阵营/席位排出：{ ally: [seat0..4 英雄], enemy: [seat0..4 英雄] }
+# 开局阵容按它生成，避免「展示的 BP 阵容」和实际 AI 阵容不一致
+func get_draft_teams() -> Dictionary:
+	var picks: Dictionary = draft.get("picks", {})
+	var ally: Array = []
+	var enemy: Array = []
+	for i in 5:
+		ally.append(str(picks.get("0-%d" % i, "")))
+		enemy.append(str(picks.get("1-%d" % i, "")))
+	return {"ally": ally, "enemy": enemy}
+
+
+# host：代某位玩家锁定（超时兜底用；与 guest 自己上报走同一套校验）
+func host_force_pick(pid: int, hero: String, summoner: String = "flash") -> bool:
+	if mode != Mode.HOST:
+		return false
+	return _apply_pick(pid, hero, summoner)
+
+
+# 该 peer 是否正处在自己的顺序选人回合（host 判定/拒绝提示用）
+func _draft_is_turn_of(pid: int) -> bool:
+	var turn: Array = draft.get("turn", [])
+	if turn.size() < 2 or int(turn[0]) != 0:
+		return false
+	var ids: Array = [1]
+	for p in players:
+		if not ids.has(int(p)):
+			ids.append(int(p))
+	ids.sort()
+	var seat := int(turn[1])
+	return seat < ids.size() and int(ids[seat]) == pid
+
+
+# 顺序选人合法性：本回合玩家才可上报；展示阵容里的英雄/职责不重复
+func _draft_allows(pid: int, hero: String) -> bool:
+	if draft.is_empty():
+		return true
+	if int(draft.get("step", 0)) >= 10:
+		return not _picks.has(pid)   # 顺序已结束：只允许补未锁席位，不允许改选
+	var turn: Array = draft.get("turn", [])
+	if turn.size() < 2:
+		return true
+	if int(turn[0]) != 0:
+		return false   # 红方/我方 AI 席位回合：不接受真人选人
+	var ids: Array = [1]
+	for p in players:
+		if not ids.has(int(p)):
+			ids.append(int(p))
+	ids.sort()
+	var seat := int(turn[1])
+	if seat >= ids.size() or int(ids[seat]) != pid:
+		return false
+	var role := str(HeroPickData.HERO_ROLE.get(hero, ""))
+	var dp: Dictionary = draft.get("picks", {})
+	for k in dp:
+		if str(dp[k]) == hero:
+			return false   # 展示阵容已占该英雄（全局唯一）
+		if str(k).begins_with("0-") and str(HeroPickData.HERO_ROLE.get(str(dp[k]), "")) == role:
+			return false   # 我方 AI 已占该职责
+	return true
 
 
 func start_match() -> void:
@@ -445,6 +568,9 @@ func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
 			continue
 		if str(_picks[q].get("role", "")) == role:
 			return false
+	# 顺序选人：只允许本回合玩家上报，且不与展示阵容冲突
+	if not _draft_allows(pid, hero):
+		return false
 	_picks[pid] = { "hero": hero, "summoner": summoner, "role": role }
 	print("[Net] 选人锁定 peer=", pid, " hero=", hero, " role=", role)
 	_broadcast_lobby_state()
@@ -492,6 +618,7 @@ func disconnect_network() -> void:
 	cli_mode = false
 	players.clear()
 	_picks.clear()
+	draft.clear()
 	_manifest = {}
 	_assign_hero.clear()
 	_assign_peer.clear()
@@ -983,7 +1110,7 @@ func _build_snapshot(bm: Node) -> Array:
 		"obj": _pack_obj_timers(),   # 小地图目标计时：[暴君剩余秒, 暴君存活, 主宰剩余秒, 主宰存活]
 		"jg": _pack_jg_dead(),       # 小地图野怪记忆：我方已确认在复活中的野怪点位 [[x,z],…]   # 小地图目标计时：[暴君剩余秒, 暴君存活, 主宰剩余秒, 主宰存活]
 			"rec": UiManager._get_best_recommended_item(h),   # P3d host 同款 B 键推荐购买决策（合成/槽满逻辑一致），客户端 B 键直接 C_BUY 此 id
-			"rb": UiManager._compute_recommended_bundle(h),   # 主界面右上推荐带：host 烘焙 {id,text,cost,show}（客户端无 ItemDatabase 合成链，只画）
+			"rb": UiManager._compute_recommended_bundle(h, false),   # 主界面右上推荐带：host 烘焙 {id,text,cost,show}（客户端无 ItemDatabase 合成链，只画）
 			"sa": _pack_stat_triples(h),   # 属性面板：18 行 [基础,装备,Buff] 三元组（顺序同 UiManager.ATTRIBUTE_ROWS）
 			"bs": _pack_equip_bonus(h),    # 商店「总装备加成」：host 同款文本+配色（bonus_* 含装备被动换算，客户端只画）
 			"sx": _pack_skill_icons(h),   # 触控技能键图标读数（4槽×编码数组，同 TouchController._update_skill_button_ui）
@@ -1072,9 +1199,15 @@ func _build_snapshot(bm: Node) -> Array:
 			var bsrc = bl.source
 			if bsrc != null and is_instance_valid(bsrc) and (bsrc is Hero or bsrc is Turret):
 				bsz = 1
+		# idx8：全图技能弹标记（1=后羿R / 2=鲁班七号2技能），客户端小地图据此画全图子弹
+		var gsf := 0
+		if bl.houyi_r:
+			gsf = 1
+		elif bl.luban_w_knockback:
+			gsf = 2
 		bullets.append([int(bl.get_instance_id()),
 			bl.global_position.x, bl.global_position.y, bl.global_position.z,
-			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl)])
+			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl), gsf])
 	out.append(bullets)
 
 	# #43 FX 段：[seq, [fid,kind,x,y,z,team,r,life], …]——事件保留 ~0.35s（约5帧快照）防 unreliable 丢包；
@@ -1089,7 +1222,8 @@ func _build_snapshot(bm: Node) -> Array:
 		_fx_buf = keep
 	var fx_out: Array = [_fx_seq]
 	for e in _fx_buf:
-		fx_out.append([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]])
+		# 末位补施法英雄名（客户端据此取元素/技能配色；旧客户端行大小判断兼容）
+		fx_out.append([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[9]])
 	out.append(fx_out)
 
 	# #44 数值/经验珠/攻击动作 events 段：[seq, [fid, kind, ...], …]——变长行、born_ms 单存 [0]；
@@ -1118,6 +1252,16 @@ func _build_snapshot(bm: Node) -> Array:
 	# 小地图右侧英雄环形头像带（复刻主机 _update_respawn_widgets：我方 5 人恒显 + 已阵亡敌方第二排）。
 	# 行 = [nid,team,name,level,hp,maxhp,is_ai,is_dead,respawn_remain,respawn_total]
 	out.append(_build_respawn_rows())
+
+	# 视野之灵：行 = [iid, x, z, active, 5 秒蓄力进度 0..1, 状态]
+	# 追加在快照尾部，旧客户端按 snap.size() 守卫自然忽略。
+	var vision_rows: Array = []
+	for s in get_tree().get_nodes_in_group("vision_spirits"):
+		if not is_instance_valid(s):
+			continue
+		vision_rows.append([int(s.get_instance_id()), s.global_position.x, s.global_position.z,
+			1 if s.vision_active else 0, s.get_net_progress(), s.get_net_state()])
+	out.append(vision_rows)
 
 	return out
 
@@ -1192,7 +1336,8 @@ func _fx_ally_near(p: Vector3) -> bool:
 	for e in get_tree().get_nodes_in_group("entities"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if e.team != TEAM_PLAYER:
+		# 我方 = Config.player_team（开局会随机换边；写死 TEAM_PLAYER 会让换到敌方的玩家整局看不到 FX）
+		if not Config.is_ally(int(e.team)):
 			continue
 		if p.distance_to(e.global_position) <= 18.0:
 			return true
@@ -1249,8 +1394,10 @@ func _push_ev_row(pos: Vector3, row: Array) -> void:
 		_ev_buf.pop_front()
 
 
-func push_net_dmg(pos: Vector3, dmg: float, crit: bool, magic: bool) -> void:
-	_push_ev_row(pos, [0, EV_DMG, pos.x, pos.y, pos.z, dmg, 1 if crit else 0, 1 if magic else 0])
+func push_net_dmg(pos: Vector3, dmg: float, crit: bool, magic: bool, shielded: bool = false, true_dmg: bool = false) -> void:
+	_push_ev_row(pos, [0, EV_DMG, pos.x, pos.y, pos.z, dmg, 1 if crit else 0, 1 if magic else 0, 1 if shielded else 0, 1 if true_dmg else 0])
+
+
 
 
 func push_net_gold(pos: Vector3, amount: float, own: bool) -> void:
@@ -1324,7 +1471,8 @@ func _pack_hero(e: Node) -> Array:
 	# HeroInfoControl 规格绘制蓝条/护盾，等级环经验弧用后两段）；idx14 = 暗印摘要（黄段+层数）
 	return [_net_id_for(e), 0, e.team, e.global_position.x, e.global_position.z, e.health, _maxhp_of(e), e.level, str(e.display_name),
 		e.mana, _maxmana_of(e), e.shield_remaining, int(e.exp), int(e.exp_to_next),
-		_pack_lyf(e), e.rotation.y]
+		_pack_lyf(e), e.rotation.y, 1 if bool(e.get("hidden_in_bush")) else 0,
+		str(e.get("player_name"))]   # idx17：玩家/AI 昵称（无英雄名时兜底显示）
 
 
 func _maxmana_of(e: Node) -> float:
@@ -1407,6 +1555,9 @@ func _pack_roster_row(e: Node) -> Array:
 		_lane = int(_bm.team_tactics.assignments.get(e, -1))
 	row.append(_lane)
 	row.append(_pack_roster_skill_info(e))
+	# 追加：[28]原初印记等级（0~6，每 100 原初积分 1 级；面板头像环上符文用）
+	var _ps: int = int(e.get("primitive_score")) if e.get("primitive_score") != null else 0
+	row.append(clampi(_ps / 100, 0, 6))
 	return row
 
 # 英雄卡属性徽章：与 host UI_Manager._update_hero_detail（属性行 _achips）逐条同源（形状/主题色/文本）
@@ -1676,6 +1827,9 @@ func _pack_unit(e: Node, type_code: int, extra = null) -> Array:
 	if extra != null:
 		row.append(extra)
 	row.append(_pack_lyf(e))
+	# 小兵/野怪被动标记（idx9；塔不追加，保持既有 idx8/9 布局不变）
+	if type_code != 2:
+		row.append(_pack_markers(e))
 	return row
 
 # 李元芳暗印摘要：[[源英雄名, 层数, 预测实际伤害], …]（客户端血条黄段/层数文字 1:1 复刻主机）
@@ -1686,6 +1840,16 @@ func _pack_lyf(e: Node) -> Array:
 			var src = m["source"]
 			out.append([str(src.display_name) if (src != null and is_instance_valid(src)) else "",
 				int(m["stacks"]), float(m["pred"])])
+	return out
+
+# 通用被动标记摘要：[[源英雄名, 层数], …]（小兵/野怪血条图标用）
+func _pack_markers(e: Node) -> Array:
+	var out: Array = []
+	if e.has_method("get_marker_sources"):
+		for src in e.get_marker_sources():
+			var cnt: int = int(e.count_markers(src))
+			if cnt > 0:
+				out.append([str(src.display_name) if (src != null and is_instance_valid(src)) else "", cnt])
 	return out
 
 
@@ -1761,18 +1925,64 @@ func _rpc_roster(payload: Array) -> void:
 
 
 # ---------- P3e：击杀战报广播（host→client；host UI_Manager.show_kill_feed 为全网单点转发入口） ----------
-signal net_kill_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int)
+# assists：[[name,team,mark],…] 助攻者（推塔时含小兵）；a_mark/v_mark：事件时刻的原初印记等级
+signal net_kill_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int,
+	assists: Array, a_mark: int, v_mark: int)
 
-func broadcast_kill_feed(actor: String, actor_team: int, desc: String, victim: String = "", victim_team: int = -1) -> void:
+func broadcast_kill_feed(actor: String, actor_team: int, desc: String, victim: String = "", victim_team: int = -1,
+		assists: Array = [], a_mark: int = 0, v_mark: int = 0) -> void:
 	if mode != Mode.HOST or not multiplayer.is_server():
 		return
-	rpc("_rpc_kill_feed", str(actor), int(actor_team), str(desc), str(victim), int(victim_team))
+	rpc("_rpc_kill_feed", str(actor), int(actor_team), str(desc), str(victim), int(victim_team),
+		assists, int(a_mark), int(v_mark))
 
 @rpc("any_peer", "reliable", "call_remote")
-func _rpc_kill_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int) -> void:
+func _rpc_kill_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int,
+		assists: Array, a_mark: int, v_mark: int) -> void:
 	if multiplayer.is_server():
 		return
-	net_kill_feed.emit(actor, actor_team, desc, victim, victim_team)
+	net_kill_feed.emit(actor, actor_team, desc, victim, victim_team, assists, a_mark, v_mark)
+
+
+# ---------- 聊天：主机统一广播；客户端发言先送主机再回显（全端同一顺序，含 AI 台词） ----------
+signal net_chat(from_name: String, team: int, text: String)
+
+var _chat_stamp := {}   # host：peer_id -> 上次发言毫秒（简易刷屏限流）
+
+func broadcast_chat(from_name: String, team: int, text: String) -> void:
+	if mode != Mode.HOST or not multiplayer.is_server():
+		return
+	rpc("_rpc_chat", str(from_name), int(team), str(text))
+
+func request_chat(text: String, team: int) -> void:
+	if mode != Mode.CLIENT:
+		return
+	rpc_id(1, "_rpc_chat_request", str(text), int(team))
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_chat_request(text: String, team: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var pid := multiplayer.get_remote_sender_id()
+	var now := Time.get_ticks_msec()
+	if now - int(_chat_stamp.get(pid, -99999)) < 700:
+		return
+	_chat_stamp[pid] = now
+	var t := str(text).strip_edges()
+	if t == "":
+		return
+	if t.length() > 40:
+		t = t.substr(0, 40)
+	var nm := str(players.get(pid, {}).get("name", "玩家"))
+	var tm := clampi(int(team), 0, 1)
+	broadcast_chat(nm, tm, t)
+	net_chat.emit(nm, tm, t)   # 主机本机也要显示这条客户端发言（rpc 是 call_remote）
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_chat(from_name: String, team: int, text: String) -> void:
+	if multiplayer.is_server():
+		return
+	net_chat.emit(from_name, team, text)
 
 
 # ---------- P3e：死亡回放（host 死亡跃迁时对该 pid 推一次；client 弹层复刻主机 _show_death_recap 聚合视图） ----------
@@ -1821,17 +2031,31 @@ signal net_game_over(payload: Dictionary)
 
 func _build_result_payload(bm: Node) -> Dictionary:
 	var rows: Array = []
+	# 与 BattleHistory 同一套 rows 结构（含承伤/治疗/控制/推塔/补刀/装备），客户端结算与对战纪录都直接展示
+	var turrets := [0, 0]
+	for team in 2:
+		var alive := 0
+		for t in get_tree().get_nodes_in_group("turrets"):
+			if t is Turret and int(t.team) == team and t.health > 0.0:
+				alive += 1
+		turrets[team] = maxi(0, Turret.TOTAL_PER_SIDE - alive)
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if e is Hero:
 			var h := e as Hero
 			rows.append({
 				"name": h.display_name, "team": h.team, "lv": h.level,
 				"k": h.kills, "d": h.deaths, "a": h.assists,
-				"gold": int(h.gold),
+				"gold": int(h.gold), "dmg": int(h.damage_dealt_to_heroes),
+				"mvp": h.is_mvp, "mine": not h.is_ai,
+				"role": str(h.role), "lh": int(h.last_hits), "jungle": int(h.jungle_gold),
+				"taken": int(h.damage_taken_from_heroes), "heal": int(h.healing_done),
+				"cc": int(round(h.cc_duration_dealt * 10.0)), "turret": int(h.turret_damage),
 				"equip": (h.equipment_slots.duplicate() if h.equipment_slots is Array else []),
 			})
 	return {
 		"winner": int(bm.get("winner")),
+		"dur": float(bm.get("game_time")),
+		"turrets": turrets,
 		"rows": rows,
 	}
 

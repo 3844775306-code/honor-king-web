@@ -51,7 +51,7 @@ func apply_collision_pushback(entities: Array, delta: float):
 			var overlap: float = -dist
 			var np_i: Vector3 = mob_pos[i] + push_dir * overlap * 0.4
 			var np_j: Vector3 = mob_pos[j] - push_dir * overlap * 0.4
-			var half: float = Config.MAP_SIZE / 2.0 - 1.0   # 边界格是实心墙，推挤不能把单位推上去
+			var half: float = Config.MAP_EDGE_LIMIT   # 与英雄/外墙统一的可移动边界
 			np_i.x = clampf(np_i.x, -half, half)
 			np_i.z = clampf(np_i.z, -half, half)
 			mob_pos[i] = np_i
@@ -73,7 +73,7 @@ func apply_collision_pushback(entities: Array, delta: float):
 		tower_pos.append(st.global_position)
 		tower_rad.append(1.24)
 	if not tower_pos.is_empty():
-		var half_map: float = Config.MAP_SIZE / 2.0 - 1.0
+		var half_map: float = Config.MAP_EDGE_LIMIT
 		# 英雄/小兵/野怪都会被塔基推开（塔本身不动）
 		for a in entities:
 			if not is_instance_valid(a) or a.health <= 0 or not a.get("can_move") or a is Turret:
@@ -104,7 +104,7 @@ func apply_collision_pushback(entities: Array, delta: float):
 		_rebuild_wall_grid()
 	if _wall_pts.is_empty():
 		return
-	var half_map: float = Config.MAP_SIZE / 2.0 - 1.0
+	var half_map: float = Config.MAP_EDGE_LIMIT
 	for ent in entities:
 		if not is_instance_valid(ent) or ent.health <= 0 or not ent.get("can_move"): continue
 		if ent.collision_layer == 0: continue   # 隐身/筋斗云等无碰撞状态不参与墙体推离

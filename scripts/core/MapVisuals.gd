@@ -14,6 +14,7 @@ extends RefCounted
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const MAP_HALF := 60.0
 const LAYOUT_SIZE := 256
+const ISLAND_RADIUS := 105.0
 
 static var _layout_tex: ImageTexture
 static var _detail_tex: NoiseTexture2D
@@ -36,8 +37,9 @@ static func setup_environment(parent: Node3D) -> void:
 	sky_mat.sky_top_color = Color(0.16, 0.33, 0.63)
 	sky_mat.sky_horizon_color = Color(0.80, 0.78, 0.70)
 	sky_mat.sky_curve = 0.13
-	sky_mat.ground_bottom_color = Color(0.09, 0.12, 0.09)
-	sky_mat.ground_horizon_color = Color(0.44, 0.50, 0.44)
+	# 浮空岛：地平线以下不再是草地，而是远天/云海，让岛外一眼看到天空
+	sky_mat.ground_bottom_color = Color(0.10, 0.22, 0.42)
+	sky_mat.ground_horizon_color = Color(0.52, 0.68, 0.86)
 	sky_mat.sun_angle_max = 16.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
@@ -162,6 +164,14 @@ static func ground_material(bump: float = 0.0) -> ShaderMaterial:
 	mat.set_shader_parameter("tint", Color(1, 1, 1, 1))
 	mat.set_shader_parameter("map_half", MAP_HALF)
 	mat.set_shader_parameter("bump_amount", bump)
+	return mat
+
+
+## 浮空岛顶面：沿用同一张地面布局图，只额外把圆岛外的片元丢弃，露出天空。
+static func island_ground_material() -> ShaderMaterial:
+	var mat := ground_material(0.28)
+	mat.set_shader_parameter("island_edge", 1.0)
+	mat.set_shader_parameter("island_radius", ISLAND_RADIUS)
 	return mat
 
 # 高地/基地台座：石砖铺装（错缝砖块 + 灰缝 + 苔痕），与其他石质建筑同族
@@ -294,6 +304,8 @@ uniform vec4 emission_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float emission_strength = 0.0;
 uniform float detail_scale = 14.0;
 uniform float map_half = 60.0;
+uniform float island_edge = 0.0;
+uniform float island_radius = 105.0;
 uniform float normal_strength = 0.35;
 uniform float ground_roughness = 0.95;
 uniform float bump_amount = 0.0;
@@ -316,6 +328,10 @@ void vertex() {
 }
 
 void fragment() {
+	// 浮空岛：顶面平面仍是一整块，岛外直接丢弃，露出天空盒与岛缘岩壁
+	if (island_edge > 0.5 && length(wp.xz) > island_radius) {
+		discard;
+	}
 	// 世界坐标采样布局图：所有地面平面共用一张图，平面之间天然无缝
 	vec2 luv = clamp((wp.xz + vec2(map_half)) / vec2(map_half * 2.0), vec2(0.0), vec2(1.0));
 	vec2 duv = wp.xz * (detail_scale / (map_half * 2.0));
@@ -323,6 +339,14 @@ void fragment() {
 	vec3 base = pow(texture(layout_tex, luv).rgb, vec3(2.2));
 	vec3 det = texture(detail_tex, duv).rgb;
 	base *= mix(vec3(1.0), det, 0.55);
+	// 岛内布局图只覆盖 ±60；城墙外的大片岛面用程序化草甸延续，避免采样到边缘黑边
+	if (island_edge > 0.5) {
+		float rr = length(wp.xz);
+		float outer = smoothstep(58.0, 67.0, rr);
+		vec3 meadow = mix(vec3(0.13, 0.24, 0.11), vec3(0.29, 0.43, 0.19), det.r);
+		base = mix(base, meadow, outer);
+		base *= mix(1.0, 0.82, smoothstep(96.0, 105.0, rr));
+	}
 	ALBEDO = base * tint.rgb;
 	NORMAL_MAP = texture(normal_tex, duv).rgb;
 	NORMAL_MAP_DEPTH = normal_strength;
@@ -532,6 +556,242 @@ static func spawn_river_banks(parent: Node3D) -> void:
 	parent.add_child(lily_node)
 
 
+# ================= 浮空岛背景 =================
+## 整张地图是一块悬在天空中的圆岛：岛缘岩壁 + 下方倒锥岩体 + 墙外树林/草坡/碎石/浮岩。
+## 纯视觉、无碰撞；host 与 LAN 客户端共用，随机种子固定，两端一致。
+static func spawn_floating_island(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261031
+	_build_island_rim(parent, rng)
+	_build_island_underside(parent, rng)
+	_spawn_island_grass(parent, rng)
+	_spawn_island_trees(parent, rng)
+	_spawn_island_rocks(parent, rng)
+	_spawn_sky_chunks(parent, rng)
+
+
+static func _island_rock_material() -> ShaderMaterial:
+	# 岛缘是程序化环带，顶点绕序在移动端不同驱动下容易翻面；直接做双面岩石材质
+	var base := DecorMesh.rock_material()
+	var sh := (base.shader as Shader).duplicate() as Shader
+	sh.code = sh.code.replace(
+		"render_mode diffuse_burley, specular_schlick_ggx;",
+		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	return mat
+
+
+static func _build_island_rim(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	var seg := 128
+	var levels := [
+		{"r": 104.6, "y": -0.04},
+		{"r": 107.0, "y": -1.4},
+		{"r": 104.0, "y": -4.8},
+		{"r": 99.0, "y": -9.2},
+		{"r": 91.0, "y": -13.8},
+		{"r": 82.0, "y": -17.8},
+	]
+	var rings: Array = []
+	for li in levels.size():
+		var lv: Dictionary = levels[li]
+		var ring: Array[Vector3] = []
+		for i in seg:
+			var a := TAU * float(i) / float(seg)
+			var n := sin(a * 7.0 + float(li) * 1.7) * 1.8 + sin(a * 13.0 - 0.8 + float(li)) * 1.1
+			var r: float = float(lv["r"]) + (n if li > 0 else 0.0)
+			var y: float = float(lv["y"]) + (sin(a * 5.0 + float(li) * 2.1) * 0.35 if li > 0 else 0.0)
+			ring.append(Vector3(cos(a) * r, y, sin(a) * r))
+		rings.append(ring)
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for l in range(rings.size() - 1):
+		var top: Array = rings[l]
+		var bot: Array = rings[l + 1]
+		for i in seg:
+			var j := (i + 1) % seg
+			var a0: Vector3 = top[i]
+			var a1: Vector3 = top[j]
+			var b0: Vector3 = bot[i]
+			var b1: Vector3 = bot[j]
+			st.add_vertex(a0); st.add_vertex(a1); st.add_vertex(b0)
+			st.add_vertex(a1); st.add_vertex(b1); st.add_vertex(b0)
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.name = "IslandCliff"
+	mi.mesh = st.commit()
+	mi.material_override = _island_rock_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	parent.add_child(mi)
+
+
+static func _build_island_underside(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	var cone := MeshInstance3D.new()
+	cone.name = "IslandUnderside"
+	var cm := CylinderMesh.new()
+	cm.top_radius = 84.0
+	cm.bottom_radius = 0.0
+	cm.height = 28.0
+	cm.radial_segments = 48
+	cone.mesh = cm
+	cone.position.y = -31.5
+	cone.material_override = DecorMesh.rock_material()
+	cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	parent.add_child(cone)
+	# 岛底倒挂岩柱：长短不一，远看像被撕开后悬空的岩层
+	for i in 7:
+		var a := TAU * float(i) / 7.0 + rng.randf_range(-0.18, 0.18)
+		var rr := rng.randf_range(38.0, 70.0)
+		var h := rng.randf_range(10.0, 24.0)
+		var spike := MeshInstance3D.new()
+		var sm := CylinderMesh.new()
+		sm.top_radius = rng.randf_range(5.0, 10.0)
+		sm.bottom_radius = rng.randf_range(0.2, 1.2)
+		sm.height = h
+		sm.radial_segments = 9
+		spike.mesh = sm
+		spike.position = Vector3(cos(a) * rr, -20.0 - h * 0.5, sin(a) * rr)
+		spike.rotation.z = rng.randf_range(-0.12, 0.12)
+		spike.material_override = DecorMesh.rock_material()
+		spike.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(spike)
+
+
+static func _spawn_island_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	var xforms: Array[Transform3D] = []
+	for i in 240:
+		var a := rng.randf_range(0.0, TAU)
+		var r := rng.randf_range(66.0, 100.0)
+		var p := Vector3(cos(a) * r, 0.0, sin(a) * r)
+		var s := rng.randf_range(0.75, 1.45)
+		xforms.append(Transform3D(Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(s, s, s)), p))
+	var grass := _make_cluster("", xforms, 1.05, false, DecorMesh.grass_mesh(), DecorMesh.leaf_material())
+	if grass != null:
+		grass.name = "IslandGrass"
+		parent.add_child(grass)
+
+
+static func _spawn_island_trees(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	# 沿四边墙外成排，再在外圈补一圈，形成“城墙外是树林”的包边
+	for side in 4:
+		for k in range(-5, 6):
+			var t := float(k) * 10.5 + rng.randf_range(-2.0, 2.0)
+			var off := rng.randf_range(67.0, 79.0)
+			var p: Vector3
+			match side:
+				0: p = Vector3(off, 0.0, t)
+				1: p = Vector3(-off, 0.0, t)
+				2: p = Vector3(t, 0.0, off)
+				_: p = Vector3(t, 0.0, -off)
+			_spawn_tree(parent, p, rng.randf_range(0.9, 1.55), rng)
+	for i in 16:
+		var a := rng.randf_range(0.0, TAU)
+		var r := rng.randf_range(82.0, 99.0)
+		_spawn_tree(parent, Vector3(cos(a) * r, 0.0, sin(a) * r), rng.randf_range(1.0, 1.8), rng)
+
+
+static func _spawn_tree(parent: Node3D, pos: Vector3, s: float, rng: RandomNumberGenerator) -> void:
+	var root := Node3D.new()
+	root.position = pos
+	root.rotation.y = rng.randf_range(0.0, TAU)
+	parent.add_child(root)
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.25, 0.17, 0.10)
+	trunk_mat.roughness = 0.96
+	var trunk := MeshInstance3D.new()
+	var tm := CylinderMesh.new()
+	tm.top_radius = 0.10 * s
+	tm.bottom_radius = 0.24 * s
+	tm.height = 3.0 * s
+	tm.radial_segments = 8
+	trunk.mesh = tm
+	trunk.position.y = 1.5 * s
+	trunk.material_override = trunk_mat
+	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(trunk)
+
+	var leaf := DecorMesh.leaf_material()
+	if rng.randf() < 0.32:
+		# 针叶树：三层锥冠
+		for i in 3:
+			var cone := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.03 * s
+			cm.bottom_radius = (1.35 - float(i) * 0.26) * s
+			cm.height = (1.9 - float(i) * 0.18) * s
+			cm.radial_segments = 10
+			cone.mesh = cm
+			cone.position.y = (3.0 + float(i) * 1.05) * s
+			cone.material_override = leaf
+			cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			root.add_child(cone)
+	else:
+		# 阔叶树：三团错位树冠，头重脚轻但轮廓自然
+		for i in 3:
+			var ball := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = (1.1 - float(i) * 0.10) * s
+			sm.height = (1.5 - float(i) * 0.12) * s
+			sm.radial_segments = 12
+			sm.rings = 6
+			ball.mesh = sm
+			var ang := float(i) * 2.2
+			ball.position = Vector3(cos(ang) * 0.55 * s, (3.5 + float(i) * 0.42) * s, sin(ang) * 0.55 * s)
+			ball.scale = Vector3(1.0, 0.78, 1.0)
+			ball.material_override = leaf
+			ball.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			root.add_child(ball)
+
+
+static func _spawn_island_rocks(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	var rock_mesh := SphereMesh.new()
+	rock_mesh.radius = 1.0
+	rock_mesh.height = 1.25
+	rock_mesh.radial_segments = 9
+	rock_mesh.rings = 5
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = rock_mesh
+	mm.instance_count = 30
+	for i in mm.instance_count:
+		var a := rng.randf_range(0.0, TAU)
+		var r := rng.randf_range(66.0, 101.0)
+		var sx := rng.randf_range(0.55, 2.1)
+		var sy := rng.randf_range(0.32, 0.95)
+		var b := Basis().scaled(Vector3(sx, sy, sx * rng.randf_range(0.75, 1.25)))
+		mm.set_instance_transform(i, Transform3D(b, Vector3(cos(a) * r, sy * 0.35, sin(a) * r)))
+	var node := MultiMeshInstance3D.new()
+	node.name = "IslandRocks"
+	node.multimesh = mm
+	node.material_override = DecorMesh.rock_material()
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(node)
+
+
+static func _spawn_sky_chunks(parent: Node3D, rng: RandomNumberGenerator) -> void:
+	# 主岛外漂浮的小岩块：给“空岛”里的天空增加层次，不需要碰撞
+	for i in 8:
+		var a := TAU * float(i) / 8.0 + rng.randf_range(-0.2, 0.2)
+		var r := rng.randf_range(118.0, 148.0)
+		var chunk := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 1.0
+		sm.height = 1.0
+		sm.radial_segments = 7
+		sm.rings = 4
+		chunk.mesh = sm
+		chunk.position = Vector3(cos(a) * r, rng.randf_range(-30.0, -4.0), sin(a) * r)
+		chunk.scale = Vector3(rng.randf_range(4.0, 10.0), rng.randf_range(1.5, 4.0), rng.randf_range(4.0, 10.0))
+		chunk.rotation.y = rng.randf_range(0.0, TAU)
+		chunk.material_override = DecorMesh.rock_material()
+		chunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(chunk)
+
+
 # ================= 布局贴图绘制 =================
 
 static func _paint_layout() -> Image:
@@ -588,8 +848,9 @@ static func _inside(d: float, half: float, feather: float) -> float:
 # 三路覆盖度（0..1，软边）：四边路 + 中路对角线（x+z=0 方向，与 _is_on_lane 一致）
 static func _lane_mask(x: float, z: float) -> float:
 	var m := 0.0
-	var along_z: float = _inside(absf(z), 44.0, 5.0)   # 竖向路长度（±40 再加软边）
-	var along_x: float = _inside(absf(x), 44.0, 5.0)
+	# 边路贴图一直铺到外墙（±63），与加长后的分路平面一致
+	var along_z: float = _inside(absf(z), 61.0, 2.0)
+	var along_x: float = _inside(absf(x), 61.0, 2.0)
 	m = maxf(m, _inside(absf(absf(x) - 55.0), 8.0, 3.0) * along_z)
 	m = maxf(m, _inside(absf(absf(z) - 55.0), 8.0, 3.0) * along_x)
 	m = maxf(m, _inside(absf(x + z) * 0.70710678, 7.5, 2.5))
@@ -598,8 +859,8 @@ static func _lane_mask(x: float, z: float) -> float:
 # 路缘（路两侧 1.5 单位内的暗边）
 static func _lane_rim(x: float, z: float) -> float:
 	var m := 0.0
-	var along_z: float = _inside(absf(z), 44.0, 5.0)
-	var along_x: float = _inside(absf(x), 44.0, 5.0)
+	var along_z: float = _inside(absf(z), 61.0, 2.0)
+	var along_x: float = _inside(absf(x), 61.0, 2.0)
 	m = maxf(m, _inside(absf(absf(absf(x) - 55.0) - 9.5), 1.6, 1.2) * along_z)
 	m = maxf(m, _inside(absf(absf(absf(z) - 55.0) - 9.5), 1.6, 1.2) * along_x)
 	m = maxf(m, _inside(absf(absf(x + z) * 0.70710678 - 9.0), 1.6, 1.2))

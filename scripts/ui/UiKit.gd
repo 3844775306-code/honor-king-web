@@ -152,27 +152,40 @@ func item_icon(ci: CanvasItem, rect: Rect2, tier: int, item_name: String) -> voi
 	var qc: Color = QUALITY_COLORS[clampi(tier, 1, 5)]
 	ItemGlyph.draw(ci, rect, tier, qc, item_name)
 
+## 推荐装备卡图标区：宽卡用满高图标；与金币等宽的窄卡收缩图标，给文字留出可读宽度
+func rec_icon_rect(rect: Rect2) -> Rect2:
+	var pad := 6.0
+	var s: float = rect.size.y - pad * 2.0
+	if rect.size.x < 300.0:
+		s = minf(s, 78.0)
+	return Rect2(rect.position + Vector2(pad, (rect.size.y - s) * 0.5), Vector2(s, s))
+
 ## 推荐装备卡：品质图标 + 名称 + 状态行（可买/还差/槽满/已成型）+ 金币进度条
 func rec_card(ci: CanvasItem, rect: Rect2, item_name: String, tier: int, cost: int, gold: int,
 		maxed: bool, slot_full: bool) -> void:
 	var can := cost > 0 and gold >= cost
+	var compact := rect.size.x < 300.0
 	var accent := C_GOLD if can else (C_DANGER if slot_full else C_PANEL_EDGE)
 	chip(ci, rect, 0.90, 14.0, accent)
 	var pad := 6.0
-	var ic := Rect2(rect.position + Vector2(pad, pad), Vector2(rect.size.y - pad * 2.0, rect.size.y - pad * 2.0))
+	var ic := rec_icon_rect(rect)
 	item_icon(ci, ic, tier, item_name)
-	var tx := ic.position.x + ic.size.x + 10.0
-	var avail := rect.position.x + rect.size.x - tx - 8.0
+	var tx := ic.position.x + ic.size.x + (8.0 if compact else 10.0)
+	var avail := rect.position.x + rect.size.x - tx - 6.0
 	var nm := item_name if item_name != "" else ("已成型" if maxed else "无推荐")
-	var fs := int(rect.size.y * 0.27)
+	var fs := int(rect.size.y * (0.22 if compact else 0.27))
 	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.40), nm,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, fs, 3, Color(0, 0, 0, 0.8))
 	ci.draw_string(font(), Vector2(tx, rect.position.y + rect.size.y * 0.40), nm,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, fs, Color(1, 1, 1, 0.96))
 	var sub := "-"
 	if maxed: sub = "已成型"
-	elif cost > 0: sub = ("%d 金 · 可买" % cost) if can else ("还差 %d 金" % (cost - gold))
-	var sfs := int(rect.size.y * 0.20)
+	elif cost > 0:
+		if compact:
+			sub = "可买" if can else ("还差 %d" % (cost - gold))
+		else:
+			sub = ("%d 金 · 可买" % cost) if can else ("还差 %d 金" % (cost - gold))
+	var sfs := int(rect.size.y * (0.155 if compact else 0.20))
 	var sc := C_GOLD if can else (Color(1, 0.62, 0.35) if cost > 0 else Color(0.70, 0.72, 0.80))
 	ci.draw_string_outline(font(), Vector2(tx, rect.position.y + rect.size.y * 0.68), sub,
 		HORIZONTAL_ALIGNMENT_LEFT, avail, sfs, 2, Color(0, 0, 0, 0.8))
@@ -380,7 +393,7 @@ func punch(control: Control, amount: float = 0.96, dur: float = 0.10) -> void:
 
 ## 轻震动（仅移动端，毫秒）。
 func haptic(ms: int = 12) -> void:
-	if OS.has_feature("mobile"):
+	if Config.on_mobile():
 		Input.vibrate_handheld(ms)
 
 
@@ -451,7 +464,7 @@ func scale() -> float:
 ## 安全区内缩（虚拟像素，Vector4: left/top/right/bottom）。
 ## 仅在移动端生效；桌面返回全 0，避免 Windows 上 safe_area 是整块屏幕导致误缩。
 func safe_insets() -> Vector4:
-	if not OS.has_feature("mobile"):
+	if not Config.on_mobile():
 		return Vector4.ZERO
 	var win := DisplayServer.window_get_size()
 	if win.x <= 0 or win.y <= 0:

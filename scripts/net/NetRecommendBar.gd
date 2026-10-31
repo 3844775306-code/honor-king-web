@@ -33,26 +33,27 @@ func _ready() -> void:
 	_card.anchor_left = 1.0
 	_card.anchor_right = 1.0
 	# 同 host UI_Manager.rec_card：right -410..-20，top 53..137（金币 chip 底边 45 下方 8px）
-	_card.offset_left = -410.0
-	_card.offset_top = 53.0
-	_card.offset_right = -20.0
-	_card.offset_bottom = 137.0
+	_card.offset_left = -362.0
+	_card.offset_top = 70.0
+	_card.offset_right = -116.0
+	_card.offset_bottom = 190.0
+	_card.buy_requested.connect(_on_buy_clicked)
 	add_child(_card)
 
 	# “+”快速购买按钮（与推荐卡同高，贴右下）
 	_plus = TouchActionButtonScript.new()
 	_plus.label_text = "+"
-	_plus.label_font_size = 64.0     # 同 host buy_plus_btn.label_font_size
+	_plus.label_font_size = 76.0     # 同 host buy_plus_btn.label_font_size
 	_plus.color = Color(0.98, 0.84, 0.25, 0.95)
 	_plus.hold_to_act = false
 	_plus.emit_activated_on_press = true
 	_plus.activated.connect(_on_buy_clicked)
 	_plus.anchor_left = 1.0
 	_plus.anchor_top = 0.0
-	_plus.offset_left = -94.0
-	_plus.offset_top = 61.0
-	_plus.offset_right = -26.0
-	_plus.offset_bottom = 133.0
+	_plus.offset_left = -108.0
+	_plus.offset_top = 79.0
+	_plus.offset_right = -12.0
+	_plus.offset_bottom = 181.0
 	_plus.visible = false   # 初始隐藏，feed 按 host 烘焙 show 刷新（买得起才亮）
 	add_child(_plus)
 
@@ -60,10 +61,10 @@ func _ready() -> void:
 	_chip = GoldChip.new()
 	_chip.anchor_left = 1.0
 	_chip.anchor_top = 0.0
-	_chip.offset_left = -250.0
+	_chip.offset_left = -286.0
 	_chip.offset_top = 8.0
-	_chip.offset_right = -45.0
-	_chip.offset_bottom = 45.0
+	_chip.offset_right = -40.0
+	_chip.offset_bottom = 62.0
 	_chip.tapped.connect(func(): shop_requested.emit())
 	add_child(_chip)
 
@@ -88,10 +89,11 @@ func feed(o: Dictionary) -> void:
 	_card.maxed = bool(rb.get("maxed", false)) if rb is Dictionary else false
 	_card.slot_full = bool(rb.get("slot_full", false)) if rb is Dictionary else false
 	_card.gold = _gold
-	# 金币不足自动收起成图标；买得起后自动展开
-	_card.set_collapsed_for_gold(not _rec_show and _rec_id != "" and not _card.maxed)
+	# 金币不足自动收起成图标；买得起后自动展开（以卡片自身可买判定兜底）
+	var can_show: bool = _rec_show or _card.affordable()
+	_card.set_collapsed_for_gold(not can_show and _rec_id != "" and not _card.maxed)
 	_card.queue_redraw()
-	_plus.visible = _rec_show and _rec_id != "" and not _card.collapsed
+	_plus.visible = can_show and _rec_id != "" and not _card.collapsed
 	_chip.set_gold(_gold)
 
 func hide_panel() -> void:
@@ -103,6 +105,7 @@ func _on_buy_clicked() -> void:
 
 # —— 推荐装备卡：与 host 同一套 UiKit.rec_card 绘制 ——
 class RecCard extends Control:
+	signal buy_requested
 	var item_name := ""
 	var tier := 2
 	var cost := 0
@@ -110,33 +113,51 @@ class RecCard extends Control:
 	var maxed := false
 	var slot_full := false
 	var collapsed := false          # 点按收起：只留右侧装备图标（灰=暂不可买）
-	var auto_collapsed := false     # 因金币不足自动收起；金币够了自动展开
+	var _last_should_collapse := false
+	var _glow_t := 0.0              # 可购买发光拖尾相位
+	func _process(delta: float) -> void:
+		if affordable():
+			_glow_t += delta
+			queue_redraw()
 	func affordable() -> bool:
 		return cost > 0 and gold >= cost
 	func set_collapsed_for_gold(should_collapse: bool) -> void:
+		# 只在金币状态切换时自动收/展，避免每帧覆盖玩家刚点出的状态
+		if should_collapse == _last_should_collapse:
+			return
+		_last_should_collapse = should_collapse
 		if should_collapse:
 			if not collapsed:
 				collapsed = true
-				auto_collapsed = true
-				offset_left = -96.0
+				offset_left = -208.0    # 收起后仍保留 92px 可点宽度（含图标）
 				queue_redraw()
-		elif auto_collapsed:
+		elif collapsed:
 			collapsed = false
-			auto_collapsed = false
-			offset_left = -410.0
+			offset_left = -362.0
 			queue_redraw()
 	func _gui_input(ev: InputEvent) -> void:
-		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
-				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-			collapsed = not collapsed
-			auto_collapsed = false
-			offset_left = -96.0 if collapsed else -410.0   # 收起时缩成图标大小，避免挡住后方面板
+		var is_tap := false
+		if ev is InputEventMouseButton:
+			var mb := ev as InputEventMouseButton
+			is_tap = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+		elif ev is InputEventScreenTouch:
+			is_tap = (ev as InputEventScreenTouch).pressed
+		if is_tap:
+			# 收起态点击 = 展开；展开且买不起时才允许点回收起。买得起时保持展开，购买走右侧“+”
+			if collapsed:
+				collapsed = false
+				offset_left = -362.0
+			elif not affordable():
+				collapsed = true
+				offset_left = -208.0    # 收起态宽度必须容得下图标本身
 			queue_redraw()
 			accept_event()
 	func _draw() -> void:
 		if collapsed:
 			var s := minf(size.y - 8.0, 84.0)
 			var ir := Rect2(size.x - s - 4.0, (size.y - s) * 0.5, s, s)
+			if affordable():
+				_glow_ring(ir.get_center(), s * 0.5 + 5.0)
 			UiKit.item_icon(self, ir, tier, item_name)
 			if not affordable() and not maxed:
 				draw_circle(ir.get_center(), s * 0.5, Color(0.10, 0.11, 0.14, 0.60))
@@ -144,6 +165,17 @@ class RecCard extends Control:
 					22, Color(0.78, 0.80, 0.86), HORIZONTAL_ALIGNMENT_CENTER, s)
 			return
 		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full)
+		if affordable():
+			var ic := UiKit.rec_icon_rect(Rect2(Vector2.ZERO, size))
+			_glow_ring(ic.get_center(), ic.size.x * 0.5 + 5.0)
+	# 图标四周旋转发光拖尾（同 host RecItemCard）
+	func _glow_ring(c: Vector2, r: float) -> void:
+		for gi in 3:
+			var a0 := _glow_t * 3.2 + TAU * float(gi) / 3.0
+			for gk in 6:
+				var gt := float(gk) / 6.0
+				draw_arc(c, r + gt * 7.0, a0, a0 + 1.0, 10,
+					Color(1.0, 0.86, 0.32, (1.0 - gt) * 0.6), 5.0 - gt * 2.6, true)
 
 # —— 金币 chip：半透明圆角矩形 + 金色金币数（同 host gold_chip Panel+Label 观感）——
 class GoldChip:
@@ -165,7 +197,7 @@ class GoldChip:
 		# 同 host gold_chip：_apply_panel_style(0.55) 圆角玻璃 + 冷光描边
 		draw_style_box(UiKit.flat(0.55, 12, 1), r)
 		var txt := "金币: %d" % gold
-		var fs := 17.0 * _us()   # host: _apply_label_style(gold_label, 17, UiKit.C_GOLD)
+		var fs := 23.0 * _us()   # host: _apply_label_style(gold_label, 23, UiKit.C_GOLD)
 		var w := _f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 		var c := size * 0.5 + Vector2(-w * 0.5, fs * 0.36)
 		draw_string_outline(_f, c, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, int(round(fs)), 1, Color.BLACK)

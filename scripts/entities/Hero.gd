@@ -1,6 +1,9 @@
 class_name Hero
 extends GameEntity
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
+const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
+# 泉水回复节拍（秒/跳）；每跳回 10% 最大生命与法力，等于原来的 20%/秒
+const FOUNTAIN_TICK := 0.5
 # 线性技能预览线
 # 技能预览：地面箭头（线性/位移技能用）
 var arrow_preview: Node3D
@@ -75,11 +78,17 @@ var hidden_in_bush: bool = false   # 每帧由 _update_bush_stealth() 刷新：�
 var _bush_region_counts: Dictionary = {}   # 所在草区域 {region_id: 重叠计数}
 var visual_mesh: Node3D
 var manual_target: GameEntity = null
-# 技能预览：AOE填充圆 + 施法范围圈
+# 最近一次普攻的命中目标（补刀提示用：血量低于一次普攻伤害 → 血条变灰白）
+var aa_target: GameEntity = null
+var aa_target_t: float = 0.0
+# 技能预览：AOE填充圆 + 施法范围圈 + 命中半径圈（半径型技能的第二段范围，如吕布R/太乙Q）
 var aoe_fill: MeshInstance3D
 var cast_range_ring: MeshInstance3D
+var impact_ring: MeshInstance3D
 # 普攻轮盘选敌准星（拖动普攻键时高亮即将锁定的目标）
 var attack_aim_marker: MeshInstance3D
+# 技能预览法阵（瞄准技能时脚下浮现）
+var _foot_sigil: Node3D = null
 # ==================== 技能系统 ====================
 var skills: Array = []               # 存储 Skill 资源
 var skill_cooldowns: Array = []
@@ -87,9 +96,35 @@ var skill_window_timers: Array = []  # 技能窗口倒计时      # 每个技能
 var skill_uses: Array = []
 var summoner_skill: Skill = null
 var summoner_cooldown: float = 0.0
+var _summoner_preview_on := false   # 本帧是否由召唤师技能占用地面的施法预览
+
+# —— 阵亡状态清零：技能冷却/被动层数/Buff/控制/装备被动计时…（召唤师冷却、战绩、复活类除外）——
+# 快照在首个物理帧抓取（此时装备/技能等级已初始化），死亡时按快照还原成"出生状态"。
+const STATE_RESET_SUFFIX := ["_cd", "_cooldown", "_timer", "_t", "_stacks", "_stack", "_count",
+	"_phase", "_active", "_ready", "_uses", "_window", "_left", "_until", "_hold", "_edge",
+	"_enhanced", "_channeling", "_stealth", "_protected", "_fuse", "_barrage", "_flying",
+	"_burrow", "_float", "_flow", "_pick", "_picked", "_stage", "_angle", "_marks", "_orb",
+	"_idle", "_auras", "_ticks", "_mana", "_transformed"]
+const STATE_RESET_EXACT := ["stat", "stat2", "parry", "marked", "markers", "lyf_marks",
+	"active_buffs", "active_regen", "shield_remaining", "grievous_wounds", "toughness", "fly",
+	"hunt_damage", "hunt_source", "slow_amount", "skill_cooldowns", "skill_restores",
+	"skill_window_timers", "channeling_skill_index", "pending_skill_index", "pending_skill_target_entity"]
+const STATE_RESET_SKIP := ["summoner_", "respawn_", "revive_", "skill_uses", "is_dead", "is_reviving",
+	"dayu_", "donghuang_orb"]   # 召唤物（大禹鼎/东皇能量体）与召唤师技能不受死亡影响
+# 装备被动倒计时也不清零（防止靠送死刷新装备被动/保命装冷却）
+const STATE_RESET_KEEP := ["famous_blade_cd", "frost_assault_cd", "sanction_regen_cd", "purify_cd",
+	"sage_power_cd", "sunspire_active_cd", "shadow_dart_cd", "golden_body_cd", "fire_dominate_cd",
+	"echo_staff_cd", "pain_mask_cd", "witch_staff_cd", "frost_breath_cd", "thornmail_cd",
+	"blood_rage_cd", "ice_shock_cd", "ice_shock_shield_cd", "dragon_shield_cd", "rising_sun_cd",
+	"mage_robe_shield_cd", "ice_storm_cd", "revive_cd", "night_guardian_cd", "ice_fist_cd",
+	"tyrant_lightning_cd"]
+var _base_state_snap: Dictionary = {}
+var _base_state_captured := false
 var channeling_skill_index: int = -1
 var channeling_preview_pos: Vector3 = Vector3.ZERO
 var casting_skill: bool = false
+var aim_slot: int = -1                  # 正在按住瞄准的技能槽（-1=没在瞄准；小地图瞄准线用）
+var aim_world: Vector3 = Vector3.ZERO   # 当前瞄准点（世界坐标）
 var pending_skill_index: int = -1
 var pending_skill_target: Vector3 = Vector3.ZERO
 var pending_skill_target_entity: GameEntity = null   # 目标型技能拖拽/智能施法选中的目标
@@ -174,7 +209,14 @@ var hero_passive: HeroPassive = null
 var last_health: float = 0.0          # 用于检测回血变化
 const HEAL_POPUP_THRESHOLD: float = 50.0  # 回血量超过此值才显示
 # 模型A攻速阈值表（攻速% -> 攻击间隔秒）
-var target_indicator: MeshInstance3D   # 目标标记环
+var target_indicator: Node3D   # 锁定目标标识（四角括号 + 双环刻度 + 顶部标记）
+var _reticle_t: float = 0.0
+var _reticle_brackets: Array = []
+var _reticle_spin_a: Node3D = null
+var _reticle_spin_b: Node3D = null
+var _reticle_billboard: Node3D = null
+var _reticle_ground: Node3D = null
+var _reticle_top: Node3D = null
 const MODEL_A_THRESHOLDS = [
 	[0, 1.0],
 	[1, 0.95],
@@ -192,10 +234,14 @@ const MODEL_A_THRESHOLDS = [
 var attack_range_ring: MeshInstance3D
 var _melee_anim_flip := false   # 近战普攻左右挥砍交替
 var _aa_ring_leap := false  # 攻击范围圈当前是否处于跳跃强化普攻状态（×2+金色）
+var _aa_ring_show_timer := 0.0   # 攻击范围圈剩余显示时间（普攻出手才亮，>0 时可见）
 var under_tower_attack: bool = false
 var tower_attacker: Turret = null
 var tower_attack_timer: float = 0.0
 var is_teleporting: bool = false
+var is_dashing: bool = false        # 位移（突进/闪现）滑行中：位置由 Tween 逐帧推进，不再瞬移
+var _dash_tw: Tween = null
+var _dash_preview: MeshInstance3D = null   # 位移预览落点环
 var teleport_targeting: bool = false
 # 亚瑟
 var arthur_q_active: bool = false
@@ -218,6 +264,8 @@ var taiyi_q_channeling: bool = false
 var taiyi_q_timer: float = 0.0
 # 沈梦溪
 var shen_fuse_active: bool = false   # W疾跑引燃中：窗口内可手动引爆，4秒到期自动引爆
+var shen_barrage_active: bool = false   # 1技能猫咪炸弹连发进行中：防重入，禁止并发连发（同帧叠多段伤害）
+var player_name: String = ""   # 玩家/本局 AI 昵称（血条上方与选人界面显示）
 var donghuang_orbs: int = 0
 var donghuang_orb_angle: float = 0.0
 var donghuang_suppress_target: Hero = null
@@ -260,9 +308,14 @@ var yingrui_stack_timer: float = 0.0
 var yingrui_aa_count: int = 0          # 被动：已普攻计数（满3次后下次普攻为肘击）
 var yingrui_elbow_ready: bool = false  # 被动：下次普攻是否为肘击
 var yingrui_w_stage: int = 0           # W三段：当前已释放段数（1~2窗口期，3打完关闭）
+# 英睿 视觉（HeroYingrui.gd）：人形底座 + 大招 LabiB 毛绒形态切换
+var yingrui_body: Node3D = null
+var yingrui_plush: Node3D = null
+var _yingrui_form_on: bool = false
 
 
 var revive_hp: float = 0.0
+var fountain_tick_timer: float = 0.0   # 泉水回复节拍计时（FOUNTAIN_TICK 一跳）
 var teleport_progress: float = 0.0
 var teleport_target_pos: Vector3
 var teleport_timer: float = 0.0
@@ -275,8 +328,11 @@ var _regen_t: float = 0.0
 var is_recalling: bool = false
 var recall_timer: float = 0.0
 const RECALL_DURATION: float = 7.0
-# 回城动画（纯程序化 VFX：地面法阵 + 光柱 + 上升粒子，挂在英雄身上跟随）
+const TELEPORT_DURATION: float = 4.0
+# 回城/传送动画（纯程序化 VFX：双层法阵 + 光晕盘 + 光柱 + 上升粒子，挂在英雄身上跟随）
 var _recall_ring: MeshInstance3D = null
+var _recall_ring2: MeshInstance3D = null
+var _recall_glow: MeshInstance3D = null
 var _recall_pillar: MeshInstance3D = null
 var _recall_spark: CPUParticles3D = null
 var _recall_vfx_t: float = 0.0
@@ -288,6 +344,8 @@ var machao_prev_aa_held := false    # 马超：上一帧普攻是否按住（检
 var machao_aa_edge := false         # 马超：普攻按下沿（无目标空冲仅在点按那帧触发）
 var kai_prev_aa_held := false    # 铠：上一帧普攻是否按住（检测按下沿）
 var kai_aa_edge := false         # 铠：普攻按下沿（强普无目标空冲仅在点按那帧触发）
+var mai_prev_aa_held := false    # 不知火舞：上一帧普攻是否按住（检测按下沿）
+var mai_aa_edge := false         # 不知火舞：普攻按下沿（强普无目标空放仅在点按那帧触发）
 var luban_passive_stacks: int = 0         # 鲁班七号被动层数（5层触发扫射）
 var luban_skill_enhanced: bool = false     # 鲁班七号技能后下次普攻强化
 var luban_r_active: bool = false           # 鲁班七号R技能防重入守卫
@@ -482,11 +540,11 @@ func cancel_recall():
 	if bm:
 		bm.remove_recall_line(self)
 
-# ---------- 回城动画（程序化 VFX，无美术资源） ----------
-func _recall_vfx_start() -> void:
+# ---------- 回城/传送动画（程序化 VFX，无美术资源） ----------
+func _recall_vfx_start(col_override: Color = Color(0, 0, 0, 0)) -> void:
 	_recall_vfx_stop()
 	_recall_vfx_t = 0.0
-	var col: Color = Color(0.40, 0.80, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.55, 0.40)
+	var col: Color = col_override if col_override.a > 0.0 else (Color(0.40, 0.80, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.55, 0.40))
 	# 地面法阵环（双环叠加，缓慢旋转）
 	_recall_ring = MeshInstance3D.new()
 	var tm := TorusMesh.new()
@@ -525,27 +583,60 @@ func _recall_vfx_start() -> void:
 	add_child(_recall_pillar)
 	# 上升粒子
 	_recall_spark = CPUParticles3D.new()
-	_recall_spark.amount = 20
-	_recall_spark.lifetime = 1.4
+	_recall_spark.amount = 36
+	_recall_spark.lifetime = 1.15
 	_recall_spark.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	_recall_spark.emission_sphere_radius = 1.1
+	_recall_spark.emission_sphere_radius = 1.35
 	_recall_spark.position.y = 0.3
-	_recall_spark.direction = Vector3(0, 1, 0)
-	_recall_spark.spread = 12.0
-	_recall_spark.initial_velocity_min = 1.2
-	_recall_spark.initial_velocity_max = 2.6
+	_recall_spark.spread = 18.0
+	_recall_spark.initial_velocity_min = 1.6
+	_recall_spark.initial_velocity_max = 3.2
 	_recall_spark.gravity = Vector3(0, 0.6, 0)
 	_recall_spark.scale_amount_min = 0.03
 	_recall_spark.scale_amount_max = 0.07
 	_recall_spark.color = Color(col.r, col.g, col.b, 0.85)
 	add_child(_recall_spark)
+	# 外圈反向法阵（两层环反向旋转，视觉更"转"）
+	_recall_ring2 = MeshInstance3D.new()
+	var tm2 := TorusMesh.new()
+	tm2.inner_radius = 1.58
+	tm2.outer_radius = 1.78
+	tm2.rings = 40
+	tm2.ring_segments = 8
+	_recall_ring2.mesh = tm2
+	_recall_ring2.position.y = 0.10
+	var rm2 := StandardMaterial3D.new()
+	rm2.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm2.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm2.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	rm2.albedo_color = Color(col.r, col.g, col.b, 0.34)
+	rm2.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_recall_ring2.material_override = rm2
+	add_child(_recall_ring2)
+	# 地面光晕盘（贴地加色圆盘，随进度变亮）
+	_recall_glow = MeshInstance3D.new()
+	var gm := CylinderMesh.new()
+	gm.top_radius = 1.9
+	gm.bottom_radius = 1.9
+	gm.height = 0.02
+	gm.radial_segments = 36
+	_recall_glow.mesh = gm
+	_recall_glow.position.y = 0.04
+	var gmat := StandardMaterial3D.new()
+	gmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	gmat.albedo_color = Color(col.r, col.g, col.b, 0.10)
+	gmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_recall_glow.material_override = gmat
+	add_child(_recall_glow)
 	# 起手一圈爆发
 	Vfx.sigil(global_position, col, 2.2, 0.8)
 	Vfx.cast_glow(global_position + Vector3.UP * 0.9, col, 1.4, 0.6)
 
-func _recall_vfx_tick(delta: float) -> void:
+func _recall_vfx_tick(delta: float, k_in: float = -1.0) -> void:
 	_recall_vfx_t += delta
-	var k: float = clampf(1.0 - recall_timer / RECALL_DURATION, 0.0, 1.0)
+	var k: float = k_in if k_in >= 0.0 else clampf(1.0 - recall_timer / RECALL_DURATION, 0.0, 1.0)
 	if is_instance_valid(_recall_ring):
 		_recall_ring.rotation.y += delta * 2.4
 		var s: float = 1.0 + sin(_recall_vfx_t * 3.4) * 0.05 + k * 0.18
@@ -556,15 +647,32 @@ func _recall_vfx_tick(delta: float) -> void:
 		_recall_pillar.position.y = 3.0 * ph
 	if is_instance_valid(_recall_spark):
 		_recall_spark.emitting = true
+	# 外圈反向旋转 + 呼吸；进度越高转得越快
+	if is_instance_valid(_recall_ring2):
+		_recall_ring2.rotation.y -= delta * (1.7 + k * 2.2)
+		var s2: float = 1.0 + sin(_recall_vfx_t * 2.1) * 0.04 + k * 0.10
+		_recall_ring2.scale = Vector3(s2, 1.0, s2)
+	if is_instance_valid(_recall_glow):
+		var gm: StandardMaterial3D = _recall_glow.material_override as StandardMaterial3D
+		if gm != null:
+			gm.albedo_color.a = 0.10 + k * 0.30
+		var gs: float = 0.92 + sin(_recall_vfx_t * 2.6) * 0.05 + k * 0.16
+		_recall_glow.scale = Vector3(gs, 1.0, gs)
 
 func _recall_vfx_stop() -> void:
 	if is_instance_valid(_recall_ring):
 		_recall_ring.queue_free()
+	if is_instance_valid(_recall_ring2):
+		_recall_ring2.queue_free()
+	if is_instance_valid(_recall_glow):
+		_recall_glow.queue_free()
 	if is_instance_valid(_recall_pillar):
 		_recall_pillar.queue_free()
 	if is_instance_valid(_recall_spark):
 		_recall_spark.queue_free()
 	_recall_ring = null
+	_recall_ring2 = null
+	_recall_glow = null
 	_recall_pillar = null
 	_recall_spark = null
 
@@ -576,7 +684,7 @@ func _start_wukong_cloud():
 	collision_layer = 0   # 筋斗云全程无视碰撞（起飞即关闭，避免升空阶段被墙体推离）
 	wukong_cloud_timer = 0.5
 	wukong_cloud_speed = 0.0
-	wukong_cloud_target = Vector3(-60, 0, 60) if team == Config.Team.PLAYER else Vector3(60, 0, -60)
+	wukong_cloud_target = Vector3(-62, 0, 62) if team == Config.Team.PLAYER else Vector3(62, 0, -62)   # 落点=泉水圆心
 	bt_timer = 1.5  # 腾空+飞行初期霸体
 	# 取消当前攻击/施法
 	casting_skill = false
@@ -606,6 +714,7 @@ func _start_tripod_teleport(tripod):
 	dayu_teleport_progress = 0.0
 	dayu_teleport_target = tripod.global_position
 	dayu_teleport_cd = 60.0
+	_recall_vfx_start(Color(0.55, 0.85, 0.45) if team == Config.Team.PLAYER else Color(1.0, 0.70, 0.40))
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	if bm: bm.add_teleport_line(self, dayu_teleport_target)
 
@@ -671,7 +780,7 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		night_guardian_hp_track += amount
 	# 反伤刺甲：主动期间35%真伤反弹
 	if thornmail_active and source and source.team != team:
-		source.take_damage(amount * 0.35, self, false, -42, 1.0)
+		source.take_true_damage(amount * 0.35, self, false, -42, 1.0)
 	# 名刀·司命：受到致命伤害时触发无敌(120s CD, 最多3次)
 	if health > 0 and health - amount <= 0 and equipment_slots.has("famous_blade") and famous_blade_cd <= 0 and famous_blade_uses < 3:
 		famous_blade_cd = 120.0
@@ -732,21 +841,28 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	# ... 其他初始化代码 ...
 
 func _create_attack_range_ring():
-	attack_range_ring = MeshFactory.create_torus_ring(attack_range*0.01 - 0.1, attack_range*0.01 + 0.1, Color.WHITE, true, 0.3)
-	attack_range_ring.position = Vector3(0, 0.15, 0)
-	
+	# 贴地攻击范围圈（柔化环带 + 磨损斑驳，随野区起伏贴地），替代原来的纯色 Torus 环
+	attack_range_ring = MeshFactory.create_ground_ring(attack_range*0.01, Color(1, 1, 1, 0.32), 96.0)
+	attack_range_ring.visible = false   # 只在普攻出手瞬间短暂显示
 	add_child(attack_range_ring)
 
+## 普攻出手时亮一圈（0.45s 后自动收起），让玩家看清本次攻击的判定范围
+func flash_attack_range_ring(duration: float = 0.45) -> void:
+	if is_ai:
+		return
+	_aa_ring_show_timer = maxf(_aa_ring_show_timer, duration)
+	_update_attack_range_ring()
+	if attack_range_ring and is_instance_valid(attack_range_ring):
+		attack_range_ring.visible = true
+
 func _update_attack_range_ring():
-	if attack_range_ring and attack_range_ring.mesh is TorusMesh:
+	if attack_range_ring and is_instance_valid(attack_range_ring):
 		var leap := _enhanced_aa_queued()
 		var reach := _aa_engage_reach()  # 跳跃强化普攻就绪时 = 攻击距离×2
-		var torus = attack_range_ring.mesh as TorusMesh
-		torus.inner_radius = reach - 0.1
-		torus.outer_radius = reach + 0.1
-		var mat: StandardMaterial3D = attack_range_ring.material_override
-		if mat:
-			mat.albedo_color = Color(1.0, 0.8, 0.2, 0.8) if leap else Color(1.0, 1.0, 1.0, 0.3)
+		attack_range_ring.scale = Vector3(reach, 1.0, reach)
+		# 跳跃强化普攻：金色更亮；平时白色半透（与地面混合，不抢眼）
+		MeshFactory.set_ground_ring_color(attack_range_ring,
+			Color(1.0, 0.82, 0.25, 0.55) if leap else Color(1.0, 1.0, 1.0, 0.32))
 		_aa_ring_leap = leap
 # ==================== 草丛(同一排)视野 ====================
 # Bush 通过 Area3D 进出事件维护英雄所在草区域(region)的重叠计数
@@ -825,15 +941,193 @@ func _ready():
 	cast_range_ring = MeshFactory.create_cast_range(Color(0.32, 0.72, 1.0))
 	cast_range_ring.visible = false
 	add_child(cast_range_ring)
-	# 目标标记环（默认隐藏）
-	target_indicator = MeshFactory.create_torus_ring(1, 1.2, Color.WHITE, true, 0.8)
-	target_indicator.visible = false
-	add_child(target_indicator)
+	# 命中半径圈：给 radius>0 的技能补第二段落点范围（不改变原技能类型预览）
+	impact_ring = MeshFactory.create_cast_area(Color(0.30, 0.72, 1.0), 0)
+	impact_ring.visible = false
+	add_child(impact_ring)
+	# 锁定目标标识（默认隐藏）
+	_build_target_reticle()
 
 	# 普攻轮盘选敌准星（拖动普攻键时高亮即将锁定的目标）
 	attack_aim_marker = MeshFactory.create_torus_ring(0.4, 0.55, Color(1.0, 0.65, 0.25), true, 0.6)
 	attack_aim_marker.visible = false
 	add_child(attack_aim_marker)
+	# 技能预览法阵：瞄准任意技能时浮现在脚底（柔光底 + 双层反向光环 + 刻度符文）
+	_build_foot_sigil()
+
+# ==================== 锁定目标标识 ====================
+# 玩家锁定目标时显示：四角括号（呼吸收束）+ 内外反向旋转刻度环 + 头顶下压标记 + 脚下光圈
+func _reticle_mat(color: Color, alpha: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(color.r, color.g, color.b, alpha)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = 1.6
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+func _reticle_bar(box_size: Vector3, color: Color, alpha: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = box_size
+	mi.mesh = bm
+	mi.material_override = _reticle_mat(color, alpha)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	return mi
+
+func _build_target_reticle() -> void:
+	target_indicator = Node3D.new()
+	target_indicator.name = "TargetReticle"
+	target_indicator.visible = false
+	add_child(target_indicator)
+	var gold := Color(1.0, 0.78, 0.36)
+	var hot := Color(1.0, 0.93, 0.76)
+	# 内环：细金环，慢速顺转
+	_reticle_spin_a = Node3D.new()
+	_reticle_spin_a.name = "SpinInner"
+	target_indicator.add_child(_reticle_spin_a)
+	var inner_ring := MeshFactory.create_torus_ring(0.72, 0.77, gold, true, 0.85, true)
+	inner_ring.material_override = _reticle_mat(gold, 0.85)
+	inner_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reticle_spin_a.add_child(inner_ring)
+	# 外环：8 段刻度，快速逆转，读作“扫描”
+	_reticle_spin_b = Node3D.new()
+	_reticle_spin_b.name = "SpinTicks"
+	target_indicator.add_child(_reticle_spin_b)
+	for i in range(8):
+		var ang: float = TAU * float(i) / 8.0
+		var seg := _reticle_bar(Vector3(0.18, 0.016, 0.034), gold, 0.8)
+		seg.position = Vector3(cos(ang) * 0.95, 0.0, sin(ang) * 0.95)
+		seg.rotation.y = -(ang + PI * 0.5)
+		_reticle_spin_b.add_child(seg)
+	# 四角括号：挂在朝向相机的立面上（经典锁定框形态），呼吸时整体向内收紧
+	_reticle_billboard = Node3D.new()
+	_reticle_billboard.name = "Billboard"
+	target_indicator.add_child(_reticle_billboard)
+	var half := 0.62
+	for i in range(4):
+		var sx: float = 1.0 if (i == 0 or i == 3) else -1.0
+		var sy: float = 1.0 if i < 2 else -1.0
+		var br := Node3D.new()
+		br.name = "Bracket%d" % i
+		br.position = Vector3(sx * half, sy * half, 0.0)
+		var arm_x := _reticle_bar(Vector3(0.24, 0.04, 0.02), hot, 0.95)
+		arm_x.position = Vector3(-sx * 0.12, 0.0, 0.0)
+		br.add_child(arm_x)
+		var arm_y := _reticle_bar(Vector3(0.04, 0.24, 0.02), hot, 0.95)
+		arm_y.position = Vector3(0.0, -sy * 0.12, 0.0)
+		br.add_child(arm_y)
+		_reticle_billboard.add_child(br)
+		_reticle_brackets.append(br)
+	# 头顶下压标记：倒锥 + 细环，轻微起伏（同立面内，始终朝向相机）
+	_reticle_top = Node3D.new()
+	_reticle_top.name = "TopMark"
+	_reticle_top.position = Vector3(0.0, half + 0.36, 0.0)
+	_reticle_billboard.add_child(_reticle_top)
+	var cone := MeshFactory.create_cylinder(0.12, 0.0, 0.24, hot, 0.95)
+	cone.material_override = _reticle_mat(hot, 0.95)
+	cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reticle_top.add_child(cone)
+	var top_ring := MeshFactory.create_torus_ring(0.21, 0.26, gold, true, 0.7, true)
+	top_ring.material_override = _reticle_mat(gold, 0.7)
+	top_ring.position = Vector3(0.0, 0.18, 0.0)
+	top_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reticle_top.add_child(top_ring)
+	# 脚下光圈：暗金虚环 + 12 道刻度，缓慢旋转
+	_reticle_ground = Node3D.new()
+	_reticle_ground.name = "GroundRing"
+	_reticle_ground.position = Vector3(0.0, -1.28, 0.0)
+	target_indicator.add_child(_reticle_ground)
+	var gr := MeshFactory.create_torus_ring(0.60, 0.66, Color(1.0, 0.55, 0.16), true, 0.42, true)
+	gr.material_override = _reticle_mat(Color(1.0, 0.55, 0.16), 0.42)
+	gr.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_reticle_ground.add_child(gr)
+	for i in range(12):
+		var ang: float = TAU * float(i) / 12.0
+		var tick := _reticle_bar(Vector3(0.08, 0.012, 0.028), gold, 0.32)
+		tick.position = Vector3(cos(ang) * 0.72, 0.0, sin(ang) * 0.72)
+		tick.rotation.y = -(ang + PI * 0.5)
+		_reticle_ground.add_child(tick)
+
+func _update_target_reticle(delta: float) -> void:
+	_reticle_t += delta
+	var t := _reticle_t
+	if _reticle_spin_a != null:
+		_reticle_spin_a.rotation.y += delta * 0.55
+	if _reticle_spin_b != null:
+		_reticle_spin_b.rotation.y -= delta * 1.35
+	if _reticle_ground != null:
+		_reticle_ground.rotation.y += delta * 1.05
+	if _reticle_top != null:
+		_reticle_top.position.y = 0.98 + 0.05 * sin(t * 3.6)
+	# 括号：立面转向相机 + 呼吸收紧（锁定感）
+	if _reticle_billboard != null:
+		var cam := get_viewport().get_camera_3d()
+		if cam != null:
+			var to_cam: Vector3 = cam.global_position - target_indicator.global_position
+			_reticle_billboard.rotation.y = atan2(to_cam.x, to_cam.z)
+		var breath: float = 0.5 + 0.5 * sin(t * 4.2)
+		_reticle_billboard.scale = Vector3.ONE * (1.0 - 0.06 * breath)
+		_reticle_billboard.position.y = 0.025 * sin(t * 4.2)
+
+# 脚底技能预览法阵（创建一次，预览时显隐）
+func _build_foot_sigil() -> void:
+	var col: Color = Vfx.color_for_hero(display_name)
+	_foot_sigil = Node3D.new()
+	_foot_sigil.visible = false
+	_foot_sigil.position = Vector3(0.0, Config.GROUND_FX_Y + 0.02, 0.0)
+	add_child(_foot_sigil)
+	# 柔光底 + 外圈呼吸环
+	_foot_sigil.add_child(Vfx.preview_ring(2.25, team))
+	# 外层环（顺时针）
+	var outer := MeshFactory.create_torus_ring(2.02, 2.16, col, true, 0.9, true)
+	outer.name = "SigilOuter"
+	_foot_sigil.add_child(outer)
+	# 内层环（逆时针）+ 内圈细环
+	var inner := MeshFactory.create_torus_ring(1.28, 1.4, col.lerp(Color.WHITE, 0.35), true, 0.85, true)
+	inner.name = "SigilInner"
+	_foot_sigil.add_child(inner)
+	var core := MeshFactory.create_torus_ring(0.72, 0.8, col.lerp(Color.WHITE, 0.55), true, 0.7, true)
+	_foot_sigil.add_child(core)
+	# 12 道刻度符文：短条沿半径方向，读作法阵刻线
+	var runes := Node3D.new()
+	runes.name = "SigilRunes"
+	_foot_sigil.add_child(runes)
+	var rune_mat := StandardMaterial3D.new()
+	rune_mat.albedo_color = col.lerp(Color.WHITE, 0.5)
+	rune_mat.emission_enabled = true
+	rune_mat.emission = col
+	rune_mat.emission_energy_multiplier = 2.4
+	rune_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rune_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rune_mat.albedo_color.a = 0.85
+	rune_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	for i in range(12):
+		var tick := MeshInstance3D.new()
+		var tb := BoxMesh.new()
+		var long_tick := i % 3 == 0
+		tb.size = Vector3(0.09 if long_tick else 0.06, 0.02, 0.42 if long_tick else 0.24)
+		tick.mesh = tb
+		var ang := TAU * float(i) / 12.0
+		tick.position = Vector3(cos(ang), 0.0, sin(ang)) * 1.72
+		tick.rotation.y = -ang
+		tick.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		tick.material_override = rune_mat
+		runes.add_child(tick)
+	# 旋转：外环顺时针、内环逆时针、符文层顺时针（不同速度，形成法阵运转感）
+	var t1 := outer.create_tween()
+	t1.set_loops()
+	t1.tween_property(outer, "rotation:y", TAU, 7.0).from(0.0)
+	var t2 := inner.create_tween()
+	t2.set_loops()
+	t2.tween_property(inner, "rotation:y", -TAU, 4.6).from(0.0)
+	var t3 := runes.create_tween()
+	t3.set_loops()
+	t3.tween_property(runes, "rotation:y", -TAU, 11.0).from(0.0)
 func buy_equipment(item_id: String) -> bool:
 	var item_data = ItemDatabase.get_item(item_id)
 	if item_data.is_empty(): return false
@@ -936,6 +1230,12 @@ func _create_visual():
 		fallback.material_override = mat
 		visual_mesh = fallback
 
+	# 英睿：大招「变身LabiB」等身毛绒形态（同一 visual_mesh 下的兄弟节点，默认隐藏，变身时切换）
+	if display_name == "英睿" and visual_mesh:
+		yingrui_plush = HeroYingrui.build_labib()
+		yingrui_plush.visible = false
+		visual_mesh.add_child(yingrui_plush)
+
 	# 角色可读性：rim 边缘光 + 脚下接地软阴影（仅 material_overlay / 独立子节点，不改原材质）
 	UnitVisuals.attach_hero(self, team, visual_mesh)
 	# 行走质感：步频起伏 + 左右摆 + 前倾 + 步点扬尘（只动模型，不改位移/碰撞）
@@ -989,7 +1289,7 @@ func setup_skills_from_database(skill_ids: Array, summoner_id: String = ""):
 		skill_uses.append(0)
 		skill_window_timers.append(0)
 		skill_cooldowns.append(0.0)
-	else:skill_levels[3] = 1
+	else: skill_levels[3] = 0   # 第4技能：统一 4 级自动解锁（见 _check_fourth_skill_unlock），不占技能点
 	var recover = SkillDatabase.get_skill("recover")
 	if recover:
 		skills.append(recover)
@@ -1015,8 +1315,15 @@ func on_kill(victim: GameEntity):
 	else:
 		streak_count = 1
 	last_kill_time = now
+	# 助攻者（与 BattleManager.on_hero_killed 同口径：击杀点 12m 内同队英雄，排除自己）
+	var kf_assists: Array = []
+	if victim is Hero:
+		for e in get_tree().get_nodes_in_group("heroes"):
+			if e is Hero and e != self and e.team == team \
+					and e.global_position.distance_to(victim.global_position) < 12.0:
+				kf_assists.append({"name": e.display_name, "team": e.team})
 	if victim is Hero and victim.consecutive_kills >= 3:
-		battle.ui.show_kill_feed(display_name, team, "终结", victim.display_name, victim.team)
+		battle.ui.show_kill_feed(display_name, team, "终结", victim.display_name, victim.team, kf_assists)
 		return
 
 	var short_desc = ""
@@ -1042,13 +1349,13 @@ func on_kill(victim: GameEntity):
 	if battle.ui:
 		if short_desc != "":
 			# 10 秒窗口内的连续击杀：短连杀文案优先（二连击破~五连绝世）
-			battle.ui.show_kill_feed(display_name, team, short_desc, victim.display_name, victim.team)
+			battle.ui.show_kill_feed(display_name, team, short_desc, victim.display_name, victim.team, kf_assists)
 		elif cumulative_desc != "":
 			# 窗口外击杀但累计连续击杀跨过档位：补报累计档（大杀特杀~天下无双）
-			battle.ui.show_kill_feed(display_name, team, cumulative_desc, victim.display_name, victim.team)
+			battle.ui.show_kill_feed(display_name, team, cumulative_desc, victim.display_name, victim.team, kf_assists)
 		else:
 			# 普通单杀（且未跨累计档位）
-			battle.ui.show_kill_feed(display_name, team, "击败", victim.display_name, victim.team)
+			battle.ui.show_kill_feed(display_name, team, "击败", victim.display_name, victim.team, kf_assists)
 		
 	# 原有金币奖励、击杀播报等...
 
@@ -1065,6 +1372,90 @@ var storm_aura_tick: float = 0.0
 var storm_shield_amount: float = 0.0
 var storm_shield_timer: float = 0.0
 var storm_aura_ring: Node3D = null   # 风暴觉醒光环视觉节点
+
+# ==================== 阵亡状态清零 ====================
+func _is_reset_state_var(n: String) -> bool:
+	for s in STATE_RESET_SKIP:
+		if n.begins_with(s):
+			return false
+	if STATE_RESET_KEEP.has(n):
+		return false
+	if STATE_RESET_EXACT.has(n):
+		return true
+	for s in STATE_RESET_SUFFIX:
+		if n.ends_with(s):
+			return true
+	return false
+
+
+## 出生首帧抓取"无状态"基线（只记录状态类变量，含继承自 GameEntity 的）
+func _capture_state_baseline() -> void:
+	if _base_state_captured:
+		return
+	for p in get_property_list():
+		if (int(p.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0:
+			continue
+		var n: String = p.name
+		if not _is_reset_state_var(n):
+			continue
+		var v = get(n)
+		if typeof(v) == TYPE_ARRAY or typeof(v) == TYPE_DICTIONARY:
+			_base_state_snap[n] = v.duplicate(true)
+		else:
+			_base_state_snap[n] = v
+	_base_state_captured = true
+
+
+## 死亡时把一切临时状态还原为出生基线；召唤师技能冷却、复活类与战绩类不动
+func _reset_states_on_death() -> void:
+	_capture_state_baseline()
+	var zf_was := zhangfei_transformed
+	var yr_was := _yingrui_form_on
+	var cloud_was := wukong_cloud_flying
+	# 临时视觉节点：快照只能清变量，节点必须显式销毁否则会残留
+	# （召唤物——大禹鼎、东皇能量体——不清：阵亡后仍保留，复活后继续存在）
+	for node_name in ["_regen_ring", "_regen_fx", "_recall_ring", "_recall_ring2", "_recall_glow", "_recall_pillar", "_recall_spark",
+			"storm_aura_ring", "libai_w_ring", "zhangfei_q_mesh"]:
+		var nd = get(node_name)
+		if nd != null and is_instance_valid(nd):
+			(nd as Node).queue_free()
+	for key in _base_state_snap.keys():
+		var v = _base_state_snap[key]
+		if typeof(v) == TYPE_ARRAY or typeof(v) == TYPE_DICTIONARY:
+			set(key, v.duplicate(true))
+		else:
+			set(key, v)
+	# 快照外的硬清
+	for arr in [skill_cooldowns, skill_window_timers, skill_restores]:
+		if arr.size() < skills.size():
+			arr.resize(skills.size())
+		for i in range(arr.size()):
+			arr[i] = 0.0
+	channeling_skill_index = -1
+	channeling_preview_pos = Vector3.ZERO
+	casting_skill = false
+	pending_skill_index = -1
+	pending_skill_target = Vector3.ZERO
+	pending_skill_target_entity = null
+	manual_target = null
+	current_target = null
+	remove_cc_speed_buffs()
+	if is_recalling:
+		cancel_recall()
+	if zf_was:
+		clear_zhangfei_form_visual()
+	if yr_was:
+		_yingrui_apply_form(false)
+	if cloud_was:
+		_end_wukong_cloud()
+	if buff_ring_red:
+		buff_ring_red.visible = false
+	if buff_ring_blue:
+		buff_ring_blue.visible = false
+	_update_shield_visual()
+	# Buff 清空后重算属性（攻击/双抗/移速回落装备+等级基准）
+	_recalculate_attributes()
+
 
 func die(killer):
 	if is_dead:
@@ -1119,6 +1510,7 @@ func die(killer):
 	channeling_skill_index = -1
 	if display_name == "沈梦溪":
 		shen_fuse_active = false   # 引燃死亡即熄灭（防复活后原地自动引爆）
+		shen_barrage_active = false   # 死亡清掉连发占用标记，避免复活后1技能被自己挡住
 		if 1 < skill_window_timers.size():
 			skill_window_timers[1] = 0
 	consecutive_kills = 0
@@ -1126,6 +1518,8 @@ func die(killer):
 	wukong_cloud_flying = false
 	wukong_cloud_phase = 0
 	wukong_cloud_speed = 0.0
+	# 全部临时状态清零（技能冷却/被动层数/Buff/控制/装备被动计时…；召唤师技能冷却除外）
+	_reset_states_on_death()
 	# 团灭判定：本英雄阵亡后若整队同时阵亡 → host 结算 团灭(我方被灭)/完美团战(我方团灭敌方)
 	var bm_wipe := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	if bm_wipe:
@@ -1149,9 +1543,43 @@ func start_teleport(target: Vector3):
 	is_teleporting = true
 	teleport_progress = 0.0
 	teleport_target_pos = target
+	# 传送引导动画：紫蓝色法阵，与回城同款但换色
+	_recall_vfx_start(Color(0.62, 0.48, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.45, 0.72))
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	if bm and teleport_target_pos != Vector3.ZERO:
 		bm.add_teleport_line(self, teleport_target_pos)
+
+# 位移表现统一入口：不再瞬移，而是在 dur 秒（约 7~10 帧）内快速滑到落点，并让英雄做出冲刺/跳跃动作。
+# anim 传 "" 表示不覆盖当前动作（例如突进普攻已在播攻击动作）。
+func dash_move_to(target: Vector3, dur: float = 0.16, anim: String = "sprint") -> void:
+	var to := target
+	to.y = global_position.y
+	var from := global_position
+	var flat := to - from
+	flat.y = 0.0
+	if flat.length() < 0.05:
+		global_position = to
+		return
+	if dur <= 0.01:
+		global_position = to
+		return
+	if _dash_tw != null and _dash_tw.is_valid():
+		_dash_tw.kill()
+	rotation.y = atan2(flat.x, flat.z)
+	is_dashing = true
+	if anim != "" and is_instance_valid(anim_player):
+		_play_anim(anim)
+		# 保护动作不被「移动→walk」立刻覆盖（约等于滑行时长）
+		_aa_anim_until = maxf(_aa_anim_until, Time.get_ticks_msec() * 0.001 + dur + 0.05)
+	_dash_tw = create_tween()
+	_dash_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_dash_tw.tween_property(self, "global_position", to, dur)
+	_dash_tw.finished.connect(_on_dash_finished.bind(anim))
+
+func _on_dash_finished(anim: String) -> void:
+	is_dashing = false
+	if health > 0 and anim != "":
+		_play_anim("idle")
 
 # 技能/召唤师冷却统一递减（死亡/复活倒计时期间也照常走，复活时不清空）
 func _tick_skill_cooldowns(delta):
@@ -1310,6 +1738,8 @@ func net_predict_locked() -> float:
 	return maxf(0.0, _move_lock_until - Time.get_ticks_msec() * 0.001)
 
 func _physics_process(delta):
+	if not _base_state_captured:
+		_capture_state_baseline()   # 出生首帧记录状态基线（死亡时用来清零）
 	# 元流之子·「流」衰减：不使用流（无获得/消耗）→ 闲置5秒先失1层，此后每秒1层直至用流。
 	# 放在最顶、死亡/回城分支之前 → 死亡等一切状态都照常流失；客户端 doll 的 yuanliu_flow 恒为0 → 无副作用。
 	if display_name == "元流之子":
@@ -1347,30 +1777,38 @@ func _physics_process(delta):
 		manual_target = null
 	if is_recalling:
 		recall_timer -= delta
-		_recall_vfx_tick(delta)
+		_recall_vfx_tick(delta, clampf(1.0 - recall_timer / RECALL_DURATION, 0.0, 1.0))
 		if recall_timer <= 0:
 			# 完成瞬间：光柱爆发 + 波环，再位移回泉水
 			var rcol: Color = Color(0.40, 0.80, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.55, 0.40)
 			Vfx.pillar(global_position, rcol, 1.6, 9.0, 0.6)
 			Vfx.nova(global_position, rcol, 3.2)
-			global_position = Vector3(-60, 0, 60) if team == Config.Team.PLAYER else Vector3(60, 0, -60)
+			global_position = Vector3(-62, 0, 62) if team == Config.Team.PLAYER else Vector3(62, 0, -62)   # 回城落点=泉水圆心
 			cancel_recall()
-	# 传送吟唱（4秒）
+	# 传送吟唱（TELEPORT_DURATION 秒，读条与特效同一时长）
 	if is_teleporting:
-		teleport_progress += delta / 4.0
+		teleport_progress += delta / TELEPORT_DURATION
+		_recall_vfx_tick(delta, clampf(teleport_progress, 0.0, 1.0))
 		if teleport_progress >= 1.0:
+			var tcol: Color = Color(0.62, 0.48, 1.0) if team == Config.Team.PLAYER else Color(1.0, 0.45, 0.72)
+			Vfx.pillar(global_position, tcol, 1.4, 9.0, 0.55)
+			Vfx.nova(global_position, tcol, 3.0)
 			global_position = teleport_target_pos
 			is_teleporting = false
 			teleport_progress = 0.0
+			_recall_vfx_stop()
+			Vfx.nova(global_position, tcol, 2.6)
 			var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 			if bm:
 				bm.remove_teleport_line(self, teleport_target_pos)
 	# 大禹传送进度
 	if dayu_teleport_channeling:
 		dayu_teleport_progress += delta / DAYU_TELEPORT_DURATION
+		_recall_vfx_tick(delta, clampf(dayu_teleport_progress, 0.0, 1.0))
 		if dayu_teleport_progress >= 1.0:
 			global_position = dayu_teleport_target
 			dayu_teleport_channeling = false
+			_recall_vfx_stop()
 			var bm2 = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 			if bm2: bm2.remove_teleport_line(self, dayu_teleport_target)
 	# 孙悟空：筋斗云飞行
@@ -1389,18 +1827,24 @@ func _physics_process(delta):
 			var _cloud_dir = (wukong_cloud_target - global_position).normalized()
 			wukong_cloud_speed = min(wukong_cloud_speed + delta * 20.0, 10.0)
 			global_position += _cloud_dir * wukong_cloud_speed * delta
-			# 到达泉水上空（水平距离判定，保证落在泉水内）
+			# 到达泉水上空（水平距离判定，保证落在泉水内）；落点对齐泉水圆心
 			if Vector2(global_position.x, global_position.z).distance_to(Vector2(wukong_cloud_target.x, wukong_cloud_target.z)) < 1.0:
+				global_position = Vector3(wukong_cloud_target.x, global_position.y, wukong_cloud_target.z)
 				_end_wukong_cloud()
 			# 玩家操控移动后停止
 			elif not is_ai:
 				var _check_input = Vector3(Input.get_axis("ui_left", "ui_right"), 0, Input.get_axis("ui_up", "ui_down"))
 				if _check_input.length() > 0.1 or move_target != Vector3.ZERO:
 					_end_wukong_cloud()
-	# 泉水回复：自家泉水范围内按最大生命/法力 20%/秒 回复（半径判据与 is_in_own_fountain 同源）
+	# 泉水回复：自家泉水范围内每 0.5s 一跳（每跳 10% 最大生命/法力 = 原 20%/秒；半径判据与 is_in_own_fountain 同源）
 	if is_in_own_fountain():
-		_apply_healing(actual_max_health * 0.2 * delta)
-		mana = min(mana + actual_mana_max * 0.2 * delta, actual_mana_max)
+		fountain_tick_timer -= delta
+		if fountain_tick_timer <= 0.0:
+			fountain_tick_timer = FOUNTAIN_TICK
+			_apply_healing(actual_max_health * 0.1)
+			mana = minf(mana + actual_mana_max * 0.1, actual_mana_max)
+	else:
+		fountain_tick_timer = 0.0   # 出泉立即归零：进泉第一跳不等待
 	_update_regen_fx(delta)
 	
 	buff_ring_red.visible = red_buff_active
@@ -1411,6 +1855,10 @@ func _physics_process(delta):
 	_tick_skill_cooldowns(delta)
 	if dayu_teleport_cd > 0: dayu_teleport_cd -= delta
 	if attack_timer > 0: attack_timer -= delta * attack_speed_timer
+	if aa_target_t > 0.0:
+		aa_target_t -= delta
+		if aa_target_t <= 0.0:
+			aa_target = null
 	# Buff计时
 	if red_buff_active:
 		red_buff_timer -= delta
@@ -1445,7 +1893,7 @@ func _physics_process(delta):
 					if entity is Turret: continue
 					if entity.team == team: continue
 					if global_position.distance_to(entity.global_position) <= 8.0:
-						entity.take_damage(entity.max_health * 0.04, self, true, -54, 1.0)
+						entity.take_true_damage(entity.max_health * 0.04, self, true, -54, 1.0)
 	if shield_timer > 0:
 		shield_timer -= delta
 		if shield_timer <= 0: shield_remaining = 0.0
@@ -1540,8 +1988,10 @@ func _physics_process(delta):
 			teleport_targeting = false  # 移动取消瞄准
 	# 玩家 / 联机真人接管：锁定目标超出普攻范围 → 清空锁定（不再主动追击，等待玩家自己走近/换目标）
 	# 跳跃强化普攻就绪时普攻距离×2，此时保留更远的锁定以便位移出手
-	if (not is_ai or net_taken) and manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
-		if global_position.distance_to(manual_target.global_position) > _aa_engage_reach():
+	if (not is_ai or net_taken) and manual_target and is_instance_valid(manual_target):
+		if manual_target.health <= 0:
+			manual_target = null   # 锁定目标已阵亡：脱锁（锁敌条不保留尸体）
+		elif global_position.distance_to(manual_target.global_position) > _aa_engage_reach() + _auto_chase_margin():
 			manual_target = null
 	# 锁定目标进入隐身（兰陵王·影袭 / 幽影袖箭）：立即脱锁 —— 隐身期间不可被锁定攻击，仅受AoE波及
 	if manual_target and is_instance_valid(manual_target) and manual_target is Hero and (manual_target as Hero).is_invisible_to_enemy():
@@ -1556,6 +2006,11 @@ func _physics_process(delta):
 		var kai_atk_now = Input.is_action_pressed("ui_accept") or TouchController.get_attack_held()
 		kai_aa_edge = kai_atk_now and not kai_prev_aa_held
 		kai_prev_aa_held = kai_atk_now
+	# 不知火舞：普攻按下沿检测（用于强化普攻无目标空放位移；长按不会连续空放）
+	if (not is_ai or net_taken) and display_name == "不知火舞" and health > 0:
+		var mai_atk_now = Input.is_action_pressed("ui_accept") or TouchController.get_attack_held() or net_attack_hold
+		mai_aa_edge = mai_atk_now and not mai_prev_aa_held
+		mai_prev_aa_held = mai_atk_now
 	# 移动控制
 	# 全屏面板（商店/英雄面板）打开时不响应键盘/摇杆，避免按 W/S 选装备时英雄跟着跑
 	var ui_block: bool = (not is_ai) and UiManager.blocks_gameplay_input()
@@ -1573,6 +2028,7 @@ func _physics_process(delta):
 			joy_vec = TouchController.get_move_vector()   # 移动端摇杆（屏幕x右+，y上+）
 	var move_vec = Vector3.ZERO
 	var keyboard_move := false
+	var auto_chase_moved := false   # 本帧是否因锁定目标自动追击而移动：移动帧不自动普攻
 	if stun_timer <= 0 and knockup_timer <= 0 and froze_timer <= 0 and suppress_timer <= 0 and not wukong_cloud_flying:
 		if is_recalling and not is_ai and (joy_vec.length() > 0.1 or input_dir.length() > 0.1 or move_target != Vector3.ZERO): cancel_recall()
 
@@ -1617,6 +2073,9 @@ func _physics_process(delta):
 			move_target = Vector3.ZERO; move_vec = dir.normalized()
 		
 		# 减速/加速已由重算属性时按净百分比烘焙进 actual_move_speed，此处不再逐帧乘算
+		# AI 回城引导中：不能移动/攻击/施法（玩家侧由移动输入取消回城，AI 直接锁住动作）
+		if is_ai and is_recalling:
+			move_vec = Vector3.ZERO
 		# 走A：攻击瞬间锁移动 0.5s，让攻击动画原地播完（玩家与 AI 一致；锁定期仍可继续普攻）
 		if Time.get_ticks_msec() * 0.001 < _move_lock_until:
 			move_vec = Vector3.ZERO
@@ -1653,6 +2112,19 @@ func _physics_process(delta):
 				_play_anim("walk")
 			_clamp_to_map_edge()
 		else:
+			# 自动追击：锁定目标在「射程 + 追击距离」内但还没进射程 → 站定时自动靠近（移动输入会打断）
+			if not is_ai and manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
+				var _chase_m := _auto_chase_margin()
+				if _chase_m > 0.0:
+					var _cdir: Vector3 = manual_target.global_position - global_position
+					_cdir.y = 0.0
+					var _cdist := _cdir.length()
+					if _cdist > _aa_engage_reach() and _cdist <= _aa_engage_reach() + _chase_m and stun_timer <= 0 and knockup_timer <= 0 and suppress_timer <= 0 and Time.get_ticks_msec() * 0.001 > _move_lock_until:
+						global_position += _cdir.normalized() * actual_move_speed * delta * 0.01
+						rotation.y = atan2(_cdir.x, _cdir.z)
+						auto_chase_moved = true
+						_play_anim("walk")
+						_clamp_to_map_edge()
 			var target = _get_attack_target()
 			# 马超拾枪强化普攻 = 突进（替代普攻）：点/按普攻键 → 朝「普攻轮盘方向→目标方向→面朝方向」位移2.5米，
 			# 对位移沿途所有敌人都造成强化普攻伤害，每次突进消耗1次强化普攻（stat_timer 扣4秒，拾枪/召回各+4秒、上限8秒）。
@@ -1664,7 +2136,13 @@ func _physics_process(delta):
 				var mode_auto := not is_ai and can_act and _is_mode_target(target)
 				# 铠强化普攻就绪：普攻键改为突进，此处不再发普通普攻（由下方铠强普突进块处理）
 				var kai_enh_gate := not (display_name == "铠" and int(stat) == 1)
-				var should_attack = kai_enh_gate and not casting_skill and (is_ai or ((Input.is_action_pressed("ui_accept") or TouchController.get_attack_held()) and can_act) or (manual_target and is_instance_valid(manual_target) ) or mode_auto)
+				var auto_atk_on: bool = PlayerPrefs.opt_bool("auto_atk", true)
+				# 自动普攻只在真正站定时触发；自动追击的移动帧只走路，不边追边打。
+				# 按住普攻/手动操作保留走A能力，不受此限制。
+				var should_attack = kai_enh_gate and not casting_skill and not (is_ai and is_recalling) \
+					and (is_ai or ((Input.is_action_pressed("ui_accept") or TouchController.get_attack_held()) and can_act) \
+						or (auto_atk_on and not auto_chase_moved and manual_target and is_instance_valid(manual_target)) \
+						or mode_auto)
 				if is_recalling and not is_ai and should_attack: cancel_recall()
 				if should_attack and attack_timer <= 0: _perform_attack(target); attack_timer = 1.0 / attack_speed;
 		if display_name == "马超" and stat_timer > 0 and not casting_skill and attack_timer <= 0:
@@ -1674,7 +2152,7 @@ func _physics_process(delta):
 			if target and target.health > 0:
 				# 有可达目标：与普攻一致，AI/按住普攻/锁定目标/自动模式均触发突进
 				var mode_auto_m := not is_ai and can_act_m and _is_mode_target(target)
-				var want_dash = is_ai or atk_held_m or (manual_target and is_instance_valid(manual_target)) or mode_auto_m
+				var want_dash = (is_ai and not is_recalling) or atk_held_m or (manual_target and is_instance_valid(manual_target)) or mode_auto_m
 				if want_dash:
 					if is_recalling and not is_ai: cancel_recall()
 					_machao_enhanced_dash(target)
@@ -1693,7 +2171,7 @@ func _physics_process(delta):
 			if target and target.health > 0:
 				# 有可达目标：与普攻一致，AI/按住普攻/锁定目标/自动模式均触发突进
 				var mode_auto_k := not is_ai and can_act_k and _is_mode_target(target)
-				var want_dash_k = is_ai or atk_held_k or (manual_target and is_instance_valid(manual_target)) or mode_auto_k
+				var want_dash_k = (is_ai and not is_recalling) or atk_held_k or (manual_target and is_instance_valid(manual_target)) or mode_auto_k
 				if want_dash_k:
 					if is_recalling and not is_ai: cancel_recall()
 					_kai_enhanced_dash(target)
@@ -1705,6 +2183,16 @@ func _physics_process(delta):
 				_kai_enhanced_dash(null)
 				attack_timer = 1.0 / attack_speed
 				target = null
+		# 不知火舞：强化普攻（stat_timer>=5）就绪时无目标也能空放 → 快速向前位移一小段（参照马超强普突进）
+		if display_name == "不知火舞" and stat_timer >= 5.0 and not casting_skill and attack_timer <= 0:
+			var can_act_mai = stun_timer <= 0 and knockup_timer <= 0 and suppress_timer <= 0 and silence_timer <= 0
+			var atk_held_mai = (Input.is_action_pressed("ui_accept") or TouchController.get_attack_held() or net_attack_hold) and can_act_mai
+			var target_mai = _get_attack_target()
+			if (not is_ai or net_taken) and can_act_mai and atk_held_mai and mai_aa_edge and not (target_mai and target_mai.health > 0):
+				# 无目标：仅在点按那帧沿「普攻轮盘方向→面朝方向」前冲 2.2 米（强化普攻释放，可当机动位移）
+				if is_recalling: cancel_recall()
+				_mai_enhanced_dash()
+				attack_timer = 1.0 / attack_speed
 		if not is_ai and not ui_block:
 			if Input.is_key_pressed(KEY_CTRL):
 				for i in range(3):
@@ -1713,6 +2201,7 @@ func _physics_process(delta):
 			_handle_desktop_type0_aim()
 			_handle_attack_wheel_input()
 			_handle_attack_priority_input()
+			_update_dash_preview()
 		if casting_skill:
 			if _cast_windup_left > 0.0:
 				_cast_windup_left -= delta
@@ -1721,15 +2210,22 @@ func _physics_process(delta):
 					_finish_casting()   # 前摇结束才真正出手（扣蓝/进 CD/结算都在 _finish_casting）
 			else:
 				_finish_casting()
-	# 更新目标标记环
+	# 更新锁定目标标识
 	if manual_target and is_instance_valid(manual_target) and manual_target.health > 0 and not is_ai:
 		target_indicator.global_position = manual_target.global_position + Vector3(0, 1.5, 0)
 		target_indicator.visible = true
+		_update_target_reticle(delta)
 	else:
 		target_indicator.visible = false
-	# 攻击范围预览圈跟随强化普攻就绪状态：就绪时变金色（跳跃型扩至×2），普攻打出/过期后还原
-	if not is_ai and attack_range_ring and _aa_ring_leap != _enhanced_aa_queued():
-		_update_attack_range_ring()
+	# 攻击范围圈：按住普攻键即显示（不必等真正出手），松开后按 0.45s 余辉收起
+	if not is_ai and attack_range_ring and is_instance_valid(attack_range_ring):
+		_aa_ring_show_timer = maxf(0.0, _aa_ring_show_timer - delta)
+		var atk_held_ring: bool = health > 0.0 and (Input.is_action_pressed("ui_accept") or TouchController.get_attack_held())
+		var show_ring: bool = _aa_ring_show_timer > 0.0 or atk_held_ring
+		if attack_range_ring.visible != show_ring:
+			attack_range_ring.visible = show_ring
+		if _aa_ring_leap != _enhanced_aa_queued():
+			_update_attack_range_ring()
 	if taiyi_protected and taiyi_protect_timer > 0:
 		taiyi_protect_timer -= delta
 		if taiyi_protect_timer <= 0:
@@ -1827,6 +2323,17 @@ func _physics_process(delta):
 		# W三段：窗口过期后重置段数（下次W重新从第一段开始）
 		if yingrui_w_stage > 0 and skill_window_timers.size() > 1 and skill_window_timers[1] <= 0:
 			yingrui_w_stage = 0
+		# 视觉：人形 ←→ LabiB 毛绒形态切换（只换模型，不改碰撞/数值）
+		if yingrui_transformed != _yingrui_form_on:
+			_yingrui_apply_form(yingrui_transformed)
+
+# 英睿大招形态切换：隐藏人形底座、显示等身 LabiB（scale 在技能里另放大，这里只管可见性）
+func _yingrui_apply_form(on: bool) -> void:
+	_yingrui_form_on = on
+	if yingrui_body and is_instance_valid(yingrui_body):
+		yingrui_body.visible = not on
+	if yingrui_plush and is_instance_valid(yingrui_plush):
+		yingrui_plush.visible = on
 
 # 跳跃式强化普攻就绪：孙悟空被动 / 亚瑟Q 强化普攻（攻击距离×2 并位移至目标身边攻击）
 func _leap_aa_ready() -> bool:
@@ -1897,8 +2404,9 @@ func _dash_beside_target(target: GameEntity) -> void:
 		return   # 已在攻击间距内，无需位移
 	if cur_dist > attack_range * 0.02 + 0.1:
 		return   # 超出 2×普攻距离上限，不做跨图位移
-	global_position = Vector3(target.global_position.x + dir.x * standoff,
-		global_position.y, target.global_position.z + dir.z * standoff)
+	# 跳跃类强化普攻：几帧内跃到目标身旁（不再是瞬移），空中播跳跃动作
+	dash_move_to(Vector3(target.global_position.x + dir.x * standoff,
+		global_position.y, target.global_position.z + dir.z * standoff), 0.13, "jump")
 
 # 普攻键实时预览：若下一次普攻是数值/跳跃类强化普攻，返回强化后的未减甲伤害与金色高亮标记。
 # 口径与普攻键当前显示的「原始攻击力」一致；孙悟空强化普攻必定暴击故乘暴击系数。
@@ -2057,7 +2565,10 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 			manual_target = null
 		elif manual_target.health > 0:
 			var dist = global_position.distance_to(manual_target.global_position)
-			if dist < range:
+			# 锁敌头像用的是「距离 - 目标体积」判定，这里同步把目标体积计入射程，
+			# 否则头像边缘锁定的敌人会出现“锁了但普攻不选中”的情况。
+			var body_pad: float = float(manual_target.body_radius) + 0.15 if manual_target is GameEntity else 0.0
+			if dist <= range + body_pad:
 				return manual_target
 	# 玩家：自动选敌 —— 范围内优先英雄（剩余血量最低优先），其次非英雄（小兵/塔/野怪，剩余血量最低优先）
 	# 远程接管英雄：net_attack_hold（按住普攻）或已启用具体优先级模式（推塔/小兵，站定自动持续攻击）时生效。
@@ -2071,29 +2582,39 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 				if mode_target:
 					return mode_target
 		var best_hero: GameEntity = null
-		var best_hero_hp := 999999.0
+		var best_hero_s := 999999.0
 		var best_other: GameEntity = null
-		var best_other_hp := 999999.0
+		var best_other_s := 999999.0
+		var best_pot: GameEntity = null
+		var best_pot_s := 999999.0
 		for ent in get_tree().get_nodes_in_group("entities"):
 			if ent == self or not (ent is GameEntity) or ent.health <= 0 or ent.team == team:
 				continue
-			if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster):
+			if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster or ent is Tripod):
 				continue  # 排除墙体/草丛/治疗包等非战斗实体
 			if global_position.distance_to(ent.global_position) > range:
 				continue
+			var sc: float = _target_prio_score(ent)
 			if ent is Hero:
 				if (ent as Hero).is_invisible_to_enemy() or (ent as Hero).is_untargetable_by_enemies():
 					continue  # 隐身中的敌方英雄不可被自动索敌（AoE 仍可波及）
-				if ent.health < best_hero_hp:
-					best_hero_hp = ent.health
+				if sc < best_hero_s:
+					best_hero_s = sc
 					best_hero = ent
+			elif ent is Tripod:
+				# 大禹治疗鼎优先级最低：不抢英雄/兵线/塔的自动索敌
+				if sc < best_pot_s:
+					best_pot_s = sc
+					best_pot = ent
 			else:
-				if ent.health < best_other_hp:
-					best_other_hp = ent.health
+				if sc < best_other_s:
+					best_other_s = sc
 					best_other = ent
 		if best_hero:
 			return best_hero
-		return best_other
+		if best_other:
+			return best_other
+		return best_pot
 	if net_attack_hold or (net_attack_priority >= 0 and net_attack_priority != TouchController.ATTACK_PRIORITY_AUTO):
 		# 推塔/小兵模式：与上面玩家分支同规则（该类目标最低血优先）；无该类目标时若仅在按住普攻
 		# 才回退通用选敌（站定自动点塔/点兵不因周围有英雄而改打英雄）
@@ -2107,10 +2628,12 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 			var best_hero_hp := 999999.0
 			var best_other: GameEntity = null
 			var best_other_hp := 999999.0
+			var best_pot: GameEntity = null
+			var best_pot_hp := 999999.0
 			for ent in get_tree().get_nodes_in_group("entities"):
 				if ent == self or not (ent is GameEntity) or ent.health <= 0 or ent.team == team:
 					continue
-				if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster):
+				if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster or ent is Tripod):
 					continue
 				if global_position.distance_to(ent.global_position) > range:
 					continue
@@ -2120,17 +2643,102 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 					if ent.health < best_hero_hp:
 						best_hero_hp = ent.health
 						best_hero = ent
+				elif ent is Tripod:
+					if ent.health < best_pot_hp:
+						best_pot_hp = ent.health
+						best_pot = ent
 				else:
 					if ent.health < best_other_hp:
 						best_other_hp = ent.health
 						best_other = ent
 			if best_hero:
 				return best_hero
-			return best_other
+			if best_other:
+				return best_other
+			return best_pot
 	return null
 
 # 目标优先级模式的同类选敌：范围内选「类别符合」的敌方单位中剩余血量最低者
 # （TOWER=防御塔；MINION=小兵/野怪）。无对应类别目标返回 null。
+# 自动索敌排序分：0=百分比血量最低 1=绝对血量最低 2=距离最近
+func _target_prio_score(ent: GameEntity) -> float:
+	var mode: int = PlayerPrefs.opt_int("target_prio", 0)
+	if mode == 2:
+		return global_position.distance_to(ent.global_position)
+	if mode == 0:
+		var mx: float = float(ent.get("actual_max_health")) if ent.get("actual_max_health") != null else ent.max_health
+		return ent.health / maxf(mx, 1.0)
+	return ent.health
+
+# 自动追击距离余量（米）：0=标准+3 1=近+1 2=关
+func _auto_chase_margin() -> float:
+	var m: int = PlayerPrefs.opt_int("auto_chase", 0)
+	if m == 1:
+		return 1.0
+	if m == 2:
+		return 0.0
+	return 3.0
+
+# 位移落点（考虑墙体）：沿 dir 前进 dist，撞墙则停在墙前 0.4m
+func clamp_dash_landing(dir: Vector3, dist: float) -> Vector3:
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length() < 0.01:
+		return global_position
+	var from := global_position + flat.normalized() * 0.4
+	var to := from + flat.normalized() * dist
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(from + Vector3.UP * 0.7, to + Vector3.UP * 0.7)
+	q.collision_mask = 1
+	q.collide_with_bodies = true
+	var hit: Dictionary = space.intersect_ray(q)
+	var out := to
+	if not hit.is_empty() and hit.get("collider") is Wall:
+		var p: Vector3 = hit["position"] + (hit["normal"] as Vector3) * 0.45
+		out = Vector3(p.x, global_position.y, p.z)
+	return out
+
+# 位移预览环：拖动闪现/位移技能时在落点画圈（已按墙体修正）；关=不显示
+func _update_dash_preview() -> void:
+	if is_ai or health <= 0 or not PlayerPrefs.opt_bool("move_preview", true):
+		if _dash_preview != null and is_instance_valid(_dash_preview):
+			_dash_preview.visible = false
+		return
+	var dir := Vector3.ZERO
+	var dist := 0.0
+	var sum_drag := TouchController.get_summoner_drag()
+	if sum_drag.length() > 20.0 and summoner_skill != null and str(summoner_skill.skill_name) == "闪现":
+		dir = _resolve_flash_dir(sum_drag)
+		dist = 5.0
+	else:
+		for i in range(mini(skills.size(), 3)):
+			if TouchController.get_skill_held(i) and skills[i] != null and int(skills[i].type) == 4:
+				var drag := TouchController.get_skill_drag(i)
+				if drag.length() > 20.0:
+					dir = Vector3(drag.x, 0.0, drag.y).normalized()
+					dist = clampf(float(skills[i].cast_range), 2.0, 12.0)
+					break
+	if dist <= 0.0:
+		if _dash_preview != null and is_instance_valid(_dash_preview):
+			_dash_preview.visible = false
+		return
+	var endp := clamp_dash_landing(dir, dist)
+	if _dash_preview == null or not is_instance_valid(_dash_preview):
+		_dash_preview = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.42
+		tm.outer_radius = 0.55
+		_dash_preview.mesh = tm
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(0.55, 0.85, 1.0, 0.9)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_dash_preview.material_override = mat
+		var host: Node = get_tree().current_scene if get_tree().current_scene != null else get_parent()
+		if host != null:
+			host.add_child(_dash_preview)
+	_dash_preview.global_position = endp + Vector3.UP * 0.12
+	_dash_preview.visible = true
+
 func _pick_priority_target(pri: int, range: float) -> GameEntity:
 	var best: GameEntity = null
 	var best_hp := 999999.0
@@ -2199,8 +2807,13 @@ func _perform_attack(target: GameEntity):
 	_aa_anim_until = now_s + 0.5
 	HeroWeapons.play(visual_mesh, "attack")   # 武器普攻动作
 	manual_target = target
+	# 补刀提示：记录本次普攻目标并给一个略长于攻击间隔的有效期
+	aa_target = target
+	aa_target_t = clampf(1.6 / maxf(attack_speed, 0.1), 0.5, 1.8)
 	# 本地玩家英雄普攻出音（非本人内部直接忽略；按英雄元素/远近程叠加专属音色）
 	SfxManager.try_attack_sfx(display_name, attack_range)
+	# 普攻出手：攻击范围圈亮一下（仅玩家本人；AI 不显示避免满屏圆环）
+	flash_attack_range_ring()
 	# 攻击退出隐身
 	if shadow_dart_active:
 		shadow_dart_active = false; collision_layer = 1
@@ -2688,7 +3301,7 @@ func _perform_attack(target: GameEntity):
 	if display_name == "夏侯惇" and xiahou_enhanced_attacks > 0:
 		xiahou_enhanced_attacks -= 1
 		var w_true_dmg = 150 + (skill_levels[1] - 1) * 30 + bonus_attack * 0.45
-		target.take_damage(int(w_true_dmg), self, false, -50, 1)
+		target.take_true_damage(int(w_true_dmg), self, false, -50, 1.0)
 		skill_cooldowns[2] = max(0, skill_cooldowns[2] - 1.0)
 	# 夏侯惇：被动噬目回血
 	if display_name == "夏侯惇" and xiahou_passive_active:
@@ -2772,13 +3385,17 @@ func _machao_enhanced_dash(aim_target: GameEntity = null) -> void:
 				dir = d.normalized()
 	if dir == Vector3.ZERO:
 		dir = Vector3(sin(rotation.y), 0.0, cos(rotation.y))
-	# 位移 2.5 米（沿用技能突进式瞬移，不做寻路）
+	# 位移 2.5 米（几帧内突进过去，不做寻路）
 	var start := global_position
-	var end := start + dir * 2.5
+	var end: Vector3 = start + dir * 2.5
 	rotation.y = atan2(dir.x, dir.z)
 	global_position = end
 	global_position.y = 0.5
 	_clamp_to_map_edge()
+	end = global_position
+	global_position = start
+	Vfx.dash_fx(start, end, Vfx.color_for_hero(display_name), not is_ai, 2.5)
+	dash_move_to(end, 0.14, "")
 	_attack_anim()
 	# 位移沿途敌人（水平投影到线段的距离 ≤ 自身半径+余量 视为命中）各吃一次强化普攻伤害
 	var dash_dmg := int(actual_attack_damage + 65.0 + 0.22 * bonus_attack + 5.0 * level)
@@ -2827,13 +3444,17 @@ func _kai_enhanced_dash(aim_target: GameEntity = null) -> void:
 				dir = d.normalized()
 	if dir == Vector3.ZERO:
 		dir = Vector3(sin(rotation.y), 0.0, cos(rotation.y))
-	# 位移 2.5 米（沿用技能突进式瞬移，不做寻路）
+	# 位移 2.5 米（几帧内突进过去，不做寻路）
 	var start := global_position
-	var end := start + dir * 2.5
+	var end: Vector3 = start + dir * 2.5
 	rotation.y = atan2(dir.x, dir.z)
 	global_position = end
 	global_position.y = 0.5
 	_clamp_to_map_edge()
+	end = global_position
+	global_position = start
+	Vfx.dash_fx(start, end, Vfx.color_for_hero(display_name), not is_ai, 2.5)
+	dash_move_to(end, 0.14, "")
 	_attack_anim()
 	# 位移沿途敌人（水平投影到线段距离 ≤ 自身半径+余量 视为命中）各吃一次强化普攻伤害；命中者击飞
 	var dash_dmg := int(actual_attack_damage + 100.0 + 25.0 * skill_levels[1] + 0.32 * bonus_attack)
@@ -2849,6 +3470,52 @@ func _kai_enhanced_dash(aim_target: GameEntity = null) -> void:
 				_cc_burst(ent)
 	# 消耗本次强化普攻
 	stat = 0
+
+# 不知火舞强化普攻·空放位移（参照马超强普突进）：
+# 强化普攻（stat_timer>=5）就绪且没有可打目标时，点/按普攻键 → 沿「普攻轮盘方向→面朝方向」前冲 2.2 米，
+# 位移沿途敌人各吃一次强化普攻的魔法伤害（100+AP，走法穿），命中者被忍蜂推开（同强化普攻的 repel）；
+# 出手后清空 stat_timer（消耗这次强化普攻，重新蓄力）。
+func _mai_enhanced_dash() -> void:
+	var dir := Vector3.ZERO
+	if not is_ai:
+		var drag := TouchController.get_attack_drag()
+		if drag.length() > ATTACK_WHEEL_DRAG_THRESHOLD:
+			var aim_screen := get_viewport().get_visible_rect().size * 0.5 + drag.normalized() * 500.0
+			var aim := _screen_ray_world(aim_screen)
+			var d := aim - global_position
+			d.y = 0.0
+			if d.length() > 0.05:
+				dir = d.normalized()
+	if dir == Vector3.ZERO:
+		dir = Vector3(sin(rotation.y), 0.0, cos(rotation.y))
+	var start := global_position
+	var end: Vector3 = start + dir * 2.2
+	rotation.y = atan2(dir.x, dir.z)
+	global_position = end
+	global_position.y = 0.5
+	_clamp_to_map_edge()
+	end = global_position
+	global_position = start
+	Vfx.dash_fx(start, end, Vfx.color_for_hero(display_name), not is_ai, 2.2)
+	dash_move_to(end, 0.12, "")
+	_attack_anim()
+	# 沿途命中：强化普攻的魔法伤害（与普攻强化结算同口径）
+	var mai_dmg := int(100.0 + 1.0 * actual_ability_power)
+	var hit_any := false
+	for ent in get_tree().get_nodes_in_group("entities"):
+		if ent == self or not (ent is GameEntity) or ent.health <= 0 or ent.team == team:
+			continue
+		if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster):
+			continue
+		if _dist_point_segment_h(ent.global_position, start, end) <= ent.body_radius + 0.6:
+			ent.take_damage(mai_dmg, self, true, 0, actual_magic_pen_percent)
+			hit_any = true
+			if not (ent is Turret):
+				ent.global_position += (ent.global_position - start).normalized() * 2.5   # 忍蜂推开
+	# 命中回蓝（同强化普攻命中）+ 消耗强化普攻
+	if hit_any:
+		mana = minf(mana + 10.0, actual_mana_max)
+	stat_timer = 0.0
 
 # —— 关键操作（群控）判定 ——
 # 同一英雄 0.9s 内对 ≥3 名敌方英雄施加硬控（眩晕/击飞）→ 我方"关键操作"播报。
@@ -2918,19 +3585,57 @@ func _create_move_indicator(world_pos: Vector3):
 # - source_mouse=false（移动端）：有拖拽 → 屏幕中心+拖拽方向；否则朝锁定目标；否则朝面朝方向
 # - source_mouse=true（桌面键盘）：瞄准 = 鼠标位置
 # 结果经地面射线取世界坐标，并限制在 skill.cast_range 内
-func _compute_skill_aim(drag: Vector2, skill: Skill, source_mouse: bool) -> Vector3:
+# 轻点技能的自动索敌：英雄 > 小兵 > 野怪（中立），不考虑防御塔/建筑；同档内取最近
+func _nearest_skill_target(range: float) -> GameEntity:
+	if range <= 0.0:
+		range = attack_range * 0.01
+	var best: GameEntity = null
+	var best_rank := 9
+	var best_d := 1e18
+	for ent in get_tree().get_nodes_in_group("entities"):
+		if ent == self or not (ent is GameEntity) or ent.health <= 0 or ent.team == team:
+			continue
+		if not (ent is Hero or ent is Minion or ent is JungleMonster):
+			continue   # 防御塔/水晶/墙体/草丛等建筑与地形不参与自动索敌
+		if ent is Hero and ((ent as Hero).is_invisible_to_enemy() or (ent as Hero).is_untargetable_by_enemies()):
+			continue
+		var d: float = global_position.distance_to(ent.global_position) - ent.body_radius
+		if d > range:
+			continue
+		var rank := 0 if ent is Hero else (1 if ent is Minion else 2)
+		if rank < best_rank or (rank == best_rank and d < best_d):
+			best_rank = rank
+			best_d = d
+			best = ent
+	return best
+
+func _compute_skill_aim(drag_in: Vector2, skill: Skill, source_mouse: bool) -> Vector3:
+	var drag := drag_in * PlayerPrefs.opt_float("skill_sens", 1.0)
 	var cam := get_viewport().get_camera_3d()
 	var target_pos := global_position + Vector3.FORWARD * 5.0
 	if cam:
 		var aim_screen := get_viewport().get_mouse_position()
+		var direct := Vector3.ZERO
+		var has_direct := false
 		if not source_mouse:
 			if drag.length() > 12.0:
 				aim_screen = get_viewport().get_visible_rect().size * 0.5 + drag.normalized() * 500.0
 			elif manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
-				aim_screen = cam.unproject_position(manual_target.global_position)
+				# 已锁定目标：直接取该单位世界坐标（不经过屏幕投影，屏幕外/背后目标同样有效）
+				direct = manual_target.global_position
+				has_direct = true
 			else:
-				aim_screen = cam.unproject_position(global_position + Vector3(sin(rotation.y), 0, cos(rotation.y)) * 5.0)
-		target_pos = _screen_ray_world(aim_screen)
+				# 未锁定目标且轻点（未拖动）：自动朝最近敌方/中立单位施放（英雄 > 小兵 > 野怪，忽略防御塔）
+				var auto_t = _nearest_skill_target(skill.cast_range) if (skill and skill.type in [0, 1, 3, 5]) else null
+				if auto_t and is_instance_valid(auto_t):
+					direct = auto_t.global_position
+					has_direct = true
+				else:
+					aim_screen = cam.unproject_position(global_position + Vector3(sin(rotation.y), 0, cos(rotation.y)) * 5.0)
+		if has_direct:
+			target_pos = Vfx.ground_pos(direct)
+		else:
+			target_pos = _screen_ray_world(aim_screen)
 		# 移动端拖拽：拖得越长投放越远（≤施法范围），可精准控制投放距离；桌面用鼠标位置自然定距
 		if not source_mouse and drag.length() > 12.0:
 			var aim_dir := target_pos - global_position
@@ -2946,6 +3651,22 @@ func _compute_skill_aim(drag: Vector2, skill: Skill, source_mouse: bool) -> Vect
 			var dir := (target_pos - global_position).normalized()
 			target_pos = global_position + dir * skill.cast_range
 	return target_pos
+
+# 全图技能瞄准态（小地图瞄准线/命中的敌人高亮用）：{} 或 {from, dir, len, hit_r, only_hero, color}
+func global_aim() -> Dictionary:
+	if aim_slot < 0 or health <= 0.0:
+		return {}
+	var prof: Dictionary = SkillDatabase.global_shot_profile(display_name, aim_slot)
+	if prof.is_empty():
+		return {}
+	var d: Vector3 = aim_world - global_position
+	d.y = 0.0
+	if d.length() < 0.15:
+		d = Vector3(sin(rotation.y), 0.0, cos(rotation.y))
+	if d.length() < 0.01:
+		return {}
+	return {"from": global_position, "dir": d.normalized(), "len": float(prof["len"]),
+		"hit_r": float(prof["hit_r"]), "only_hero": bool(prof["only_hero"]), "color": prof["color"]}
 
 # 屏幕坐标 → 地面世界坐标（射线打到地面/墙体；落空时取射线远端）
 func _screen_ray_world(aim_screen: Vector2) -> Vector3:
@@ -2994,7 +3715,7 @@ func _show_donghuang_w_preview(aim_pos: Vector3):
 		if i < total:
 			var ring: MeshInstance3D = donghuang_aim_rings[i]
 			var landing := aim_pos - dir * (1.5 * i)
-			ring.global_position = Vector3(landing.x, 0.085, landing.z)
+			ring.global_position = Vector3(landing.x, Config.GROUND_FX_Y + 0.01, landing.z)
 			ring.visible = true
 		else:
 			donghuang_aim_rings[i].visible = false
@@ -3012,7 +3733,7 @@ func _pick_attack_target(drag: Vector2, pick_range: float) -> GameEntity:
 	for ent in get_tree().get_nodes_in_group("entities"):
 		if ent == self or not (ent is GameEntity) or ent.health <= 0 or ent.team == team:
 			continue
-		if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster):
+		if not (ent is Hero or ent is Minion or ent is Turret or ent is JungleMonster or ent is Tripod):
 			continue
 		if global_position.distance_to(ent.global_position) > pick_range:
 			continue
@@ -3024,9 +3745,85 @@ func _pick_attack_target(drag: Vector2, pick_range: float) -> GameEntity:
 			best = ent
 	return best
 
+## 召唤师技能施法预览：复用技能的地面指示器（范围圈/落点圈/位移箭头/脚下法阵）
+func _update_summoner_preview(drag: Vector2, touch_aiming: bool) -> void:
+	var sk := summoner_skill
+	var col: Color = Vfx.color_for_hero(display_name)
+	if _pv_color_key != display_name + "|sum":
+		_pv_color_key = display_name + "|sum"
+		for mi in [cast_range_ring, aoe_fill, impact_ring, arrow_shaft, arrow_head]:
+			MeshFactory.set_cast_preview_color(mi, col)
+	var ground_y := Config.GROUND_FX_Y
+	var self_pos := Vector3(global_position.x, ground_y, global_position.z)
+	# 瞄准方向：桌面=鼠标地面点；移动端=拖拽方向（未拖时取面朝方向）
+	var aim_dir := Vector3(sin(rotation.y), 0.0, cos(rotation.y))
+	if touch_aiming:
+		if drag.length() > 12.0:
+			aim_dir = Vector3(drag.x, 0.0, drag.y).normalized()
+	elif get_viewport() != null:
+		var md: Vector3 = _screen_ray_world(get_viewport().get_mouse_position()) - global_position
+		md.y = 0.0
+		if md.length() > 0.2:
+			aim_dir = md.normalized()
+	arrow_preview.visible = false
+	aoe_fill.visible = false
+	impact_ring.visible = false
+	cast_range_ring.visible = false
+	if _foot_sigil != null and is_instance_valid(_foot_sigil):
+		_foot_sigil.visible = true
+	match sk.skill_name:
+		"闪现":
+			var land := global_position + aim_dir * 5.0
+			arrow_preview.visible = true
+			arrow_shaft.position = Vector3(0, 0, 2.5)
+			arrow_shaft.scale = Vector3(0.9, 1.0, 5.0)
+			arrow_head.position = Vector3(0, 0, 5.0)
+			arrow_preview.global_position = self_pos + Vector3(0, 0.025, 0)
+			arrow_preview.global_rotation.y = atan2(aim_dir.x, aim_dir.z)
+			impact_ring.visible = true
+			impact_ring.global_position = Vector3(land.x, ground_y + 0.01, land.z)
+			impact_ring.scale = Vector3.ONE
+		"终结", "惩击":
+			var rng: float = 5.0 if sk.skill_name == "终结" else 3.0
+			var aim_pos := global_position + aim_dir * rng
+			cast_range_ring.visible = true
+			cast_range_ring.global_position = self_pos + Vector3(0, 0.02, 0)
+			cast_range_ring.scale = Vector3(rng, rng, rng)
+			aoe_fill.visible = true
+			MeshFactory.set_cast_area_mode(aoe_fill, 1)
+			aoe_fill.global_position = Vector3(aim_pos.x, ground_y, aim_pos.z)
+			aoe_fill.scale = Vector3(1.2, 1, 1.2)
+		"晕眩", "弱化", "治疗术":
+			var rad: float = 3.0 if sk.skill_name == "治疗术" else 5.0
+			aoe_fill.visible = true
+			MeshFactory.set_cast_area_mode(aoe_fill, 0)
+			aoe_fill.global_position = self_pos
+			aoe_fill.scale = Vector3(rad, 1, rad)
+			impact_ring.visible = true
+			impact_ring.global_position = self_pos + Vector3(0, 0.01, 0)
+			impact_ring.scale = Vector3(rad, 1, rad)
+		_:
+			pass   # 疾跑/狂暴/净化/传送：仅脚下法阵提示（传送在小地图选点）
+
+
 func _handle_skill_input(delta):
 	if Input.is_key_pressed(KEY_CTRL):
 		return
+	_summoner_preview_on = false
+	# 召唤师技能施法预览：按住召唤师按钮/键（且没在按技能）时，复用技能同一套地面指示器
+	# 注意不能提前 return：召唤师技能的施放走本函数末尾（移动端松手/桌面 just_pressed）
+	if summoner_skill != null and summoner_cooldown <= 0.0 and not is_ai:
+		var sk_held := false
+		for i in range(3):
+			if i < skills.size() and skill_levels[i] >= 1 \
+					and (TouchController.get_skill_held(i) or Input.is_action_pressed("skill_%d" % i)):
+				sk_held = true
+				break
+		if not sk_held:
+			var sum_touch := TouchController.get_summoner_held()
+			if sum_touch or Input.is_action_pressed("summoner_spell"):
+				_summoner_preview_on = true
+				_update_summoner_preview(TouchController.get_summoner_drag(), sum_touch)
 	var any_held = false
 	var held_index = -1
 	for i in range(3):
@@ -3051,6 +3848,8 @@ func _handle_skill_input(delta):
 	# 预览控制
 	if any_held and held_index < skills.size():
 		if skill_cast_ready(held_index):
+			aim_slot = held_index
+			aim_world = target_pos
 			# 预览配色跟随英雄元素色（技能 1/2/3 依次偏向副元素）
 			var pv_key := "%s|%d" % [display_name, held_index]
 			if pv_key != _pv_color_key:
@@ -3058,12 +3857,18 @@ func _handle_skill_input(delta):
 				var pv_col: Color = Vfx.color_for_hero(display_name)
 				if held_index > 0:
 					pv_col = pv_col.lerp(Vfx.color2_for_hero(display_name), 0.16 * held_index)
-				for mi in [cast_range_ring, aoe_fill, arrow_shaft, arrow_head]:
+				for mi in [cast_range_ring, aoe_fill, impact_ring, arrow_shaft, arrow_head]:
 					MeshFactory.set_cast_preview_color(mi, pv_col)
+			# 任何技能进入瞄准/预览：脚底浮现法阵（随英雄移动，跟随朝向旋转）
+			if _foot_sigil != null and is_instance_valid(_foot_sigil):
+				_foot_sigil.visible = true
 			var dir = target_pos - global_position
 			var dist = dir.length()
 			var angle_y = atan2(dir.x, dir.z) if dist > 0.01 else 0.0
-			var ground_y = 0.05
+			var ground_y := Config.GROUND_FX_Y
+			var radius: float = maxf(skill.radius, 0.0)
+			var aim_pos := Vector3(target_pos.x, ground_y, target_pos.z)
+			impact_ring.visible = false
 			
 			if display_name == "东皇太一" and held_index == 1:
 				_show_donghuang_w_preview(target_pos)
@@ -3073,51 +3878,89 @@ func _handle_skill_input(delta):
 			elif skill.type == 1:   # 范围技能：柔光落点 + 双层范围圈
 				aoe_fill.visible = true
 				MeshFactory.set_cast_area_mode(aoe_fill, 0)
-				aoe_fill.global_position = Vector3(target_pos.x, ground_y, target_pos.z)
-				aoe_fill.scale = Vector3(skill.radius, 1, skill.radius)
-				cast_range_ring.visible = true
+				aoe_fill.global_position = aim_pos
+				aoe_fill.scale = Vector3(radius, 1, radius)
+				cast_range_ring.visible = skill.cast_range > 0.0
 				cast_range_ring.global_position = Vector3(global_position.x, ground_y + 0.02, global_position.z)
 				cast_range_ring.scale = Vector3(skill.cast_range, skill.cast_range, skill.cast_range)
 				arrow_preview.visible = false
-			elif skill.type == 3: # 线性技能：贴地能量带，长度=子弹最远飞行距离
+			elif skill.type == 3: # 线性技能：贴地能量带，长度=子弹最远飞行距离；有半径则补落点圈
 				var arrow_len = skill.bullet_range if skill.bullet_range > 0 else skill.cast_range
 				arrow_preview.visible = true
 				arrow_shaft.position = Vector3(0, 0, arrow_len * 0.5)
 				arrow_shaft.scale = Vector3(0.9, 1.0, arrow_len)
 				arrow_head.position = Vector3(0, 0, arrow_len)
-				arrow_preview.global_position = Vector3(global_position.x, 0.075, global_position.z)
+				arrow_preview.global_position = Vector3(global_position.x, ground_y + 0.025, global_position.z)
 				arrow_preview.global_rotation.y = angle_y
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
-			elif skill.type == 4: # 位移技能：贴地能量带，长度=位移最远距离
+				if radius > 0.0:
+					impact_ring.visible = true
+					impact_ring.global_position = aim_pos + Vector3(0, 0.01, 0)
+					impact_ring.scale = Vector3(radius, 1, radius)
+			elif skill.type == 4: # 位移技能：贴地能量带，长度=位移最远距离；有半径则补落点圈
 				var dash_len = skill.self_displacement if skill.self_displacement > 0 else skill.cast_range
 				arrow_preview.visible = true
 				arrow_shaft.position = Vector3(0, 0, dash_len * 0.5)
 				arrow_shaft.scale = Vector3(0.9, 1.0, dash_len)
 				arrow_head.position = Vector3(0, 0, dash_len)
-				arrow_preview.global_position = Vector3(global_position.x, 0.075, global_position.z)
+				arrow_preview.global_position = Vector3(global_position.x, ground_y + 0.025, global_position.z)
 				arrow_preview.global_rotation.y = angle_y
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
-			else:   # 目标类：始终显示施法范围圈 + 瞄准点标记（桌面按住技能键也有预览）
+				if radius > 0.0:
+					impact_ring.visible = true
+					impact_ring.global_position = aim_pos + Vector3(0, 0.01, 0)
+					impact_ring.scale = Vector3(radius, 1, radius)
+			elif skill.type == 2 or skill.type == 6:
+				# 增益/护盾：有半径的（吕布R/太乙Q/小乔R/刘禅R）补落点范围；
+				# 纯自身增益用脚下柔光，不再显示误导性的瞄准准星。
+				arrow_preview.visible = false
+				if radius > 0.0:
+					aoe_fill.visible = false
+					impact_ring.visible = true
+					impact_ring.global_position = aim_pos + Vector3(0, 0.01, 0)
+					impact_ring.scale = Vector3(radius, 1, radius)
+				else:
+					aoe_fill.visible = true
+					MeshFactory.set_cast_area_mode(aoe_fill, 0)
+					aoe_fill.global_position = Vector3(global_position.x, ground_y, global_position.z)
+					aoe_fill.scale = Vector3(1.6, 1, 1.6)
+				cast_range_ring.visible = skill.cast_range > 0.0
+				cast_range_ring.global_position = Vector3(global_position.x, ground_y + 0.02, global_position.z)
+				cast_range_ring.scale = Vector3(skill.cast_range, skill.cast_range, skill.cast_range)
+			else:   # 目标类：施法范围圈 + 瞄准准星；有半径则叠加命中范围
 				arrow_preview.visible = false
 				aoe_fill.visible = true
 				MeshFactory.set_cast_area_mode(aoe_fill, 1)
 				aoe_fill.scale = Vector3(1.2, 1, 1.2)
-				aoe_fill.global_position = Vector3(target_pos.x, 0.05, target_pos.z)
-				cast_range_ring.visible = true
-				cast_range_ring.global_position = Vector3(global_position.x, 0.07, global_position.z)
+				aoe_fill.global_position = aim_pos
+				if radius > 0.0:
+					impact_ring.visible = true
+					impact_ring.global_position = aim_pos + Vector3(0, 0.01, 0)
+					impact_ring.scale = Vector3(radius, 1, radius)
+				cast_range_ring.visible = skill.cast_range > 0.0
+				cast_range_ring.global_position = Vector3(global_position.x, ground_y + 0.02, global_position.z)
 				cast_range_ring.scale = Vector3(skill.cast_range, skill.cast_range, skill.cast_range)
 		else:
+			aim_slot = -1
 			_hide_donghuang_w_preview()
 			arrow_preview.visible = false
 			aoe_fill.visible = false
+			impact_ring.visible = false
 			cast_range_ring.visible = false
+			if _foot_sigil != null and is_instance_valid(_foot_sigil):
+				_foot_sigil.visible = false
 	else:
-		_hide_donghuang_w_preview()
-		arrow_preview.visible = false
-		aoe_fill.visible = false
-		cast_range_ring.visible = false
+		aim_slot = -1
+		if not _summoner_preview_on:
+			_hide_donghuang_w_preview()
+			arrow_preview.visible = false
+			aoe_fill.visible = false
+			impact_ring.visible = false
+			cast_range_ring.visible = false
+			if _foot_sigil != null and is_instance_valid(_foot_sigil):
+				_foot_sigil.visible = false
 	# 引导技能释放（键盘/桌面：按住瞄准、松开施放；移动端由下方 consume_skill_release 统一处理）
 	if not touch_aiming:
 		if any_held and held_index < skills.size():
@@ -3496,6 +4339,10 @@ func _try_walk_attack() -> void:
 	attack_timer = 1.0 / attack_speed
 
 func _start_casting(index: int, skill: Skill, target_pos: Vector3):
+	aim_slot = -1   # 松手施放：小地图瞄准线立即消失
+	# AI 回城引导中禁止施法（玩家施法/移动会取消回城，AI 直接不允许动作）
+	if is_ai and is_recalling:
+		return
 	# 前摇期间重复按技能键忽略（不重置 pending / 不叠加前摇）
 	if casting_skill and _cast_windup_left > 0.0:
 		return
@@ -3620,10 +4467,18 @@ func _finish_casting():
 	if display_name == "元流之子" and pending_skill_index == 1:
 		var yl_dash_dir := last_move_dir
 		if yl_dash_dir.length() > 0.1:
-			global_position += yl_dash_dir.normalized() * 2.5
-			global_position.y = 0.5
+			var yl_end: Vector3 = global_position + yl_dash_dir.normalized() * 2.5
+			yl_end.y = 0.5
+			dash_move_to(yl_end, 0.14, "sprint")
 	#print(pending_skill_index)
 	var pos = pending_skill_target
+	# 右下角索敌头像锁定：锁定目标在施法范围内时，普攻与技能统一以此为目标/落点
+	# （增益/位移/护盾类不吃锁定，避免把保命技能甩到敌人身上）
+	if manual_target and is_instance_valid(manual_target) and manual_target.health > 0 \
+			and manual_target is GameEntity and skill.type != 2 and skill.type != 4 and skill.type != 6:
+		var _lk_dist: float = global_position.distance_to(manual_target.global_position)
+		if _lk_dist <= maxf(skill.cast_range, attack_range * 0.01) + manual_target.body_radius + 2.0:
+			pos = manual_target.global_position
 	# P0/P1：技能真正出手表现（签名大招查 SpellFxTable，其余走通用元素爆发；伤害时序不变）
 	var _cast_fwd := Vector3(sin(rotation.y), 0.0, cos(rotation.y))
 	Vfx.play_spell(display_name, pending_skill_index, global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, skill, _cast_fwd, not is_ai)	
@@ -3648,13 +4503,14 @@ func _finish_casting():
 			else:
 				pos = Vector3.ZERO
 				
-		4:  # 位移
+		4:  # 位移：几帧内快速滑到落点 + 冲刺动作（不再瞬移）
 			
 			var dir = (pos - global_position).normalized()
 			if dir.length() < 0.1: dir = Vector3.FORWARD
 			
-			global_position += dir * skill.self_displacement
-			global_position.y=0.5
+			var dash_end: Vector3 = global_position + dir * skill.self_displacement
+			dash_end.y = 0.5
+			dash_move_to(dash_end, 0.16, "sprint")
 		6:  # 护盾
 			shield_remaining = max(shield_remaining, skill.shield_amount)
 			shield_timer = skill.duration
@@ -3783,6 +4639,8 @@ func _finish_casting():
 		apply_flat_move_buff("machao_speed", 5.0, 4.7+0.45*level)
 func _use_summoner(aim_dir: Vector2 = Vector2.ZERO):
 	if not summoner_skill or summoner_cooldown > 0: return
+	# AI 回城引导中禁止使用召唤师技能
+	if is_ai and is_recalling: return
 	var cd = summoner_skill.cooldown
 	if equipment_slots.has("cd_boots"):
 		cd /= (1.0 + 0.10 + level * 0.007)
@@ -3790,9 +4648,13 @@ func _use_summoner(aim_dir: Vector2 = Vector2.ZERO):
 		"闪现":
 			# 方向：优先召唤师按钮拖拽轮盘；其次当前移动方向（摇杆/键鼠）；兜底面朝
 			var _flash_from := global_position
-			global_position += _resolve_flash_dir(aim_dir) * 5.0
+			var _flash_to := clamp_dash_landing(_resolve_flash_dir(aim_dir), 5.0)
+			_flash_to.y = 0.5
 			Vfx.cast_burst(display_name, _flash_from + Vector3.UP * 1.0, Vector3.UP, 0.7)
-			Vfx.cast_burst(display_name, global_position + Vector3.UP * 1.0, Vector3.UP, 0.8)
+			Vfx.cast_burst(display_name, _flash_to + Vector3.UP * 1.0, Vector3.UP, 0.8)
+			# 5 米在 6~8 帧内滑过去（仍是闪现手感，但不是「啪」地瞬移）
+			Vfx.dash_fx(_flash_from, _flash_to, Vfx.color_for_hero(display_name), not is_ai, 5.0)
+			dash_move_to(_flash_to, 0.11, "jump")
 			Vfx.camera_shake(0.04, 0.16)
 		"疾跑":
 			_cleanse()
@@ -3861,6 +4723,24 @@ func _use_summoner(aim_dir: Vector2 = Vector2.ZERO):
 func _resolve_flash_dir(aim_dir: Vector2) -> Vector3:
 	if aim_dir.length() > 20.0:
 		return Vector3(aim_dir.x, 0, aim_dir.y).normalized()
+	# 轻点闪现：智能寻敌 → 朝锁定目标/最近敌方英雄方向
+	if PlayerPrefs.opt_int("flash_dir", 0) == 1:
+		var tgt: GameEntity = null
+		if manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
+			tgt = manual_target
+		else:
+			var best_d := 8.0
+			for e in get_tree().get_nodes_in_group("heroes"):
+				if e is Hero and e != self and e.team != team and e.health > 0 and not (e as Hero).is_invisible_to_enemy():
+					var d: float = global_position.distance_to(e.global_position)
+					if d < best_d:
+						best_d = d
+						tgt = e
+		if tgt != null:
+			var to_t: Vector3 = tgt.global_position - global_position
+			to_t.y = 0.0
+			if to_t.length() > 0.2:
+				return to_t.normalized()
 	var jv := TouchController.get_move_vector()
 	if jv.length() > 0.1:
 		return Vector3(jv.x, 0, -jv.y).normalized()
@@ -3924,9 +4804,20 @@ func upgrade_skill(slot: int) -> bool:
 	skill_points -= 1
 	_recalculate_attributes()   # 技能等级影响被动（如铠永久移速）→ 重算同步
 	return true
+# 第4技能（兰陵王·隐匿等真实第4技能槽）：统一在英雄 4 级自动解锁；
+# 固定 1 级、不消耗技能点、不需要“+”升级钮（与其他 1/2/3 技能的手动升级区分）。
+func _check_fourth_skill_unlock() -> void:
+	if level < 4 or skills.size() <= 3 or skill_levels.size() <= 3:
+		return
+	if skills[3] == null or skill_levels[3] >= 1:
+		return
+	skill_levels[3] = 1
+	_recalculate_attributes()
+
 func level_up():
 	skill_points+=1
 	level += 1
+	_check_fourth_skill_unlock()
 	# 时之预言：升级后3秒内回复20%生命和法力
 	if equipment_slots.has("prophecy_of_time"):
 		apply_regen(actual_max_health * 0.2 / 3.0, actual_mana_max * 0.2 / 3.0, 3.0, "prophecy")
@@ -4024,12 +4915,12 @@ func _sync_tagged_entry(tag: String, active: bool, fields: Dictionary):
 		entry["_tag"] = tag
 		active_buffs.append(entry)
 
-# 地图边界钳制：泉水小院（基地角，泉水圆心 ±62）允许走出边界 5 米，方便走进泉水
+# 地图边界钳制：统一到 Config.MAP_EDGE_LIMIT；泉水小院（泉水圆心 ±62）允许再向外到 ±62.5
 func _clamp_to_map_edge() -> void:
-	var half: float = Config.MAP_SIZE / 2.0
+	var half: float = Config.MAP_EDGE_LIMIT
 	var spring := Vector3(-62, 0, 62) if team == Config.Team.PLAYER else Vector3(62, 0, -62)
 	if global_position.distance_to(spring) <= 7.5:
-		half += 2.5
+		half += 1.3
 	global_position.x = clampf(global_position.x, -half, half)
 	global_position.z = clampf(global_position.z, -half, half)
 
@@ -4270,7 +5161,7 @@ func yingrui_elbow(target_pos: Vector3) -> void:
 			_cc_burst(ent)
 			if ent is Hero:
 				yingrui_add_stack()
-	global_position = new_pos
+	dash_move_to(new_pos, 0.13, "")
 	# 肘击冲击环视觉
 	var ring = MeshInstance3D.new()
 	var rm = TorusMesh.new()
@@ -4561,9 +5452,9 @@ const HERO_MODEL_MAP = {
 	# 特殊英雄 (5) — 复用底座 + 配件区分
 	"东皇太一": ["res://model/hero/character-male-a.glb", "res://model/hero/aid-mask.glb"],
 	"马超":     ["res://model/hero/character-male-b.glb", ""],
-	"狄仁杰":   ["res://model/hero/wheelchair.glb", "res://model/hero/aid-glasses.glb"],
-	"马可波罗": ["res://model/hero/wheelchair-power.glb", "res://model/hero/aid-sunglasses.glb"],
-	"太乙真人": ["res://model/hero/wheelchair-deluxe.glb", "res://model/hero/aid-cane.glb"],
+	"狄仁杰":   ["res://model/hero/character-male-c.glb", "res://model/hero/aid-glasses.glb"],
+	"马可波罗": ["res://model/hero/character-male-d.glb", "res://model/hero/aid-sunglasses.glb"],
+	"太乙真人": ["res://model/hero/character-male-f.glb", "res://model/hero/aid-cane.glb"],
 	"鲁班七号": ["res://model/hero/character-male-a.glb", ""],
 	"夏侯惇": ["res://model/hero/character-male-a.glb", ""],
 	"后羿": ["res://model/hero/character-male-a.glb", ""],
@@ -4572,6 +5463,8 @@ const HERO_MODEL_MAP = {
 	"大禹": ["res://model/hero/character-male-a.glb", ""],
 	"孙悟空": ["res://model/hero/character-male-a.glb", ""],
 "刘禅":     ["res://model/hero/character-male-b.glb", ""],
+	# 英睿：男战士底座 + 程序化签名道具（耳机/冰红茶/背包 LabiB），大招换等身 LabiB 毛绒形态（HeroYingrui.gd）
+	"英睿":     ["res://model/hero/character-male-d.glb", ""],
 
 }
 
@@ -4590,8 +5483,15 @@ func _load_hero_model() -> Node3D:
 	# 英雄模型总放大×3.0（原已×2.0，再×1.5；张飞变身倍率在 visual_mesh 上独立叠加）
 	instance.scale = Vector3(3.0, 3.0, 3.0)
 	root.add_child(instance)
+	# 轮椅英雄：角色本体 + 座椅（本体上抬并切坐姿，避免只剩一把椅子）
+	if HeroWeapons.is_wheelchair_hero(display_name):
+		HeroWeapons.mount_wheelchair(root, instance, display_name, 3.0)
 	# 专属武器（程序化建模，按英雄名区分造型）
 	HeroWeapons.attach(instance, display_name, attack_range * 0.01)
+	# 英睿：签名道具（耳机 / 挂腰冰红茶 / 背包小 LabiB），米制坐标挂在 HeroModel 根（同 aid-mask 配件做法）
+	if display_name == "英睿":
+		yingrui_body = instance
+		HeroYingrui.attach_props(root)
 	# 查找动画播放器
 	anim_player = _find_anim_player(instance)
 	if anim_player:
@@ -4602,6 +5502,12 @@ func _load_hero_model() -> Node3D:
 		if acc:
 			var acc_instance = acc.instantiate()
 			root.add_child(acc_instance)
+			# 轮椅英雄：辅具按坐姿重新摆位（配件是米制尺寸，原本挂在模型根原点=贴地）
+			if HeroWeapons.is_wheelchair_hero(display_name):
+				if display_name == "太乙真人":
+					acc_instance.position = Vector3(0.62, 0.0, 0.30)   # 手杖立在轮椅旁
+				else:
+					acc_instance.position = Vector3(0.0, 1.10, 0.10)  # 眼镜/墨镜架在面部高度
 	return root
 
 
@@ -4655,4 +5561,4 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		spike_bullet.life_time = 1.5
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
-			await get_tree().create_timer(0.11).timeout
+			await get_tree().create_timer(0.15).timeout

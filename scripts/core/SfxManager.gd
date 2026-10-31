@@ -41,7 +41,7 @@ const BUS_SFX := "SFX"
 const BUS_UI := "UI"
 const BUS_MUSIC := "Music"
 const BUS_NAMES := [BUS_ANNOUNCER, BUS_SFX, BUS_UI, BUS_MUSIC]
-const UI_SFX_KEYS := ["coin", "buy", "sell", "ui_click"]
+const UI_SFX_KEYS := ["coin", "last_hit", "buy", "sell", "ui_click"]
 
 # 通道/音量常量（dB）；-40 当作淡出静音位
 const VOL_DB_OFF := -40.0
@@ -136,6 +136,8 @@ const _SYNTH := {
 	"levelup":  {"kind": "arp", "notes": [523.25, 659.25, 783.99, 1046.5], "step": 0.075, "dur": 0.38, "vol": 0.30},
 	"heal":     {"kind": "arp", "notes": [659.25, 880.0, 1046.5], "step": 0.07, "dur": 0.36, "vol": 0.27},
 	"coin":     {"kind": "metal", "f0": 1975.5, "dur": 0.30, "vol": 0.32},
+	# 补刀：更短、更高、起音带高频点击，和普通金币音区分开
+	"last_hit": {"kind": "crisp_coin", "f0": 2637.0, "dur": 0.18, "vol": 0.34},
 	"buy":      {"kind": "bell", "f0": 880.0, "dur": 0.16, "vol": 0.22, "decay": 5.0, "harmonic": 1.5},
 	"sell":     {"kind": "bell", "f0": 587.33, "dur": 0.16, "vol": 0.20, "decay": 6.0, "harmonic": 1.5},
 	"ui_click": {"kind": "bell", "f0": 1320.0, "dur": 0.06, "vol": 0.15, "decay": 8.0, "harmonic": 2.0},
@@ -149,7 +151,7 @@ const _SYNTH := {
 }
 
 # 同类短音最小间隔（ms）：受击/金币/施法连续触发时防糊成一片
-const _SFX_MIN_GAP := {"hurt": 320, "coin": 90, "heal": 400, "crit": 140, "ui_click": 45}
+const _SFX_MIN_GAP := {"hurt": 320, "coin": 90, "last_hit": 65, "heal": 400, "crit": 140, "ui_click": 45}
 
 # 英雄专属技能音色（其余按元素+技能类型动态合成）：小乔 Q 回旋扇 / R 流星
 const _SKILL_SFX_OVERRIDE := {
@@ -902,6 +904,21 @@ func _render_synth(cfg: Dictionary, key: String) -> AudioStreamWAV:
 			if bright and t > 0.58:
 				var dt3 := t - 0.58
 				s += (sin(TAU * 1046.5 * t) + sin(TAU * 1568.0 * t) * 0.5) * 0.10 * exp(-6.0 * dt3)
+		elif kind == "crisp_coin":
+			# 补刀金币：高频清脆主音 + 极短金属泛音 + 瞬态噪声点击，快速收尾
+			var hit := exp(-34.0 * t)
+			if t > 0.035:
+				hit += exp(-48.0 * (t - 0.035)) * 0.32
+			phase += TAU * f0 / float(rate)
+			phase2 += TAU * f0 * 2.01 / float(rate)
+			var p3 := TAU * f0 * 3.01 * t
+			var ns := rng.randf_range(-1.0, 1.0)
+			lp = lp * 0.30 + ns * 0.70
+			var hp := ns - lp
+			s = (sin(phase) * 0.55 + sin(phase2) * 0.24 + sin(p3) * 0.10) * hit
+			s += hp * 0.30 * exp(-120.0 * t)
+			s += sin(TAU * f0 * 4.10 * t) * 0.05 * exp(-55.0 * t)
+			env = minf(1.0, t / 0.0007)
 		elif kind == "metal":
 			# 金币/硬币：非谐金属分音（基频+2.756+5.404）+ 三次快速撞击 + 高频碎响
 			var hits := exp(-13.0 * t)

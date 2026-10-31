@@ -291,7 +291,9 @@ func _process(delta):
 
 	# --- 恢复 ---
 	if hero.skill_cooldowns[4] <= 0:
-		if hero.health < hero.actual_max_health * AiConfig.HEALTH_SAFE or hero.mana < hero.actual_mana_max * AiConfig.HEALTH_SAFE:
+		# 张飞的「蓝」由狂意值驱动（HeroPassive 每帧回写），泉水无法回复，不能按普通蓝量判断
+		var need_mana: bool = hero.display_name != "张飞" and hero.mana < hero.actual_mana_max * AiConfig.HEALTH_SAFE
+		if hero.health < hero.actual_max_health * AiConfig.HEALTH_SAFE or need_mana:
 			_try_use_recover()
 
 	# --- 血包（泉水养伤时不抢血包，否则会半血跑出泉） ---
@@ -310,6 +312,9 @@ func _process(delta):
 	if state == State.RECALL_SAFE or state == State.RETREAT:
 		return
 
+	# --- 视野之灵：友方 AI 捡金币，敌方 AI 近身 1 米压制 5 秒 ---
+	if _try_vision_spirit_contact():
+		return
 
 	# --- 近身目标技能 ---
 	if hero.manual_target and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0:
@@ -344,6 +349,13 @@ func _decide():
 
 	# P1: 本线防御塔防御（外塔/内塔）
 	if _handle_lane_turret_defense():
+		return
+
+	# 敌方大禹治疗鼎：在交战范围内就顺手拆掉（否则残血敌人会被持续奶回来）
+	var enemy_pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
+	if enemy_pot:
+		hero.manual_target = enemy_pot
+		state = State.PUSH
 		return
 
 	# 泉水养伤：在自家泉水范围内血/蓝没回到阈值前不出门（原来只要血量>2000 就走，等于半血出门）
@@ -432,6 +444,45 @@ func apply_team_lane(new_lane: int) -> void:
 			jungle_strategy.pending_lane = new_lane
 		elif not _is_natural_jungler and lane_strategy:
 			lane_strategy.pending_lane = new_lane
+
+# ==================== 视野之灵交互 ====================
+# 友方 AI：未领奖的视野之灵在附近时主动走过去触碰（10 金币）。
+# 敌方 AI：已进入草丛提供视野的视野之灵在附近时，走到 1 米内站定，累计 5 秒将其逼退。
+func _try_vision_spirit_contact() -> bool:
+	var tree := hero.get_tree()
+	if tree == null:
+		return false
+	if hero.health < hero.actual_max_health * 0.45:
+		return false
+	# 附近有敌方英雄时优先战斗，不绕路去碰视野之灵
+	if perception.count_enemy_heroes_near(7.0) > 0:
+		return false
+	var best = null
+	var best_d := INF
+	var best_friendly := false
+	for s in tree.get_nodes_in_group("vision_spirits"):
+		if not is_instance_valid(s):
+			continue
+		var friendly: bool = s.team == hero.team
+		if friendly and s.gold_claimed:
+			continue
+		if not friendly and not s.vision_active:
+			continue
+		var d: float = hero.global_position.distance_to(s.global_position)
+		if d < best_d:
+			best_d = d
+			best = s
+			best_friendly = friendly
+	if best == null:
+		return false
+	var max_range := 24.0 if best_friendly else 18.0
+	if best_d > max_range:
+		return false
+	hero.manual_target = null
+	# 0.8 米内站定，确保进入视野之灵的 1 米判定圈
+	hero.move_target = hero.global_position if best_d <= 0.8 else best.global_position
+	state = State.PUSH
+	return true
 
 # ==================== 六维指标计算 ====================
 
@@ -636,9 +687,11 @@ func _try_use_recover():
 	if hero.skills.size() < 4:
 		return
 	var idx = 4
-	if hero.skill_cooldowns[idx] <= 0 and hero.mana >= hero.skills[idx].mana_cost:
-		if hero.health < hero.actual_max_health * AiConfig.HEALTH_SAFE or hero.mana < hero.actual_mana_max * AiConfig.HEALTH_SAFE:
-			hero._start_casting(4, hero.skills[4], hero.global_position)
+	if hero.skill_cooldowns[idx] > 0 or hero.mana < hero.skills[idx].mana_cost:
+		return
+	var low_mana := hero.display_name != "张飞" and hero.mana < hero.actual_mana_max * AiConfig.HEALTH_SAFE
+	if hero.health < hero.actual_max_health * AiConfig.HEALTH_SAFE or low_mana:
+		hero._start_casting(4, hero.skills[4], hero.global_position)
 
 
 # ==================== 安全回城 ====================
@@ -655,21 +708,27 @@ func _recall_safe_behavior(delta):
 		if _fully_recovered():
 			_assign_lane()
 		return
+	# 读条中敌人压过来（AI 读条期间不能动）：立刻取消，换到别的安全点再回城
+	if hero.is_recalling \
+			and perception.count_enemy_heroes_near(AiConfig.RECALL_DANGER_RADIUS) > 0:
+		hero.cancel_recall()
 	var safe_pos = _find_safe_recall_spot()
-	if safe_pos != Vector3.ZERO:
-		if hero.global_position.distance_to(safe_pos) > 2.0:
-			hero.move_target = safe_pos
-		else:
-			if not hero.is_recalling:
-				hero.start_recall()
-	else:
-		_move_to_friendly_turret()
+	if safe_pos == Vector3.ZERO:
+		_leave_recall_spot()
+		return
+	if hero.global_position.distance_to(safe_pos) > 2.0:
+		hero.move_target = safe_pos
+	elif not hero.is_recalling:
+		hero.start_recall()
 
 
 # 泉水养伤是否完成：血量（有蓝英雄再加蓝量）都回到 HEALTH_RECOVERED 才算满
 func _fully_recovered() -> bool:
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECOVERED:
 		return false
+	# 张飞不消耗/回复普通蓝，蓝条由狂意值回写，泉水永远回不满；只看血量即可离泉
+	if hero.display_name == "张飞":
+		return true
 	if hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.HEALTH_RECOVERED:
 		return false
 	return true
@@ -678,11 +737,57 @@ func _fully_recovered() -> bool:
 
 
 func _find_safe_recall_spot() -> Vector3:
-	var turret = perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_FAR)
+	# 只在塔区/草丛附近没有敌方英雄时选点：读条 7 秒，敌人贴脸就会被打断甚至带走
+	var turret := _pick_safe_recall_turret()
 	if turret and is_instance_valid(turret):
 		var dir = (hero.global_position - turret.global_position).normalized()
 		return turret.global_position + dir * 2
-	return perception.find_nearest_bush(AiConfig.FRIENDLY_TURRET_FAR)
+	var bush := perception.find_nearest_bush(AiConfig.FRIENDLY_TURRET_FAR)
+	if bush != Vector3.ZERO and not _recall_point_threatened(bush):
+		return bush
+	return Vector3.ZERO
+
+
+# 回城塔：离自己最近、且塔周围没有敌方英雄
+func _pick_safe_recall_turret() -> Turret:
+	var tree := hero.get_tree()
+	if tree == null:
+		return null
+	var best: Turret = null
+	var best_d: float = AiConfig.FRIENDLY_TURRET_FAR + 1.0
+	for entity in tree.get_nodes_in_group("turrets"):
+		if not is_instance_valid(entity) or not (entity is Turret):
+			continue
+		var t := entity as Turret
+		if t.health <= 0.0 or t.team != hero.team:
+			continue
+		var d: float = hero.global_position.distance_to(t.global_position)
+		if d > AiConfig.FRIENDLY_TURRET_FAR or d >= best_d:
+			continue
+		if _recall_point_threatened(t.global_position):
+			continue
+		best_d = d
+		best = t
+	return best
+
+
+# 该位置附近（RECALL_SPOT_CLEAR 内）有没有敌方英雄
+func _recall_point_threatened(pos: Vector3) -> bool:
+	return perception.count_enemy_heroes_near_center(pos, AiConfig.RECALL_SPOT_CLEAR) > 0
+
+
+# 己方塔区全被敌人压着：背向最近的敌人退开，等敌人走了再回城（不原地读条送人头）
+func _leave_recall_spot() -> void:
+	hero.manual_target = null
+	var threat := perception.find_nearest_enemy_hero(AiConfig.RECALL_SPOT_CLEAR)
+	if threat == null or not is_instance_valid(threat):
+		_move_to_friendly_turret()
+		return
+	var away: Vector3 = hero.global_position - threat.global_position
+	away.y = 0.0
+	if away.length() < 0.01:
+		away = Vector3.BACK
+	hero.move_target = hero.global_position + away.normalized() * 8.0
 
 # ==================== 技能使用 ====================
 func _try_use_skills(target: GameEntity):
@@ -874,3 +979,17 @@ func _handle_lane_turret_defense() -> bool:
 		hero.manual_target = attacker
 	state = State.PUSH
 	return true
+
+
+## 最近的敌方大禹治疗鼎（大招乾鼎不可攻击，跳过）
+func _find_enemy_tripod(max_dist: float) -> Tripod:
+	var best: Tripod = null
+	var best_d := max_dist
+	for t in get_tree().get_nodes_in_group("tripods"):
+		if not (t is Tripod) or t.health <= 0 or t.team == hero.team or t.is_r_tripod:
+			continue
+		var d: float = hero.global_position.distance_to(t.global_position)
+		if d < best_d:
+			best_d = d
+			best = t
+	return best

@@ -14,6 +14,9 @@ var all_heroes: Array = []
 var team_player_heroes: Array = []
 var team_enemy_heroes: Array = []
 var current_tab: int = 0
+var _rank_result: Dictionary = {}
+var _self_is_mvp := false
+var _gauges: Array = []
 
 # ==================== Tab 控件 ====================
 var tab_buttons: Array = []
@@ -110,6 +113,12 @@ func setup(battle: BattleManager):
 	team_player_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
 	team_enemy_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
 
+	# 段位结算：单机结算唯一入口（原代码读 bm.rank_result，但 BattleManager 上没有这个字段）
+	if _rank_result.is_empty():
+		var mp := _find_mvp(team_player_heroes)
+		_self_is_mvp = mp != null and is_instance_valid(bm.hero) and mp == bm.hero
+		_rank_result = RankSystem.apply_result(Config.is_ally(bm.winner), _self_is_mvp)
+
 	_create_ui()
 
 func _create_ui():
@@ -135,11 +144,11 @@ func _create_ui():
 	var main_vbox = VBoxContainer.new()
 	main_vbox.anchor_right = 1.0
 	main_vbox.anchor_bottom = 1.0
-	main_vbox.add_theme_constant_override("separation", 14)
-	main_vbox.offset_top = 32
-	main_vbox.offset_bottom = -32
-	main_vbox.offset_left = 32
-	main_vbox.offset_right = -32
+	main_vbox.add_theme_constant_override("separation", 8)
+	main_vbox.offset_top = 24
+	main_vbox.offset_bottom = -24
+	main_vbox.offset_left = 24
+	main_vbox.offset_right = -24
 	add_child(main_vbox)
 
 	# ---------------- 顶部标题区 ----------------
@@ -193,6 +202,8 @@ func _create_ui():
 	top_bar.add_child(return_btn)
 
 	# ---------------- Tab 按钮行：居中但整体拉满，三个 tab 等分 ----------------
+	main_vbox.add_child(_build_reward_band())
+
 	var tab_bar = HBoxContainer.new()
 	tab_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	tab_bar.add_theme_constant_override("separation", 16)
@@ -280,9 +291,9 @@ func _create_overview_tab():
 	scroll.anchor_bottom = 1.0
 	overview_panel.add_child(scroll)
 
-	# 内容不足一屏时垂直居中，超高时自动滚动
+	# 内容不足一屏时垂直居中，超高时从顶部开始（避免首行卡片被切）
 	var vwrap = VBoxContainer.new()
-	vwrap.alignment = BoxContainer.ALIGNMENT_CENTER
+	vwrap.alignment = BoxContainer.ALIGNMENT_BEGIN
 	vwrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(vwrap)
 
@@ -297,7 +308,7 @@ func _create_overview_tab():
 
 	# ---- 我方列（占满左半区，卡片随之横向拉伸）----
 	var blue_col = VBoxContainer.new()
-	blue_col.add_theme_constant_override("separation", 8)
+	blue_col.add_theme_constant_override("separation", 6)
 	blue_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	blue_col.add_child(_make_team_header("我方", BLUE_TEAM, team_player_heroes, false))
 	for hero in team_player_heroes:
@@ -309,7 +320,7 @@ func _create_overview_tab():
 
 	# ---- 敌方列 ----
 	var red_col = VBoxContainer.new()
-	red_col.add_theme_constant_override("separation", 8)
+	red_col.add_theme_constant_override("separation", 6)
 	red_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	red_col.add_child(_make_team_header("敌方", RED_TEAM, team_enemy_heroes, true))
 	for hero in team_enemy_heroes:
@@ -489,7 +500,7 @@ func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	var team_color = RED_TEAM if is_enemy else BLUE_TEAM
 	var card = Panel.new()
 	# 高度随整体字号缩放（118 基准保证 5 张卡整屏可见）；宽度下限 480，由所在列拉伸铺满
-	card.custom_minimum_size = Vector2(480, int(118 * _ui_scale()))
+	card.custom_minimum_size = Vector2(480, int(114 * _ui_scale()))
 
 	var style = _box_style(
 		Color(0.05, 0.08, 0.16, 0.72) if not is_enemy else Color(0.2, 0.05, 0.06, 0.72),
@@ -714,6 +725,7 @@ func _create_data_tab():
 	_apply_label_style(hs, UiKit.FS_XS, Color(0.6, 0.65, 0.75))
 	head.add_child(hs)
 	root.add_child(head)
+	root.add_child(_build_gauge_row())
 
 	var scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1216,3 +1228,338 @@ class GoldChart extends Control:
 		if abs_val >= 1000:
 			return ("%.1fk" % (val / 1000.0)) if val >= 0 else ("-%.1fk" % (abs_val / 1000.0))
 		return str(int(val))
+
+
+# ==================== 战利品结算带（段位/星条/积分 + 本局评价 + 灵宝点评） ====================
+
+const LingbaoStoreScript = preload("res://scripts/core/LingbaoStore.gd")
+
+func _build_reward_band() -> Control:
+	var is_win: bool = Config.is_ally(bm.winner)
+	var rs: Dictionary = _rank_result.get("new_state", RankSystem.state()) if not _rank_result.is_empty() else RankSystem.state()
+	var old_state: Dictionary = _rank_result.get("old_state", rs) if not _rank_result.is_empty() else rs
+	var tier: int = clampi(int(rs.get("tier", 0)), 0, RankSystem.KING_INDEX)
+	var tcol: Color = RankSystem.tier_color(rs)
+
+	var band := Panel.new()
+	band.name = "RewardBand"
+	band.custom_minimum_size = Vector2(0, 80)
+	band.add_theme_stylebox_override("panel",
+		_box_style(Color(0.06, 0.075, 0.12, 0.9), Color(tcol.r, tcol.g, tcol.b, 0.42), 1, 12))
+	var hb := HBoxContainer.new()
+	_fill(hb, band, 18, 6, 18, 6)
+	hb.add_theme_constant_override("separation", 24)
+
+	# 1) 段位 + 星条
+	var c1 := VBoxContainer.new()
+	c1.add_theme_constant_override("separation", 2)
+	c1.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	hb.add_child(c1)
+	var r1 := HBoxContainer.new()
+	r1.add_theme_constant_override("separation", 8)
+	c1.add_child(r1)
+	var cap := Label.new()
+	cap.text = "排位"
+	_apply_label_style(cap, UiKit.FS_XS, UiKit.C_TEXT_DIM)
+	cap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r1.add_child(cap)
+	var rn := Label.new()
+	rn.text = str(_rank_result.get("new_label", RankSystem.label(rs)))
+	_apply_label_style(rn, UiKit.FS_MD, tcol.lightened(0.22))
+	rn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	r1.add_child(rn)
+	var stars_now: int = int(rs.get("stars", 0))
+	var stars_old: int = int(old_state.get("stars", 0))
+	if tier >= RankSystem.KING_INDEX:
+		var kl := Label.new()
+		kl.text = "★ ×%d" % stars_now
+		_apply_label_style(kl, UiKit.FS_SM, UiKit.C_GOLD)
+		kl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		r1.add_child(kl)
+	else:
+		var srow := HBoxContainer.new()
+		srow.add_theme_constant_override("separation", 1)
+		r1.add_child(srow)
+		for i in range(mini(int(RankSystem.TIER_STARS[tier]), 8)):
+			var lit: bool = i < stars_now
+			var s := Label.new()
+			s.text = "★"
+			_apply_label_style(s, UiKit.FS_SM, UiKit.C_GOLD if lit else Color(0.34, 0.37, 0.44))
+			s.add_theme_constant_override("outline_size", 0)
+			if lit and i >= stars_old:
+				s.modulate.a = 0.0
+				var t0 := create_tween()
+				t0.tween_interval(0.35 + 0.10 * float(i))
+				t0.tween_property(s, "modulate:a", 1.0, 0.26)
+			srow.add_child(s)
+	var delta_txt := ""
+	var sc := int(_rank_result.get("star_change", 0))
+	if bool(_rank_result.get("promoted", false)):
+		delta_txt = "晋升"
+	elif bool(_rank_result.get("demoted", false)):
+		delta_txt = "降级"
+	elif bool(_rank_result.get("protected", false)):
+		delta_txt = "保星"
+	elif bool(_rank_result.get("floor_protected", false)):
+		delta_txt = "段位保护"
+	elif sc > 0:
+		delta_txt = "+%d★" % sc
+	elif sc < 0:
+		delta_txt = "%d★" % sc
+	if delta_txt != "":
+		var dl := Label.new()
+		dl.text = delta_txt
+		_apply_label_style(dl, UiKit.FS_SM, UiKit.C_GOLD if sc >= 0 else UiKit.C_DANGER)
+		dl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		r1.add_child(dl)
+	var p_old: int = int(old_state.get("points", 0))
+	var p_new: int = int(rs.get("points", 0))
+	var pl := Label.new()
+	pl.text = "勇者积分 %d/%d" % [p_new, RankSystem.MAX_POINTS]
+	_apply_label_style(pl, UiKit.FS_XS, UiKit.C_TEXT_DIM)
+	c1.add_child(pl)
+
+	# 2) 积分条（旧值 → 新值填充）
+	var c2 := VBoxContainer.new()
+	c2.add_theme_constant_override("separation", 6)
+	c2.custom_minimum_size = Vector2(300, 0)
+	c2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(c2)
+	var pcap := Label.new()
+	pcap.text = "勇者积分进度"
+	_apply_label_style(pcap, UiKit.FS_XS, UiKit.C_TEXT_DIM)
+	c2.add_child(pcap)
+	var bar_bg := Panel.new()
+	bar_bg.custom_minimum_size = Vector2(0, 16)
+	bar_bg.add_theme_stylebox_override("panel",
+		_box_style(Color(0.10, 0.12, 0.18, 0.95), Color(1, 1, 1, 0.08), 1, 8))
+	c2.add_child(bar_bg)
+	var bar_fill := Panel.new()
+	bar_fill.add_theme_stylebox_override("panel",
+		_box_style(UiKit.C_GOLD, UiKit.C_GOLD.lightened(0.25), 0, 8))
+	bar_fill.anchor_top = 0.0
+	bar_fill.anchor_bottom = 1.0
+	bar_fill.offset_top = 2.0
+	bar_fill.offset_bottom = -2.0
+	bar_fill.offset_left = 2.0
+	bar_fill.anchor_right = clampf(float(p_old) / float(RankSystem.MAX_POINTS), 0.0, 1.0)
+	bar_bg.add_child(bar_fill)
+	var tw := create_tween()
+	tw.tween_interval(0.40)
+	tw.tween_property(bar_fill, "anchor_right",
+		clampf(float(p_new) / float(RankSystem.MAX_POINTS), 0.0, 1.0), 0.7)
+
+	# 3) 本局结算 + 成就
+	var hero: Hero = bm.hero if is_instance_valid(bm.hero) else null
+	var c3 := HBoxContainer.new()
+	c3.add_theme_constant_override("separation", 8)
+	c3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	c3.alignment = BoxContainer.ALIGNMENT_CENTER
+	hb.add_child(c3)
+	var grade := "—"
+	var grade_col: Color = UiKit.C_TEXT_DIM
+	if hero != null:
+		c3.add_child(_make_stat_chip("金", GOLD_COLOR, _format_gold(int(hero.total_gold_earned))))
+		c3.add_child(_make_stat_chip("级", Color(0.55, 0.80, 1.0), "Lv.%d" % int(hero.level)))
+		var score := _calculate_rating(hero)
+		grade = _rating_grade(score)
+		grade_col = _rating_grade_color(score)
+	var gl := Label.new()
+	gl.text = "评价"
+	_apply_label_style(gl, UiKit.FS_XS, UiKit.C_TEXT_DIM)
+	gl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	c3.add_child(gl)
+	var gv := Label.new()
+	gv.text = grade
+	_apply_label_style(gv, UiKit.FS_LG, grade_col)
+	gv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	c3.add_child(gv)
+	for a in _achievements():
+		c3.add_child(_tag_label(str(a), UiKit.C_GOLD, Color(0.12, 0.09, 0.03), 0, true))
+
+	# 4) 灵宝点评（单行，超长省略）
+	var c4 := HBoxContainer.new()
+	c4.add_theme_constant_override("separation", 8)
+	c4.custom_minimum_size = Vector2(430, 0)
+	c4.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hb.add_child(c4)
+	var lbn := Label.new()
+	lbn.text = "%s：" % LingbaoStoreScript.name()
+	_apply_label_style(lbn, UiKit.FS_SM, Color(0.72, 0.84, 1.0))
+	lbn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	c4.add_child(lbn)
+	var lbt := Label.new()
+	lbt.text = _lingbao_line(is_win, _self_is_mvp, grade)
+	lbt.clip_text = true
+	lbt.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	lbt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lbt.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_apply_label_style(lbt, UiKit.FS_SM, Color(0.88, 0.93, 1.0))
+	c4.add_child(lbt)
+
+	band.modulate.a = 0.0
+	var tw2 := create_tween()
+	tw2.tween_property(band, "modulate:a", 1.0, 0.35)
+	return band
+
+
+func _achievements() -> Array:
+	var out: Array = []
+	var h: Hero = bm.hero if is_instance_valid(bm.hero) else null
+	if h == null:
+		return out
+	if int(h.kills) >= 10:
+		out.append("超神")
+	if int(h.deaths) == 0:
+		out.append("零死")
+	if int(h.assists) >= 15:
+		out.append("团队核心")
+	if float(h.turret_damage) >= 8000.0:
+		out.append("推塔机器")
+	if float(h.damage_dealt_to_heroes) >= 30000.0:
+		out.append("团战核心")
+	if float(h.healing_done) >= 8000.0:
+		out.append("团队奶妈")
+	return out
+
+
+func _lingbao_line(win: bool, mvp: bool, grade: String) -> String:
+	if win and mvp:
+		return "带飞全场！我就知道你能行～"
+	if win and (grade == "S" or grade == "A"):
+		return "这局打得漂亮，我在旁边都看呆了！"
+	if win:
+		return "赢啦赢啦，下一把继续冲～"
+	if mvp:
+		return "你已经尽力了，输了不怪你～"
+	if grade == "S" or grade == "A":
+		return "数据这么好还输，队友拖累了吧…"
+	return "这把对面太肥了，咱们下把赢回来！"
+
+
+# ==================== 仪表盘（对位双环） ====================
+
+func _team_agg(heroes: Array) -> Dictionary:
+	var k := 0
+	var d := 0
+	var asst := 0
+	var gold := 0
+	var dmg := 0.0
+	var taken := 0.0
+	var tower := 0.0
+	for h in heroes:
+		if not is_instance_valid(h):
+			continue
+		k += int(h.kills)
+		d += int(h.deaths)
+		asst += int(h.assists)
+		gold += int(h.total_gold_earned)
+		dmg += float(h.damage_dealt_to_heroes)
+		taken += float(h.damage_taken_from_heroes)
+		tower += float(h.turret_damage)
+	var mins := maxf(0.5, float(bm.game_time) / 60.0)
+	return {
+		"kills": k, "deaths": d, "assists": asst, "gold": gold,
+		"gpm": float(gold) / mins, "dmg": dmg, "taken": taken, "tower": tower,
+		"kda": float(k + asst) / maxf(1.0, float(d)),
+	}
+
+
+func _fmt_short(v: float) -> String:
+	if v >= 10000.0:
+		return "%.1f万" % (v / 10000.0)
+	if v >= 100.0:
+		return "%d" % int(round(v))
+	return "%.1f" % v
+
+
+func _build_gauge_row() -> Control:
+	var a := _team_agg(team_player_heroes)
+	var b := _team_agg(team_enemy_heroes)
+	var defs := [
+		["总击杀", float(a["kills"]), float(b["kills"])],
+		["经济/分", float(a["gpm"]), float(b["gpm"])],
+		["对英雄输出", float(a["dmg"]), float(b["dmg"])],
+		["承受伤害", float(a["taken"]), float(b["taken"])],
+		["推塔伤害", float(a["tower"]), float(b["tower"])],
+		["团队KDA", float(a["kda"]), float(b["kda"])],
+	]
+	var row := HBoxContainer.new()
+	row.name = "GaugeRow"
+	row.add_theme_constant_override("separation", 10)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_gauges.clear()
+	for i in range(defs.size()):
+		var dd: Array = defs[i]
+		var va := float(dd[1])
+		var vb := float(dd[2])
+		var mx := maxf(va, vb)
+		var g := RingGauge.new()
+		g.label = str(dd[0])
+		g.txt_a = _fmt_short(va)
+		g.txt_b = _fmt_short(vb)
+		g.val_a = 0.0 if mx <= 0.0 else va / mx
+		g.val_b = 0.0 if mx <= 0.0 else vb / mx
+		g.delay = 0.20 + 0.06 * float(i)
+		row.add_child(g)
+		_gauges.append(g)
+	return row
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	var k := (event as InputEventKey).keycode
+	if k == KEY_ENTER or k == KEY_KP_ENTER:
+		get_viewport().set_input_as_handled()
+		_on_play_again()
+	elif k == KEY_ESCAPE:
+		get_viewport().set_input_as_handled()
+		_on_return()
+
+
+class RingGauge extends Control:
+	var label := ""
+	var txt_a := ""
+	var txt_b := ""
+	var val_a := 0.0
+	var val_b := 0.0
+	var delay := 0.0
+	var col_a: Color = Color(0.25, 0.85, 1.0)
+	var col_b: Color = Color(1.0, 0.40, 0.32)
+	var t := 0.0
+
+	func _usc() -> float:
+		return clampf(get_viewport().get_visible_rect().size.x / 2400.0, 1.0, 1.2) * 1.7
+
+	func _ready() -> void:
+		custom_minimum_size = Vector2(196, 196)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tw := create_tween()
+		tw.tween_interval(delay)
+		tw.tween_method(_on_t, 0.0, 1.0, 0.7)
+
+	func _on_t(v: float) -> void:
+		t = v
+		queue_redraw()
+
+	func _draw() -> void:
+		var f: float = minf(size.x, size.y)
+		var c := size * 0.5
+		var r_out := f * 0.40
+		var r_in := r_out * 0.72
+		var w := f * 0.075
+		draw_arc(c, r_out, 0.0, TAU, 56, Color(1, 1, 1, 0.07), w, true)
+		draw_arc(c, r_in, 0.0, TAU, 56, Color(1, 1, 1, 0.05), w * 0.85, true)
+		if val_a > 0.001:
+			draw_arc(c, r_out, -PI * 0.5, -PI * 0.5 + TAU * clampf(val_a * t, 0.0, 1.0), 56, col_a, w, true)
+		if val_b > 0.001:
+			draw_arc(c, r_in, -PI * 0.5, -PI * 0.5 + TAU * clampf(val_b * t, 0.0, 1.0), 56, col_b, w * 0.85, true)
+		var s1 := int(round(22.0 * _usc()))
+		var s2 := int(round(11.0 * _usc()))
+		UiKit.text(self, c + Vector2(-size.x * 0.5, s1 * 0.36), txt_a, s1, Color(0.97, 0.98, 1.0),
+			HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		UiKit.text(self, c + Vector2(-size.x * 0.5, s1 * 0.36 + s2 * 1.5), label, s2,
+			Color(0.70, 0.78, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		UiKit.text(self, c + Vector2(-size.x * 0.5, s1 * 0.36 + s2 * 2.9), "敌 " + txt_b, s2,
+			Color(col_b.r, col_b.g, col_b.b, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)

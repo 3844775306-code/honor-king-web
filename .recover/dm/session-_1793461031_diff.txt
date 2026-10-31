@@ -1,0 +1,133 @@
++++ b/scripts/core/BattleManager.gd
++var spectate_hero: Hero = null   # 阵亡后点击复活条队友时的观战目标（UI 读取）
++## 阵亡观战：复活条点击存活队友时记录目标，供 UI 高亮/后续镜头扩展；传 null 取消
++func set_spectate_target(target: Hero) -> void:
++	spectate_hero = target if is_instance_valid(target) else null
++
++++ b/scripts/mobile/SkillTouchButton.gd
++# 主动装备图标（非空时画程序化装备图案：品质色圆角底 + 该装备专属几何纹样，与商店/推荐装同款）
++var item_name := ""
++var item_tier := 1
++# 状态动效：技能冷却结束的一圈清亮“就绪”波纹；升级时一圈金色爆闪；
++# 可升级期间技能图标外沿持续金色呼吸，和上方升级键的旋转光弧互相呼应。
++const READY_ANIM_TIME := 0.55
++const UPGRADE_ANIM_TIME := 0.65
++var upgrade_ready := false       # TouchController 每帧推送：当前技能可升级
++var _ready_anim := 0.0
++var _upgrade_anim := 0.0
++var _upgrade_ready_t := 0.0
++var _prev_cd_ratio := 0.0
++var _last_skill_level := -1
++
++var _held_time := 0.0            # 本次按住时长：读数只在真正瞄准时出现，避免点按闪字
++	_held_time = _held_time + delta if _active else 0.0
++	if upgrade_ready:
++		_upgrade_ready_t += delta
++	# 冷却从有到无：触发一次“就绪”波纹（只在刚结束冷却时触发，开局/学技能不闪）
++	var learned := skill_level > 0 or max_level == 0
++	var ready_now := learned and cd_ratio <= 0.001 and not in_window and not blocked and mana_ok
++	if ready_now and _prev_cd_ratio > 0.02:
++		_ready_anim = READY_ANIM_TIME
++	_prev_cd_ratio = cd_ratio
++	# 技能等级上升：金色爆闪（首次设置等级不触发）
++	if skill_level != _last_skill_level:
++		if _last_skill_level >= 0 and skill_level > _last_skill_level:
++			_upgrade_anim = UPGRADE_ANIM_TIME
++		_last_skill_level = skill_level
++	var animating := _ready_anim > 0.0 or _upgrade_anim > 0.0 or upgrade_ready
++	if _ready_anim > 0.0:
++		_ready_anim = maxf(0.0, _ready_anim - delta)
++	if _upgrade_anim > 0.0:
++		_upgrade_anim = maxf(0.0, _upgrade_anim - delta)
++		if animating:
++			queue_redraw()
++				_held_time = 0.0
++				_held_time = 0.0
++	elif item_name != "":
++		# 主动装备：程序化装备图标（品质色底 + 专属纹样），不可用时压暗
++		var ir := radius * 0.80
++		UiKit.item_icon(self, Rect2(center - Vector2(ir, ir), Vector2(ir, ir) * 2.0), item_tier, item_name)
++		if not usable:
++			draw_circle(center, radius, Color(0.02, 0.02, 0.03, 0.52))
++	_draw_state_fx(center, radius, k)
++		_draw_txt(center + Vector2(-radius, 6), "%d" % maxi(1, ceili(win_left)),
++					HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, int(27.0 * k), Color(0.97, 0.94, 0.86))
++		_draw_txt(center + Vector2(-radius, 6), "%d" % secs, HORIZONTAL_ALIGNMENT_CENTER,
++			radius * 2.0, int(27.0 * k), Color(0.97, 0.94, 0.86))
++	# 方案A：常态不显示伤害/效果读数，只在真正按住瞄准时露出；松手立即恢复干净图标
++			and _active and _held_time >= 0.15 and not in_window and not on_cd and not blocked:
++# 状态动效：可升级呼吸金环 / 冷却结束就绪波纹 / 升级瞬间金色爆闪
++func _draw_state_fx(center: Vector2, radius: float, k: float) -> void:
++	if upgrade_ready and not _active:
++		var pulse := 0.5 + 0.5 * sin(_upgrade_ready_t * 4.2)
++		draw_arc(center, radius + 5.0 * k + pulse * 2.0 * k, 0.0, TAU, 48,
++			Color(1.0, 0.84, 0.30, 0.10 + 0.17 * pulse), maxf(1.5, 2.2 * k), true)
++	if _ready_anim > 0.0:
++		var t := 1.0 - _ready_anim / READY_ANIM_TIME
++		var a := (1.0 - t) * (1.0 - t)
++		var rr := radius + (3.0 + t * 12.0) * k
++		draw_arc(center, rr, 0.0, TAU, 48, Color(0.78, 0.95, 1.0, 0.70 * a),
++			maxf(1.0, 2.8 * k * (1.0 - t) + 0.8), true)
++		# 内层微弱提亮，只闪一下，不盖住图标细节
++		draw_circle(center, radius, Color(0.85, 0.97, 1.0, 0.075 * a))
++	if _upgrade_anim > 0.0:
++		var t := 1.0 - _upgrade_anim / UPGRADE_ANIM_TIME
++		var a := 1.0 - t
++		var rr := radius + (4.0 + t * 11.0) * k
++		draw_arc(center, rr, 0.0, TAU, 48, Color(1.0, 0.87, 0.38, 0.82 * a),
++			maxf(1.2, 3.2 * k * a + 0.7), true)
++		for i in range(8):
++			var dir := Vector2.from_angle(TAU * float(i) / 8.0 + 0.2)
++			var p0 := center + dir * (radius + (2.0 + t * 4.0) * k)
++			var p1 := center + dir * (radius + (7.0 + t * 10.0) * k)
++			draw_line(p0, p1, Color(1.0, 0.89, 0.46, 0.72 * a), maxf(1.0, 2.2 * k * a), true)
++
++	# 瞄准读数最多两行效果，其余留给长按详情卡；避免按钮内堆成小作文
++	var fx_items: Array = icon_fx
++	var fx_more := 0
++	if fx_items.size() > 2:
++		fx_more = fx_items.size() - 2
++		fx_items = fx_items.slice(0, 2)
++	var n := fx_items.size()
++		for it in fx_items:
++	for it in fx_items:
++	if fx_more > 0:
++		# 未展开的效果聚合为右下角小徽标，详情卡里可看全
++		var tag := "+%d" % fx_more
++		_draw_txt(Vector2(c.x + R * 0.30, c.y + R * 0.34), tag,
++			HORIZONTAL_ALIGNMENT_CENTER, R * 0.42, int(11.0 * k), Color(0.72, 0.84, 0.95, 0.9))
++	var th := maxf(2.5, 3.2 * k)        # 细环，避免和冷却扇形/伤害读数抢视觉
++			col = Color(1.0, 0.85, 0.32, 0.95)     # 已学的亮金
++			col = Color(0.42, 0.4, 0.36, 0.34)     # 未学的暗段降低存在感
++++ b/scripts/mobile/TouchController.gd
++const HeroArt = preload("res://scripts/ui/HeroArt.gd")
++const SkillArt = preload("res://scripts/ui/SkillArt.gd")
++# 敌人索敌头像条：攻击范围内敌人 ≥2 时，沿技能扇形「外侧」同圆心弧线排布（点击锁定普攻/技能目标）
++const PICKER_MAX := 5
++const PICKER_SIZE := 118.0
++const PICKER_RADIUS := 800.0     # 比技能扇半径 560 再外扩一圈，落在技能键外沿之外
++const PICKER_ANGLE_MIN := 8.0    # 0°=普攻正上方（正方向朝屏幕左侧），与技能扇同角度基准
++const PICKER_ANGLE_MAX := 76.0
++
++var _picker_root: Control = null           # 敌人索敌头像条容器
++var _picker_buttons: Array = []            # 复用的头像按钮池（_EnemyAvatar）
++var _skill_detail_tag: Label = null
++var _skill_detail_icon: Control = null
++var _skill_detail_accent: ColorRect = null
++var _skill_detail_divider: ColorRect = null
++var _skill_detail_section: Label = null
++var _skill_detail_fx_title: Label = null
++var _skill_detail_hint: Label = null
++var _fx_holder: Control = null      # 效果“圆角徽章”的承载体（详情面板下方，普通 Control 手动排布）
++var intro_hidden := false   # 开局运镜期间隐藏全部触摸 HUD
++	Input.set_emulate_touch_from_mouse(not Config.on_mobile())
++	Input.set_emulate_mouse_from_touch(Config.on_mobile())
++		_update_enemy_picker()
++# ---------------- 敌人索敌头像条（技能扇形外侧弧线） ----------------
++
++# 每帧扫描玩家攻击范围内的敌人：≥2 个才出现头像；按距离排序取前 PICKER_MAX 个，
++# 沿与技能扇同圆心、更大半径的弧线布点；高亮 = 当前锁定目标（Hero.manual_target）。
++func _update_enemy_picker():
+[stderr]
+warning: in the working copy of 'scripts/core/BattleManager.gd', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'scripts/mobile/TouchController.gd', CRLF will be replaced by LF the next time Git touches it

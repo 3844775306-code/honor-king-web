@@ -12,6 +12,7 @@ static var _wall_mesh_cache: ArrayMesh = null
 static var _wall_variants: Array = []
 static var _bush_variants: Array = []
 static var _outer_wall_cache: Dictionary = {}
+static var _pillar_mesh: ArrayMesh = null
 
 # ==================== 材质 ====================
 
@@ -371,6 +372,30 @@ static func _build_outer_wall_mesh(length: float) -> ArrayMesh:
 			Vector3(float(i) * 1.7, float(i) * 2.1, 0.0))
 	return st.commit()
 
+## 墙端小柱：连续墙两端收口（基座 + 柱身 + 柱头 + 顶饰），与墙体同一石材质感
+static func pillar_visual() -> Node3D:
+	var root := Node3D.new()
+	root.name = "WallPillar"
+	if _pillar_mesh == null:
+		_pillar_mesh = _build_pillar_mesh()
+	var mi := MeshInstance3D.new()
+	mi.mesh = _pillar_mesh
+	mi.material_override = rock_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(mi)
+	return root
+
+static func _build_pillar_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	_append(st, box, Vector3(0.0, 0.13, 0.0), Vector3(0.66, 0.26, 0.66), Vector3.ZERO)   # 基座
+	_append(st, box, Vector3(0.0, 1.15, 0.0), Vector3(0.44, 1.80, 0.44), Vector3.ZERO)   # 柱身
+	_append(st, box, Vector3(0.0, 2.13, 0.0), Vector3(0.58, 0.16, 0.58), Vector3.ZERO)   # 柱头
+	_append(st, box, Vector3(0.0, 2.31, 0.0), Vector3(0.34, 0.20, 0.34), Vector3.ZERO)   # 顶饰
+	return st.commit()
+
 # ==================== 内部工具 ====================
 
 static func _append(st: SurfaceTool, mesh: Mesh, pos: Vector3, sc: Vector3, rot: Vector3) -> void:
@@ -412,3 +437,338 @@ static func _disc(radius: float, height: float, segs: int) -> CylinderMesh:
 	cm.height = height
 	cm.radial_segments = segs
 	return cm
+
+# ==================== 青砖铺装（防御塔外周地面） ====================
+# 单块薄圆盘 + 世界坐标画砖缝的 shader：不同塔/相邻塔的砖纹能自然接上，且只有 1 个 draw call。
+const _BRICK_CODE := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform vec4 brick_a : source_color = vec4(0.34, 0.43, 0.45, 1.0);
+uniform vec4 brick_b : source_color = vec4(0.25, 0.33, 0.35, 1.0);
+uniform vec4 mortar_col : source_color = vec4(0.14, 0.17, 0.18, 1.0);
+uniform vec4 moss_col : source_color = vec4(0.20, 0.30, 0.18, 1.0);
+uniform float brick_w = 0.86;
+uniform float brick_h = 0.42;
+
+varying vec3 wp;
+
+__NOISE__
+
+void vertex() {
+	wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	vec2 p = vec2(wp.x, wp.z) / vec2(brick_w, brick_h);
+	p.x += mod(floor(p.y), 2.0) * 0.5;
+	vec2 id = floor(p);
+	vec2 f = fract(p);
+	float edge = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+	float mortar = 1.0 - smoothstep(0.02, 0.085, edge);
+	float h = hash13(vec3(id.x, id.y, 3.0));
+	vec3 col = mix(brick_a.rgb, brick_b.rgb, h);
+	col *= 0.86 + 0.26 * hash13(vec3(id.x * 1.7, id.y * 2.3, 11.0));
+	col = mix(col, moss_col.rgb, step(0.88, h) * 0.6);
+	col = mix(col, mortar_col.rgb, mortar * 0.92);
+	ALBEDO = col;
+	ROUGHNESS = mix(0.62, 0.96, mortar);
+	SPECULAR = 0.30;
+}
+"""
+
+static var _pave_mat: ShaderMaterial = null
+static var _pave_meshes: Dictionary = {}
+
+static func brick_material() -> ShaderMaterial:
+	if _pave_mat != null:
+		return _pave_mat
+	var sh := Shader.new()
+	sh.code = _BRICK_CODE.replace("__NOISE__", _NOISE_GLSL)
+	_pave_mat = ShaderMaterial.new()
+	_pave_mat.shader = sh
+	return _pave_mat
+
+## 防御塔外周的青砖圆台（很薄，贴着地面，避免和接地暗影/地形打架）
+static func pave_visual(radius: float) -> Node3D:
+	var key := int(round(radius * 10.0))
+	if not _pave_meshes.has(key):
+		var cm := CylinderMesh.new()
+		cm.top_radius = radius
+		cm.bottom_radius = radius * 1.02
+		cm.height = 0.05
+		cm.radial_segments = 56
+		_pave_meshes[key] = cm
+	var root := Node3D.new()
+	root.name = "TurretPave"
+	var mi := MeshInstance3D.new()
+	mi.mesh = _pave_meshes[key]
+	mi.material_override = brick_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	return root
+
+## 防御塔底座的「圆环状砖」：以塔心为圆心的同心环砖薄环（中间留出塔基洞），
+## 贴地 5cm 厚；顶面高度由调用方给（路面 0.152 / 高地砖面 0.177）。
+static var _pave_ring_meshes: Dictionary = {}
+
+static func turret_ring_pave(center: Vector3, inner_r: float, outer_r: float, top_y: float) -> Node3D:
+	var key := "%d_%d" % [int(round(inner_r * 10.0)), int(round(outer_r * 10.0))]
+	if not _pave_ring_meshes.has(key):
+		_pave_ring_meshes[key] = _build_ring_slab(inner_r, outer_r, 0.05, 84)
+	var root := Node3D.new()
+	root.name = "TurretRingPave"
+	var mi := MeshInstance3D.new()
+	mi.mesh = _pave_ring_meshes[key]
+	# 同心环砖（与高地/兵线擂台同一套极坐标砖纹），中心徽半径设为 0 → 环上无徽记
+	mi.material_override = _ring_brick_double_sided(center, outer_r)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = Vector3(center.x, top_y, center.z)
+	root.add_child(mi)
+	return root
+
+## 圆环薄板：顶面 + 底面 + 内外侧壁（双面材质，绕序不影响可见性）
+static func _build_ring_slab(inner_r: float, outer_r: float, thickness: float, seg: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var top := 0.0
+	var bot := -thickness
+	for i in seg:
+		var a0 := TAU * float(i) / float(seg)
+		var a1 := TAU * float(i + 1) / float(seg)
+		var c0 := Vector2(cos(a0), sin(a0))
+		var c1 := Vector2(cos(a1), sin(a1))
+		# 顶面（法线朝上）
+		st.set_normal(Vector3.UP)
+		st.add_vertex(Vector3(c0.x * inner_r, top, c0.y * inner_r))
+		st.add_vertex(Vector3(c1.x * inner_r, top, c1.y * inner_r))
+		st.add_vertex(Vector3(c0.x * outer_r, top, c0.y * outer_r))
+		st.add_vertex(Vector3(c1.x * inner_r, top, c1.y * inner_r))
+		st.add_vertex(Vector3(c1.x * outer_r, top, c1.y * outer_r))
+		st.add_vertex(Vector3(c0.x * outer_r, top, c0.y * outer_r))
+		# 底面（法线朝下）
+		st.set_normal(Vector3.DOWN)
+		st.add_vertex(Vector3(c0.x * inner_r, bot, c0.y * inner_r))
+		st.add_vertex(Vector3(c0.x * outer_r, bot, c0.y * outer_r))
+		st.add_vertex(Vector3(c1.x * inner_r, bot, c1.y * inner_r))
+		st.add_vertex(Vector3(c1.x * inner_r, bot, c1.y * inner_r))
+		st.add_vertex(Vector3(c0.x * outer_r, bot, c0.y * outer_r))
+		st.add_vertex(Vector3(c1.x * outer_r, bot, c1.y * outer_r))
+		# 外侧壁（法线朝外）/ 内侧壁（法线朝内）
+		for r in [outer_r, inner_r]:
+			var nr: float = 1.0 if r == outer_r else -1.0
+			st.set_normal(Vector3(c0.x * nr, 0.0, c0.y * nr))
+			st.add_vertex(Vector3(c0.x * r, bot, c0.y * r))
+			st.add_vertex(Vector3(c0.x * r, top, c0.y * r))
+			st.add_vertex(Vector3(c1.x * r, bot, c1.y * r))
+			st.add_vertex(Vector3(c1.x * r, bot, c1.y * r))
+			st.add_vertex(Vector3(c0.x * r, top, c0.y * r))
+			st.add_vertex(Vector3(c1.x * r, top, c1.y * r))
+	st.index()
+	return st.commit()
+
+static func _ring_brick_double_sided(center: Vector3, radius: float) -> ShaderMaterial:
+	var mat := ring_brick_material(center, radius, 0.62, 0.0)
+	var sh := (mat.shader as Shader).duplicate() as Shader
+	sh.code = sh.code.replace("render_mode diffuse_burley, specular_schlick_ggx;",
+		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
+	mat.shader = sh
+	return mat
+
+# ==================== 兵线交汇圆形擂台（青砖） ====================
+# 极坐标砖纹：同心环 + 错缝径向砖 + 中心圆徽 + 外圈石沿，单塔只 1 个 draw call。
+const _ARENA_CODE := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform vec2 arena_center = vec2(0.0, 0.0);
+uniform float arena_radius = 7.2;
+uniform vec4 brick_a : source_color = vec4(0.34, 0.43, 0.45, 1.0);
+uniform vec4 brick_b : source_color = vec4(0.25, 0.33, 0.35, 1.0);
+uniform vec4 mortar_col : source_color = vec4(0.14, 0.17, 0.18, 1.0);
+uniform vec4 moss_col : source_color = vec4(0.20, 0.30, 0.18, 1.0);
+uniform vec4 rim_col : source_color = vec4(0.36, 0.34, 0.31, 1.0);
+uniform float ring_w = 0.62;
+uniform float medal_r = 1.52;
+uniform float medal_strength = 0.75;
+
+varying vec3 wp;
+
+__NOISE__
+
+void vertex() {
+	wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	vec2 d = vec2(wp.x - arena_center.x, wp.z - arena_center.y);
+	float r = max(length(d), 0.02);
+	float ridx = floor(r / ring_w);
+	float rt = fract(r / ring_w);
+	float circ = max(6.0, floor(6.2831853 * max(r, 0.6) / 0.90));
+	float ang = atan(d.y, d.x) / 6.2831853;
+	float shift = 0.5 * mod(ridx, 2.0);
+	float at = fract(ang * circ + shift);
+	float arc = 6.2831853 * max(r, 0.6) / circ;
+	float edge = min(min(rt, 1.0 - rt) * ring_w, min(at, 1.0 - at) * arc);
+	float mortar = 1.0 - smoothstep(0.015, 0.075, edge);
+	float h = hash13(vec3(ridx, floor(ang * circ + shift), 9.0));
+	vec3 col = mix(brick_a.rgb, brick_b.rgb, h);
+	col *= 0.87 + 0.24 * hash13(vec3(ridx * 2.1, 3.0, h * 17.0));
+	col = mix(col, moss_col.rgb, step(0.92, h) * 0.45);
+	col = mix(col, mortar_col.rgb, mortar * 0.88);
+	// 中心圆徽
+	float med = 1.0 - smoothstep(medal_r, medal_r + 0.14, r);
+	col = mix(col, mortar_col.rgb * 0.85, med * medal_strength);
+	// 外圈石沿（擂台边）
+	float rim = smoothstep(arena_radius - 0.90, arena_radius - 0.55, r);
+	float rim_tone = 0.82 + 0.30 * hash13(vec3(floor(ang * 48.0), 2.0, 4.0));
+	col = mix(col, rim_col.rgb * rim_tone, rim);
+	ALBEDO = col;
+	ROUGHNESS = mix(0.60, 0.95, max(mortar, rim));
+	SPECULAR = 0.32;
+}
+"""
+
+static var _arena_meshes: Dictionary = {}
+
+## 极坐标青砖材质：以 center 为圆心的同心环砖（radius 只用于画最外圈石沿）
+static func ring_brick_material(center: Vector3, radius: float, ring_w: float = 0.62,
+		medal_r: float = 1.52) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = _ARENA_CODE.replace("__NOISE__", _NOISE_GLSL)
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("arena_center", Vector2(center.x, center.z))
+	mat.set_shader_parameter("arena_radius", radius)
+	mat.set_shader_parameter("ring_w", ring_w)
+	mat.set_shader_parameter("medal_r", medal_r)
+	return mat
+
+## 高地青砖：整体呈以水晶为圆心的同心圆环（去掉外圈石沿与中心徽的强对比）
+static func hq_ring_brick_material(crystal_pos: Vector3) -> ShaderMaterial:
+	var mat := ring_brick_material(crystal_pos, 999.0, 1.05, 4.2)
+	mat.set_shader_parameter("medal_strength", 0.35)
+	return mat
+
+## 兵线交汇处的圆形青砖擂台：薄圆台压住分路路面与河道，顶面略带高差
+static func arena_visual(center: Vector3, radius: float) -> Node3D:
+	var root := Node3D.new()
+	root.name = "LaneArena"
+	var key := int(round(radius * 10.0))
+	if not _arena_meshes.has(key):
+		var cm := CylinderMesh.new()
+		cm.top_radius = radius
+		cm.bottom_radius = radius * 1.015
+		cm.height = 0.26
+		cm.radial_segments = 64
+		_arena_meshes[key] = cm
+	var mi := MeshInstance3D.new()
+	mi.mesh = _arena_meshes[key]
+	mi.material_override = ring_brick_material(center, radius)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position.y = 0.07      # 顶面 ≈ 0.20：压住分路路面(0.14)和河道(0.02)
+	root.add_child(mi)
+	return root
+
+# ==================== 草丛小花 ====================
+static var _flower_mat: StandardMaterial3D = null
+static var _flower_variants: Array = []
+
+static func flower_material() -> StandardMaterial3D:
+	if _flower_mat != null:
+		return _flower_mat
+	_flower_mat = StandardMaterial3D.new()
+	_flower_mat.vertex_color_use_as_albedo = true
+	_flower_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_flower_mat.roughness = 0.65
+	_flower_mat.emission_enabled = true
+	_flower_mat.emission = Color(0.40, 0.32, 0.34)
+	_flower_mat.emission_energy_multiplier = 0.35
+	return _flower_mat
+
+## 草丛里的小花：几朵低面数花朵（顶点色），整丛共用一份网格，1 个 draw call
+static func flower_visual(seed_val: int = 0) -> Node3D:
+	var slot: int = absi(seed_val) % 4
+	while _flower_variants.size() <= slot:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 9173 + _flower_variants.size() * 15486071
+		_flower_variants.append(_build_flower_mesh(rng))
+	var root := Node3D.new()
+	root.name = "BushFlowers"
+	var mi := MeshInstance3D.new()
+	mi.mesh = _flower_variants[slot]
+	mi.material_override = flower_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	return root
+
+static func _build_flower_mesh(rng: RandomNumberGenerator) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var palette := [
+		Color(0.95, 0.62, 0.78), Color(0.96, 0.94, 0.88),
+		Color(0.84, 0.72, 0.98), Color(0.99, 0.86, 0.45),
+	]
+	for i in range(9):
+		var a: float = rng.randf_range(0.0, TAU)
+		var d: float = sqrt(rng.randf()) * 0.62
+		var y: float = rng.randf_range(0.62, 1.22)
+		var c := Vector3(cos(a) * d, y, sin(a) * d)
+		var size := rng.randf_range(0.17, 0.27)
+		_add_flat_quad(st, c, size, rng.randf_range(0.0, TAU), rng.randf_range(-0.30, 0.30), palette[i % palette.size()])
+		_add_flat_quad(st, c + Vector3(0.0, 0.025, 0.0), size * 0.55,
+			rng.randf_range(0.0, TAU), rng.randf_range(-0.35, 0.35), Color(0.99, 0.92, 0.48))
+	return st.commit()
+
+## 水平小四边形（两面可见）：花瓣/花心用
+static func _add_flat_quad(st: SurfaceTool, c: Vector3, size: float, rot_y: float, tilt: float, col: Color) -> void:
+	var basis := Basis(Vector3.UP, rot_y) * Basis(Vector3.RIGHT, tilt)
+	var n := (basis * Vector3.UP).normalized()
+	var h := size * 0.5
+	var corners := [Vector3(-h, 0, -h), Vector3(h, 0, -h), Vector3(h, 0, h), Vector3(-h, 0, h)]
+	for idx in [0, 1, 2, 0, 2, 3]:
+		st.set_color(col)
+		st.set_normal(n)
+		st.set_uv(Vector2(0.5, 0.5))
+		st.add_vertex(basis * corners[idx] + c)
+
+# ==================== 墙体装饰（常春藤垂挂 + 顶部苔草） ====================
+static var _wall_decor_variants: Array = []
+
+## 连续墙上的绿色装饰：垂下来的常春藤团 + 压顶苔草，与墙同叶材质、随风摆动
+static func wall_decor_visual(seed_val: int = 0) -> Node3D:
+	var slot: int = absi(seed_val) % 3
+	while _wall_decor_variants.size() <= slot:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 6011 + _wall_decor_variants.size() * 7717
+		_wall_decor_variants.append(_build_wall_decor_mesh(rng))
+	var root := Node3D.new()
+	root.name = "WallDecor"
+	var mi := MeshInstance3D.new()
+	mi.mesh = _wall_decor_variants[slot]
+	mi.material_override = leaf_material()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	return root
+
+static func _build_wall_decor_mesh(rng: RandomNumberGenerator) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var blob := _leaf_blob()
+	# 墙面垂藤：贴着正/反墙面，从上往下越来越小
+	for i in range(6):
+		var side: float = 1.0 if rng.randf() < 0.5 else -1.0
+		var x: float = rng.randf_range(-0.78, 0.78)
+		var y: float = rng.randf_range(0.95, 2.20)
+		var rr: float = rng.randf_range(0.15, 0.28)
+		_append(st, blob, Vector3(x, y, side * 0.46),
+			Vector3(rr, rr * rng.randf_range(0.75, 1.25), rr * 0.65),
+			Vector3(rng.randf_range(-0.4, 0.4), rng.randf_range(0.0, TAU), rng.randf_range(-0.4, 0.4)))
+	# 压顶苔草
+	for i in range(4):
+		var x2: float = rng.randf_range(-0.80, 0.80)
+		var rr2: float = rng.randf_range(0.12, 0.22)
+		_append(st, blob, Vector3(x2, 2.52, rng.randf_range(-0.30, 0.30)),
+			Vector3(rr2, rr2 * 0.55, rr2), Vector3(0.0, rng.randf_range(0.0, TAU), 0.0))
+	return st.commit()

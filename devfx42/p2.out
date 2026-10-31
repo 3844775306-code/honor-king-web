@@ -1,0 +1,22 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[Debug] AI路径球显示已开启（F4切换）
+[Debug] 击杀奖励调试日志已开启（BattleManager.debug_kill_rewards）
+[A*]己 马超: (-60,60)->(-40,20) 路点40 终点(-40,20) 目标移动 0.1ms 标记0格
+[A*]己 安琪拉: (-60,60)->(-49,49) 路点13 终点(-49,49) 目标移动 0.1ms 标记0格
+[A*]己 马可波罗: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]己 大禹: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]敌 马超: (60,-60)->(40,-20) 路点40 终点(40,-20) 目标移动 0.1ms 标记0格
+[A*]敌 王昭君: (60,-60)->(13,-16) 路点48 终点(13,-16) 目标移动 0.1ms 标记0格
+[A*]敌 鲁班七号: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+[A*]敌 亚瑟: (60,-60)->(-19,-47) 路点79 终点(-19,-47) 目标移动 0.1ms 标记0格
+[A*]敌 大禹: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+L vp=(2400.0, 2400.0) panel_grect=[P: (849.0, 830.0), S: (702.0, 756.0)] anchL=0.50 offL=-351.00 size=(702.0, 756.0)
+L row1 rect=[P: (24.0, 300.0), S: (472.0, 38.0)] screen=(1200.0, 1260.65)
+L expanded=-1
+L pager screen=(1492.95, 846.2) pages=1
+L hit_page=0
+ERROR: 32 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.

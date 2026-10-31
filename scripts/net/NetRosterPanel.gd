@@ -78,6 +78,7 @@ func _row_from_net(r: Array) -> Dictionary:
 		"chips": r[22] if r.size() > 22 else [],
 		"skills": r[27] if r.size() > 27 else [],
 		"lane": int(r[26]) if r.size() > 26 else -1,
+		"mark": int(r[28]) if r.size() > 28 else 0,
 		"equips": eq,
 	}
 

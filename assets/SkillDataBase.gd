@@ -9,6 +9,9 @@ var bpos_valid: bool = false
 func _ready():
 	_init_skills()
 func apply_skills(hero:Hero,skill_id: int,pos):
+	# 所有技能效果统一抬到地面以上（野区起伏/分路/高地/泉水），预览与实体落点一致
+	if pos is Vector3 and pos != Vector3.ZERO:
+		pos = Vfx.ground_pos(pos)
 	var level = hero.skill_levels[skill_id-1]
 	match hero.display_name:
 		"狄仁杰":match  skill_id:
@@ -349,23 +352,27 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 		"沈梦溪":match  skill_id:
 			1:
 				# 猫咪炸弹（按住技能轮盘连续投掷）：按下即开始、0.75秒一发、实时跟随轮盘方向；
-				# 松开轮盘 / 弹药用尽 / 连发满5枚即停。AI 无轮盘，整轮投完。
+				# 松开轮盘 / 弹药用尽 / 连发满5枚即停。AI 无轮盘，同样按 0.75 秒节奏投完。
+				# 防重入：一轮连发未结束时再次施放直接忽略，避免两条协程并发 → 同一时刻多枚炸弹叠在同一目标上
+				if hero.shen_barrage_active:
+					return
+				hero.shen_barrage_active = true
 				hero.apply_flat_move_buff("shenmengxi_boost", float(min(5, hero.stat)), 48 + 12 * level)
 				var shen_shots: int = mini(5, int(hero.stat))
 				var shen_fired: int = 0
 				var shen_preview: Node3D = null
 				while shen_fired < shen_shots and hero.stat > 0.0:
-					if shen_fired > 0 and not hero.is_ai:
-						# 每0.75秒一发；松开技能轮盘/键盘即停止连发（已发保留、剩余炸弹不消耗）
-						if not (TouchController.get_skill_held(0) or Input.is_action_pressed("skill_0")):
-							break
+					if shen_fired > 0:
+						# 每0.75秒一发（AI 与玩家同一节奏，不能一帧内把整轮炸弹全砸出去）
 						if not is_instance_valid(hero) or hero.health <= 0:
 							break
+						if not hero.is_ai and not (TouchController.get_skill_held(0) or Input.is_action_pressed("skill_0")):
+							break   # 松开技能轮盘/键盘即停止连发（已发保留、剩余炸弹不消耗）
 						await hero.get_tree().create_timer(0.75).timeout
 						if not is_instance_valid(hero) or hero.health <= 0:
 							break
 						# 松开发生在等待期间：补一次判定，避免松手后仍多发一枚
-						if not (TouchController.get_skill_held(0) or Input.is_action_pressed("skill_0")):
+						if not hero.is_ai and not (TouchController.get_skill_held(0) or Input.is_action_pressed("skill_0")):
 							break
 					if not is_instance_valid(hero) or hero.health <= 0:
 						break
@@ -387,6 +394,8 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					bullet.set_goal(aim)
 					hero.get_parent().add_child(bullet)
 					shen_fired += 1
+				if is_instance_valid(hero):
+					hero.shen_barrage_active = false
 				if is_instance_valid(hero) and is_instance_valid(shen_preview):
 					await hero.get_tree().create_timer(0.7).timeout
 					if is_instance_valid(shen_preview):
@@ -890,13 +899,43 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					hero.zhangfei_q_active = true; hero.zhangfei_q_angle = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
 					hero.zhangfei_q_timer = 0.5; hero.zhangfei_q_elapsed = 0.0
 					hero.zhangfei_q_dmg = 464 + 116 * level + hero.bonus_attack * 1.45
+					# 横扫长枪：加色发光枪身 + 枪尖锥 + 双层光带（替代灰色柱）
 					hero.zhangfei_q_mesh = MeshInstance3D.new(); hero.zhangfei_q_mesh.mesh = CylinderMesh.new()
-					hero.zhangfei_q_mesh.mesh.top_radius = 0.2; hero.zhangfei_q_mesh.mesh.bottom_radius = 0.2
+					hero.zhangfei_q_mesh.mesh.top_radius = 0.16; hero.zhangfei_q_mesh.mesh.bottom_radius = 0.16
 					hero.zhangfei_q_mesh.mesh.height = 3.0
-					var qmat = StandardMaterial3D.new(); qmat.albedo_color = Color.GRAY
+					hero.zhangfei_q_mesh.mesh.radial_segments = 12
+					var qmat = StandardMaterial3D.new()
+					qmat.albedo_color = Color(1.0, 0.78, 0.45)
+					qmat.emission_enabled = true; qmat.emission = Color(1.0, 0.55, 0.18)
+					qmat.emission_energy_multiplier = 1.8
 					qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					qmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					qmat.albedo_color.a = 0.85
+					qmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 					hero.zhangfei_q_mesh.material_override = qmat
+					# 枪尖
+					var q_tip = MeshInstance3D.new()
+					var q_cone = CylinderMesh.new()
+					q_cone.top_radius = 0.0; q_cone.bottom_radius = 0.26; q_cone.height = 0.7
+					q_cone.radial_segments = 12
+					q_tip.mesh = q_cone
+					q_tip.position.y = 1.85
+					var q_tip_mat = StandardMaterial3D.new()
+					q_tip_mat.albedo_color = Color(1.0, 0.95, 0.75)
+					q_tip_mat.emission_enabled = true; q_tip_mat.emission = Color(1.0, 0.85, 0.45)
+					q_tip_mat.emission_energy_multiplier = 2.6
+					q_tip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					q_tip_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+					q_tip.material_override = q_tip_mat
+					hero.zhangfei_q_mesh.add_child(q_tip)
+					# 中段环绕光带
+					for qi in range(2):
+						var q_ring := MeshFactory.create_torus_ring(0.26, 0.34, Color(1.0, 0.8, 0.4, 0.7), true, 0.7, true)
+						q_ring.position.y = -0.9 + 1.2 * float(qi)
+						hero.zhangfei_q_mesh.add_child(q_ring)
 					hero.get_parent().add_child(hero.zhangfei_q_mesh)
+					Vfx.attach_trail(hero.zhangfei_q_mesh, Color(1.0, 0.62, 0.22), 0.26, 0.22, 8)
+					Vfx.hit_spark(hero.global_position + Vector3.UP * 1.2, Color(1.0, 0.7, 0.35), Vector3.UP, 1.1)
 					hero.zhangfei_mana = min(hero.zhangfei_mana + 3, 100); hero.mana = hero.zhangfei_mana
 			2:
 				var ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
@@ -923,30 +962,26 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 			3:
 				hero.zhangfei_transformed = true; hero.zhangfei_transform_timer = 15.0
 				hero.apply_zhangfei_form_visual()   # 变身：模型放大+脚下金色Buff光环
-				var r_vis = MeshInstance3D.new(); r_vis.mesh = CylinderMesh.new()
-				r_vis.mesh.top_radius = 1.5; r_vis.mesh.bottom_radius = 1.5; r_vis.mesh.height = 5.0
-				r_vis.position = hero.global_position + Vector3(0, 2.5, 0)
-				var rmat = StandardMaterial3D.new(); rmat.albedo_color = Color.GOLD
-				rmat.emission_enabled = true; rmat.emission = Color.GOLD
-				rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; rmat.albedo_color.a = 0.5
-				r_vis.material_override = rmat; hero.get_parent().add_child(r_vis)
-				var tw_r = hero.create_tween(); tw_r.tween_interval(1.5); tw_r.tween_callback(r_vis.queue_free)
+				# 变身爆发：金色天降光柱 + 地纹 + 双层冲击环 + 上升金尘（替代纯色圆柱）
+				var tf_col := Color(1.0, 0.84, 0.32)
+				var tf_ground := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
+				Vfx.pillar(tf_ground, tf_col, 1.9, 8.5, 0.8)
+				Vfx.sigil(tf_ground, tf_col, 3.4, 1.1)
+				Vfx.shockwave(tf_ground, 3.6, tf_col, 0.55)
+				Vfx.shockwave(tf_ground, 2.0, Color(1.0, 0.97, 0.8), 0.4)
+				Vfx.nova(tf_ground, tf_col, 3.6)
+				Vfx.cast_glow(hero.global_position + Vector3.UP * 1.2, tf_col, 1.7, 0.8)
 				hero.wd_timer = 1.25
 				var r_shield = 850 + 850 * level + hero.bonus_health * 0.35
 				hero.shield_remaining = max(hero.shield_remaining, r_shield); hero.shield_timer = 15.0
 				var ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
 				var dir = Vector3(cos(ang),0,-sin(ang))
-				var wz = MeshInstance3D.new(); wz.mesh = BoxMesh.new()
-				wz.mesh.size = Vector3(6.0, 0.3, 18.0)
-				wz.position = hero.global_position + dir * 9.0 + Vector3(0, 0.3, 0)
-				wz.look_at(hero.global_position + dir, Vector3.UP)
-				var wzmat = StandardMaterial3D.new(); wzmat.albedo_color = Color.CORNFLOWER_BLUE
-				wzmat.emission_enabled = true; wzmat.emission = Color.CORNFLOWER_BLUE
-				wzmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				wzmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA; wzmat.albedo_color.a = 0.3
-				wz.material_override = wzmat; hero.get_parent().add_child(wz)
-				var tw_wz = hero.create_tween(); tw_wz.tween_interval(3.0); tw_wz.tween_callback(wz.queue_free)
+				# 咆哮冲击：三层扩散青蓝声波环沿朝向推进（替代纯色半透明长方体）
+				var wz_col := Color.CORNFLOWER_BLUE.lerp(Color.WHITE, 0.25)
+				for _wi in range(3):
+					Vfx._delayed_ring(hero.global_position + dir * (3.0 + 5.0 * float(_wi)), 3.0, wz_col, 0.08 + 0.14 * float(_wi), 0.5)
+				Vfx.dash_fx(hero.global_position, hero.global_position + dir * 16.0, wz_col, false, 16.0)
+				Vfx.slash_fx(hero.global_position, hero.global_position + dir * 16.0, wz_col)
 				var perp = Vector3(-dir.z, 0, dir.x)
 				var hit_entities: Array = []  # 防止同一实体被多个网格点击中
 				for _j in range(3):
@@ -1035,14 +1070,14 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				Vfx.fade_out(a3_beam, 0.25)
 		# ==================== 妲己 ====================
 		"妲己":match  skill_id:
-			1:  # 灵魂冲击波：5米宽冲击波，飞行7.5米
+			1:  # 灵魂冲击波：5米宽冲击波，飞行10米
 				var d1_ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
 				var d1_dir = Vector3(cos(d1_ang), 0, -sin(d1_ang))
 				var d1_bullet = create_bullet(505, 0, 1.2, 65*level, true, hero, d1_dir, 1)
 				
 				d1_bullet.damage_range = 2.5
 				d1_bullet.pierce = true
-				d1_bullet.set_linear(d1_dir,7.5)
+				d1_bullet.set_linear(d1_dir,10.0)
 				# 视觉：半月形波刃 + 双层拖尾（外层柔光/内层亮芯，宽度对齐 damage_range）
 				hero.get_parent().add_child(d1_bullet)
 				Vfx.crescent_wave(d1_bullet, d1_dir, Color(1.0, 0.42, 0.62), 5.0)
@@ -1127,11 +1162,10 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					x1_return.set_linear(return_dir, x1_endpoint.distance_to(hero.global_position))
 					hero.get_parent().add_child(x1_return)
 			2:  # 甜蜜恋风：0.7秒后直接击飞，无弹道
-				var x2_preview = create_preview(2.0, pos, hero.team)
-				hero.get_parent().add_child(x2_preview)
+				# 前摇：落点风场法阵（柔光斑 + 双反向环 + 向心汇聚粒子），替代原来的纯色圆盘
+				var x2_col := Color(1.0, 0.52, 0.74)
+				Vfx.telegraph(pos, 2.0, x2_col, 0.7)
 				await hero.get_tree().create_timer(0.7).timeout
-				if is_instance_valid(x2_preview):
-					x2_preview.queue_free()
 				# 直接范围伤害+击飞（无弹道）
 				for ent in hero.get_tree().get_nodes_in_group("entities"):
 					if ent != hero and ent.health > 0 and ent.team != hero.team:
@@ -1141,28 +1175,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 							ent.knockup_timer = 1.5
 							if ent is Hero:
 								hero.cc_duration_dealt += 1.5
-				# 视觉：粉色旋风（独立网格，渐隐消失）
-				var x2_vis = MeshInstance3D.new()
-				x2_vis.mesh = CylinderMesh.new()
-				x2_vis.mesh.top_radius = 1.5
-				x2_vis.mesh.bottom_radius = 1.8
-				x2_vis.mesh.height = 3.0
-				x2_vis.mesh.radial_segments = 10
-				x2_vis.mesh.rings = 1
-				x2_vis.position = pos + Vector3(0, 1.5, 0)
-				var x2_mat = StandardMaterial3D.new()
-				x2_mat.albedo_color = Color(1.0, 0.5, 0.7, 0.6)
-				x2_mat.emission_enabled = true
-				x2_mat.emission = Color(1.0, 0.3, 0.6, 0.4)
-				x2_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				x2_vis.material_override = x2_mat
-				hero.get_parent().add_child(x2_vis)
-				# #43 FX：粉色旋风柱（~1s 渐缩渐隐，team=-1 固定色）
+				# 视觉：粉色旋风（中央风柱 + 三层螺旋环 + 上升气流，host 与客户端同款）
+				Vfx.tornado_fx(pos, x2_col)
+				Vfx.nova(pos, Color(1.0, 0.62, 0.82), 2.4)
+				Vfx.hit_spark(pos + Vector3.UP * 1.1, Color(1.0, 0.68, 0.86), Vector3.UP, 1.3)
+				# #43 FX：粉色旋风（客户端同款 tornado）
 				NetSession.push_net_fx(NetSession.FX_XQ_WHIRL, pos + Vector3(0.0, 1.5, 0.0), -1, 1.8, 1.0)
-				var tw = hero.create_tween()
-				tw.tween_property(x2_vis, "scale", Vector3(0.5, 0.3, 0.5), 1.0)
-				tw.parallel().tween_property(x2_vis.material_override, "albedo_color:a", 0.0, 1.0)
-				tw.tween_callback(x2_vis.queue_free)
 			3:  # 星华缭乱：6秒内每0.75秒降下流星，每目标最多4颗，重复命中50%伤害
 				hero.apply_move_pct_buff("ms_haste", 6.0, 0.25)
 				# 大招范围预览圈（7.0半径，持续6秒
@@ -1188,30 +1206,54 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 						var eid = str(x3_t.get_instance_id())
 						var hits = r_hit_count.get(eid, 0)
 						if hits >= 4: continue
-						var x3_dir = (x3_t.global_position - hero.global_position).normalized()
-						var x3_bullet = create_bullet(400, 0, 1.0, 100*level, true, hero, x3_dir, 3)
+						# 落点=目标脚下，出膛点=目标正上方 → 流星垂直砸下
+						var x3_ground := Vector3(x3_t.global_position.x, 0.0, x3_t.global_position.z)
+						var x3_bullet = create_bullet(400, 0, 1.0, 100*level, true, hero, Vector3.DOWN, 3)
 						x3_bullet.target = x3_t
-						x3_bullet.set_goal(x3_t.global_position)
-						x3_bullet.speed = 12.0
+						x3_bullet.set_goal(x3_ground)
+						x3_bullet.drop_mode = true
+						x3_bullet.speed = 22.0
 						if hits > 0: x3_bullet.damage *= 0.5
 						x3_bullet.life_time = 1.5
 						r_hit_count[eid] = hits + 1
 						spawned += 1
-						# 视觉：紫色流星
+						# 视觉：紫色流星（发光核心 + 白金内核 + 拖尾）
 						var x3_vis = MeshInstance3D.new()
-						x3_vis.mesh = SphereMesh.new()
-						x3_vis.mesh.radius = 0.3
-						x3_vis.mesh.height = 0.6
-						x3_vis.mesh.radial_segments = 10
-						x3_vis.mesh.rings = 5
+						var x3_sphere := SphereMesh.new()
+						x3_sphere.radius = 0.34
+						x3_sphere.height = 0.68
+						x3_sphere.radial_segments = 16
+						x3_sphere.rings = 8
+						x3_vis.mesh = x3_sphere
 						var x3_mat = StandardMaterial3D.new()
-						x3_mat.albedo_color = Color(0.7, 0.2, 1.0)
+						x3_mat.albedo_color = Color(0.72, 0.32, 1.0, 0.9)
 						x3_mat.emission_enabled = true
-						x3_mat.emission = Color(0.5, 0.1, 0.9)
+						x3_mat.emission = Color(0.55, 0.18, 1.0)
+						x3_mat.emission_energy_multiplier = 2.6
 						x3_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+						x3_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+						x3_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 						x3_vis.material_override = x3_mat
 						x3_bullet.add_child(x3_vis)
+						var x3_core = MeshInstance3D.new()
+						var x3_cs := SphereMesh.new()
+						x3_cs.radius = 0.15
+						x3_cs.height = 0.3
+						x3_cs.radial_segments = 10
+						x3_cs.rings = 5
+						x3_core.mesh = x3_cs
+						var x3_cmat = StandardMaterial3D.new()
+						x3_cmat.albedo_color = Color(1.0, 0.95, 1.0)
+						x3_cmat.emission_enabled = true
+						x3_cmat.emission = Color(1.0, 0.85, 1.0)
+						x3_cmat.emission_energy_multiplier = 3.4
+						x3_cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+						x3_cmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+						x3_core.material_override = x3_cmat
+						x3_vis.add_child(x3_core)
 						hero.get_parent().add_child(x3_bullet)
+						x3_bullet.global_position = x3_ground + Vector3(randf_range(-0.3, 0.3), 9.5, randf_range(-0.3, 0.3))
+						Vfx.attach_trail(x3_bullet, Color(0.62, 0.26, 1.0), 0.34, 0.3, 10, Color(1.0, 0.75, 1.0, 0.6))
 				# 预览圈清理
 				if is_instance_valid(r_preview): r_preview.queue_free()
 
@@ -1256,16 +1298,75 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				var r_preview = create_preview(5.0, pos, hero.team)
 				r_preview.visible = true
 				hero.get_parent().add_child(r_preview)
-				# 飞艇视觉模型
+				# 飞艇视觉模型：金属机身 + 发光舷窗 + 侧旋桨 + 探照灯锥（替代灰色纯色盒子）
 				var r_airship = MeshInstance3D.new()
-				r_airship.mesh = BoxMesh.new()
-				r_airship.mesh.size = Vector3(3, 0.5, 1.5)
+				var hull := BoxMesh.new()
+				hull.size = Vector3(3, 0.9, 1.5)
+				r_airship.mesh = hull
 				var r_mat = StandardMaterial3D.new()
-				r_mat.albedo_color = Color(0.5, 0.5, 0.5)
+				r_mat.albedo_color = Color(0.62, 0.66, 0.72)
+				r_mat.emission_enabled = true
+				r_mat.emission = Color(0.35, 0.45, 0.6)
+				r_mat.emission_energy_multiplier = 0.6
 				r_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 				r_airship.material_override = r_mat
 				r_airship.global_position = Vector3(pos.x, pos.y + 8, pos.z)
 				hero.get_parent().add_child(r_airship)
+				# 气囊
+				var balloon = MeshInstance3D.new()
+				var bs := SphereMesh.new()
+				bs.radius = 0.9; bs.height = 1.5
+				bs.radial_segments = 14; bs.rings = 7
+				balloon.mesh = bs
+				balloon.scale = Vector3(1.5, 1.0, 1.0)
+				balloon.position = Vector3(0, 0.85, 0)
+				var balloon_mat = StandardMaterial3D.new()
+				balloon_mat.albedo_color = Color(0.85, 0.88, 0.95, 0.85)
+				balloon_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				balloon_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				balloon_mat.emission_enabled = true
+				balloon_mat.emission = Color(0.4, 0.55, 0.85)
+				balloon_mat.emission_energy_multiplier = 0.5
+				balloon.material_override = balloon_mat
+				r_airship.add_child(balloon)
+				# 两侧旋桨（持续自转）
+				for _si in range(2):
+					var rotor := MeshInstance3D.new()
+					var rot := BoxMesh.new()
+					rot.size = Vector3(0.12, 0.05, 1.1)
+					rotor.mesh = rot
+					var rotor_mat = StandardMaterial3D.new()
+					rotor_mat.albedo_color = Color(0.9, 0.92, 1.0, 0.7)
+					rotor_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					rotor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+					rotor_mat.emission_enabled = true
+					rotor_mat.emission = Color(0.6, 0.8, 1.0)
+					rotor_mat.emission_energy_multiplier = 1.2
+					rotor.material_override = rotor_mat
+					rotor.position = Vector3(-1.5 if _si == 0 else 1.5, 0.1, 0)
+					r_airship.add_child(rotor)
+					var rotor_spin := rotor.create_tween()
+					rotor_spin.set_loops()
+					rotor_spin.tween_property(rotor, "rotation:z", TAU, 0.35)
+				# 探照灯锥（指向轰炸区域）
+				var lamp := MeshInstance3D.new()
+				var lamp_mesh := CylinderMesh.new()
+				lamp_mesh.top_radius = 0.18; lamp_mesh.bottom_radius = 1.6; lamp_mesh.height = 8.0
+				lamp_mesh.cap_top = false; lamp_mesh.cap_bottom = false
+				lamp.mesh = lamp_mesh
+				lamp.position = Vector3(0, -4.0, 0)
+				var lamp_mat = StandardMaterial3D.new()
+				lamp_mat.albedo_color = Color(1.0, 0.95, 0.7, 0.10)
+				lamp_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				lamp_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				lamp_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+				lamp_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+				lamp_mat.emission_enabled = true
+				lamp_mat.emission = Color(1.0, 0.92, 0.6)
+				lamp_mat.emission_energy_multiplier = 1.4
+				lamp.material_override = lamp_mat
+				r_airship.add_child(lamp)
+				Vfx.attach_trail(r_airship, Color(0.6, 0.8, 1.0), 0.4, 0.5, 10)
 				var r_center = pos  # 轰炸区域中心，随飞艇缓慢移动
 				for _r_i in range(14):
 					await hero.get_tree().create_timer(1.0).timeout
@@ -1439,6 +1540,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.get_parent().add_child(tripod)
 				tripod.setup_tripod(hero.team, hero, q_level, hero.bonus_health)
 				hero.dayu_tripods.append(tripod)
+				# 鼎落位：金色地纹 + 绿柱 + 冲击环（替代纯色圆盘观感）
+				var q_col := Color(0.42, 1.0, 0.62)
+				Vfx.sigil(Vector3(pos.x, 0.0, pos.z), q_col, 3.0, 0.7)
+				Vfx.pillar(Vector3(pos.x, 0.0, pos.z), q_col, 1.1, 4.2, 0.55)
+				Vfx.shockwave(Vector3(pos.x, 0.0, pos.z), 2.6, q_col.lerp(Color.WHITE, 0.3), 0.4)
+				Vfx.hit_spark(pos + Vector3.UP * 0.6, q_col, Vector3.UP, 1.2)
 				# Q预览圈
 				var q_preview = create_preview(3.0, pos, hero.team)
 				q_preview.visible = true; hero.get_parent().add_child(q_preview)
@@ -1482,7 +1589,10 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					var r2_travel_time = max(0.5, r2_dist / 30.0)
 					# 霸体传送
 					hero.bt_timer = r2_travel_time + 0.5
+					var r2_from: Vector3 = hero.global_position
 					hero.global_position = r2_target
+					Vfx.dash_fx(r2_from, r2_target, Color(0.55, 0.85, 1.0), not hero.is_ai, r2_dist)
+					Vfx.cast_glow(r2_from, Color(0.55, 0.85, 1.0), 1.6, 0.4)
 					# 爆发加速（速度*5，持续1秒）
 					hero.apply_move_pct_buff("ms_haste", 1.0, 4.0)
 					await hero.get_tree().create_timer(r2_travel_time).timeout
@@ -1498,6 +1608,19 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 							if r2_target.distance_to(ent.global_position) <= 4.0:
 								ent.take_damage(int(r2_dmg), hero, false, 3, 0)
 								ent.apply_move_pct_buff("ms_slow", 1.0, -r2_slow, true)
+					# 第二段特效：传送落点震波 + 水色地面域 + 双层冲击环
+					var r2_col := Color(0.55, 0.85, 1.0)
+					Vfx.shockwave(r2_target, 4.0, r2_col, 0.5)
+					Vfx.shockwave(r2_target, 2.4, r2_col.lerp(Color.WHITE, 0.45), 0.35)
+					Vfx.nova(r2_target, r2_col, 4.4)
+					var r2_zone = Vfx.ground_zone(4.0, hero.team, "大禹", 1.2)
+					hero.get_parent().add_child(r2_zone)
+					r2_zone.global_position = Vector3(r2_target.x, 0.0, r2_target.z)
+					var _r2_zt = r2_zone.create_tween()
+					_r2_zt.tween_interval(1.3)
+					_r2_zt.tween_callback(r2_zone.queue_free)
+					Vfx._delayed_ring(r2_target, 4.6, r2_col, 0.18, 0.5)
+					Vfx.hit_spark(r2_target + Vector3.UP * 0.8, r2_col, Vector3.UP, 1.6)
 				else:
 					# 第一段：AoE乾鼎击飞
 					var r1_dmg = 500 + (r_level - 1) * 125 + hero.bonus_attack * 1.45
@@ -1538,6 +1661,14 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					hero.get_parent().add_child(r_tripod)
 					r_tripod.setup_tripod(hero.team, hero, r_level, hero.bonus_health, true)
 					hero.dayu_tripods.append(r_tripod)
+					# 乾鼎降临特效：金色天降光柱 + 落地冲击环 + 地纹 + 碎石火花
+					var r1_col := Color(1.0, 0.82, 0.35)
+					Vfx.pillar(Vector3(pos.x, 0.0, pos.z), r1_col, 2.0, 9.0, 0.7)
+					Vfx.shockwave(Vector3(pos.x, 0.0, pos.z), 3.4, r1_col, 0.55)
+					Vfx.shockwave(Vector3(pos.x, 0.0, pos.z), 2.0, Color(1.0, 0.95, 0.7), 0.35)
+					Vfx.sigil(Vector3(pos.x, 0.0, pos.z), r1_col, 3.4, 1.0)
+					Vfx.nova(Vector3(pos.x, 0.0, pos.z), r1_col, 3.8)
+					Vfx.hit_spark(pos + Vector3.UP * 0.7, r1_col, Vector3.UP, 1.8)
 					# 开启重施窗口
 					hero.skill_window_timers[2] = 3.0
 		"王昭君":match  skill_id:
@@ -1630,15 +1761,26 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				await hero.get_tree().create_timer(0.5).timeout
 				if is_instance_valid(w2_preview): w2_preview.queue_free()
 			3:  # 暴走熊猫：3秒旋转AoE+减速
-				# === 视觉1：持续地面范围环（4.0半径） ===
-				var ls_ground_ring = MeshFactory.create_torus_ring(3.85, 4.0, Color(1.0, 0.4, 0.1), true, 0.4, true)
+				# === 视觉1：持续地面范围环（4.0半径）→ 实体齿轮盘（金属 + 发光齿）
+				var ls_ground_ring := MeshInstance3D.new()
+				ls_ground_ring.mesh = MeshFactory.build_gear(3.88, 0.12, 30, 0.16, 3.05)
+				ls_ground_ring.material_override = MeshFactory.metal_pbr(Color(0.26, 0.24, 0.22), 0.30, Color(1.0, 0.46, 0.10))
+				ls_ground_ring.rotation.x = -PI * 0.5
+				ls_ground_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				ls_ground_ring.position = hero.global_position + Vector3(0, 0.05, 0)
+				var ls_gtw := ls_ground_ring.create_tween()
+				ls_gtw.set_loops()
+				ls_gtw.tween_property(ls_ground_ring, "rotation:y", TAU, 2.4).as_relative()
 				hero.get_parent().add_child(ls_ground_ring)
 				# #43 网络 FX：刘禅R 旋转地面环（3s 橙区，随英雄起手位）
 				if NetSession.mode == NetSession.Mode.HOST:
 					NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(hero.global_position.x, 0.0, hero.global_position.z), hero.team, 4.0, 3.0, "李元芳")
-				# === 视觉2：腰部旋转光环 ===
-				var ls_waist_ring = MeshFactory.create_torus_ring(0.65, 0.8, Color(1.0, 0.5, 0.15), true, 0.6, true)
+				# === 视觉2：腰部旋转齿轮环（金属 PBR + 接缝发光）
+				var ls_waist_ring := MeshInstance3D.new()
+				ls_waist_ring.mesh = MeshFactory.build_gear(0.78, 0.10, 14, 0.10, 0.30)
+				ls_waist_ring.material_override = MeshFactory.metal_pbr(Color(0.52, 0.55, 0.62), 0.26, Color(1.0, 0.52, 0.15))
+				ls_waist_ring.rotation.x = -PI * 0.5
+				ls_waist_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				ls_waist_ring.position = hero.global_position + Vector3(0, 1.0, 0)
 				hero.get_parent().add_child(ls_waist_ring)
 				var ls_waist_tw = hero.create_tween()
@@ -1650,40 +1792,90 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 						ls_ground_ring.global_position = hero.global_position + Vector3(0, 0.05, 0)
 					if is_instance_valid(ls_waist_ring):
 						ls_waist_ring.global_position = hero.global_position + Vector3(0, 1.0, 0)
-					# === 视觉3：脚底烟尘粒子 ===
-					for _d in range(3):
-						var ls_angle = randf() * TAU
-						var ls_r = randf() * 0.8
-						var ls_dust = MeshFactory.create_sphere(0.12, Color(0.7, 0.5, 0.3), false, 0.5)
-						ls_dust.position = hero.global_position + Vector3(cos(ls_angle) * ls_r, 0.08, sin(ls_angle) * ls_r)
-						hero.get_parent().add_child(ls_dust)
-						var ls_dt = hero.create_tween()
-						ls_dt.tween_property(ls_dust, "position:y", ls_dust.position.y + 0.6, 0.5)
-						ls_dt.parallel().tween_property(ls_dust.material_override, "albedo_color:a", 0.0, 0.5)
-						ls_dt.tween_callback(ls_dust.queue_free)
-					# === 视觉4：扩散冲击波（每tick一次，从中心扩散至边缘） ===
-					var ls_wave = MeshFactory.create_torus_ring(0.35, 0.4, Color(1.0, 0.45, 0.1), true, 0.6, true)
+					# === 视觉3：脚底蒸汽 + 金属飞屑（不再用纯色小球）===
+					if _tick == 0:
+						var ls_steam := Vfx._charge_particles(22, 0.9, Color(0.88, 0.92, 0.98), 0.22, 0.9)
+						ls_steam.emitting = true
+						ls_steam.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+						ls_steam.emission_ring_radius = 3.2
+						ls_steam.emission_ring_inner_radius = 1.1
+						ls_steam.emission_ring_height = 0.2
+						ls_steam.direction = Vector3(0, 1, 0)
+						ls_steam.spread = 55.0
+						ls_steam.gravity = Vector3(0, 2.0, 0)
+						ls_steam.initial_velocity_min = 0.6
+						ls_steam.initial_velocity_max = 1.8
+						ls_steam.position = hero.global_position + Vector3(0, 0.2, 0)
+						hero.get_parent().add_child(ls_steam)
+						var ls_stw := hero.create_tween()
+						ls_stw.tween_interval(2.6)
+						ls_stw.tween_property(ls_steam, "emitting", false, 0.1)
+						ls_stw.tween_callback(ls_steam.queue_free)
+					for _d in range(2):
+						var ls_angle2 := randf() * TAU
+						var ls_shard := MeshInstance3D.new()
+						var shm := BoxMesh.new()
+						shm.size = Vector3(0.18, 0.05, 0.05)
+						ls_shard.mesh = shm
+						ls_shard.material_override = MeshFactory.metal_pbr(Color(0.62, 0.66, 0.74), 0.28, Color(1.0, 0.5, 0.14))
+						ls_shard.position = hero.global_position + Vector3(cos(ls_angle2) * 0.6, 0.12, sin(ls_angle2) * 0.6)
+						ls_shard.rotation = Vector3(randf() * TAU, ls_angle2, randf() * TAU)
+						ls_shard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+						hero.get_parent().add_child(ls_shard)
+						var ls_dt := hero.create_tween()
+						ls_dt.set_parallel(true)
+						ls_dt.tween_property(ls_shard, "position", ls_shard.position + Vector3(cos(ls_angle2), 0.9, sin(ls_angle2)) * 1.8, 0.45).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
+						ls_dt.tween_property(ls_shard, "rotation:x", ls_shard.rotation.x + 8.0, 0.45)
+						ls_dt.tween_property(ls_shard, "transparency", 1.0, 0.45).set_delay(0.15)
+						ls_dt.tween_callback(ls_shard.queue_free)
+					# === 视觉4：扩散冲击齿轮环（每tick一次，从中心扩散至边缘）===
+					var ls_wave := MeshInstance3D.new()
+					ls_wave.mesh = MeshFactory.build_gear(0.42, 0.06, 12, 0.12, 0.20)
+					ls_wave.material_override = MeshFactory.metal_pbr(Color(0.78, 0.52, 0.24), 0.26, Color(1.0, 0.5, 0.12))
+					ls_wave.rotation.x = -PI * 0.5
+					ls_wave.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 					ls_wave.position = hero.global_position + Vector3(0, 0.12, 0)
 					# #43 网络 FX：刘禅R 每tick扩散冲击波（0.7s 一次性环）
 					if NetSession.mode == NetSession.Mode.HOST:
 						NetSession.push_net_fx(NetSession.FX_WAVE_RING, Vector3(hero.global_position.x, 0.0, hero.global_position.z), hero.team, 4.0, 0.7)
-					ls_wave.scale = Vector3(0.5, 0.5, 0.5)
+					ls_wave.scale = Vector3(0.5, 1.0, 0.5)
 					hero.get_parent().add_child(ls_wave)
-					var ls_sw = hero.create_tween()
-					ls_sw.tween_property(ls_wave, "scale", Vector3(10.0, 10.0, 10.0), 0.7)
-					ls_sw.parallel().tween_property(ls_wave.material_override, "albedo_color:a", 0.0, 0.7)
+					var ls_sw := ls_wave.create_tween()
+					ls_sw.set_parallel(true)
+					ls_sw.tween_property(ls_wave, "scale", Vector3(9.4, 1.0, 9.4), 0.7)
+					ls_sw.tween_property(ls_wave, "rotation:y", TAU * 1.5, 0.7)
+					ls_sw.tween_property(ls_wave, "transparency", 1.0, 0.7).set_delay(0.15)
 					ls_sw.tween_callback(ls_wave.queue_free)
-					# === 视觉5：地面火花（AoE范围内随机散布） ===
-					for _sp in range(5):
-						var ls_spa = randf() * TAU
-						var ls_sr = randf() * 3.5
-						var ls_spark = MeshFactory.create_sphere(0.07, Color(1.0, 0.75, 0.2), true, 0.8)
-						ls_spark.position = hero.global_position + Vector3(cos(ls_spa) * ls_sr, 0.04, sin(ls_spa) * ls_sr)
+					# === 视觉5：地面火花（细锥拖出的火星，而非纯色小球）===
+					for _sp in range(3):
+						var ls_spa := randf() * TAU
+						var ls_sr := randf() * 3.2
+						var ls_spark := MeshInstance3D.new()
+						var spm := CylinderMesh.new()
+						spm.top_radius = 0.0
+						spm.bottom_radius = 0.06
+						spm.height = 0.5
+						spm.radial_segments = 6
+						ls_spark.mesh = spm
+						var smat := StandardMaterial3D.new()
+						smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+						smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+						smat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+						smat.albedo_color = Color(1.0, 0.72, 0.26, 0.9)
+						smat.emission_enabled = true
+						smat.emission = Color(1.0, 0.58, 0.18)
+						smat.emission_energy_multiplier = 2.6
+						ls_spark.material_override = smat
+						ls_spark.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+						var sbase := hero.global_position + Vector3(cos(ls_spa) * ls_sr, 0.06, sin(ls_spa) * ls_sr)
+						ls_spark.position = sbase + Vector3(0, 0.25, 0)
+						ls_spark.rotation = Vector3(randf_range(-0.5, 0.5), ls_spa, randf_range(-0.5, 0.5))
 						hero.get_parent().add_child(ls_spark)
-						var ls_spt = hero.create_tween()
-						ls_spt.tween_interval(randf() * 0.25)
-						ls_spt.tween_property(ls_spark, "position:y", ls_spark.position.y + 0.35, 0.35)
-						ls_spt.parallel().tween_property(ls_spark.material_override, "albedo_color:a", 0.0, 0.35)
+						var ls_spt := ls_spark.create_tween()
+						ls_spt.set_parallel(true)
+						ls_spt.tween_property(ls_spark, "position", sbase + Vector3(0, 1.15, 0), 0.4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+						ls_spt.tween_property(ls_spark, "scale", Vector3(0.35, 1.9, 0.35), 0.4)
+						ls_spt.tween_property(ls_spark, "transparency", 1.0, 0.4).set_delay(0.12)
 						ls_spt.tween_callback(ls_spark.queue_free)
 					await hero.get_tree().create_timer(0.5).timeout
 					if hero.health <= 0: break
@@ -1766,20 +1958,15 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				var q_preview = create_preview(1.8, pos, hero.team)
 				q_preview.visible = true
 				hero.get_parent().add_child(q_preview)
-				# 泼洒视觉：茶色细柱从英雄飞向落点
-				var spray = MeshInstance3D.new()
-				spray.mesh = CylinderMesh.new()
-				spray.mesh.top_radius = 0.12; spray.mesh.bottom_radius = 0.12; spray.mesh.height = 0.7
-				var s_mat = StandardMaterial3D.new()
-				s_mat.albedo_color = Color(0.55, 0.32, 0.1)
-				s_mat.emission_enabled = true; s_mat.emission = Color(0.4, 0.22, 0.06)
-				s_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				spray.material_override = s_mat
-				spray.position = hero.global_position + Vector3(0, 1.0, 0)
-				hero.get_parent().add_child(spray)
-				var tw_s = hero.create_tween()
-				tw_s.tween_property(spray, "position", pos + Vector3(0, 1.0, 0), 0.4)
-				tw_s.tween_callback(spray.queue_free)
+				# 泼洒视觉：茶色水流束 + 落点茶花四溅（替代原来的纯色细柱）
+				var tea_col := Color(0.78, 0.48, 0.16)
+				var tea_from: Vector3 = hero.global_position + Vector3(0, 1.0, 0)
+				var tea_to: Vector3 = pos + Vector3(0, 0.6, 0)
+				Vfx.beam(tea_from, tea_to, tea_col, 0.30, 0.45)
+				Vfx.beam(tea_from, tea_to, tea_col.lerp(Color.WHITE, 0.5), 0.12, 0.32)
+				Vfx.cast_glow(tea_from, tea_col, 0.9, 0.35)
+				Vfx.nova(pos, tea_col.lerp(Color.WHITE, 0.3), 1.9)
+				Vfx._delayed_ring(pos, 1.9, tea_col, 0.22, 0.45)
 				await hero.get_tree().create_timer(0.5).timeout
 				# —— 第一段：冰红茶伤害 ——
 				var q_dmg = int(340 + 40 * (level - 1) + hero.bonus_attack * 1.2)
@@ -1794,19 +1981,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				await hero.get_tree().create_timer(0.5).timeout
 				# —— 第二段：仅冰红茶命中时，巧乐兹造成同等伤害+击飞0.75s ——
 				if q_hit:
-					var bar = MeshInstance3D.new()
-					bar.mesh = CylinderMesh.new()
-					bar.mesh.top_radius = 0.3; bar.mesh.bottom_radius = 0.3; bar.mesh.height = 1.8
-					var b_mat = StandardMaterial3D.new()
-					b_mat.albedo_color = Color(0.93, 0.85, 0.65)
-					b_mat.emission_enabled = true; b_mat.emission = Color(0.7, 0.55, 0.3)
-					b_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-					bar.material_override = b_mat
-					bar.position = pos + Vector3(0, 0.9, 0)
-					hero.get_parent().add_child(bar)
-					var tw_b = hero.create_tween()
-					tw_b.tween_interval(0.6)
-					tw_b.tween_callback(bar.queue_free)
+					# 巧乐兹：奶油色冰柱 + 冰霜环 + 击飞火花（替代纯色短柱）
+					var bar_col := Color(0.95, 0.9, 0.72)
+					Vfx.pillar(pos, bar_col, 0.85, 3.4, 0.55)
+					Vfx.shockwave(pos, 1.9, bar_col.lerp(Color(0.7, 0.9, 1.0), 0.5), 0.35)
+					Vfx.nova(pos, Color(0.8, 0.94, 1.0), 2.0)
+					Vfx.hit_spark(pos + Vector3.UP * 1.2, bar_col, Vector3.UP, 1.3)
 					for ent in hero.get_tree().get_nodes_in_group("entities"):
 						if ent == hero or ent.health <= 0 or ent.team == hero.team: continue
 						if ent.global_position.distance_to(pos) <= 1.8:
@@ -1831,22 +2011,15 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.scale = Vector3(1.15, 1.15, 1.15)
 				hero._apply_df_buff(160 + 50 * r_lv, 0, 14.0, false)
 				hero._apply_df_buff(100 + 40 * r_lv, 0, 14.0, true)
-				# 视觉：金色光柱
-				var pillar = MeshInstance3D.new()
-				pillar.mesh = CylinderMesh.new()
-				pillar.mesh.top_radius = 1.4; pillar.mesh.bottom_radius = 1.4; pillar.mesh.height = 6.0
-				pillar.position = hero.global_position + Vector3(0, 3.0, 0)
-				var p_mat = StandardMaterial3D.new()
-				p_mat.albedo_color = Color(1.0, 0.75, 0.15)
-				p_mat.emission_enabled = true; p_mat.emission = Color(1.0, 0.6, 0.1)
-				p_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				p_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				p_mat.albedo_color.a = 0.45
-				pillar.material_override = p_mat
-				hero.get_parent().add_child(pillar)
-				var tw_p = hero.create_tween()
-				tw_p.tween_interval(1.5)
-				tw_p.tween_callback(pillar.queue_free)
+				# 视觉：变身金光（天降光柱 + 地纹 + 冲击环 + 上升金尘，替代纯色圆柱）
+				var r_col := Color(1.0, 0.8, 0.28)
+				var r_ground := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
+				Vfx.pillar(r_ground, r_col, 1.7, 8.0, 0.9)
+				Vfx.sigil(r_ground, r_col, 3.2, 1.2)
+				Vfx.shockwave(r_ground, 3.0, r_col, 0.5)
+				Vfx.nova(r_ground, r_col, 3.2)
+				Vfx.cast_glow(hero.global_position + Vector3.UP * 1.2, r_col, 1.6, 0.8)
+				Vfx.hit_spark(hero.global_position + Vector3.UP * 1.4, r_col, Vector3.UP, 1.8)
 
 
 # 技能图标内的伤害预览。把 apply_skills 里每英雄每个技能「主要命中段」的单次伤害转录到这里：
@@ -2234,7 +2407,7 @@ func get_skill_fx(hero: Hero, i: int) -> Dictionary:
 				texts.append("持续光束3秒（每0.25秒一段伤害）")
 		"妲己":
 			if i == 0:
-				texts.append("宽5米的冲击波贯穿直线敌人")
+				texts.append("宽5米、射程10米的冲击波贯穿直线敌人")
 			elif i == 1:
 				fx.append({"t": "stun", "v": 1.5})
 				texts.append("锁定最近敌人，命中眩晕1.5秒")
@@ -2336,11 +2509,11 @@ func get_skill_fx(hero: Hero, i: int) -> Dictionary:
 			if i == 0:
 				texts.append("汇流为一：对范围内敌人造成物理伤害并将其击退（约1.5米/短击飞），回复自身生命；附近每名友方英雄/友方小兵使回复+25%且「流」额外+1（至多4名）；获得基础5层「流」（上限9），破釜/万箭剩余冷却时间减少50%。「流」不使用会流失：闲置5秒后先失1层，之后每秒1层，用流（普攻或技能）即重置5秒")
 			elif i == 1:
-				texts.append("破釜之箭：锁敌型单体必中——施放时朝摇杆方向位移2.5米，巨型弩箭自动追踪锁定目标（无目标则空放短箭）；命中全额伤害并把目标击退约1.5米（短击飞）；拥有4层「流」可连续施放（参连/凌空）")
+				texts.append("破釜之箭：锁敌型单体必中——施放时朝摇杆方向位移2.5米，巨型弩箭自动追踪锁定目标（无目标则空放短箭）；命中全额伤害，仅对非英雄单位击退约1.5米（短击飞）；拥有4层「流」可连续施放（参连/凌空）")
 			else:
 				count = 7 + 3 * (lv - 1); unit = "支"
 				fx.append({"t": "selfspeed", "v": 20.0 + 10.0 * (lv - 1), "d": 2.0})
-				texts.append("万箭齐发：朝指定区域落下箭雨，每3支箭视作1次普攻，可触发普攻类装备效果（闪电匕首/末世等）；释放获得移速提升，拥有5层「流」可立即再施放一次")
+				texts.append("万箭齐发：从自身向指定区域连续射出追踪箭，每3支箭视作1次普攻，可触发普攻类装备效果（闪电匕首/末世等）；释放获得移速提升，拥有5层「流」可立即再施放一次")
 		"英睿":
 			if i == 0:
 				count = 2; unit = "段"
@@ -2427,12 +2600,11 @@ func create_spell(radius,team,hero_name := "",dur := 0.0)->Node3D:
 func create_preview(radius,pos,team)->Node3D:
 	# 圆形范围预览：柔光圆底 + 亮环 + 呼吸（替代旧纯色 torus）
 	var area_preview: Node3D = Vfx.preview_ring(float(radius), int(team))
-	area_preview.position = pos
-	area_preview.position.y += 0.2
+	area_preview.position = Vfx.ground_pos(pos) + Vector3(0, 0.02, 0)
 	return area_preview
 func create_machao_spear(pos: Vector3, team: int) -> Node3D:
 	var spear: Node3D = HeroWeapons.spear_marker(team)
-	spear.position = pos
+	spear.position = Vfx.ground_pos(pos)
 	spear.add_to_group("terrains")
 	return spear
 
@@ -2613,11 +2785,11 @@ func _lyf_q(hero, lv: int, pos: Vector3) -> void:
 				tgt = e
 	if tgt != null:
 		tgt.lyf_cast_mark(hero)
-		# 视觉：飞镖自李元芳飞向目标（随后由暗印环绕表现接管）
+		# 视觉：真实飞镖本体自李元芳手中飞向目标（随后由暗印环绕表现接管）
 		var qcol := Color(1.0, 0.52, 0.16)
 		var hpos: Vector3 = hero.global_position + Vector3(0, 1.1, 0)
 		var tpos: Vector3 = tgt.global_position + Vector3(0, 1.1, 0)
-		Vfx.beam(hpos, tpos, qcol, 0.10, 0.20)
+		Vfx.lyf_throw_dart(hpos, tpos, qcol)
 		Vfx.hit_spark(tpos, qcol, Vector3.UP, 1.1)
 
 
@@ -2790,6 +2962,7 @@ func _lyf_r(hero, lv: int, pos: Vector3) -> void:
 func _lyf_storm_visual(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	var zone_root := Node3D.new()
 	zone_root.position = pos
+	parent.add_child(zone_root)   # 先入树：下面的 create_tween 需要节点在树内
 	var pool := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = radius
@@ -2811,42 +2984,153 @@ func _lyf_storm_visual(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	var core = MeshFactory.create_cylinder(radius * 0.5, radius * 0.5, 0.4, Color(1.0, 0.55, 0.2, 0.9), 1.0)
 	core.position.y = 0.3
 	zone_root.add_child(core)
-	parent.add_child(zone_root)
+	# 刃风本体：一圈锯齿刃盘贴着地面持续旋转，让「风域」看起来是刀刃削出来的
+	var spin := Node3D.new()
+	spin.name = "SawRing"
+	spin.position.y = 0.42
+	zone_root.add_child(spin)
+	var saw := MeshInstance3D.new()
+	saw.mesh = MeshFactory.build_saw_wheel(radius - 0.55, radius - 0.12, 0.05, 40, 0.14, 0, 0.0)
+	saw.material_override = MeshFactory.blade_metal(Color(0.28, 0.25, 0.22), Color(1.0, 0.45, 0.10), 0.24)
+	saw.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(saw)
+	var saw_edge := MeshInstance3D.new()
+	saw_edge.mesh = saw.mesh
+	var sem := StandardMaterial3D.new()
+	sem.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sem.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sem.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	sem.albedo_color = Color(1.0, 0.55, 0.15, 0.4)
+	sem.emission_enabled = true
+	sem.emission = Color(1.0, 0.45, 0.10)
+	sem.emission_energy_multiplier = 2.4
+	sem.cull_mode = BaseMaterial3D.CULL_DISABLED
+	saw_edge.material_override = sem
+	saw_edge.scale = Vector3(1.04, 1.04, 2.0)
+	saw_edge.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(saw_edge)
+	spin.rotation.x = -PI * 0.5   # 刀盘放平贴地
+	var saw_tw := spin.create_tween()
+	saw_tw.set_loops()
+	saw_tw.tween_property(spin, "rotation:y", TAU, 1.1).from(0.0).set_trans(Tween.TRANS_LINEAR)
 	# #43 网络 FX：风暴地面域（persist ~4s，固定暗橙）
 	if NetSession.mode == NetSession.Mode.HOST:
 		NetSession.push_net_fx(NetSession.FX_LYF_STORM, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0, "李元芳")
 	return zone_root
 
 
-# R巨型飞刃滑行视觉：扁平大刃盘自 a 滑向 b（dur秒，20米/秒），带自旋辐条与亮环
+# R巨型飞刃滑行视觉：写实向锯齿刃轮 —— 金属刀盘（锯齿环 + 4 片外扩巨刃）+ 刃口加色描边
+# + 双层金属轮毂 + 能量核 + 内环光带 + 地面热环，滚动方向沿滑行方向，滚动中自转。
 func _lyf_slide_blade(parent: Node, a: Vector3, b: Vector3, dur: float) -> Node3D:
 	var root := Node3D.new()
-	root.position = Vector3(a.x, 1.0, a.z)
+	root.name = "LyfSlideBlade"
+	root.position = Vector3(a.x, 1.05, a.z)
 	var col := Color(1.0, 0.55, 0.15)
-	var rim = MeshFactory.create_torus_ring(1.0, 1.3, col, true, 0.95, true)
-	root.add_child(rim)
-	var hub = MeshFactory.create_cylinder(0.38, 0.38, 0.18, Color(1.0, 0.7, 0.3, 0.95), 0.95)
-	root.add_child(hub)
-	for ang in [0.0, 120.0, 240.0]:
+	# 朝向：本地 +X = 滑行方向，本地 +Z = 刃轮法线（侧向），绕本地 Z 自转 = 滚轮转动
+	var nd := Vector3(b.x - a.x, 0.0, b.z - a.z)
+	if nd.length() < 0.01:
+		nd = Vector3.FORWARD
+	nd = nd.normalized()
+	root.basis = Basis(nd, Vector3.UP, Vector3(-nd.z, 0.0, nd.x))
+	var spin := Node3D.new()
+	spin.name = "Spin"
+	root.add_child(spin)
+	# 1) 金属刀盘：锯齿外缘环 + 4 片巨刃（封闭实体壳，非纸片）
+	var disc_mesh := MeshFactory.build_saw_wheel(0.92, 1.34, 0.11, 28, 0.14, 4, 0.62)
+	var disc := MeshInstance3D.new()
+	disc.name = "Blades"
+	disc.mesh = disc_mesh
+	disc.material_override = MeshFactory.blade_metal(Color(0.26, 0.24, 0.22), Color(1.0, 0.45, 0.10), 0.22)
+	disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(disc)
+	# 2) 刃口加色描边（同网格微放大）
+	var edge := MeshInstance3D.new()
+	edge.name = "Edge"
+	edge.mesh = disc_mesh
+	var em := StandardMaterial3D.new()
+	em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	em.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	em.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	em.albedo_color = Color(1.0, 0.5, 0.12, 0.30)
+	em.emission_enabled = true
+	em.emission = Color(1.0, 0.42, 0.08)
+	em.emission_energy_multiplier = 2.6
+	em.cull_mode = BaseMaterial3D.CULL_DISABLED
+	edge.material_override = em
+	edge.scale = Vector3(1.035, 1.035, 1.8)
+	edge.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(edge)
+	# 3) 双层金属轮毂 + 能量核
+	var hub := MeshInstance3D.new()
+	var hub_mesh := CylinderMesh.new()
+	hub_mesh.top_radius = 0.30
+	hub_mesh.bottom_radius = 0.34
+	hub_mesh.height = 0.34
+	hub_mesh.radial_segments = 16
+	hub.mesh = hub_mesh
+	hub.material_override = MeshFactory.blade_metal(Color(0.34, 0.30, 0.24), Color(1.0, 0.5, 0.12), 0.28)
+	hub.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(hub)
+	# 立方轴柄：轮辐感
+	for k in range(4):
 		var spoke := MeshInstance3D.new()
 		var sb := BoxMesh.new()
-		sb.size = Vector3(2.2, 0.05, 0.2)
+		sb.size = Vector3(0.62, 0.055, 0.11)
 		spoke.mesh = sb
-		var sm := StandardMaterial3D.new()
-		sm.albedo_color = Color(1.0, 0.72, 0.3, 0.9)
-		sm.emission_enabled = true
-		sm.emission = Color(1.0, 0.5, 0.1, 0.9)
-		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		spoke.material_override = sm
-		spoke.rotation.y = deg_to_rad(ang)
-		root.add_child(spoke)
+		spoke.material_override = MeshFactory.blade_metal(Color(0.30, 0.26, 0.22), Color(1.0, 0.5, 0.12), 0.3)
+		spoke.position = Vector3(cos(TAU * float(k) / 4.0) * 0.34, sin(TAU * float(k) / 4.0) * 0.34, 0.0)
+		spoke.rotation.z = TAU * float(k) / 4.0
+		spoke.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		spin.add_child(spoke)
+	var core := MeshInstance3D.new()
+	var core_mesh := SphereMesh.new()
+	core_mesh.radius = 0.24
+	core_mesh.height = 0.48
+	core_mesh.radial_segments = 14
+	core_mesh.rings = 8
+	core.mesh = core_mesh
+	var cm := StandardMaterial3D.new()
+	cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	cm.albedo_color = Color(1.0, 0.72, 0.28, 0.85)
+	cm.emission_enabled = true
+	cm.emission = Color(1.0, 0.55, 0.15)
+	cm.emission_energy_multiplier = 3.2
+	core.material_override = cm
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(core)
+	# 4) 内环光带（不随刀盘转，做出「能量束箍住刀轮」的层次）
+	var halo := MeshInstance3D.new()
+	var halo_mesh := TorusMesh.new()
+	halo_mesh.inner_radius = 1.0
+	halo_mesh.outer_radius = 1.08
+	halo_mesh.rings = 32
+	halo_mesh.ring_segments = 8
+	halo.mesh = halo_mesh
+	var hm := StandardMaterial3D.new()
+	hm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	hm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	hm.albedo_color = Color(1.0, 0.62, 0.22, 0.55)
+	hm.emission_enabled = true
+	hm.emission = Color(1.0, 0.5, 0.12)
+	hm.emission_energy_multiplier = 2.2
+	halo.material_override = hm
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(halo)
+	# 5) 地面热环（贴地，宽于刃轮直径，读得出「贴地削过」）
+	var heat := MeshFactory.create_torus_ring(1.05, 1.45, Color(1.0, 0.45, 0.10), true, 0.45, true)
+	heat.position = Vector3(0.0, -0.92, 0.0)
+	root.add_child(heat)
 	parent.add_child(root)
 	if dur > 0.0:
 		var tw := root.get_tree().create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(root, "position", Vector3(b.x, 1.0, b.z), dur).set_trans(Tween.TRANS_LINEAR)
-		tw.tween_property(root, "rotation:y", TAU * 3.0, dur).set_trans(Tween.TRANS_LINEAR)
+		tw.tween_property(root, "position", Vector3(b.x, 1.05, b.z), dur).set_trans(Tween.TRANS_LINEAR)
+		# 自转：滚动方向与滑行一致（本地 Z 轴 = 轮轴）
+		tw.tween_property(spin, "rotation:z", -TAU * 3.0, dur).set_trans(Tween.TRANS_LINEAR)
+		tw.tween_property(halo, "rotation:z", TAU * 1.5, dur).set_trans(Tween.TRANS_LINEAR)
 	return root
 
 
@@ -2982,18 +3266,16 @@ func _yuanliu_w(hero, lv: int, pos: Vector3) -> void:
 		var lead_pos := Vector3(target.global_position.x, 0.5, target.global_position.z)
 		lead.global_position = lead.global_position.lerp(lead_pos, 0.25)
 		await hero.get_tree().create_timer(0.035).timeout
-	# 命中：单目标全额伤害（无贯穿/无英雄格挡）+ 1.5m 小击退 + 0.3s 短击飞
+	# 命中：单目标全额伤害（无贯穿/无英雄格挡）；仅非英雄单位吃 1.5m 小击退 + 0.3s 短击飞
 	if is_instance_valid(target) and target.health > 0.0 and target.team != hero.team:
 		target.take_damage(float(dmg), hero, false, 2, 0)
-		if not (target is Turret):
+		if not (target is Turret) and not (target is Hero):
 			var kb_dir := Vector3(target.global_position.x - origin.x, 0.0, target.global_position.z - origin.z)
 			if kb_dir.length() < 0.05:
 				kb_dir = Vector3(-hero.global_transform.basis.z.x, 0.0, -hero.global_transform.basis.z.z).normalized()
 			var kb_n := kb_dir.normalized()
 			target.global_position = Vector3(target.global_position.x + kb_n.x * 1.5, 0.5, target.global_position.z + kb_n.z * 1.5)
 			target.knockup_timer = maxf(target.knockup_timer, 0.3)
-			if target is Hero:
-				hero.cc_duration_dealt += 0.3
 	lead.queue_free()
 
 
@@ -3043,7 +3325,10 @@ func _yuanliu_r(hero, lv: int, pos: Vector3) -> void:
 		arrow.radius = 0.28
 		arrow.skill_id = 3
 		arrow.scale = Vector3(1.2, 1.2, 1.2)
-		arrow.global_position = Vector3(pick.global_position.x + randf_range(-1.1, 1.1), pick.global_position.y + 8.0, pick.global_position.z + randf_range(-1.1, 1.1))
+		# 三技能箭矢从元流之子自身发出（不再从目标头顶落下），再追踪区域内的目标
+		arrow.global_position = Vector3(hero.global_position.x + randf_range(-0.25, 0.25),
+			hero.global_position.y + 1.15,
+			hero.global_position.z + randf_range(-0.25, 0.25))
 		hero.get_parent().add_child(arrow)
 
 
@@ -3339,7 +3624,7 @@ func _init_skills():
 	# ==================== 妲己 ====================
 	sk = Skill.new()
 	sk.skill_name = "灵魂冲击波"; sk.cooldown = 5.0; sk.mana_cost = 30
-	sk.cd_bonus = 0.2; sk.type = 3; sk.cast_range = 7.5
+	sk.cd_bonus = 0.2; sk.type = 3; sk.cast_range = 10.0
 	skills["daji_q"] = sk
 
 	sk = Skill.new()
@@ -3603,3 +3888,15 @@ func get_skill(skill_id: String) -> Skill:
 	if skill:
 		skill.is_channeling = true if skill.type ==1 or skill.type ==4 or skill.type ==3 else false
 	return skill
+
+## 全图弹道技能（鲁班七号2技能 / 后羿3技能这种“瞄准方向、子弹横穿全图”的技能）：
+## 供小地图瞄准线、命中的敌人高亮、飞行中子弹绘制共用；返回 {} 表示该槽不是全图技。
+## len=最大飞行距离；hit_r=判定半径基数（与单位 body_radius 相加）；only_hero=只命中英雄。
+static func global_shot_profile(hero_name: String, slot: int) -> Dictionary:
+	if hero_name == "鲁班七号" and slot == 1:
+		return {"len": 160.0, "hit_r": 0.6, "only_hero": false, "speed": 35.0,
+			"color": Color(0.42, 0.95, 0.72)}
+	if hero_name == "后羿" and slot == 2:
+		return {"len": 160.0, "hit_r": 1.2, "only_hero": true, "speed": 20.0,
+			"color": Color(1.0, 0.62, 0.14)}
+	return {}

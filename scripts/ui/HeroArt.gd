@@ -70,6 +70,44 @@ static func accent_of(hero_name: String) -> Color:
 	return Vfx.color_for_hero(hero_name)
 
 ## 环形英雄头像：深色内盘 + 英雄色径向光 + 专属徽记 + 阵营细边；dead=true 整体压暗去色
+# ==================== 原初印记等级（非数字：环上符文 + 段位色） ====================
+# 0 级不画；1~6 级依次点亮 1~6 枚环上符文（自顶部顺时针），同时整体换段位色：
+# 青铜(1~2)/银(3)/金(4)/赤金(5)/紫金(6，光晕+内环)。不看数字，凭「亮几枚 + 什么颜色」一眼读等级。
+const MARK_TIER_COL := [
+	Color(0.0, 0.0, 0.0, 0.0),
+	Color(0.80, 0.52, 0.26),
+	Color(0.92, 0.60, 0.30),
+	Color(0.80, 0.88, 0.98),
+	Color(1.00, 0.84, 0.34),
+	Color(1.00, 0.56, 0.22),
+	Color(0.82, 0.55, 1.00),
+]
+
+static func draw_primitive_mark(ci: CanvasItem, center: Vector2, radius: float, level: int) -> void:
+	var lv := clampi(level, 0, 6)
+	if lv <= 0 or radius < 2.5:
+		return
+	var col: Color = MARK_TIER_COL[lv]
+	var rr := radius * 1.14
+	var pip := maxf(radius * 0.15, 1.15)
+	# 5/6 级：外发光环；6 级再加内环，和 5 级拉开差距
+	if lv >= 5:
+		ci.draw_arc(center, rr, 0.0, TAU, 30, Color(col.r, col.g, col.b, 0.22 if lv == 5 else 0.34),
+			maxf(radius * 0.22, 2.2), true)
+	if lv >= 6:
+		ci.draw_arc(center, radius * 0.74, -PI * 0.5, PI * 1.5, 24,
+			Color(col.r, col.g, col.b, 0.55), maxf(radius * 0.10, 1.2), true)
+	for i in lv:
+		var a := -PI * 0.5 + TAU * float(i) / 6.0
+		var p := center + Vector2(cos(a), sin(a)) * rr
+		var up := Vector2(cos(a), sin(a))
+		var side := Vector2(-up.y, up.x)
+		var pts := PackedVector2Array([p - up * pip, p - side * pip * 0.72,
+			p + up * pip, p + side * pip * 0.72])
+		ci.draw_colored_polygon(pts, col)
+		ci.draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]),
+			Color(0, 0, 0, 0.55), maxf(pip * 0.30, 1.0))
+
 static func draw_portrait(ci: CanvasItem, center: Vector2, radius: float, hero_name: String,
 		team_col: Color, dead := false) -> void:
 	var acc := accent_of(hero_name)

@@ -1,9 +1,10 @@
 class_name Turret
 extends GameEntity
 const TurretMesh = preload("res://scripts/entities/TurretMesh.gd")
+const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 # 攻击范围预览环
 var range_preview: MeshInstance3D
-var preview_material: StandardMaterial3D
+var preview_material: ShaderMaterial
 var range_ring_state: int = 2   # 0=红(正在打玩家) 1=绿(敌方兵线近) 2=黄(默认)；供联机快照广播给客户端复刻
 var search_timer: float = 0.0
 var consecutive_hits: int = 0          # 连续攻击同一目标次数
@@ -45,21 +46,12 @@ func _ready():
 	collision_layer = 1
 	collision_mask = 0
 func _create_range_preview():
-	range_preview = MeshInstance3D.new()
-	var torus = TorusMesh.new()
-	torus.inner_radius = attack_range*0.01 - 0.15+body_radius
-	torus.outer_radius = attack_range*0.01 + 0.15+body_radius
-	range_preview.mesh = torus
-	range_preview.rotation_degrees = Vector3(0, 0, 0)  # 水平放置
-	range_preview.position = Vector3(0, 0.01, 0)
-	
-	preview_material = StandardMaterial3D.new()
-	preview_material.albedo_color = Color.YELLOW
-	preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	preview_material.albedo_color.a = 0.3
-	preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	range_preview.material_override = preview_material
-	
+	# 贴地范围圈（柔化环带 + 磨损斑驳，随野区起伏贴地），不再是纯色 Torus 环
+	var r: float = attack_range * 0.01 + body_radius
+	range_preview = MeshFactory.create_ground_ring(r, Color(1.0, 0.9, 0.35, 0.5))
+	range_preview.name = "RangeRing"
+	range_preview.visible = false   # 只在玩家靠近（≤11m）时才显示
+	preview_material = range_preview.material_override as ShaderMaterial
 	add_child(range_preview)
 func _update_range_preview():
 	if not range_preview: return
@@ -68,20 +60,24 @@ func _update_range_preview():
 	var enemy_minion_near = _has_enemy_minion_near()
 	shield_protected_no_minion = not enemy_minion_near
 
+	# 敌方防御塔的攻击范围圈：玩家本人进到 11 米内才出现（否则满屏圆环糊住战场）
+	var near_player: bool = player_hero != null and player_hero.team != team \
+		and global_position.distance_to(player_hero.global_position) <= 11.0
+	range_preview.visible = near_player
+	if not near_player:
+		return
+
 	if player_hero and self.current_target == player_hero:
 		# 正在被玩家英雄攻击 → 红色
-		preview_material.albedo_color = Color.RED
-		preview_material.albedo_color.a = 0.4
+		MeshFactory.set_ground_ring_color(range_preview, Color(1.0, 0.28, 0.24, 0.55))
 		range_ring_state = 0
 	elif enemy_minion_near:
 		# 有敌方兵线在附近 → 绿色
-		preview_material.albedo_color = Color.GREEN
-		preview_material.albedo_color.a = 0.4
+		MeshFactory.set_ground_ring_color(range_preview, Color(0.45, 1.0, 0.45, 0.5))
 		range_ring_state = 1
 	else:
 		# 默认黄色
-		preview_material.albedo_color = Color.YELLOW
-		preview_material.albedo_color.a = 0.3
+		MeshFactory.set_ground_ring_color(range_preview, Color(1.0, 0.9, 0.35, 0.45))
 		range_ring_state = 2
 
 func _get_player_hero() -> Hero:
@@ -102,6 +98,7 @@ func _create_visual():
 	_body_vis = vis
 	_body_vis_base = vis.position
 	_crystal_pivot = vis.get_node_or_null("CrystalPivot") as Node3D
+	# 塔外周青砖铺装已移到 BattleManager（塔被摧毁后砖要留下，不能挂在塔节点下）
 	_add_base_blend(f)   # 石台 + 接地暗影：让塔"长"进地面，消除与地形的硬切边
 	var col = CollisionShape3D.new()
 	col.shape = SphereShape3D.new()
@@ -137,7 +134,7 @@ void fragment() {
 
 func _add_base_blend(f: float) -> void:
 	_ensure_mats()
-	var k := f / 1.5   # 底座尺寸按旧 1.5 基准归一：塔放大后底座不会跟着无限变宽
+	var k := f / 1.5 * 0.8   # 底座尺寸按旧 1.5 基准归一后，再缩到原来的 80%
 	# 外圈低矮过渡台（颜色更深，视觉上"长"进地里）
 	var s1 := MeshInstance3D.new()
 	var c1 := CylinderMesh.new()
@@ -273,7 +270,7 @@ func _update_lock_beam(delta: float) -> void:
 	if _lock_beam == null or not is_instance_valid(_lock_beam):
 		_lock_beam = Vfx.make_lock_beam(Vfx.team_color(team))
 		add_child(_lock_beam)
-	var from: Vector3 = global_position + Vector3(0, 3.45 if display_name != "crystal" else 4.35, 0)
+	var from: Vector3 = global_position + Vector3(0, 3.45 if display_name != "crystal" else 3.30, 0)
 	var to: Vector3 = tgt.global_position + Vector3.UP * 1.0
 	Vfx.aim_lock_beam(_lock_beam, from, to, Time.get_ticks_msec() * 0.001)
 	_lock_send_t -= delta
@@ -349,7 +346,7 @@ func _physics_process(delta):
 
 				# 激光攻击：常驻细锁定光束 + 能量球沿同一束光飞行，到达目标才结算伤害
 				var tgt := current_target
-				var from := global_position + Vector3(0, 3.45 if display_name != "crystal" else 4.35, 0)
+				var from := global_position + Vector3(0, 3.45 if display_name != "crystal" else 3.30, 0)
 				var to := tgt.global_position + Vector3.UP * 1.0
 				var dst := from.distance_to(to)
 				var fly_t := clampf(dst / 26.0, 0.22, 0.85)   # 能量球飞行时间（伤害在到达时结算）
@@ -411,6 +408,19 @@ func die(killer):
 			lane = "mid"
 		if bm and lane != "":
 			bm.high_tower_destroyed[team][lane] = true
+			# 超级兵出动播报：仅在高地塔被摧毁时随后播 1 次，不再每波小兵重复
+			if bm.ui:
+				bm.ui.show_kill_feed("超级兵", team, "出动！")
+	# 己方边路二塔被摧毁：60 秒后于原位置生成视野之灵
+	if display_name == "inner" and bm and team == Config.player_team:
+		var lane2 := ""
+		var sx := global_position.x + global_position.z
+		if sx > 0:
+			lane2 = "farm"
+		elif sx < 0:
+			lane2 = "clash"
+		if lane2 != "":
+			bm.schedule_vision_spirit(global_position, lane2)
 	if display_name == "crystal":
 		if bm:
 			bm.crystal_destroyed(team)
@@ -497,6 +507,9 @@ func play_hit_react() -> void:
 	_hit_tween.tween_property(_body_vis, "position", _body_vis_base, 0.12)
 
 var _recently_reported
+func _clear_recently_reported() -> void:
+	_recently_reported = false
+
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false,skill_id:int=0,pen: float = 0.0, is_crit_forced: int = -1):
 	# 无兵线减伤：仅对英雄伤害生效，且塔附近没有攻击方的小兵
 	if not _recently_reported and Config.is_ally(team):
@@ -509,8 +522,8 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			warn_desc = "我方水晶正在被攻击"
 		battle.ui.show_kill_feed("", Config.Team.NEUTRAL, warn_desc, display_name, team)
 		_recently_reported = true
-		await get_tree().create_timer(25.0).timeout
-		_recently_reported = false
+		# 不能用 await：take_damage 会挂起 25 秒，首次命中（例如第一只小兵）等于白打
+		get_tree().create_timer(25.0).timeout.connect(_clear_recently_reported)
 	if source and (source.display_name in ["siege", "super", "shadow_dragon"]):
 		amount *= 2.0
 	if source and source.display_name in ["dragon", "storm"]:
@@ -550,7 +563,8 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			_check_tower_shield_triggers()
 			return
 		else:
-			amount =0
+			# 护盾被击穿：剩余溢出伤害继续落到塔身上（原实现直接清零 → 这一击完全免疫）
+			amount -= tower_shield
 			tower_shield = 0
 	if source:
 		super.take_damage(amount, source, is_magic,skill_id,pen, is_crit_forced) 
@@ -575,3 +589,5 @@ func _activate_tower_shield(stage: float):
 	var lost_health = max_health - health
 	tower_shield = lost_health
 	tower_shield_active = true
+
+const TOTAL_PER_SIDE: int = 10   # 每方 9 塔 + 1 水晶（对战纪录统计用）

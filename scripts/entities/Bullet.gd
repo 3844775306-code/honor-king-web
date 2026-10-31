@@ -37,6 +37,7 @@ var drop_dur: float = 0.0
 var knock_dur :float = 0.0
 var goal: Vector3=Vector3.ZERO
 var path_hit: bool = false   # goal 模式是否沿途判伤（默认只到落点爆炸；安琪拉1技能开启）
+var drop_mode: bool = false  # 垂直落体（小乔R流星等）：落点判定用三维距离，避免高空水平重合就爆炸
 var fire_damage:float = 0.0
 var timer:float=0.0
 var skill_id: int = 0
@@ -48,6 +49,7 @@ var transfer: int = 0
 var repel: bool = false
 var luban_w_knockback: bool = false   # 鲁班W：仅击退近身目标
 var hit :bool = false
+var _pitch_visual: bool = false   # 箭矢类弹体：视觉俯仰跟随弹道（球体光效不需要）
 # 安琪拉2技能
 var angela_w: bool = false
 var angela_w_level: int = 0
@@ -141,7 +143,10 @@ func _ready():
 func _build_unified_visual() -> void:
 	var spec := BulletVisual.spec_for(self)
 	var base: float = float(spec.get("size_mult", 1.0))
-	visual_mesh = BulletVisual.build(int(spec["shape"]), spec["c1"], spec["c2"], base)
+	# 箭矢类（弓兵实体箭 / 后羿箭）需要俯仰跟随弹道，球体光效不需要
+	var shape := int(spec["shape"])
+	_pitch_visual = shape == BulletVisual.SHAPE_BOLT or shape == BulletVisual.SHAPE_ARROW
+	visual_mesh = BulletVisual.build(shape, spec["c1"], spec["c2"], base)
 	_recursive_set_shadow(visual_mesh, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 	add_child(visual_mesh)
 	var spn := visual_mesh.get_node_or_null("Spin")
@@ -181,6 +186,16 @@ func set_linear(dir: Vector3, distance: float):
 	traveled = 0.0
 func set_goal(pos):
 	goal = pos
+# 弹体朝向：偏航跟随飞行方向；箭矢类（BOLT/ARROW）再加俯仰，箭头才不会平飞
+func _aim_visual(dir: Vector3) -> void:
+	if visual_mesh == null or not is_instance_valid(visual_mesh):
+		return
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length_squared() > 0.000001:
+		visual_mesh.rotation.y = atan2(dir.x, dir.z)
+	if _pitch_visual:
+		var d := dir.normalized()
+		visual_mesh.rotation.x = -asin(clampf(d.y, -1.0, 1.0))
 func _physics_process(delta):
 	# 发射源已释放（英雄/塔死亡1秒后被queue_free）：子弹立即销毁
 	# 否则用已释放对象作为 source 调用 take_damage 会触发类型检查错误
@@ -223,9 +238,8 @@ func _physics_process(delta):
 		var dir = (goal - global_position).normalized()
 		global_position += dir * speed * delta
 
-		# 朝向
-		var target_y = atan2(dir.x, dir.z)
-		visual_mesh.rotation.y = target_y
+		# 朝向（箭矢类同时俯仰贴弹道）
+		_aim_visual(dir)
 
 		# 沿途命中判定（path_hit：安琪拉1技能等"穿点"弹道；默认 goal 模式只飞不判伤）
 		if path_hit and source:
@@ -242,6 +256,9 @@ func _physics_process(delta):
 		# 距离检测命中（到达落点：未命中沿途目标就在终点爆一点，on_hit 内按 damage_range 结算范围伤害）
 		# 只比水平距离：地面落点 goal.y 通常为 0，而弹体出生在 y=1，三维距离会让落点永远差 1 米而不爆炸
 		var _goal_gap := Vector2(global_position.x - goal.x, global_position.z - goal.z).length()
+		if drop_mode:
+			# 垂直落体：必须真的落到落点高度才爆，否则在目标正上方就会误判命中
+			_goal_gap = global_position.distance_to(goal)
 		if _goal_gap < 0.45 and source:
 			on_hit()
 			queue_free()
@@ -268,9 +285,8 @@ func _physics_process(delta):
 				tt.parallel().tween_property(trail.material_override, "albedo_color:a", 0.0, 0.4)
 				tt.tween_callback(trail.queue_free)
 
-		# 让球体水平朝向飞行方向（只绕 Y 轴旋转）
-		var target_y = atan2(linear_dir.x, linear_dir.z)
-		visual_mesh.rotation.y = target_y
+		# 朝向飞行方向（箭矢类同时俯仰贴弹道）
+		_aim_visual(linear_dir)
 
 		# 手动检测碰撞：检查周围所有实体
 		var all_entities = get_tree().get_nodes_in_group("entities")
@@ -284,6 +300,10 @@ func _physics_process(delta):
 			if dist <= 0.4:
 				damage_range=radius
 				target = entity
+				# 全图技能命中英雄 → 给小地图打命中反馈时间戳（Minimap 画扩散冲击环）
+				if (houyi_r or luban_w_knockback) and entity is Hero:
+					entity.set_meta("mm_shot_hit_ms", Time.get_ticks_msec())
+					entity.set_meta("mm_shot_hit_kind", "houyi" if houyi_r else "luban")
 				if source.display_name == "铠" and skill_id == 1:
 					target.apply_move_pct_buff("ms_slow", 1, -0.9, true)
 					var kai_q_level = source.skill_levels[0]
@@ -352,9 +372,8 @@ func _physics_process(delta):
 		global_position += dir * step
 		var dist_after = global_position.distance_to(aim)
 
-		# 朝向
-		var target_y = atan2(dir.x, dir.z)
-		visual_mesh.rotation.y = target_y
+		# 朝向（箭矢类同时俯仰贴弹道）
+		_aim_visual(dir)
 
 		# 距离检测命中
 		if (dist_after <= hit_dist or dist_before <= step) and target and source:

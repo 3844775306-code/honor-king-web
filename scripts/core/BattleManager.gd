@@ -66,6 +66,7 @@ var _jungle_group_queue: Array = []
 # 核心实体
 var hero: Hero
 var enemy_hero: Hero
+var spectate_hero: Hero = null   # 阵亡后点击复活条队友时的观战目标（UI 读取）
 var _pfx_hp: float = -1.0   # PostFX 受击红晕：上一帧本地英雄血量（-1=未初始化）
 var turrets: Array = []
 var minions: Array = []
@@ -303,30 +304,36 @@ func _start_game(hero_type: String, summoner_id: String = "flash"):
 	# 先显示王者式加载界面：BP 用双方 picks，网络 host / --net-test 无 BP 数据时占位
 	if _loading_shown: return
 	_loading_shown = true
-	# 随机分配玩家阵营（加载界面/出生点/镜头都由 Config.player_team 决定；联机保持蓝方）
-	if NetSession.mode == NetSession.Mode.NONE:
-		Config.roll_player_team()
 	var heroes: Array = []
 	if sel_ally_picks.size() == 5 and sel_enemy_picks.size() == 5:
 		for i in 5:
 			var hn := str(sel_ally_picks[i])
 			if i == sel_player_seat and hn == "": hn = hero_type
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.player_team})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 0})
 		for i in 5:
 			var hn := str(sel_enemy_picks[i])
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.foe_team()})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": 1})
 	else:
-		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": Config.player_team})
+		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": 0})
 		for i in 4:
-			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": Config.player_team})
+			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": 0})
 		for i in 5:
-			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": Config.foe_team()})
+			heroes.append({"name": "—", "role": "敌方 %d 号位" % (i + 1), "team": 1})
 	loading_screen = LoadingScreen.new()
-	loading_screen.setup(heroes, "对局加载中", "王者峡谷 · 5v5", 2.8)
+	loading_screen.setup(heroes, "对局加载中", "王者峡谷 · 5v5", 2.2)
 	loading_screen.finished.connect(_on_loading_finished.bind(hero_type, summoner_id))
 	add_child(loading_screen)
 	if select_ui:
 		select_ui.visible = false
+
+func _hero_role(hero_name: String) -> String:
+	if hero_name == "" or not hero_configs.has(hero_name): return ""
+	return str(hero_configs[hero_name].get("role", ""))
+
+func _on_loading_finished(hero_type: String, summoner_id: String) -> void:
+	loading_screen = null
+	_loading_shown = false
+	_start_game_body(hero_type, summoner_id)
 
 # 预热：各兵种×阵营建 1 个原型并各渲染 2 帧，既填充 MinionModel 模板缓存，
 # 又让 Mesh/材质完成首帧上传；原型在选人界面后（或在开局时 _clear_prewarm_protos 兜底释放）
@@ -350,15 +357,6 @@ func _clear_prewarm_protos() -> void:
 		if is_instance_valid(p):
 			p.queue_free()
 	_prewarm_protos.clear()
-
-func _hero_role(hero_name: String) -> String:
-	if hero_name == "" or not hero_configs.has(hero_name): return ""
-	return str(hero_configs[hero_name].get("role", ""))
-
-func _on_loading_finished(hero_type: String, summoner_id: String) -> void:
-	loading_screen = null
-	_loading_shown = false
-	_start_game_body(hero_type, summoner_id)
 
 func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	# 进入对局：淡出大厅环境音乐
@@ -1718,10 +1716,12 @@ func get_kill_gold(killer: Hero, victim: Hero) -> int:
 	if victim.level >= 7:       base_gold = 200
 	elif victim.level >= 4:     base_gold = 175
 
-	# 连续死亡递减
+	# 连续死亡递减：索引=死者本局此前的死亡次数。0=首次死亡必须拿满额
+	#（原表首项 0 且无条件覆盖 base_gold，导致“首次死亡击杀奖励=0”）
 	var death_penalty = [0, 200, 180, 150, 120, 100, 60, 40, 20]
-	var index = min(victim.continuous_deaths, death_penalty.size() - 1)
-	base_gold = death_penalty[index]
+	var index = clampi(victim.continuous_deaths, 0, death_penalty.size() - 1)
+	if index > 0:
+		base_gold = death_penalty[index]
 
 	# 一血
 	if not first_blood_occurred:
@@ -4105,15 +4105,24 @@ func _build_row(idx: int, item_id: String) -> PanelContainer:
 	var name_lab := _sel_label(nm, _sel_fs(UiKit.FS_XS), SEL_TEXT, false)
 	name_lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	name_lab.clip_text = true
+	name_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_lab.custom_minimum_size = Vector2(0, 18)
+	name_lab.tooltip_text = nm
 	top.add_child(name_lab)
+	# 价格挪到第二行，把整行宽度让给装备名，长名称不再被价格和序号挤到截断
+	var meta := HBoxContainer.new()
+	meta.add_theme_constant_override("separation", 4)
+	v.add_child(meta)
 	var price_lab := _sel_label("%d金" % cost, _sel_fs(UiKit.FS_XS), SEL_GOLD, false)
 	price_lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	top.add_child(price_lab)
+	meta.add_child(price_lab)
+	var meta_spacer := Control.new()
+	meta_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	meta.add_child(meta_spacer)
 	var btns := HBoxContainer.new()
 	btns.alignment = BoxContainer.ALIGNMENT_CENTER
 	btns.add_theme_constant_override("separation", 4)
-	v.add_child(btns)
+	meta.add_child(btns)
 	var up := _sel_btn("↑", UiKit.C_TEAM0, false, Vector2(42, 26))
 	up.name = "BuildUp_%d" % idx
 	up.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
@@ -4510,6 +4519,10 @@ func _refresh_mvp() -> void:
 		best.is_mvp = true
 
 # ---- P0 镜头/画面反馈（本地表现层，不改伤害与判定时序） ----
+## 阵亡观战：复活条点击存活队友时记录目标，供 UI 高亮/后续镜头扩展；传 null 取消
+func set_spectate_target(target: Hero) -> void:
+	spectate_hero = target if is_instance_valid(target) else null
+
 func camera_shake(amp: float = 0.12, dur: float = 0.22) -> void:
 	_shake_amp = maxf(_shake_amp, amp)
 	_shake_dur = maxf(_shake_dur, dur)
@@ -5348,6 +5361,8 @@ func crystal_destroyed(team: int):
 		winner = Config.Team.PLAYER
 	# 胜负语音（host/离线；接管客户端由 NetResultPanel 收到结算广播时各自播）
 	SfxManager.play_announce("victory" if winner == Config.player_team else "defeat")
+	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看）
+	BattleHistory.record(BattleHistory.payload_from_battle(self), "联机" if NetSession.is_online() else "单机")
 	_show_game_over()
 
 func _show_game_over():

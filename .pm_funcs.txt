@@ -1,0 +1,220 @@
+## 聚光灯舞台（终局第一幕）：己方 5 人 V 字站位（玩家居中）→ 点击 → 玩家个人表现 → 再点击 → 结算
+func _enter_post_match(won: bool) -> void:
+	if not is_instance_valid(hero):
+		_show_game_over(true)
+		return
+	_pm_player = hero
+	get_tree().paused = true
+	if ui != null:
+		ui.visible = false
+	var base: Vector3 = Vector3(-53.0, 0.0, 53.0) if Config.player_team == Config.Team.PLAYER else Vector3(53.0, 0.0, -53.0)
+	_pm_inward = Vector3(-base.x, 0.0, -base.z).normalized()
+	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
+	_pm_stage = base + _pm_inward * 22.0
+	_pm_stage.y = 0.0
+	# V 字站位：玩家居中垫前，两侧各两人逐级后退
+	var slots: Array = [
+		Vector3.ZERO,
+		_pm_right * 4.6 - _pm_inward * 2.6,
+		_pm_right * -4.6 - _pm_inward * 2.6,
+		_pm_right * 9.2 - _pm_inward * 5.2,
+		_pm_right * -9.2 - _pm_inward * 5.2,
+	]
+	_pm_heroes.clear()
+	_pm_heroes.append(_pm_player)
+	for h in get_tree().get_nodes_in_group("heroes"):
+		if h is Hero and h != _pm_player and h.team == Config.player_team and _pm_heroes.size() < 5:
+			_pm_heroes.append(h)
+	for i in range(_pm_heroes.size()):
+		var eh: Hero = _pm_heroes[i]
+		var off: Vector3 = slots[i]
+		eh.global_position = _pm_stage + off
+		eh.velocity = Vector3.ZERO
+		eh.rotation = Vector3(0.0, atan2(-_pm_inward.x, -_pm_inward.z), 0.0)
+		if eh.anim_player != null and eh.anim_player.has_animation("idle"):
+			eh.anim_player.play("idle")
+		_pm_add_spotlight(eh.global_position, i == 0)
+	# 队伍评分：第 1 名 = 全队 MVP（金牌），2-3 名银牌，4-5 名铜牌
+	var ranked: Array = _pm_rank_team()
+	var medal_of: Dictionary = {}
+	for i in range(ranked.size()):
+		var rh: Hero = ranked[i]
+		medal_of[rh] = 0 if i == 0 else (1 if i < 3 else 2)
+	var mvp_hero: Hero = _pm_player
+	if not ranked.is_empty():
+		mvp_hero = ranked[0]
+	# 叠层 UI（独立 CanvasLayer，压在 HUD 之上）
+	_pm_layer = CanvasLayer.new()
+	_pm_layer.layer = 90
+	add_child(_pm_layer)
+	_pm_view = PostMatchViewScript.new()
+	_pm_layer.add_child(_pm_view)
+	_pm_view.set_camera(cam)
+	var entries: Array = []
+	for eh2 in _pm_heroes:
+		var hh: Hero = eh2
+		entries.append({
+			"world": hh.global_position,
+			"hero": str(hh.display_name),
+			"nick": str(hh.player_name),
+			"lane": HeroPickData.role_lane(str(hh.role)),
+			"mvp": hh == mvp_hero,
+			"medal": int(medal_of.get(hh, -1)),
+		})
+	_pm_view.set_stage(won, entries)
+	_pm_view.advance.connect(_on_pm_advance)
+	_pm_view.finished.connect(_on_pm_finished)
+	# 镜头推到 V 字正面
+	if cam != null and is_instance_valid(cam):
+		var look: Vector3 = _pm_stage + Vector3(0.0, 1.6, 0.0)
+		var cam_end: Vector3 = _pm_stage + _pm_inward * 13.0 + Vector3(0.0, 8.5, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		var tw: Tween = _pm_view.create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(cam, "global_position", cam_end, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(cam, "rotation", rot, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+## 单盏聚光灯：顶光 + 地面光圈 + 体积光柱（玩家位偏金色并更亮）
+func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
+	var root := Node3D.new()
+	root.position = pos
+	add_child(root)
+	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
+	var sl := SpotLight3D.new()
+	sl.position = Vector3(0.0, 7.5, 0.0)
+	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+	sl.spot_range = 14.0
+	sl.spot_angle = 26.0
+	sl.light_energy = 3.0 if is_player else 2.0
+	sl.light_color = col
+	root.add_child(sl)
+	var disc := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 1.15
+	cm.bottom_radius = 1.15
+	cm.height = 0.03
+	cm.radial_segments = 40
+	disc.mesh = cm
+	disc.position = Vector3(0.0, 0.03, 0.0)
+	var dm := StandardMaterial3D.new()
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	dm.albedo_color = Color(col.r, col.g, col.b, 0.30 if is_player else 0.18)
+	disc.material_override = dm
+	root.add_child(disc)
+	var beam := MeshInstance3D.new()
+	var bm2 := CylinderMesh.new()
+	bm2.top_radius = 0.6
+	bm2.bottom_radius = 1.12
+	bm2.height = 7.4
+	bm2.radial_segments = 28
+	beam.mesh = bm2
+	beam.position = Vector3(0.0, 3.7, 0.0)
+	var bmat := StandardMaterial3D.new()
+	bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	bmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	bmat.albedo_color = Color(col.r, col.g, col.b, 0.10)
+	beam.material_override = bmat
+	root.add_child(beam)
+
+
+## 队伍综合评分（MVP / 奖牌排序）
+func _pm_score(h: Hero) -> float:
+	return float(h.kills) * 900.0 + float(h.assists) * 320.0 - float(h.deaths) * 260.0 \
+		+ h.damage_dealt_to_heroes * 0.35 + float(h.total_gold_earned) * 0.55 \
+		+ h.healing_done * 0.22 + h.turret_damage * 0.18 + float(h.last_hits) * 2.0
+
+
+func _pm_rank_team() -> Array:
+	var arr: Array = []
+	for h in _pm_heroes:
+		arr.append(h)
+	arr.sort_custom(func(a, b): return _pm_score(a) > _pm_score(b))
+	return arr
+
+
+## 第一次点击：其余英雄退场，镜头把玩家推到屏幕左侧，右侧出个人表现面板
+func _on_pm_advance() -> void:
+	var p: Hero = _pm_player
+	if p == null or not is_instance_valid(p):
+		return
+	if _pm_view == null or not is_instance_valid(_pm_view):
+		return
+	for h in _pm_heroes:
+		if h == p:
+			continue
+		var eh: Hero = h
+		var tw: Tween = _pm_view.create_tween()
+		tw.tween_property(eh, "global_position", eh.global_position - _pm_inward * 8.0, 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(eh, "scale", Vector3(0.02, 0.02, 0.02), 0.7)
+		tw.tween_callback(func(): eh.visible = false)
+	if cam != null and is_instance_valid(cam):
+		var look: Vector3 = p.global_position + _pm_right * 7.0 + Vector3(0.0, 1.5, 0.0)
+		var cam_end: Vector3 = p.global_position + _pm_inward * 8.0 + _pm_right * 7.0 + Vector3(0.0, 5.5, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		var tw2: Tween = _pm_view.create_tween()
+		tw2.set_parallel(true)
+		tw2.tween_property(cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw2.tween_property(cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_pm_view.show_player_detail(_pm_player_detail(p))
+
+
+## 玩家个人表现数据（右侧面板 + 本局上/掉分）
+func _pm_player_detail(h: Hero) -> Dictionary:
+	var rows: Array = [
+		["K / D / A", "%d / %d / %d" % [h.kills, h.deaths, h.assists]],
+		["总经济", "%d" % h.total_gold_earned],
+		["英雄伤害", "%d" % int(h.damage_dealt_to_heroes)],
+		["承受伤害", "%d" % int(h.damage_taken_from_heroes)],
+		["治疗量", "%d" % int(h.healing_done)],
+		["补刀", "%d" % h.last_hits],
+		["推塔伤害", "%d" % int(h.turret_damage)],
+		["控制时长", "%.1f s" % h.cc_duration_dealt],
+		["野区经济", "%d" % h.jungle_gold],
+	]
+	var rank_lines: Array = []
+	if not rank_result.is_empty():
+		var rr: Dictionary = rank_result
+		var old_s: Dictionary = rr.get("old_state", {})
+		var new_s: Dictionary = rr.get("new_state", {})
+		var pts: int = int(new_s.get("points", 0)) - int(old_s.get("points", 0))
+		rank_lines.append("本局积分 %+d" % pts)
+		rank_lines.append("本局星数 %+d★" % int(rr.get("star_change", 0)))
+		rank_lines.append("段位 %s → %s" % [str(rr.get("old_label", "")), str(rr.get("new_label", ""))])
+		if bool(rr.get("promoted", false)):
+			rank_lines.append("↑ 晋升")
+		elif bool(rr.get("demoted", false)):
+			rank_lines.append("↓ 降级")
+		elif bool(rr.get("protected", false)):
+			rank_lines.append("勇者积分保星")
+		elif bool(rr.get("floor_protected", false)):
+			rank_lines.append("最低段位保护")
+	else:
+		rank_lines.append("本局不计排位星")
+	rank_lines.append("对局时长 %02d:%02d" % [int(game_time) / 60, int(game_time) % 60])
+	return {
+		"hero": str(h.display_name),
+		"nick": str(h.player_name),
+		"lane": HeroPickData.role_lane(str(h.role)),
+		"mvp": bool(h.is_mvp),
+		"rows": rows,
+		"rank_lines": rank_lines,
+	}
+
+
+## 第二次点击：收掉舞台层，进结算面板
+func _on_pm_finished() -> void:
+	if _pm_view != null and is_instance_valid(_pm_view):
+		_pm_view.queue_free()
+	_pm_view = null
+	if _pm_layer != null and is_instance_valid(_pm_layer):
+		_pm_layer.queue_free()
+	_pm_layer = null
+	if ui != null:
+		ui.visible = true
+	_show_game_over(true)
+

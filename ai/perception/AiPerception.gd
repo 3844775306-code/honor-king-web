@@ -155,6 +155,11 @@ func find_nearest_enemy_hero(radius: float) -> Hero:
 	return find_nearest_in_range(radius, [Hero], _enemy_team(), true, _is_visible_hero) as Hero
 
 
+# 指定位置附近的可见敌方英雄数量（回城点安全性判断用）
+func count_enemy_heroes_near_center(center: Vector3, radius: float) -> int:
+	return count_near_center(center, radius, [Hero], _enemy_team(), _is_visible_hero)
+
+
 # --- 己方英雄 ---
 func count_ally_heroes_near(radius: float) -> int:
 	return count_in_range(radius, [Hero], hero.team, true)

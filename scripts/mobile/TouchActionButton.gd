@@ -15,6 +15,9 @@ var icon_kind := ""           # 非空时画程序化功能图标（推塔/小�
 var name_text := ""           # 图标按钮下方的名称条（推塔/小兵/回城）
 var dimmed := false           # 图标压暗（不可用状态）
 var label_font_size := 0.0     # 0=自动按半径缩放；>0=固定字号（用于升级“+”等需要更醒目字号的按钮）
+var compact_badge := false      # 紧凑徽章：触摸区保持大，可视内容缩成小圆点/小加号（技能升级键）
+var glow := false              # 可购买/可升级：外圈旋转发光拖尾（金色）
+var _glow_t := 0.0
 var color := Color(0.85, 0.6, 0.15, 0.85)
 var emit_activated_on_press := false
 var hold_to_act := true        # true=按住持续有效（普攻），false=按下触发一次
@@ -71,6 +74,9 @@ func _gui_input(event):
 		accept_event()
 
 func _process(delta: float) -> void:
+	if glow:
+		_glow_t += delta
+		queue_redraw()
 	var target := 1.0 if _active else 0.0
 	if absf(_press - target) < 0.003:
 		return
@@ -81,6 +87,9 @@ func _draw():
 	var p := clampf(_press, 0.0, 1.0)
 	var center := size * 0.5 + Vector2(0, p * 1.8)
 	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.022)
+	if compact_badge:
+		_draw_compact_badge(center, radius, p)
+		return
 	var base_col := color if _active else color.darkened(0.25)
 	var accent := base_col.lightened(0.35)
 	# 功能键的外圈跟随图标色（回城蓝/恢复绿/召唤师色），不再一律用底色
@@ -89,6 +98,14 @@ func _draw():
 		if dimmed:
 			accent = accent.darkened(0.30)
 	UiKit.touch_button_frame(self, center, radius, accent, p, 3.0, dimmed)
+	# 可购买/可升级：图标外圈一圈旋转发光拖尾（与推荐装备同款）
+	if glow:
+		for gi in 3:
+			var a0 := _glow_t * 3.2 + TAU * float(gi) / 3.0
+			for gk in 6:
+				var gt := float(gk) / 6.0
+				draw_arc(center, radius + 4.0 + gt * 7.0, a0, a0 + 1.0, 10,
+					Color(1.0, 0.86, 0.32, (1.0 - gt) * 0.6), 5.0 - gt * 2.6, true)
 	# 开关选中态（推塔/小兵等模式键）：外圈金环 + 文字转金色
 	if toggled:
 		draw_arc(center, radius + 9, 0, TAU, 40, Color(1.0, 0.82, 0.25, 0.95), 4.0, true)
@@ -106,6 +123,22 @@ func _draw():
 		baseline = center.y + fs * 0.36
 	var tc := Color(1.0, 0.92, 0.5, 1.0) if toggled else Color.WHITE
 	draw_string(UiKit.font(), Vector2(center.x - radius, baseline), label_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, fs, tc)
+
+## 紧凑升级徽章：小金色圆盘 + 细金环 + 柔和呼吸光，不再用 72px 大加号压满触摸键
+func _draw_compact_badge(center: Vector2, radius: float, p: float) -> void:
+	var r := radius * (0.42 + p * 0.03)
+	var gold := Color(1.0, 0.84, 0.30, 0.98) if not glow else Color(1.0, 0.88, 0.42, 1.0)
+	if glow:
+		for gi in 3:
+			var a0 := _glow_t * 2.6 + TAU * float(gi) / 3.0
+			draw_arc(center, r + 7.0 + gi * 2.0, a0, a0 + 1.1, 12,
+				Color(1.0, 0.86, 0.32, 0.32 - gi * 0.07), 4.0 - gi * 0.8, true)
+	draw_circle(center + Vector2(0, 2.0), r + 1.5, Color(0, 0, 0, 0.35))
+	draw_circle(center, r, Color(0.10, 0.075, 0.025, 0.94))
+	draw_arc(center, r, 0, TAU, 32, gold, 2.0, true)
+	var fs := int(maxf(16.0, r * 1.15))
+	UiKit.text(self, Vector2(center.x - r, center.y + fs * 0.36), "+", fs, gold,
+		HORIZONTAL_ALIGNMENT_CENTER, r * 2.0)
 
 ## 图标按钮的名称条：按钮内侧底部圆角小条 + 描边白字
 ## 几何与 SkillTouchButton 的 name_below 名称条完全一致（同样 220 尺寸的回城/恢复才能对齐）

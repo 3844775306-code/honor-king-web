@@ -16,6 +16,11 @@ var dmg_by_team: Dictionary = {}   # 史诗怪本轮次存活期间按英雄队�
 var auto_search_timer: float = 0.0
 var activity_ring: MeshInstance3D
 var activity_radius: float = 4.0
+var activity_ring_center: Vector3 = Vector3.ZERO   # 活动范围圈的世界圆心（营地/巢穴，固定不动）
+var activity_ring_radius: float = 0.0              # 圈显示半径（0 = 用 activity_radius）
+var last_player_hit_time: float = -9999.0          # 玩家英雄最近一次打这只怪的游戏时间
+var _ring_center_set := false
+var _ring_is_red := false
 var search_radius: float = 8.0
 var monster_phase: int = 0   # 史诗阶段：0普通 1暗影 2风暴（出生时盖戳）
 var skill_cds: Dictionary = {}        # 技能剩余冷却 {技能名: 秒}
@@ -113,6 +118,20 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		dmg_by_team[source.team] = dmg_by_team.get(source.team, 0.0) + amount
 	if not provoked and source and source.team != team:
 		provoked = true
+	# 被英雄打中：立刻锁定攻击者反击（不受搜索半径限制），并取消「回营」状态
+	# 原逻辑只有 provoked=true，目标要靠 0.5s 一次的 _find_target 在 search_radius(8m) 内找，
+	# 且追击到 activity_radius(普通营地 4m) 就脱战回营 → 远程英雄在 6~7.5m 打野时野怪永远够不到、也不追
+	if source is Hero and source.team != team and source.health > 0 and source.collision_layer != 0 \
+		and global_position.distance_to(source.global_position) <= _leash_radius() + 4.0:
+		provoked = true
+		returning = false
+		current_target = source
+		auto_search_timer = 0.0
+	# 记录"玩家英雄最近一次打这只怪"的时间：活动圈只在这个时间窗内显示
+	if source is Hero and source.team == Config.Team.PLAYER:
+		var bm_p = get_tree().get_first_node_in_group("battle_manager")
+		if bm_p != null and bm_p.hero == source:
+			last_player_hit_time = float(bm_p.game_time)
 
 # 野怪动画名映射（攻击→eat）
 func _play_anim(anim_name: String):
@@ -200,6 +219,41 @@ func _update_anim(delta: float) -> void:
 func _process(delta: float) -> void:
 	super._process(delta)
 	_update_anim(delta)
+	_update_activity_ring()
+
+
+## 活动范围圈：只在「玩家英雄正在攻击这只野怪」时显示；
+## 圈固定在营地（不随怪移动），怪走出圈外时变红，否则白色
+func _update_activity_ring() -> void:
+	if activity_ring == null or not is_instance_valid(activity_ring):
+		return
+	var show := false
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.hero != null and is_instance_valid(bm.hero):
+		var ph = bm.hero
+		# 只有"玩家正在攻击这只野怪"才显示：目标是它 + 最近 2 秒内确实挨过玩家的打
+		#（仅靠 current_target 会残留：打一下后走开/脱战，圈还挂在那里）
+		var recent_hit: bool = float(bm.game_time) - last_player_hit_time <= 2.0
+		if health > 0.0 and ph.health > 0.0 and recent_hit and (ph.current_target == self or ph.manual_target == self):
+			show = true
+	if activity_ring.visible != show:
+		activity_ring.visible = show
+	if not show:
+		return
+	if not _ring_center_set:
+		activity_ring_center = global_position
+		_ring_center_set = true
+	if activity_ring_radius <= 0.0:
+		activity_ring_radius = maxf(activity_radius, 1.0)
+	# 圈贴回固定圆心（圈设为 top_level，自身世界坐标不受怪移动/转向影响）
+	activity_ring.global_position = Vector3(activity_ring_center.x,
+		activity_ring_center.y + 0.17, activity_ring_center.z)
+	# 走出圈外 → 红；仍在圈内 → 白
+	var out := global_position.distance_to(activity_ring_center) > activity_ring_radius
+	if out != _ring_is_red:
+		_ring_is_red = out
+		MeshFactory.set_ground_ring_color(activity_ring,
+			Color(1.0, 0.22, 0.18, 0.55) if out else Color(1.0, 1.0, 1.0, 0.42))
 
 
 func _physics_process(delta):
@@ -235,33 +289,34 @@ func _physics_process(delta):
 			_finish_cast()
 		return
 
-	# 搜索敌人（仅当被激怒且未返回）
+	# 搜索敌人（仅当被激怒且未返回）；目标丢失时才重新搜，不覆盖已锁定的攻击者
 	if provoked and not returning:
 		auto_search_timer -= delta
 		if auto_search_timer <= 0:
 			auto_search_timer = 0.5
-			_find_target()
+			if current_target == null or not is_instance_valid(current_target) or current_target.health <= 0:
+				_find_target()
 
 	# 处理当前目标
 	if current_target and is_instance_valid(current_target) and current_target.health > 0:
 		var dist_to_target = global_position.distance_to(current_target.global_position)
 		var dist_to_spawn = global_position.distance_to(spawn_pos)
-		# 离开出生点过远，脱战
-		if dist_to_spawn > activity_radius:
+		if dist_to_target <= attack_range*0.01:
+			# 够得到就先打（在追击上限边缘也照样反击）
+			if attack_timer <= 0:
+				_perform_attack()
+		elif dist_to_spawn > _leash_radius():
+			# 追出营地过远，脱战回营
 			current_target = null
 			returning = true
 			provoked = false
 		else:
-			if dist_to_target <= attack_range*0.01:
-				if attack_timer <= 0:
-					_perform_attack()
-			else:
-				# 向目标移动
-				var dir = (current_target.global_position - global_position).normalized()
-				dir = _avoid_walls(dir, delta, current_target.global_position)
-				global_position += dir * 100 * delta*0.01
-				rotation.y = atan2(dir.x, dir.z)
-				_play_anim("walk")
+			# 向目标移动
+			var dir = (current_target.global_position - global_position).normalized()
+			dir = _avoid_walls(dir, delta, current_target.global_position)
+			global_position += dir * _chase_speed_m() * delta
+			rotation.y = atan2(dir.x, dir.z)
+			_play_anim("walk")
 	else:
 		current_target = null
 		_play_anim("idle")
@@ -488,9 +543,20 @@ func _try_wrath():
 
 
 
+# 脱战上限：被攻击后会追出营地反击，超过该距离才脱战回营
+# 普通营地：活动半径 4m → 追击上限 9m（够到 750~825 射程的远程英雄）；史诗龙：8m → 13m
+func _leash_radius() -> float:
+	return maxf(activity_radius + 5.0, search_radius)
+
+
+# 追击移速（m/s）：营地配置没给 move_speed（=0），旧逻辑写死 1.0 m/s，追人太慢形同不还手
+func _chase_speed_m() -> float:
+	return maxf(move_speed, 300.0) * 0.01
+
+
 func _find_target():
 	var best: GameEntity = null
-	var best_dist = search_radius
+	var best_dist = _leash_radius()
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity == self or entity.health <= 0: continue
 		if entity.team == team: continue

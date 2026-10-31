@@ -1,7 +1,7 @@
 class_name MoveModeToggle
 extends Control
 ## 桌面移动模式切换（电脑端专属，手机上隐藏）：
-## 点按在 转向模式 ↔ 前后左右模式 之间切换。
+## 点按在 转向模式 ←→ 前后左右模式 之间切换。
 ## - 转向模式：A/D 原地转向，W/S 沿面朝前后移动（现状）
 ## - 前后左右模式：W/S/A/D 直接按屏幕方向移动（上→远离镜头，与摇杆方向映射一致）
 
@@ -67,5 +67,5 @@ func _draw():
 	draw_string(UiKit.font(), Vector2(20, h * 0.5 + 10 + oy), "WASD移动：%s" % MODE_NAMES[mode],
 			HORIZONTAL_ALIGNMENT_LEFT, w - 56, 26, Color(1, 1, 1, 0.95))
 	# 切换提示箭头
-	draw_string(UiKit.font(), Vector2(w - 34, h * 0.5 + 10 + oy), "↻",
+	draw_string(UiKit.font(), Vector2(w - 34, h * 0.5 + 10 + oy), "←→",
 			HORIZONTAL_ALIGNMENT_LEFT, 26, 28, Color(1, 0.85, 0.35, 0.95))

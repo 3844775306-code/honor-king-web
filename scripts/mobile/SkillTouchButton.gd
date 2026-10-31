@@ -23,6 +23,9 @@ var name_below := false
 var icon_kind := ""       # 非空时画功能图标（回城/恢复/召唤师），颜色固定不走英雄色
 var art_hero := ""
 var art_skill: Skill = null
+# 主动装备图标（非空时画程序化装备图案：品质色圆角底 + 该装备专属几何纹样，与商店/推荐装同款）
+var item_name := ""
+var item_tier := 1
 var color := Color(0.2, 0.55, 1.0, 0.85)
 # 按钮内下方的小字说明（由 TouchController 每帧推送，如惩击的伤害数值）
 var sub_text := ""
@@ -43,12 +46,24 @@ var icon_fx: Array = []
 # 在按钮读数最前/伤害数值前加一枚金色普攻小剑，区别于纯直接伤害技能
 var icon_aa := false
 
+# 状态动效：技能冷却结束的一圈清亮“就绪”波纹；升级时一圈金色爆闪；
+# 可升级期间技能图标外沿持续金色呼吸，和上方升级键的旋转光弧互相呼应。
+const READY_ANIM_TIME := 0.55
+const UPGRADE_ANIM_TIME := 0.65
+var upgrade_ready := false       # TouchController 每帧推送：当前技能可升级
+var _ready_anim := 0.0
+var _upgrade_anim := 0.0
+var _upgrade_ready_t := 0.0
+var _prev_cd_ratio := 0.0
+var _last_skill_level := -1
+
 var _active := false
 var _active_touch := -1
 var _origin := Vector2.ZERO      # 按下起点（局部坐标）
 var _drag := Vector2.ZERO        # 当前拖拽偏移
 var _max_drag := 0.0             # 本次手势的最大拖拽距离
 var _press := 0.0
+var _held_time := 0.0            # 本次按住时长：读数只在真正瞄准时出现，避免点按闪字
 
 # 每帧由 TouchController 更新，用于绘制冷却/蓝量状态
 var cd_ratio := 0.0              # 0..1 剩余冷却占比
@@ -80,8 +95,29 @@ func _ready():
 	set_process(true)
 
 func _process(delta: float) -> void:
+	_held_time = _held_time + delta if _active else 0.0
+	if upgrade_ready:
+		_upgrade_ready_t += delta
+	# 冷却从有到无：触发一次“就绪”波纹（只在刚结束冷却时触发，开局/学技能不闪）
+	var learned := skill_level > 0 or max_level == 0
+	var ready_now := learned and cd_ratio <= 0.001 and not in_window and not blocked and mana_ok
+	if ready_now and _prev_cd_ratio > 0.02:
+		_ready_anim = READY_ANIM_TIME
+	_prev_cd_ratio = cd_ratio
+	# 技能等级上升：金色爆闪（首次设置等级不触发）
+	if skill_level != _last_skill_level:
+		if _last_skill_level >= 0 and skill_level > _last_skill_level:
+			_upgrade_anim = UPGRADE_ANIM_TIME
+		_last_skill_level = skill_level
+	var animating := _ready_anim > 0.0 or _upgrade_anim > 0.0 or upgrade_ready
+	if _ready_anim > 0.0:
+		_ready_anim = maxf(0.0, _ready_anim - delta)
+	if _upgrade_anim > 0.0:
+		_upgrade_anim = maxf(0.0, _upgrade_anim - delta)
 	var target := 1.0 if _active else 0.0
 	if absf(_press - target) < 0.003:
+		if animating:
+			queue_redraw()
 		return
 	_press = move_toward(_press, target, delta * 14.0)
 	queue_redraw()
@@ -105,6 +141,7 @@ func _gui_input(event):
 				_active_touch = event.index
 				_active = true
 				_press = 1.0
+				_held_time = 0.0
 				_origin = event.position
 				_drag = Vector2.ZERO
 				_max_drag = 0.0
@@ -120,6 +157,7 @@ func _gui_input(event):
 				var release_global: Vector2 = get_global_position() + event.position
 				_active_touch = -1
 				_active = false
+				_held_time = 0.0
 				_drag = Vector2.ZERO
 				_max_drag = 0.0
 				pressed_changed.emit(skill_index, false)
@@ -167,8 +205,15 @@ func _draw():
 	# 主体：功能图标（回城/恢复/召唤师 → 固定色，见 IconArt）；英雄技能 → 英雄元素色（SkillArt）
 	if icon_kind != "":
 		IconArt.draw_icon(self, center, radius, icon_kind, not usable)
+	elif item_name != "":
+		# 主动装备：程序化装备图标（品质色底 + 专属纹样），不可用时压暗
+		var ir := radius * 0.80
+		UiKit.item_icon(self, Rect2(center - Vector2(ir, ir), Vector2(ir, ir) * 2.0), item_tier, item_name)
+		if not usable:
+			draw_circle(center, radius, Color(0.02, 0.02, 0.03, 0.52))
 	else:
 		SkillArt.draw_bg(self, center, radius, art_hero, art_skill, skill_index, not unlearned, usable)
+	_draw_state_fx(center, radius, k)
 	# 技能名：英雄 1/2/3 技能 name_below=true → 内嵌按钮底部圆角条（元素色色条 + 字数多自动缩字号）；
 	# 召唤师 / 恢复按钮 name_below=false → 名字居中画在按钮上
 	if name_below:
@@ -209,9 +254,8 @@ func _draw():
 	if in_window:
 		var wr := clampf(win_left / maxf(win_total, 0.001), 0.0, 1.0)
 		_draw_cd_sector(center, radius, wr, Color(0.3, 0.92, 1.0, 0.5), Color(1.0, 1.0, 1.0, 0.55))
-		var ws := "%.1f" % win_left
-		_draw_txt(center + Vector2(-radius * 0.55, 6), ws,
-					HORIZONTAL_ALIGNMENT_CENTER, radius * 1.1, int(27.0 * k), Color(1.0, 1.0, 1.0))
+		_draw_txt(center + Vector2(-radius, 6), "%d" % maxi(1, ceili(win_left)),
+					HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, int(27.0 * k), Color(0.97, 0.94, 0.86))
 		# 剩余段数：底部一排实心小圆点（剩余几段=几个点）
 		if segments_left > 0:
 			var n := segments_left
@@ -226,7 +270,8 @@ func _draw():
 	elif on_cd:
 		_draw_cd_sector(center, radius, cd_ratio)
 		var secs := ceili(cd_ratio * cd_total)
-		_draw_txt(center + Vector2(-radius * 0.5, 6), "%d" % secs, HORIZONTAL_ALIGNMENT_CENTER, radius, int(26.0 * k), Color(1, 0.85, 0.3))
+		_draw_txt(center + Vector2(-radius, 6), "%d" % secs, HORIZONTAL_ALIGNMENT_CENTER,
+			radius * 2.0, int(27.0 * k), Color(0.97, 0.94, 0.86))
 	# 存储型技能：已存层数>0 时画一圈细弧表示“下一层回充进度”（不做满遮罩、不盖住技能读数）
 	if has_charge and cd_ratio > 0.001:
 		var a_end := -PI * 0.5 + clampf(cd_ratio, 0.0, 1.0) * TAU
@@ -254,9 +299,36 @@ func _draw():
 			HORIZONTAL_ALIGNMENT_CENTER, radius * 1.4, int(16.0 * k), Color(1.0, 0.85, 0.3))
 	# 技能伤害 + 附加效果读数：英雄技能(名在下方、中央留空)已学且非瞄准/冷却/重施期间时，
 	# 在中央偏上写“伤害×弹数”（物伤橙/法伤紫），其下逐行画效果小图标+数值/时长（绿=自身增益/蓝=对敌负面）
+	# 方案A：常态不显示伤害/效果读数，只在真正按住瞄准时露出；松手立即恢复干净图标
 	if name_below and max_level > 0 and skill_level > 0 \
-			and not _active and not in_window and not on_cd and not blocked:
+			and _active and _held_time >= 0.15 and not in_window and not on_cd and not blocked:
 		_draw_skill_readout(center, radius, k)
+
+# 状态动效：可升级呼吸金环 / 冷却结束就绪波纹 / 升级瞬间金色爆闪
+func _draw_state_fx(center: Vector2, radius: float, k: float) -> void:
+	if upgrade_ready and not _active:
+		var pulse := 0.5 + 0.5 * sin(_upgrade_ready_t * 4.2)
+		draw_arc(center, radius + 5.0 * k + pulse * 2.0 * k, 0.0, TAU, 48,
+			Color(1.0, 0.84, 0.30, 0.10 + 0.17 * pulse), maxf(1.5, 2.2 * k), true)
+	if _ready_anim > 0.0:
+		var t := 1.0 - _ready_anim / READY_ANIM_TIME
+		var a := (1.0 - t) * (1.0 - t)
+		var rr := radius + (3.0 + t * 12.0) * k
+		draw_arc(center, rr, 0.0, TAU, 48, Color(0.78, 0.95, 1.0, 0.70 * a),
+			maxf(1.0, 2.8 * k * (1.0 - t) + 0.8), true)
+		# 内层微弱提亮，只闪一下，不盖住图标细节
+		draw_circle(center, radius, Color(0.85, 0.97, 1.0, 0.075 * a))
+	if _upgrade_anim > 0.0:
+		var t := 1.0 - _upgrade_anim / UPGRADE_ANIM_TIME
+		var a := 1.0 - t
+		var rr := radius + (4.0 + t * 11.0) * k
+		draw_arc(center, rr, 0.0, TAU, 48, Color(1.0, 0.87, 0.38, 0.82 * a),
+			maxf(1.2, 3.2 * k * a + 0.7), true)
+		for i in range(8):
+			var dir := Vector2.from_angle(TAU * float(i) / 8.0 + 0.2)
+			var p0 := center + dir * (radius + (2.0 + t * 4.0) * k)
+			var p1 := center + dir * (radius + (7.0 + t * 10.0) * k)
+			draw_line(p0, p1, Color(1.0, 0.89, 0.46, 0.72 * a), maxf(1.0, 2.2 * k * a), true)
 
 # 统一带描边文字（draw_string 无描边，3D 场景上纯白字会糊；参数顺序同 draw_string）
 func _draw_txt(pos: Vector2, txt: String, align: int, width: float, fs: int, col: Color) -> void:
@@ -299,7 +371,13 @@ func _draw_charge_pips(c: Vector2, R: float, k: float):
 # 把“伤害×弹数 + 附加效果”读数叠画在按钮上：伤害大字放中央偏上，
 # 效果小字（矢量图标 + 数值/时长）逐行排在下方；行数/宽度超界时自动缩字号、整体收拢进圆
 func _draw_skill_readout(c: Vector2, R: float, k: float):
-	var n := icon_fx.size()
+	# 瞄准读数最多两行效果，其余留给长按详情卡；避免按钮内堆成小作文
+	var fx_items: Array = icon_fx
+	var fx_more := 0
+	if fx_items.size() > 2:
+		fx_more = fx_items.size() - 2
+		fx_items = fx_items.slice(0, 2)
+	var n := fx_items.size()
 	var has_dmg := icon_dmg > 0
 	var has_aa := icon_aa
 	if not has_dmg and n == 0 and not has_aa:
@@ -337,7 +415,7 @@ func _draw_skill_readout(c: Vector2, R: float, k: float):
 	while n > 0 and fx_fs > int(9.0 * k):
 		var ic_dd := maxf(9.0 * k, fx_fs * 1.15)
 		var widest := 0.0
-		for it in icon_fx:
+		for it in fx_items:
 			var w: float = UiKit.font().get_string_size(
 				String(it.get("txt", "")), HORIZONTAL_ALIGNMENT_CENTER, -1, fx_fs).x
 			widest = maxf(widest, w)
@@ -406,7 +484,7 @@ func _draw_skill_readout(c: Vector2, R: float, k: float):
 			x += seg_w + dmg_gap
 		y += dmg_h
 	# 效果行：矢量小图标 + 数值/时长小字（icon 与文字同色：绿=自身增益 / 蓝=对敌负面）
-	for it in icon_fx:
+	for it in fx_items:
 		var row_cy := y + fx_h * 0.5
 		var kind := String(it.get("k", ""))
 		var col: Color = it.get("col", Color.WHITE)
@@ -417,6 +495,11 @@ func _draw_skill_readout(c: Vector2, R: float, k: float):
 		_draw_txt(Vector2(x0 + ic_d + 5.0 * k, row_cy + fx_fs * 0.36), txt,
 			HORIZONTAL_ALIGNMENT_LEFT, tw, fx_fs, col)
 		y += fx_h
+	if fx_more > 0:
+		# 未展开的效果聚合为右下角小徽标，详情卡里可看全
+		var tag := "+%d" % fx_more
+		_draw_txt(Vector2(c.x + R * 0.30, c.y + R * 0.34), tag,
+			HORIZONTAL_ALIGNMENT_CENTER, R * 0.42, int(11.0 * k), Color(0.72, 0.84, 0.95, 0.9))
 
 # 效果类型矢量小图标（小尺寸几何绘制，替代汉字节省按钮内宽度）
 func _draw_fx_glyph(kind: String, pc: Vector2, r: float, col: Color):
@@ -545,7 +628,7 @@ func _draw_level_ring(center: Vector2, radius: float, k: float = 1.0):
 	var span := TAU / float(max_level)
 	var gap := deg_to_rad(2.0)          # 段与段之间的缝隙
 	var rr := radius + 6.0 + 3.0 * k    # 环半径（略在黑色外圈外侧，呈“镶边”效果）
-	var th := maxf(5.0, 6.0 * k)
+	var th := maxf(2.5, 3.2 * k)        # 细环，避免和冷却扇形/伤害读数抢视觉
 	for s in range(max_level):
 		var a0 := -PI * 0.5 + span * s + gap * 0.5
 		var a1 := -PI * 0.5 + span * (s + 1) - gap * 0.5
@@ -553,7 +636,7 @@ func _draw_level_ring(center: Vector2, radius: float, k: float = 1.0):
 			continue
 		var col: Color
 		if s < lit:
-			col = Color(1.0, 0.85, 0.32, 1.0)     # 已学的亮金
+			col = Color(1.0, 0.85, 0.32, 0.95)     # 已学的亮金
 		else:
-			col = Color(0.42, 0.4, 0.36, 0.6)      # 未学的暗段
+			col = Color(0.42, 0.4, 0.36, 0.34)     # 未学的暗段降低存在感
 		draw_arc(center, rr, a0, a1, 10, col, th, true)

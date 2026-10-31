@@ -6,6 +6,11 @@ extends RefCounted
 static var FONT: Font = ThemeDB.fallback_font
 const ART = preload("res://scripts/ui/HeroArt.gd")   # 程序化英雄头像（与选人界面同源）
 
+# 图标放大倍数：防御塔 / 普通野怪（水晶与暴君主宰保持原尺寸）
+const TURRET_ICON_SCALE := 2.0
+const JUNGLE_ICON_SCALE := 2.0
+const EPIC_KINDS := ["tyrant", "shadow_tyrant", "dragon", "shadow_dragon", "storm_dragon"]
+
 # ==================== 地形底图 ====================
 
 ## 世界坐标 → 小地图底色（120×120：野区深绿 / 兵线暖灰 / 河道青蓝 / 基地暖光）
@@ -57,6 +62,14 @@ static func terrain_texture(px: int, map_size: float, grid: int = 120) -> ImageT
 ## 防御塔四种轮廓：外塔=方形城垛 / 内塔=八边形 / 高地塔=菱形 / 水晶=六边形宝石。
 ## 血量从底部向上填充，低于 45% 泛红；摧毁画灰叉。
 static func draw_turret(ci: CanvasItem, pos: Vector2, ratio: float, col: Color, ttype: String, alive: bool = true) -> void:
+	# 防御塔图标放大到原来的 2 倍（水晶保持原尺寸，避免遮挡基地周边）
+	var s: float = 1.0 if ttype == "crystal" else TURRET_ICON_SCALE
+	ci.draw_set_transform(pos, 0.0, Vector2(s, s))
+	_draw_turret_shape(ci, Vector2.ZERO, ratio, col, ttype, alive)
+	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+static func _draw_turret_shape(ci: CanvasItem, pos: Vector2, ratio: float, col: Color, ttype: String, alive: bool = true) -> void:
 	var size: float = 9.0
 	if ttype == "inner":
 		size = 10.5
@@ -174,6 +187,23 @@ static func draw_dragon(ci: CanvasItem, pos: Vector2, col: Color, kind: String =
 	if kind == "storm":
 		ci.draw_arc(pos, s * 0.78, 0, TAU, 18, Color(1.0, 0.88, 0.4, 0.9), 1.4)
 
+## 视野之灵：青色灵体菱形标记 + 20 米视野圈（仅 active 时显示范围）。
+static func draw_vision_spirit(ci: CanvasItem, pos: Vector2, range_px: float, active: bool) -> void:
+	if active and range_px > 2.0:
+		ci.draw_circle(pos, range_px, Color(0.26, 0.82, 1.0, 0.075))
+		ci.draw_arc(pos, range_px, 0.0, TAU, 48, Color(0.38, 0.92, 1.0, 0.68), 1.4, true)
+		ci.draw_arc(pos, range_px * 0.72, 0.0, TAU, 36, Color(0.55, 0.96, 1.0, 0.20), 1.0, true)
+	# 深色底 + 青色灵体菱形，避免和英雄圆形头像 / 小兵点混淆
+	ci.draw_circle(pos, 6.0, Color(0.02, 0.07, 0.10, 0.92))
+	var d := 6.2
+	var pts := PackedVector2Array([pos + Vector2(0, -d), pos + Vector2(d * 0.72, 0),
+		pos + Vector2(0, d), pos + Vector2(-d * 0.72, 0)])
+	ci.draw_colored_polygon(pts, Color(0.42, 0.94, 1.0, 0.95))
+	ci.draw_polyline(pts + PackedVector2Array([pts[0]]), Color(1, 1, 1, 0.82), 1.0)
+	ci.draw_circle(pos, 1.7, Color(1, 1, 1, 0.98))
+	ci.draw_string_outline(FONT, pos + Vector2(7.0, -5.0), "灵", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, 3, Color(0, 0, 0, 0.88))
+	ci.draw_string(FONT, pos + Vector2(7.0, -5.0), "灵", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.78, 1.0, 1.0))
+
 ## 攻城车（菱形 + 橙色边）/ 超级兵（六边 + 金色边 + 白芯）
 static func draw_elite_minion(ci: CanvasItem, pos: Vector2, col: Color, kind: String = "siege") -> void:
 	if kind == "super":
@@ -197,9 +227,16 @@ static func draw_elite_minion(ci: CanvasItem, pos: Vector2, col: Color, kind: St
 ## 野怪标记：普通营地 / 红蓝 buff / 空间之灵 / 暴君·主宰专属图标。
 ## seen=false 表示"我方无视野下的默认显示"（略压暗但依然清晰可辨）
 static func draw_jungle(ci: CanvasItem, pos: Vector2, kind: String, seen: bool = true) -> void:
-	if kind in ["tyrant", "shadow_tyrant", "dragon", "shadow_dragon", "storm_dragon"]:
-		_draw_epic(ci, pos, kind, seen)
+	if kind in EPIC_KINDS:
+		_draw_epic(ci, pos, kind, seen)   # 暴君/主宰/风暴龙王：保持原尺寸
 		return
+	# 普通野怪（红蓝 buff / 空间灵 / 河灵 / 常规营地）图标放大到原来的 2 倍
+	ci.draw_set_transform(pos, 0.0, Vector2(JUNGLE_ICON_SCALE, JUNGLE_ICON_SCALE))
+	_draw_camp(ci, Vector2.ZERO, kind, seen)
+	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+static func _draw_camp(ci: CanvasItem, pos: Vector2, kind: String, seen: bool = true) -> void:
 	var a: float = 1.0 if seen else 0.88
 	match kind:
 		"red_buff":
@@ -259,9 +296,9 @@ static func draw_hero(ci: CanvasItem, pos: Vector2, dir: Vector2, base: Color, h
 		is_self: bool = false, dead: bool = false, respawn: float = 0.0, hero_name: String = "",
 		ring_col: Color = Color(0.30, 0.95, 0.42)) -> void:
 	var d: Vector2 = dir.normalized() if dir.length() > 0.01 else Vector2(0, -1)
-	var r := 10.5	# 头像放大 1.5 倍（原 7.0）
+	var r := 21.0	# 头像再放大 2 倍（原 10.5，初始 7.0）
 	var body: Color = base if not dead else Color(0.42, 0.44, 0.48, 0.9)
-	ci.draw_circle(pos, r + 2.8, Color(0, 0, 0, 0.5))
+	ci.draw_circle(pos, r + 5.6, Color(0, 0, 0, 0.5))
 	# 英雄头像（程序化绘制：元素底色 + 专属徽记 + 阵营环）替代原来的纯色圆点
 	if hero_name != "":
 		ART.draw_portrait(ci, pos, r, hero_name, base, dead)
@@ -270,22 +307,22 @@ static func draw_hero(ci: CanvasItem, pos: Vector2, dir: Vector2, base: Color, h
 		ci.draw_circle(pos + Vector2(-r * 0.3, -r * 0.34), r * 0.42, Color(1, 1, 1, 0.35))
 	if dead:
 		var txt := str(int(ceil(respawn)))
-		ci.draw_string_outline(FONT, pos + Vector2(-16, 21), txt, HORIZONTAL_ALIGNMENT_CENTER, 32, 13, 3, Color(0, 0, 0, 0.85))
-		ci.draw_string(FONT, pos + Vector2(-16, 21), txt, HORIZONTAL_ALIGNMENT_CENTER, 32, 13, Color(1, 1, 1, 0.95))
+		ci.draw_string_outline(FONT, pos + Vector2(-r, r + 6.0), txt, HORIZONTAL_ALIGNMENT_CENTER, r * 2.0, 20, 4, Color(0, 0, 0, 0.85))
+		ci.draw_string(FONT, pos + Vector2(-r, r + 6.0), txt, HORIZONTAL_ALIGNMENT_CENTER, r * 2.0, 20, Color(1, 1, 1, 0.95))
 		return
 	var perp := Vector2(-d.y, d.x)
 	ci.draw_colored_polygon(PackedVector2Array([
-		pos + d * (r + 6.8), pos + d * (r + 1.2) + perp * 4.2, pos + d * (r + 1.2) - perp * 4.2,
+		pos + d * (r + 13.6), pos + d * (r + 2.4) + perp * 8.4, pos + d * (r + 2.4) - perp * 8.4,
 	]), Color(base.r, base.g, base.b, 0.95))
-	ci.draw_arc(pos, r, 0, TAU, 18, Color(0, 0, 0, 0.55), 1.2)
+	ci.draw_arc(pos, r, 0, TAU, 24, Color(0, 0, 0, 0.55), 2.0)
 	if is_self:
-		ci.draw_arc(pos, r + 4.0, 0, TAU, 26, Color(0.32, 1.0, 0.45, 1.0), 2.6, true)
+		ci.draw_arc(pos, r + 8.0, 0, TAU, 32, Color(0.32, 1.0, 0.45, 1.0), 3.6, true)
 	var hp: float = clampf(hp_ratio, 0.0, 1.0)
 	# 血量环颜色按阵营固定（我方绿 / 敌方红），弧长仍表示剩余血量；低血时略微提亮以保留警示
 	var hcol := ring_col
 	if hp <= 0.25:
 		hcol = ring_col.lightened(0.25)
-	ci.draw_arc(pos, r + 2.2, -PI / 2.0, -PI / 2.0 + TAU * hp, 22, hcol, 2.4)
+	ci.draw_arc(pos, r + 4.4, -PI / 2.0, -PI / 2.0 + TAU * hp, 28, hcol, 3.4)
 
 # ==================== 小兵聚类 ====================
 
@@ -401,12 +438,29 @@ static func draw_fog(ci: CanvasItem, grid: Array, size_px: float, alpha: float =
 			ci.draw_rect(Rect2(float(x) * cs, float(y) * cs, cs + 0.5, cs + 0.5), Color(0.02, 0.03, 0.05, alpha))
 
 ## 目标倒计时（小地图下方，避免盖住地图）：entries = [{"label","t","alive","color"}]
+## 只有「未存活且距诞生/复活 ≤ 60 秒」才读秒；更早（>1 分钟）整行不显示
+const OBJECTIVE_COUNTDOWN_LEAD := 60.0
+
+## 读秒字号：跟随小地图尺寸（小地图已放大到 450，写死 13 会小到看不清）
+static func countdown_font(size_px: float) -> int:
+	return maxi(13, int(round(size_px * 0.056)))
+
 static func draw_objectives(ci: CanvasItem, entries: Array, size_px: float) -> void:
 	if entries.is_empty():
 		return
-	var y: float = size_px + 20.0
-	for i in range(entries.size()):
-		var e: Dictionary = entries[i]
+	var rows: Array = []
+	for e in entries:
+		var alive: bool = bool(e.get("alive", false))
+		if not alive and float(e.get("t", 0.0)) > OBJECTIVE_COUNTDOWN_LEAD:
+			continue   # 诞生/复活前 1 分钟才开始读秒
+		rows.append(e)
+	if rows.is_empty():
+		return
+	var fs: int = countdown_font(size_px)
+	var row_h: float = float(fs) + 11.0
+	var y: float = size_px + 20.0 + float(fs) - 13.0
+	for i in range(rows.size()):
+		var e: Dictionary = rows[i]
 		var alive: bool = bool(e.get("alive", false))
 		var col: Color = e.get("color", Color.WHITE)
 		var txt := ""
@@ -417,11 +471,28 @@ static func draw_objectives(ci: CanvasItem, entries: Array, size_px: float) -> v
 			var t: int = maxi(int(ceil(float(e.get("t", 0.0)))), 0)
 			txt = "%s %02d:%02d" % [str(e.get("label", "")), t / 60, t % 60]
 			col = Color(col.r, col.g, col.b, 0.92)
-		var tw := FONT.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-		ci.draw_rect(Rect2(2, y - 12.0, tw + 12.0, 18.0), Color(0.02, 0.03, 0.05, 0.55))
-		ci.draw_string_outline(FONT, Vector2(8, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 3, Color(0, 0, 0, 0.8))
-		ci.draw_string(FONT, Vector2(8, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col)
-		y += 18.0
+		var tw := FONT.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		ci.draw_rect(Rect2(2, y - float(fs) * 0.92, tw + 12.0, float(fs) + 6.0), Color(0.02, 0.03, 0.05, 0.55))
+		ci.draw_string_outline(FONT, Vector2(8, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, Color(0, 0, 0, 0.8))
+		ci.draw_string(FONT, Vector2(8, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		y += row_h
+
+## 红蓝 buff 复活读秒：暗淡幽灵点位 + 剩余秒数（复活前 30 秒才画）；fs 跟随小地图尺寸
+static func draw_camp_respawn(ci: CanvasItem, pos: Vector2, kind: String, left: float, fs: int = 13) -> void:
+	if left <= 0.0:
+		return
+	var col := Color(1.0, 0.52, 0.40) if kind == "red_buff" else Color(0.55, 0.78, 1.0)
+	# 幽灵点位：淡色小圆，表示"我方知道这里死了、正在等刷新"
+	var dot_r: float = float(fs) * 0.36
+	ci.draw_circle(pos, dot_r * 1.1, Color(col.r, col.g, col.b, 0.16))
+	ci.draw_arc(pos, dot_r, 0, TAU, 18, Color(col.r, col.g, col.b, 0.55), 1.2, true)
+	# 读秒数字（贴点位右侧，深底描边保证可读）
+	var txt := "%d" % int(ceil(left))
+	var tw := FONT.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var p := pos + Vector2(dot_r * 1.7, float(fs) * 0.38)
+	ci.draw_rect(Rect2(p.x - 2.0, p.y - float(fs) * 0.86, tw + 6.0, float(fs) + 3.0), Color(0.02, 0.03, 0.05, 0.70))
+	ci.draw_string_outline(FONT, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, Color(0, 0, 0, 0.85))
+	ci.draw_string(FONT, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 # ==================== 静态地形装饰 ====================
 
@@ -455,3 +526,84 @@ static func draw_health_pack(ci: CanvasItem, pos: Vector2, available: bool = tru
 	ci.draw_circle(pos, 3.4, Color(0.16, 0.72, 0.36, 0.95))
 	ci.draw_line(pos + Vector2(-1.8, 0), pos + Vector2(1.8, 0), Color(1, 1, 1, 0.95), 1.8)
 	ci.draw_line(pos + Vector2(0, -1.8), pos + Vector2(0, 1.8), Color(1, 1, 1, 0.95), 1.8)
+
+
+## 已开启的传送阵：紫色双层光环 + 反向旋转弧 + 环绕光点
+static func draw_teleport_zone(ci: CanvasItem, pos: Vector2, t: float, highlight: bool = false) -> void:
+	var col := Color(0.72, 0.52, 1.0)
+	var r: float = 6.4 if highlight else 4.8
+	ci.draw_circle(pos, r * 1.7, Color(col.r, col.g, col.b, 0.16))
+	ci.draw_circle(pos, r * 0.55, Color(0.82, 0.66, 1.0, 0.30))
+	ci.draw_arc(pos, r, 0.0, TAU, 28, Color(col.r, col.g, col.b, 0.95), 1.8, true)
+	ci.draw_arc(pos, r * 0.62, t * 1.9, t * 1.9 + PI * 1.25, 18, Color(1, 1, 1, 0.85), 1.5, true)
+	for i in 3:
+		var a: float = -t * 2.4 + TAU * float(i) / 3.0
+		ci.draw_circle(pos + Vector2(cos(a), sin(a)) * r * 0.82, 1.4, Color(1, 1, 1, 0.92))
+	ci.draw_circle(pos, 1.6, Color(1, 1, 1, 0.95))
+
+
+# ==================== 全图技能：瞄准线 / 命中锁定 / 飞行子弹 / 命中爆发 ====================
+
+## 瞄准线：外发光 + 亮芯 + 流动光点（t 为本地时钟秒，驱动流动动画）
+static func draw_global_aim(ci: CanvasItem, p0: Vector2, p1: Vector2, col: Color, t: float) -> void:
+	var d: Vector2 = p1 - p0
+	var ln: float = d.length()
+	if ln < 1.0:
+		return
+	var dir: Vector2 = d / ln
+	ci.draw_line(p0, p1, Color(col.r, col.g, col.b, 0.20), 6.0, true)
+	ci.draw_line(p0, p1, Color(col.r, col.g, col.b, 0.62), 2.2, true)
+	ci.draw_line(p0, p1, Color(1, 1, 1, 0.42), 0.9, true)
+	# 流动光点：4 个沿瞄准线滚动的亮点，直观表达"子弹会往这飞"
+	for i in 4:
+		var f: float = fmod(t * 0.85 + float(i) * 0.25, 1.0)
+		var p: Vector2 = p0 + dir * ln * f
+		ci.draw_circle(p, 2.2, Color(col.r, col.g, col.b, 0.85))
+		ci.draw_circle(p, 1.0, Color(1, 1, 1, 0.95))
+	# 末端收束点
+	ci.draw_circle(p1, 3.0, Color(col.r, col.g, col.b, 0.55))
+	ci.draw_circle(p1, 1.4, Color(1, 1, 1, 0.9))
+
+## 被瞄准锁定的敌人：头像外脉冲锁定环 + 四角括标（"这一发会命中他"）
+static func draw_aim_lock(ci: CanvasItem, pos: Vector2, t: float, col: Color) -> void:
+	var pulse: float = 0.5 + 0.5 * sin(t * 7.0)
+	var r: float = 25.0 + 3.0 * pulse
+	ci.draw_circle(pos, r, Color(col.r, col.g, col.b, 0.10 + 0.10 * pulse))
+	ci.draw_arc(pos, r, 0.0, TAU, 30, Color(col.r, col.g, col.b, 0.55 + 0.35 * pulse), 2.4, true)
+	# 四角括标
+	for i in 4:
+		var a: float = TAU * float(i) / 4.0 + PI * 0.25
+		var c: Vector2 = pos + Vector2(cos(a), sin(a)) * (r + 4.0)
+		var tang: Vector2 = Vector2(-sin(a), cos(a))
+		var rad: Vector2 = Vector2(cos(a), sin(a))
+		ci.draw_line(c - tang * 4.5, c, Color(col.r, col.g, col.b, 0.95), 2.0)
+		ci.draw_line(c, c + rad * 4.5, Color(col.r, col.g, col.b, 0.95), 2.0)
+
+## 飞行中的全图子弹：拖尾 + 核心亮点 + 外圈光晕（dir_px 为小地图上的飞行方向）
+static func draw_global_bullet(ci: CanvasItem, pos: Vector2, dir_px: Vector2, col: Color, t: float) -> void:
+	var dn: Vector2 = dir_px.normalized() if dir_px.length() > 0.01 else Vector2(1, 0)
+	# 拖尾：由远及近 3 段渐隐
+	for i in 3:
+		var back: Vector2 = -dn * (5.0 + float(i) * 4.5)
+		var a: float = 0.32 - 0.09 * float(i)
+		ci.draw_line(pos + back, pos + back * 0.45, Color(col.r, col.g, col.b, a), 3.2 - float(i) * 0.7, true)
+	ci.draw_circle(pos, 6.4, Color(col.r, col.g, col.b, 0.20))
+	ci.draw_circle(pos, 3.4, Color(col.r, col.g, col.b, 0.85))
+	ci.draw_circle(pos, 1.6, Color(1, 1, 1, 0.95))
+	# 呼吸光环，避免高亮弹体在密集小地图上被忽略
+	ci.draw_arc(pos, 7.4 + sin(t * 9.0) * 1.2, 0.0, TAU, 20, Color(1, 1, 1, 0.35), 1.2, true)
+
+## 命中爆发：英雄头像外扩散的双环 + 放射短线（age 0→1 驱动扩散与淡出）
+static func draw_shot_hit(ci: CanvasItem, pos: Vector2, age: float, col: Color) -> void:
+	var a: float = clampf(1.0 - age, 0.0, 1.0)
+	var r: float = 24.0 + 34.0 * clampf(age, 0.0, 1.0)
+	ci.draw_arc(pos, r, 0.0, TAU, 32, Color(col.r, col.g, col.b, 0.85 * a), 3.4, true)
+	ci.draw_arc(pos, r * 0.72, 0.0, TAU, 26, Color(1, 1, 1, 0.75 * a), 2.0, true)
+	for i in 8:
+		var ang: float = TAU * float(i) / 8.0
+		var d: Vector2 = Vector2(cos(ang), sin(ang))
+		ci.draw_line(pos + d * (r * 0.85), pos + d * (r * 1.18),
+			Color(col.r, col.g, col.b, 0.9 * a), 2.2)
+	ci.draw_circle(pos, 6.0 * a, Color(1, 1, 1, 0.55 * a))
+
+

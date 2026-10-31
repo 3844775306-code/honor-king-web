@@ -1,6 +1,7 @@
 class_name NetModels
 extends RefCounted
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
+const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
 # 联机客户端只读模型库：镜像 host 各实体脚本里的 glb 路径与缩放规则。
 # 仅用于视觉呈现，不含任何逻辑；host 快照发来的名字在模型映射查不到时返回 null，
 # 由调用方退回基础几何体（见 NetClientBattle._make_view 的 fallback）。
@@ -25,16 +26,16 @@ const HERO_MODEL_MAP = {
 	# ---- 特殊英雄（复用底座 + 配件）----
 	"东皇太一": "res://model/hero/character-male-a.glb",
 	"马超":     "res://model/hero/character-male-b.glb",
-	"狄仁杰":   "res://model/hero/wheelchair.glb",
-	"马可波罗": "res://model/hero/wheelchair-power.glb",
-	"太乙真人": "res://model/hero/wheelchair-deluxe.glb",
+	"狄仁杰":   "res://model/hero/character-male-c.glb",
+	"马可波罗": "res://model/hero/character-male-d.glb",
+	"太乙真人": "res://model/hero/character-male-f.glb",
 	"鲁班七号": "res://model/hero/character-male-a.glb",
 	"夏侯惇":   "res://model/hero/character-male-a.glb",
 	"后羿":     "res://model/hero/character-male-a.glb",
 	"大禹":     "res://model/hero/character-male-a.glb",
 	"孙悟空":   "res://model/hero/character-male-a.glb",
 	"刘禅":     "res://model/hero/character-male-b.glb",
-	"英睿":     "res://model/hero/character-male-a.glb",
+	"英睿":     "res://model/hero/character-male-d.glb",   # 与主机 Hero.HERO_MODEL_MAP 对齐（底座男战士 + 签名道具）
 }
 
 const MINION_MODEL_MAP = {
@@ -108,6 +109,16 @@ static func hero(name: String) -> Node3D:
 	var inst = _spawn(path, Vector3.ONE * HERO_SCALE)
 	# 与主机同源：英雄专属武器
 	HeroWeapons.attach(inst, name, float(HeroWeapons.HERO_REACH.get(name, -1.0)))
+	# 英睿签名道具：父节点是已放大 HERO_SCALE 的模型，道具容器按 1/HERO_SCALE 换算回米制
+	if name == "英睿":
+		HeroYingrui.attach_props(inst, 1.0 / HERO_SCALE)
+	# 轮椅英雄：与主机同源合成（角色本体坐姿 + 座椅道具），不再只显示一把椅子
+	if HeroWeapons.is_wheelchair_hero(name):
+		var root := Node3D.new()
+		root.name = name
+		root.add_child(inst)
+		HeroWeapons.mount_wheelchair(root, inst, name, HERO_SCALE)
+		return root
 	return inst
 
 

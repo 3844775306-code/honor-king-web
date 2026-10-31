@@ -76,3 +76,28 @@ static func set_ai_difficulty(d: int) -> void:
 	_ensure_loaded()
 	_data["ai_difficulty"] = clampi(d, 0, AiConfig.DIFF_TABLE.size() - 1)
 	_flush()
+
+
+# ===== 操作设置（主菜单「操作设置」页写入，局内只读） =====
+# 键：siege_keys 小兵/推塔键；target_prio 0=百分比血 1=绝对血 2=最近；auto_chase 0=标准(射程+3m) 1=近(+1m) 2=关
+#     lock_portrait 锁敌头像；flash_dir 0=跟随移动方向 1=智能寻敌；skill_sens / cam_sens 灵敏度倍率
+#     move_preview 位移预览（含墙体修正）；auto_atk 自动普攻
+static func opt_bool(key: String, def: bool) -> bool:
+	_ensure_loaded()
+	return bool(_data.get("op_" + key, def))
+
+
+static func opt_int(key: String, def: int) -> int:
+	_ensure_loaded()
+	return int(_data.get("op_" + key, def))
+
+
+static func opt_float(key: String, def: float) -> float:
+	_ensure_loaded()
+	return float(_data.get("op_" + key, def))
+
+
+static func set_opt(key: String, v) -> void:
+	_ensure_loaded()
+	_data["op_" + key] = v
+	_flush()

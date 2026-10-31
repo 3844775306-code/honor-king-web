@@ -7,7 +7,7 @@ extends Control
 ## 均只覆盖本地镜头、不发任何命令。
 
 const MAP_SIZE := 120
-const MINIMAP_SIZE := 300.0
+const MINIMAP_SIZE := 450.0
 const MinimapDraw = preload("res://scripts/ui/MinimapDraw.gd")        # 两端统一（主机 BattleManager：桌面/手机一律放大为 300，左上角 inset 40）
 const DRAG_THRESHOLD := 5.0
 
@@ -27,12 +27,23 @@ const NET_JUNGLE := 3
 
 var player_team := TEAM_PLAYER
 var views := {}              # net_id -> view（NetClientBattle 每帧整体替换引用）
+var vision_rows: Array = []  # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 var self_net := -1
 var own_recalling := 0       # 自己英雄回城中（画回城黄线）
 var own_pos := Vector3.ZERO  # 自己英雄世界坐标
 var obj: Array = []             # 目标计时 [暴君秒, 暴君存活, 主宰秒, 主宰存活]（host own.obj 传入）
 var jg: Array = []              # 野怪记忆：host own.jg（我方已确认在复活中的野怪点位）
 var active := false          # 接管且对局中且非第一人称才响应取景（NetClientBattle 每帧喂入）
+# —— 全图技能（鲁班2 / 后羿3）：瞄准线、命中高亮、飞行子弹、命中反馈（NetClientBattle 每帧喂入）——
+var aim_shot: Dictionary = {}   # {} 或 {from, dir, len, hit_r, only_hero, col}
+var shot_bullets: Array = []    # [[Vector3 pos, Vector3 dir, int gs]]
+var shot_hits: Dictionary = {}  # net_id -> [命中时刻ms, gs]
+
+# 轻点小地图放大查看：再点（或放大态点地图任意处）跳转并收起
+var zoomed := false
+var _zoom_pos := Vector2.ZERO
+var _zoom_scale := Vector2.ONE
+var _zoom_z := 0
 
 # 相机覆盖状态（NetClientBattle 每帧读取后自行应用/复位）
 var panning := false
@@ -116,11 +127,16 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 	elif is_release:
 		if not _drag_started:
-			# 轻点（未拖出阈值）：一次相机跳转（同主机 minimap_jump_requested 单点语义）
-			var world := _local_to_world(local)
-			if world != Vector3.ZERO:
-				gaze_world = world
-				gaze_ready = true
+			if zoomed:
+				# 放大态轻点：相机跳转到点击处，同时收起小地图
+				var world := _local_to_world(local)
+				if world != Vector3.ZERO:
+					gaze_world = world
+					gaze_ready = true
+				exit_zoom()
+			else:
+				# 常态轻点：小地图放大 2 倍查看（拖动仍是平移取景）
+				enter_zoom()
 		else:
 			_is_dragging = false
 			panning = false   # 松手回正跟随英雄（同主机 minimap_dragging 结束）
@@ -142,6 +158,29 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 
 # —— 坐标系换算（同主机 Minimap._local_to_world / _world_to_minimap）——
+# 轻点放大 2 倍并居中（同主机 Minimap.enter_zoom；客户端 Control 用 offset 锚点，position 赋值即改 offset）
+func enter_zoom() -> void:
+	if zoomed:
+		return
+	zoomed = true
+	_zoom_pos = position
+	_zoom_scale = scale
+	_zoom_z = z_index
+	var vp := get_viewport_rect().size
+	scale = Vector2(2.0, 2.0)
+	position = (vp - size * scale) * 0.5
+	z_index = _zoom_z + 20
+	queue_redraw()
+
+func exit_zoom() -> void:
+	if not zoomed:
+		return
+	zoomed = false
+	position = _zoom_pos
+	scale = _zoom_scale
+	z_index = _zoom_z
+	queue_redraw()
+
 func _local_to_world(local_pos: Vector2) -> Vector3:
 	if local_pos.x < 0.0 or local_pos.x > MINIMAP_SIZE or local_pos.y < 0.0 or local_pos.y > MINIMAP_SIZE:
 		return Vector3.ZERO
@@ -163,6 +202,14 @@ func _draw() -> void:
 		MinimapDraw.draw_wall(self, w["p"], w["a"], 4.5, 2.8)
 	for pk in _static_packs:
 		MinimapDraw.draw_health_pack(self, pk, true)
+	# —— 我方视野之灵：20 米视野圈 + 青色灵体标记（host 快照行）——
+	var spirit_range_px := 20.0 / float(MAP_SIZE) * MINIMAP_SIZE
+	for row in vision_rows:
+		var srow: Array = row
+		if srow.size() < 6:
+			continue
+		var spos := _world_to_minimap(Vector3(float(srow[1]), 0.0, float(srow[2])))
+		MinimapDraw.draw_vision_spirit(self, spos, spirit_range_px, int(srow[3]) == 1)
 	var ally_col := Color(0.0, 0.886, 1.0)
 	var enemy_col := Color(1.0, 0.33, 0.264)
 	var ally_ring_col := Color(0.30, 0.95, 0.42)   # 血量环固定色（同单机 Minimap.gd）
@@ -219,14 +266,22 @@ func _draw() -> void:
 				break
 		if covered:
 			continue
-		# 我方已确认在复活中 → 不显示
+		# 我方已确认在复活中 → 不显示普通图标；红蓝 buff 复活前 30 秒改为读秒
 		var dead := false
+		var dname := ""
+		var dleft := 0.0
 		for d in jg:
 			if d is Array and d.size() >= 2:
 				if cp.distance_to(_world_to_minimap(Vector3(float(d[0]), 0.0, float(d[1])))) <= 4.0:
 					dead = true
+					if d.size() >= 4:
+						dname = str(d[2])
+						dleft = float(d[3])
 					break
 		if dead:
+			if (dname == "red_buff" or dname == "blue_buff") and dleft > 0.0 and dleft <= 30.0:
+				MinimapDraw.draw_camp_respawn(self, cp, dname, dleft,
+					MinimapDraw.countdown_font(MINIMAP_SIZE))
 			continue
 		MinimapDraw.draw_jungle(self, cp, "", false)
 
@@ -256,17 +311,36 @@ func _draw() -> void:
 	MinimapDraw.draw_fog(self, MinimapDraw.fog_grid(_fog_sources(), MAP_SIZE), MINIMAP_SIZE)
 	# —— 暴君/主宰 刷新倒计时 ——
 	MinimapDraw.draw_objectives(self, _obj_entries(), MINIMAP_SIZE)
+	# —— 全图技能：瞄准线 / 命中高亮 / 飞行子弹 / 命中反馈（迷雾之上）——
+	_draw_global_shots()
 	# —— 我方防御塔被攻击警告圈（最上层）——
 	_draw_tower_pings()
 	_draw_frame()
+	if zoomed:
+		_draw_zoom_hint()
+
+# 放大态提示：金色描边 + 底部操作条（轻点跳转并收起 / 拖动平移）
+func _draw_zoom_hint() -> void:
+	var r := Rect2(Vector2(-1.5, -1.5), Vector2(MINIMAP_SIZE + 3.0, MINIMAP_SIZE + 3.0))
+	draw_rect(r, Color(1.0, 0.84, 0.35, 0.75), false, 1.5)
+	var fs := int(round(MINIMAP_SIZE * 0.045))
+	var txt := "轻点跳转 · 拖动平移 · 再点收起"
+	var band_h := float(fs) * 1.9
+	draw_rect(Rect2(Vector2(0, MINIMAP_SIZE - band_h), Vector2(MINIMAP_SIZE, band_h)),
+		Color(0.03, 0.05, 0.09, 0.82))
+	var f := UiKit.font()
+	var tw := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	UiKit.text(self, Vector2((MINIMAP_SIZE - tw) * 0.5, MINIMAP_SIZE - band_h * 0.5 + fs * 0.36),
+		txt, fs, Color(1.0, 0.92, 0.72))
 ## 小地图边框（同主机 Minimap._draw_frame）：外底座 + 2px 描边 + 内侧高光 + 四角金色角标
 func _draw_frame() -> void:
 	var r := Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE))
-	# 只画描边环，不填充（填充会盖住地图内容）：2px 外暗环 + 1px 内高光线
+	# 只画描边环，不填充（填充会盖住地图内容）：2px 内暗环 + 1px 内高光线
+	# 边框与地图同界，不向外扩，避免底板相对地图/左上角错位
 	draw_style_box(UiKit.flat(0.0, 12, 2, Color(0.02, 0.03, 0.05, 0.95),
-		Color(0, 0, 0, 0), 0.0, 0.0), r.grow(2.0))
+		Color(0, 0, 0, 0), 0.0, 0.0), r)
 	draw_style_box(UiKit.flat(0.0, 8, 1, Color(0.62, 0.74, 0.92, 0.55),
-		Color(0, 0, 0, 0), 0.0, 0.0), r.grow(0.5))
+		Color(0, 0, 0, 0), 0.0, 0.0), r.grow(-1.0))
 	var L := minf(16.0, MINIMAP_SIZE * 0.10)
 	var gc := Color(0.98, 0.82, 0.32, 0.95)
 	for i in range(4):
@@ -282,6 +356,90 @@ func _view_pos(v: Dictionary) -> Vector3:
 		var n: Node3D = v["node"]
 		return n.global_position
 	return Vector3(float(v.get("x", 0.0)), 0.0, float(v.get("z", 0.0)))
+
+# ==================== 全图技能（鲁班2 / 后羿3）：瞄准线 · 命中高亮 · 飞行子弹 · 命中反馈 ====================
+func _draw_global_shots() -> void:
+	var now := Time.get_ticks_msec() * 0.001
+	# 1) 瞄准线 + 会被命中的敌人高亮
+	if not aim_shot.is_empty():
+		var from: Vector3 = aim_shot.get("from", Vector3.ZERO)
+		var dir: Vector3 = aim_shot.get("dir", Vector3.ZERO)
+		var col: Color = aim_shot.get("col", Color.WHITE)
+		if dir.length() > 0.05:
+			var ln := float(aim_shot.get("len", 160.0))
+			var p0 := _world_to_minimap(from)
+			var p1 := _clip_to_map(p0, _world_to_minimap(from + dir * ln))
+			MinimapDraw.draw_global_aim(self, p0, p1, col, now)
+			var tid: int = _aim_shot_target_id(from, dir, ln,
+				float(aim_shot.get("hit_r", 1.0)), bool(aim_shot.get("only_hero", false)))
+			if tid >= 0 and views.has(tid):
+				MinimapDraw.draw_aim_lock(self, _world_to_minimap(_view_pos(views[tid])), now, col)
+	# 2) 飞行中的全图子弹（按 host 同步的弹体实际位置）
+	for row in shot_bullets:
+		var r: Array = row
+		if r.size() < 3:
+			continue
+		var gs := int(r[2])
+		var bcol := Color(1.0, 0.62, 0.14) if gs == 1 else Color(0.42, 0.95, 0.72)
+		var bdir: Vector3 = r[1]
+		MinimapDraw.draw_global_bullet(self, _world_to_minimap(r[0]), Vector2(bdir.x, bdir.z), bcol, now)
+	# 3) 命中反馈：被打英雄头像外扩散冲击环（0.7s）
+	var now_ms := Time.get_ticks_msec()
+	for nid in shot_hits.keys():
+		var rec: Array = shot_hits[nid]
+		var age: float = (now_ms - int(rec[0])) / 700.0
+		if age < 0.0 or age > 1.0 or not views.has(nid):
+			continue
+		var hcol := Color(1.0, 0.62, 0.14) if int(rec[1]) == 1 else Color(0.42, 0.95, 0.72)
+		MinimapDraw.draw_shot_hit(self, _world_to_minimap(_view_pos(views[nid])), age, hcol)
+
+# 沿瞄准方向找第一个会被命中的敌方单位（仅在客户端快照里的英雄/单位中判断）
+func _aim_shot_target_id(from: Vector3, dir: Vector3, max_len: float, hit_r: float, only_hero: bool) -> int:
+	var best_id := -1
+	var best_t := 1e20
+	for nid in views:
+		var v: Dictionary = views[nid]
+		var typ := int(v.get("type", -1))
+		if typ != NET_HERO and typ != NET_MINION and typ != NET_TURRET and typ != NET_JUNGLE:
+			continue
+		if int(v.get("team", 9)) == player_team or float(v.get("hp", 0.0)) <= 0.0:
+			continue
+		if only_hero and typ != NET_HERO:
+			continue
+		var rel: Vector3 = _view_pos(v) - from
+		rel.y = 0.0
+		var t: float = rel.dot(dir)
+		if t <= 0.0 or t > max_len:
+			continue
+		if (rel - dir * t).length() > hit_r + 1.0:
+			continue
+		if t < best_t:
+			best_t = t
+			best_id = int(nid)
+	return best_id
+
+# 把瞄准线裁到小地图矩形内
+func _clip_to_map(a: Vector2, b: Vector2) -> Vector2:
+	var d := b - a
+	var t0 := 0.0
+	var t1 := 1.0
+	var p: Array[float] = [-d.x, d.x, -d.y, d.y]
+	var q: Array[float] = [a.x, MINIMAP_SIZE - a.x, a.y, MINIMAP_SIZE - a.y]
+	for i in 4:
+		var pi: float = p[i]
+		var qi: float = q[i]
+		if absf(pi) < 0.00001:
+			if qi < 0.0:
+				return a
+			continue
+		var r: float = qi / pi
+		if pi < 0.0:
+			t0 = maxf(t0, r)
+		else:
+			t1 = minf(t1, r)
+		if t0 > t1:
+			return a
+	return a + d * t1
 
 func _hp_ratio(hp: float, mhp: float) -> float:
 	if mhp <= 0.0:
@@ -374,6 +532,9 @@ func _fog_sources() -> Array:
 		elif typ == NET_TURRET:
 			r = 18.0
 		out.append({"p": _view_pos(v), "r": r})
+	for row in vision_rows:
+		if int(row[3]) == 1:
+			out.append({"p": Vector3(float(row[1]), 0.0, float(row[2])), "r": 20.0})
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	return out
 

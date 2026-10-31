@@ -176,6 +176,46 @@ static func _cast_material(shader: Shader, color: Color, mode: float = -1.0) -> 
 		mat.set_shader_parameter("mode", mode)
 	return mat
 
+# ==================== 地面范围圈（贴地着色器） ====================
+# 与地面 shader 共用同一套野区起伏位移 → 圈随地形起伏，柔化边缘 + 磨损斑驳；
+# 塔攻击范围 / 玩家攻击范围 / 野怪活动范围统一用这个，别再用纯 TorusMesh。
+static var _ground_ring_shader: Shader = null
+
+static func ground_ring_material(color: Color, dash_count: float = 72.0, fill_alpha: float = 0.06) -> ShaderMaterial:
+	if _ground_ring_shader == null:
+		_ground_ring_shader = load("res://shaders/fx_ground_ring.gdshader")
+	var m := ShaderMaterial.new()
+	m.shader = _ground_ring_shader
+	m.set_shader_parameter("ring_color", color)
+	m.set_shader_parameter("dash_count", dash_count)
+	m.set_shader_parameter("fill_alpha", fill_alpha)
+	m.set_shader_parameter("bump_amount", 0.28)
+	return m
+
+# radius=世界半径（XZ 缩放实现，Y 不缩放以免起伏位移被拉伸）
+static func create_ground_ring(radius: float, color: Color, dash_count: float = 72.0, subdiv: int = 24) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(2.0, 2.0)   # 半径 1，由节点缩放决定实际半径
+	plane.subdivide_width = subdiv
+	plane.subdivide_depth = subdiv
+	mi.mesh = plane
+	mi.material_override = ground_ring_material(color, dash_count)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.scale = Vector3(radius, 1.0, radius)
+	# 分路平面在 y=0.14，圈必须压在它上方，否则会被路面完全盖住（表现为“圈看不见”）
+	mi.position = Vector3(0.0, 0.17, 0.0)
+	return mi
+
+static func set_ground_ring_color(mi: MeshInstance3D, color: Color) -> void:
+	if mi == null or not is_instance_valid(mi):
+		return
+	var m = mi.material_override
+	if m is ShaderMaterial:
+		(m as ShaderMaterial).set_shader_parameter("ring_color", color)
+	elif m is StandardMaterial3D:
+		(m as StandardMaterial3D).albedo_color = color
+
 # 施法范围环：双层亮度弧 + 刻度虚线 + 流转符文（水平面片，半径 1）
 static func create_cast_range(color: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
@@ -267,3 +307,154 @@ static func create_cylinder(top_radius: float, bottom_radius: float, height: flo
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mi.material_override = mat
 	return mi
+
+# ============ 刀刃类网格（李元芳飞镖 / 飞轮） ============
+# 约定：刀面躺在 XY 平面，+Z 为刀面法线；每片刃都是封闭薄壳（正反面 + 侧壁），
+# 因此无论从哪个角度看都是实心金属刀刃，而不是纸片三角。
+
+## 十字飞镖（手里剑）：N 片后掠三角刃 + 中心轮毂
+static func build_shuriken(blades: int, r_in: float, r_out: float, thickness: float,
+		sweep_deg: float = 24.0) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half := maxf(thickness, 0.006) * 0.5
+	var hub := clampf(r_in, 0.01, r_out * 0.6)
+	var n := maxi(blades, 3)
+	var sweep := deg_to_rad(sweep_deg)
+	for i in range(n):
+		var a := TAU * float(i) / float(n)
+		var half_w := TAU / float(n) * 0.42
+		var p_in_l := Vector2(cos(a - half_w), sin(a - half_w)) * hub
+		var p_in_r := Vector2(cos(a + half_w), sin(a + half_w)) * hub
+		var p_tip := Vector2(cos(a + sweep), sin(a + sweep)) * r_out
+		_prism(st, p_in_l, p_in_r, p_tip, half)
+		# 刃根小三角，收出「磨出的刃口」层次
+		var p_mid := Vector2(cos(a), sin(a)) * (hub + (r_out - hub) * 0.45)
+		_prism(st, p_in_l, p_in_r, p_mid, half * 1.15)
+	st.generate_normals()
+	st.index()
+	return st.commit()
+
+## 锯齿刃轮：环形刀盘（外缘锯齿）+ N 片外扩巨刃
+static func build_saw_wheel(r_in: float, r_out: float, thickness: float, teeth: int = 24,
+		tooth_depth: float = 0.12, big_blades: int = 4, blade_len: float = 0.55) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half := maxf(thickness, 0.006) * 0.5
+	var n := maxi(teeth, 8)
+	# 刀盘：锯齿外缘的环带，每段都是实心柱状块
+	for i in range(n):
+		var a0 := TAU * float(i) / float(n)
+		var a1 := TAU * float(i + 1) / float(n)
+		var ro0 := r_out if i % 2 == 0 else r_out - tooth_depth
+		var ro1 := r_out if (i + 1) % 2 == 0 else r_out - tooth_depth
+		var i0 := Vector2(cos(a0), sin(a0)) * r_in
+		var i1 := Vector2(cos(a1), sin(a1)) * r_in
+		var o0 := Vector2(cos(a0), sin(a0)) * ro0
+		var o1 := Vector2(cos(a1), sin(a1)) * ro1
+		_prism(st, i0, i1, o0, half)
+		_prism(st, i1, o1, o0, half)
+	# 外扩巨刃
+	var nb := maxi(big_blades, 0)
+	for i in range(nb):
+		var a := TAU * float(i) / float(maxi(nb, 1)) + TAU * 0.125
+		var half_w := TAU / float(maxi(nb, 1)) * 0.15
+		var base_l := Vector2(cos(a - half_w), sin(a - half_w)) * (r_out - tooth_depth)
+		var base_r := Vector2(cos(a + half_w), sin(a + half_w)) * (r_out - tooth_depth)
+		var tip := Vector2(cos(a + 0.12), sin(a + 0.12)) * (r_out + blade_len)
+		_prism(st, base_l, base_r, tip, half)
+	st.generate_normals()
+	st.index()
+	return st.commit()
+
+## 三角刃实体：正反两片 + 三条侧壁，做成封闭薄壳
+static func _prism(st: SurfaceTool, a: Vector2, b: Vector2, c: Vector2, half: float) -> void:
+	var a0 := Vector3(a.x, a.y, half)
+	var b0 := Vector3(b.x, b.y, half)
+	var c0 := Vector3(c.x, c.y, half)
+	var a1 := Vector3(a.x, a.y, -half)
+	var b1 := Vector3(b.x, b.y, -half)
+	var c1 := Vector3(c.x, c.y, -half)
+	# 正反刀面
+	_tri(st, a0, b0, c0)
+	_tri(st, a1, c1, b1)
+	# 侧壁
+	_tri(st, a0, b1, b0); _tri(st, a0, a1, b1)
+	_tri(st, b0, c1, c0); _tri(st, b0, b1, c1)
+	_tri(st, c0, a1, a0); _tri(st, c0, c1, a1)
+
+static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	st.add_vertex(a); st.add_vertex(b); st.add_vertex(c)
+
+## 刀身金属材质（写实向：高金属度 + 低粗糙 + 热刃自发光 + 边缘光）
+static func blade_metal(color: Color, edge: Color, roughness: float = 0.26) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.metallic = 0.95
+	mat.metallic_specular = 0.85
+	mat.roughness = roughness
+	mat.emission_enabled = true
+	mat.emission = edge
+	mat.emission_energy_multiplier = 0.55
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.rim_enabled = true
+	mat.rim = 0.6
+	mat.rim_tint = 0.7
+	return mat
+
+
+# ============ 齿轮 / 机甲件（刘禅机关类技能复用） ============
+## 真齿轮网格：环形齿盘（可选中心孔）+ 梯形齿，XY 平面、+Z 为盘面法线
+static func build_gear(radius: float, thickness: float, teeth: int = 16, tooth_h: float = 0.18,
+		hole_r: float = 0.0, seg_per_tooth: int = 4) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var half := maxf(thickness, 0.006) * 0.5
+	var n: int = maxi(teeth, 6) * maxi(seg_per_tooth, 2)
+	var inner: float = clampf(hole_r, 0.0, radius * 0.85)
+	# 每齿 4 段：齿根 - 齿升 - 齿顶 - 齿降，形成方梯形齿而不是圆锯
+	var profile := [0.0, 0.62, 1.0, 0.62]
+	for i in range(n):
+		var a0 := TAU * float(i) / float(n)
+		var a1 := TAU * float(i + 1) / float(n)
+		var k0: float = profile[i % profile.size()]
+		var k1: float = profile[(i + 1) % profile.size()]
+		var o0 := radius + tooth_h * k0
+		var o1 := radius + tooth_h * k1
+		var i0 := Vector2(cos(a0), sin(a0)) * inner
+		var i1 := Vector2(cos(a1), sin(a1)) * inner
+		var p0 := Vector2(cos(a0), sin(a0)) * o0
+		var p1 := Vector2(cos(a1), sin(a1)) * o1
+		_ring_solid(st, i0, i1, p0, p1, half)
+	st.generate_normals()
+	st.index()
+	return st.commit()
+
+static func _ring_solid(st: SurfaceTool, i0: Vector2, i1: Vector2, o0: Vector2, o1: Vector2, half: float) -> void:
+	# 环带实体：上下两片 + 内外两圈侧壁
+	_tri(st, Vector3(i0.x, i0.y, half), Vector3(o0.x, o0.y, half), Vector3(o1.x, o1.y, half))
+	_tri(st, Vector3(i0.x, i0.y, half), Vector3(o1.x, o1.y, half), Vector3(i1.x, i1.y, half))
+	_tri(st, Vector3(i0.x, i0.y, -half), Vector3(o1.x, o1.y, -half), Vector3(o0.x, o0.y, -half))
+	_tri(st, Vector3(i0.x, i0.y, -half), Vector3(i1.x, i1.y, -half), Vector3(o1.x, o1.y, -half))
+	# 外壁
+	_tri(st, Vector3(o0.x, o0.y, half), Vector3(o0.x, o0.y, -half), Vector3(o1.x, o1.y, -half))
+	_tri(st, Vector3(o0.x, o0.y, half), Vector3(o1.x, o1.y, -half), Vector3(o1.x, o1.y, half))
+	# 内壁（反向）
+	_tri(st, Vector3(i0.x, i0.y, half), Vector3(i1.x, i1.y, half), Vector3(i1.x, i1.y, -half))
+	_tri(st, Vector3(i0.x, i0.y, half), Vector3(i1.x, i1.y, -half), Vector3(i0.x, i0.y, -half))
+
+## 机甲金属材质：PBR 金属 + 边缘高光 + 可选的接缝自发光
+static func metal_pbr(color: Color, roughness: float = 0.32, glow: Color = Color(0, 0, 0, 0)) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.metallic = 0.9
+	mat.metallic_specular = 0.75
+	mat.roughness = roughness
+	mat.rim_enabled = true
+	mat.rim = 0.35
+	mat.rim_tint = 0.5
+	if glow.a > 0.0:
+		mat.emission_enabled = true
+		mat.emission = glow
+		mat.emission_energy_multiplier = 1.4
+	return mat

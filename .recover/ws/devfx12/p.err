@@ -1,0 +1,390 @@
+ERROR: Failed to open 'user://logs/godot2026-11-01T00.02.45.log'.
+   at: copy (core/io/dir_access.cpp:429)
+ERROR: Failed to open log file for writing: user://logs/godot.log
+   at: rotate_file (core/io/logger.cpp:169)
+WARNING: The requested V-Sync mode Adaptive is not available. Falling back to V-Sync mode Enabled.
+   at: swap_chain_resize (drivers/vulkan/rendering_device_driver_vulkan.cpp:3767)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/core/SfxManager.gd:491)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/core/SfxManager.gd:491)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/core/SfxManager.gd:535)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/ui/UiKit.gd:0)
+ERROR: Failed to load script "res://scripts/ui/UiKit.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:11)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:2031)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:2225)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:2555)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:2573)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "aim" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://assets/SkillDataBase.gd:380)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:604)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:778)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1176)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "setup_tripod".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1541)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "ls_stw" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1810)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "ls_dt" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1825)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "sbase" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1870)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:1979)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:2750)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:3198)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:3207)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:3272)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://assets/SkillDataBase.gd:3311)
+ERROR: Failed to load script "res://assets/SkillDataBase.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to instantiate an autoload, script 'res://assets/SkillDataBase.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:945)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1870)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1920)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2176)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2241)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2282)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2343)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2417)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2484)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2610)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2724)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2752)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2949)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3096)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3164)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3220)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3430)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3453)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3609)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3734)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3927)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3930)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:876)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:916)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:918)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "h" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:918)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:933)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:935)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "h" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:935)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:988)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:989)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1219)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1392)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1405)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1429)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1479)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1636)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1843)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1852)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1874)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:1938)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2029)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2116)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2126)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2131)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2184)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2201)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2238)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2309)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2321)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2479)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2719)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "bm" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2719)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "want" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2727)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2758)
+SCRIPT ERROR: Parse Error: Could not resolve class "BattleManager", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2759)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2814)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:2818)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3064)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3069)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3071)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3146)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3179)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3221)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3259)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3272)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3292)
+SCRIPT ERROR: Parse Error: Could not resolve class "Hero", because of a parser error.
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3483)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3533)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:3542)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/ui/UI_Manager.gd:4353)
+ERROR: Failed to load script "res://scripts/ui/UI_Manager.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to instantiate an autoload, script 'res://scripts/ui/UI_Manager.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/core/CollisionSystem.gd:38)
+ERROR: Failed to load script "res://scripts/core/CollisionSystem.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to instantiate an autoload, script 'res://scripts/core/CollisionSystem.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+SCRIPT ERROR: Parse Error: Could not resolve class "GameEntity".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:1)
+SCRIPT ERROR: Parse Error: Could not preload resource script "res://scripts/entities/DecorMesh.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:4)
+SCRIPT ERROR: Parse Error: Could not resolve script "res://scripts/entities/DecorMesh.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:4)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:83)
+SCRIPT ERROR: Parse Error: Could not resolve class "GameEntity".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:1)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:85)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:314)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:328)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:399)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:447)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:448)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:450)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:453)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:486)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:489)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:490)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:516)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:533)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:540)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/entities/Turret.gd:574)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Minion.gd:396)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Minion.gd:397)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Minion.gd:398)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Minion.gd:398)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/entities/Minion.gd:399)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+   at: GDScript::reload (res://scripts/core/PathFinder.gd:0)
+ERROR: Failed to load script "res://scripts/core/PathFinder.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:167)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:238)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:260)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:262)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:262)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:300)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "get_skill_fx".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:447)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "get_skill_icon_damage".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:707)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "_trigger_active_equip".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:1143)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "_get_active_equip_list".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:1280)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:1326)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "bm" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:1326)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "started" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/mobile/TouchController.gd:1327)
+ERROR: Failed to load script "res://scripts/mobile/TouchController.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to instantiate an autoload, script 'res://scripts/mobile/TouchController.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:718)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:739)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:820)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:829)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:835)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:845)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:860)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1408)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1436)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1488)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1501)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1640)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1696)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1720)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1803)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:2017)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:601)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:603)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:697)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:699)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:714)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "driving" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/net/NetSession.gd:852)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1047)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1057)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1078)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "_get_best_recommended_item".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1112)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "_compute_recommended_bundle".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1113)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1135)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1200)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1298)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1311)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1451)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1493)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1494)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "collect_buff_rows".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1503)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1679)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "get_skill_icon_damage".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1739)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "get_skill_fx".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:1745)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:2043)
+SCRIPT ERROR: Parse Error: Could not parse global class "Hero" from "res://scripts/entities/Hero.gd".
+   at: GDScript::reload (res://scripts/net/NetSession.gd:2044)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "h" variable because the value doesn't have a set type.
+   at: GDScript::reload (res://scripts/net/NetSession.gd:2044)
+ERROR: Failed to load script "res://scripts/net/NetSession.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+ERROR: Failed to instantiate an autoload, script 'res://scripts/net/NetSession.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+ERROR: Failed to instantiate an autoload, script 'res://scripts/core/SfxManager.gd' does not inherit from 'Node'.
+   at: start (main/main.cpp:4539)
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://devfx12/probe.gd:4)
+SCRIPT ERROR: Parse Error: Could not parse global class "BattleManager" from "res://scripts/core/BattleManager.gd".
+   at: GDScript::reload (res://devfx12/probe.gd:12)
+ERROR: Failed to load script "res://devfx12/probe.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)

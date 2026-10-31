@@ -51,7 +51,7 @@ signal move_mode_changed(mode: int)
 var touch_active := true    # 由 NetClientBattle 每帧从全局 TouchController.touch_active 同步
 
 var attack_priority := PRIO_AUTO   # 本地状态：按钮高亮 / 同键取消判定
-var move_mode := MOVE_MODE_TURN    # 本地状态：随 C_DRIVE 发送、控制键盘移动方式
+var move_mode := MOVE_MODE_DIR     # 本地状态：随 C_DRIVE 发送、控制键盘移动方式（默认前后左右，与单机 TouchController 一致）
 
 # 同 TouchController：不写死 class_name 类型，避免编辑器类缓存滞后导致的
 # "Invalid access to property or key 'move_vector'" 误报
@@ -112,7 +112,7 @@ func _ready() -> void:
 	mm.mode_changed.connect(_on_move_mode_changed)
 	_anchor_br(mm, MOVE_TOGGLE_POS, MOVE_TOGGLE_SIZE, Vector2.ZERO)
 	# 桌面键盘 WASD 模式切换：手机端隐藏（否则在窄屏上会从左侧越界）
-	mm.visible = not OS.has_feature("mobile")
+	mm.visible = not Config.on_mobile()
 	root.add_child(mm)
 	_move_toggle = mm
 
@@ -448,6 +448,7 @@ func set_extra_skill_visible(v: bool) -> void:
 # 升级“+”钮显隐（仅该技能可升级时显示，与主机 Hero.can_upgrade_skill 判定同源）
 func set_upgrade_visible(i: int, v: bool) -> void:
 	if i >= 0 and i < _upgrade_btns.size():
+		(_upgrade_btns[i] as TouchActionButton).glow = v
 		_upgrade_btns[i].visible = v
 
 # —— P1c：召唤师 / 恢复 / 回城 / 主动装 / 取消施法状态读取与消费 ——

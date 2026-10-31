@@ -16,6 +16,7 @@ const SHAPE_SIEGE := 9      # 攻城炮弹（带外环）
 const SHAPE_FAN := 10       # 回旋扇面：小乔
 const SHAPE_FLAME := 11     # 火焰弹：安琪拉 / 妲己 / 不知火舞
 const SHAPE_SPEAR := 12     # 枪芒：马超
+const SHAPE_BOLT := 13      # 实体箭矢：弓兵普攻（木杆+钢镞+队伍色箭羽）。raw 13 落在技能码位 20 之前，不占技能段
 
 const PALETTE_ALLY := 10
 const PALETTE_ENEMY := 11
@@ -97,10 +98,10 @@ static func spec_for(bl) -> Dictionary:
 	elif src is Minion:
 		var enemy := int(bl.team) != 0
 		if str(src.display_name) == "ranged":
-			shape = SHAPE_ARROW
+			shape = SHAPE_BOLT        # 弓兵：实体箭矢（木杆+铁镞+队伍色箭羽），不再是发光假箭
 			palette = PALETTE_ENEMY_SMALL if enemy else PALETTE_ALLY_SMALL
 		elif str(src.display_name) == "siege":
-			shape = SHAPE_SIEGE
+			shape = SHAPE_BOLT        # 攻城车：放大版实体弩箭（1.35 档 ≈1.7m，与车上那支同尺寸）
 			palette = PALETTE_ENEMY_SIEGE if enemy else PALETTE_ALLY_SIEGE
 	elif src is Hero:
 		shape = int(HERO_SHAPE.get(str(src.display_name), SHAPE_ORB))
@@ -156,9 +157,9 @@ static func colors_for(palette: int) -> Array:
 ## 调色板自带尺寸档（小兵/攻城兵比英雄弹小，双端一致）。
 static func _size_for_palette(palette: int) -> float:
 	if palette == PALETTE_ALLY_SMALL or palette == PALETTE_ENEMY_SMALL:
-		return 0.8
+		return 1.0   # 远程兵：小兵模型是 2 倍放大（~2.6m 高），箭矢按 1.0 才和手里的箭同尺寸
 	if palette == PALETTE_ALLY_SIEGE or palette == PALETTE_ENEMY_SIEGE:
-		return 0.95
+		return 1.5    # 攻城车：弩炮巨型箭，1.5×1.28m ≈ 1.92m，与车上那支（0.96×模型缩放2.0）等长
 	return 1.0
 
 
@@ -249,6 +250,22 @@ static func build(shape: int, c1: Color, c2: Color, size_mult: float = 1.0) -> N
 			_add(root, _sphere(), _glow(c1, 0.55), Vector3(0.32, 0.32, 1.9))
 			_add(root, _sphere(), _core(c2), Vector3(0.11, 0.11, 1.35))
 			_add(root, _cone(), _core(c2), Vector3(0.26, 0.55, 0.26), Vector3(0.0, 0.0, 1.0), Vector3(PI * 0.5, 0.0, 0.0))
+		SHAPE_BOLT:
+			# 实体箭矢（弓兵普攻）：淡队伍色气流 + 木箭杆 + 钢箭镞 + 三片队伍色箭羽 + 深色箭尾
+			# 全长 ~1.12m（与弓兵手里 1.26m 的箭同尺寸），+Z 为箭头方向
+			_add(root, _sphere(), _glow(c1, 0.14), Vector3(0.10, 0.10, 1.25))
+			_add(root, _shaft(), _mat_solid(Color(0.46, 0.31, 0.16), 0.05, 0.72),
+				Vector3(1.0, 0.90, 1.0), Vector3.ZERO, Vector3(PI * 0.5, 0.0, 0.0))
+			_add(root, _cone(), _mat_solid(Color(0.66, 0.70, 0.76), 0.80, 0.28, 0.12),
+				Vector3(0.075, 0.22, 0.075), Vector3(0.0, 0.0, 0.56), Vector3(PI * 0.5, 0.0, 0.0))
+			_add(root, _shaft(), _mat_solid(Color(0.10, 0.10, 0.12), 0.1, 0.6),
+				Vector3(0.9, 0.05, 0.9), Vector3(0.0, 0.0, -0.44), Vector3(PI * 0.5, 0.0, 0.0))
+			for i in range(3):
+				var feather := Node3D.new()
+				feather.rotation.z = TAU * float(i) / 3.0
+				root.add_child(feather)
+				_add(feather, _quad(), _fan_mat(c1), Vector3(0.06, 0.26, 1.0),
+					Vector3(0.0, 0.0, -0.36), Vector3(0.0, PI * 0.5, 0.0))
 		_:  # SHAPE_ORB
 			_add(root, _sphere(), _glow(c1, 0.32), Vector3(0.95, 0.95, 0.95))
 			_add(root, _sphere(), _core(c2), Vector3(0.34, 0.34, 0.34))
@@ -331,6 +348,20 @@ static func _cone() -> Mesh:
 	return m
 
 
+## 细圆柱（箭杆/箭尾）：半径 0.5、高 1.0，绕 X 旋转 90° 后可当沿 +Z 的杆件
+static func _shaft() -> Mesh:
+	if _mesh_cache.has("shaft"):
+		return _mesh_cache["shaft"]
+	var m := CylinderMesh.new()
+	m.top_radius = 0.035
+	m.bottom_radius = 0.035
+	m.height = 1.0
+	m.radial_segments = 6
+	m.rings = 1
+	_mesh_cache["shaft"] = m
+	return m
+
+
 ## 扇面材质：半透明自发光（双面，贴图无光照也能看清轮廓）
 static func _fan_mat(c: Color) -> StandardMaterial3D:
 	var key := "f" + c.to_html()
@@ -390,6 +421,24 @@ static func _core(c: Color) -> StandardMaterial3D:
 	return m
 
 
+## 实体材质（箭杆/箭镞等需要受光的部件）：与自发光弹体区分，靠光照读出体积
+static func _mat_solid(c: Color, metal: float, rough: float, emis: float = 0.0) -> StandardMaterial3D:
+	var key := "s%s%.2f%.2f%.2f" % [c.to_html(), metal, rough, emis]
+	if _mat_cache.has(key):
+		return _mat_cache[key]
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.metallic = metal
+	m.roughness = rough
+	m.disable_receive_shadows = true
+	if emis > 0.0:
+		m.emission_enabled = true
+		m.emission = c
+		m.emission_energy_multiplier = emis
+	_mat_cache[key] = m
+	return m
+
+
 static func _add(root: Node3D, mesh: Mesh, mat: Material, scl: Vector3,
 		pos: Vector3 = Vector3.ZERO, rot: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
@@ -406,6 +455,7 @@ static func _add(root: Node3D, mesh: Mesh, mat: Material, scl: Vector3,
 static func _trail_params(shape: int) -> Array:
 	match shape:
 		SHAPE_ARROW: return [0.16, 0.22]
+		SHAPE_BOLT: return [0.12, 0.18]
 		SHAPE_PELLET: return [0.13, 0.16]
 		SHAPE_SHELL: return [0.26, 0.4]
 		SHAPE_CARD: return [0.16, 0.24]

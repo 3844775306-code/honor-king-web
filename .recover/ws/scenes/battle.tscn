@@ -1,0 +1,21 @@
+[gd_scene load_steps=3 format=3 uid="uid://dwr0au2yum1j3"]
+
+[ext_resource type="Script" uid="uid://eytg66ielnjg" path="res://scripts/core/BattleManager.gd" id="1_th188"]
+[ext_resource type="Script" uid="uid://mc36apr7f46y" path="res://scripts/ui/HUD.gd" id="3_p1qf1"]
+
+[node name="BattleManager" type="Node3D"]
+script = ExtResource("1_th188")
+
+[node name="Map" type="Node3D" parent="."]
+
+[node name="Entities" type="Node3D" parent="."]
+
+[node name="Hero" type="Node3D" parent="Entities"]
+
+[node name="Minion" type="Node3D" parent="Entities"]
+
+[node name="Turret" type="Node3D" parent="Entities"]
+
+[node name="UI" type="CanvasLayer" parent="."]
+layer = 8
+script = ExtResource("3_p1qf1")

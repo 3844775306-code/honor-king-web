@@ -92,17 +92,31 @@ static func _draw_badge(ci: CanvasItem, c: Vector2, r: float, col: Color, plate:
 	ci.draw_polyline(_close(pts), col.lightened(0.12), 1.6, true)
 	# 内部专属符号
 	_draw_symbol(ci, c, r * 0.60, col.lightened(0.55), sym)
-	# 右上角层数气泡
-	var b := c + Vector2(r * 0.66, -r * 0.66)
-	var br: float = maxf(5.5, r * 0.42)
-	ci.draw_circle(b + Vector2(0, 1.0), br + 0.9, Color(0, 0, 0, 0.5))
-	ci.draw_circle(b, br, Color(0.05, 0.06, 0.10, 0.98))
-	ci.draw_arc(b, br, 0, TAU, 16, col, 1.4, true)
+	# 层数刻度：图标底部最多 5 格，叠层数量一眼可读（数字气泡仍保留精确值）
+	if stacks > 0 and r >= 12.0:
+		var pips: int = mini(stacks, 5)
+		var pw: float = maxf(2.0, r * 0.16)
+		var pg: float = maxf(1.2, r * 0.08)
+		var total_w: float = float(pips) * pw + float(pips - 1) * pg
+		var sx: float = c.x - total_w * 0.5
+		var py: float = c.y + r * 0.72
+		ci.draw_rect(Rect2(sx - 2.0, py - 1.2, total_w + 4.0, maxf(2.2, r * 0.16)), Color(0, 0, 0, 0.55))
+		for i in range(pips):
+			ci.draw_rect(Rect2(sx + float(i) * (pw + pg), py, pw, maxf(2.0, r * 0.12)),
+				col.lightened(0.40))
+	# 右上角层数气泡：加大字号 + 深色描边，远距离也能辨认
+	var b := c + Vector2(r * 0.70, -r * 0.70)
+	var br: float = maxf(7.2, r * 0.50)
+	ci.draw_circle(b + Vector2(0, 1.2), br + 1.1, Color(0, 0, 0, 0.55))
+	ci.draw_circle(b, br, Color(0.035, 0.045, 0.075, 0.98))
+	ci.draw_arc(b, br, 0, TAU, 20, col, 1.8, true)
 	var f: Font = UiKit.font()
 	var txt: String = str(stacks)
-	var tfs: int = int(maxf(10.0, br * 1.7))
+	var tfs: int = int(maxf(13.0, br * 1.72))
 	var ts: Vector2 = f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs)
-	ci.draw_string(f, b + Vector2(-ts.x * 0.5, tfs * 0.36), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs, Color(1, 1, 1, 0.98))
+	var tp := b + Vector2(-ts.x * 0.5, tfs * 0.36)
+	ci.draw_string_outline(f, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs, 2, Color(0, 0, 0, 0.85))
+	ci.draw_string(f, tp, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, tfs, Color(1, 1, 1, 0.99))
 
 static func _draw_symbol(ci: CanvasItem, c: Vector2, k: float, col: Color, sym: String) -> void:
 	match sym:

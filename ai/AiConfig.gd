@@ -38,6 +38,8 @@ const SUNSPIRE_ACTIVE_RANGE: float = 10.0   # 日冕主动范围
 const ICE_SHOCK_RANGE_NORMAL: float = 4.5   # 冰霜冲击范围
 const ICE_SHOCK_RANGE_UPGRADE: float = 6.0  # 凛冬范围
 const SHADOW_DART_RANGE: float = 8.0        # 影镖脱离范围
+const RECALL_DANGER_RADIUS: float = 18.0     # 回城读条中被敌方英雄压到该距离 → 取消换点
+const RECALL_SPOT_CLEAR: float = 25.0        # 回城点离敌方英雄的最小安全距离
 
 # ==================== 敌方数量阈值 ====================
 const FLEE_ENEMY_COUNT: int = 2             # 附近≥N个敌人时逃跑

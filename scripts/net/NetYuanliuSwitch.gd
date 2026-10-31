@@ -124,7 +124,7 @@ func _draw_modal() -> void:
 		draw_rect(rr, Color(1, 1, 1, 0.05))
 		draw_rect(rr, o[2].darkened(0.15), false, 2.0)
 		var glyph: String = o[0]
-		var txt := ("✔ 当前·【%s】  %s" if glyph == _cur else "【%s】  %s") % [glyph, o[1]]
+		var txt := ("√ 当前·【%s】  %s" if glyph == _cur else "【%s】  %s") % [glyph, o[1]]
 		_text(Vector2(rr.position.x + 18.0, rr.position.y + (rr.size.y + ofs * 0.72) * 0.5), txt, ofs, o[2])
 	# 取消钮（同 host：高 64×us、字 16×us）
 	var cr: Rect2 = lay["cancel"]

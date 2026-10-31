@@ -10,6 +10,7 @@ extends CanvasLayer
 ## 进度走满后淡出，发出 finished 信号并自动 queue_free。
 
 signal finished
+signal progress_full
 
 const ROLE_COLORS := {
 	"战士": Color(0.85, 0.3, 0.2),
@@ -30,14 +31,13 @@ const HERO_SKIN := {
 	"元流之子": "源·初", "太乙真人": "饕餮", "张飞": "乱世虎臣", "大禹": "龙腾四海", "刘禅": "天才门将",
 }
 
-const RANKS := [
-	"荣耀王者 · 50★", "最强王者 · 30★", "至尊星耀 · Ⅰ", "永恒钻石 · Ⅱ", "尊贵铂金 · Ⅰ",
-]
-
 var _heroes: Array = []
 var _title := "对局加载中"
 var _subtitle := ""
 var _duration := 2.6
+var hold_full := false      # 进度满后不自动淡出，等战场构建完成由调用方手动移除
+var manual_progress := false  # 由战场构建阶段直接驱动进度，不再走自动计时
+var _hold_emitted := false
 var _t := 0.0
 var _fade := -1.0
 var _tip_t := 0.0
@@ -176,6 +176,18 @@ func setup(heroes: Array, title := "对局加载中", subtitle := "", duration :
 		_rebuild_cards()
 
 
+func _set_progress_visual(v: float) -> void:
+	var p := clampf(v, 0.0, 1.0)
+	if _fill != null and _bar_bg != null:
+		_fill.size = Vector2(maxf(0.0, (_bar_bg.size.x - 4.0) * p), 14)
+	if _pct != null:
+		_pct.text = "%d%%" % int(round(p * 100.0))
+
+# 真实加载进度：由 BattleManager 在各构建阶段调用（0..1）
+func set_progress(v: float) -> void:
+	manual_progress = true
+	_set_progress_visual(v)
+
 func _hero_entry(i: int, ally: bool) -> Dictionary:
 	var team_id: int = Config.player_team if ally else 1 - Config.player_team
 	var pool: Array = []
@@ -303,7 +315,7 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 2)
 	im.add_child(vb)
-	var rank_lab := _mk_label(_rank_for(hero_name, idx), int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_GOLD)
+	var rank_lab := _mk_label(_rank_for(entry, idx), int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_GOLD)
 	rank_lab.add_theme_color_override("font_color", UiKit.C_GOLD.darkened(0.05))
 	vb.add_child(rank_lab)
 	var name_row := HBoxContainer.new()
@@ -327,10 +339,18 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 	return card
 
 
-func _rank_for(hero_name: String, idx: int) -> String:
+func _rank_for(entry: Dictionary, idx: int) -> String:
+	var hero_name := str(entry.get("name", ""))
 	if hero_name == "" or hero_name == "—":
 		return "未定级"
-	return RANKS[absi(hash(hero_name + str(idx))) % RANKS.size()]
+	var explicit := str(entry.get("rank", ""))
+	if explicit != "":
+		return explicit
+	if bool(entry.get("is_player", false)):
+		return RankSystem.label(RankSystem.state())
+	var diff := PlayerPrefs.get_ai_difficulty()
+	var center_tier := RankSystem.KING_INDEX if diff >= AiConfig.Difficulty.KING else diff
+	return RankSystem.ai_label(hero_name + "|" + str(idx), center_tier)
 
 
 func _skin_for(hero_name: String) -> String:
@@ -342,12 +362,11 @@ func _skin_for(hero_name: String) -> String:
 func _process(delta: float) -> void:
 	_t += delta
 	_tip_t += delta
-	var p := clampf(_t / _duration, 0.0, 1.0)
-	var eased := 1.0 - pow(1.0 - p, 1.6)
-	if _fill != null:
-		_fill.size = Vector2(maxf(0.0, (_bar_bg.size.x - 4.0) * eased), 14)
-	if _pct != null:
-		_pct.text = "%d%%" % int(round(eased * 100.0))
+	var p := 0.0
+	if not manual_progress:
+		p = clampf(_t / _duration, 0.0, 1.0)
+		var eased := 1.0 - pow(1.0 - p, 1.6)
+		_set_progress_visual(eased)
 	if _tip != null and _tip_t > 1.6:
 		_tip_t = 0.0
 		_tip.text = TIPS[randi() % TIPS.size()]
@@ -359,6 +378,8 @@ func _process(delta: float) -> void:
 		var k := fmod(_t * 0.55 + i * 0.11, 1.0)
 		shine.position = Vector2(lerpf(-180.0, 520.0, k), -60.0)
 		shine.color.a = 0.045 * sin(k * PI)
+	if manual_progress:
+		return
 	if _fade >= 0.0:
 		_fade += delta
 		_root.modulate.a = clampf(1.0 - _fade / 0.35, 0.0, 1.0)
@@ -366,4 +387,9 @@ func _process(delta: float) -> void:
 			finished.emit()
 			queue_free()
 	elif p >= 1.0:
+		if hold_full:
+			if not _hold_emitted:
+				_hold_emitted = true
+				progress_full.emit()
+			return
 		_fade = 0.0

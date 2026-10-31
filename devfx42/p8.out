@@ -1,0 +1,8 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+L pushed, hits=0
+L final_hits=0
+ERROR: 32 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.

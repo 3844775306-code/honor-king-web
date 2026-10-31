@@ -27,6 +27,19 @@ static func target_height(kind: String) -> float:
 	return float(TARGET_H.get(kind, 1.30))
 
 
+## 弹道出膛点（模型局部坐标，未乘 VISUAL_SCALE/模板缩放）：
+## 远程兵 = 箭尖，攻城兵 = 弩炮口，龙兵 = 龙嘴。小兵子弹从这里发出，不再从脚下中心 0.5m 处冒出来。
+static func muzzle_local(kind: String) -> Vector3:
+	match kind:
+		"ranged":
+			return Vector3(0.0, 0.71, 0.55)
+		"siege":
+			return Vector3(0.0, 0.65, 0.99)
+		"dragon", "storm", "shadow_dragon":
+			return Vector3(0.0, 1.14, 0.92)
+	return Vector3(0.0, 0.9, 0.2)
+
+
 static func build(kind: String, team: int) -> Node3D:
 	var key := "%s|%d" % [kind, team]
 	var tpl: Node3D = _templates.get(key)
@@ -40,6 +53,7 @@ static func _build_template(kind: String, team: int) -> Node3D:
 	var root := Node3D.new()
 	var mats := _materials(team, kind)
 	var sts: Dictionary = {}
+	var sta: Dictionary = {}     # 上膛的箭矢：单独成一个 MeshInstance(Ammo)，射出瞬间隐藏、装填后恢复
 	var stw_l: Dictionary = {}
 	var stw_r: Dictionary = {}
 	match kind:
@@ -48,9 +62,9 @@ static func _build_template(kind: String, team: int) -> Node3D:
 			_arms_melee(sts, mats)
 		"ranged":
 			_body(sts, mats, false, true)
-			_arms_bow(sts, mats)
+			_arms_bow(sts, mats, sta)
 		"siege":
-			_siege(sts, mats)
+			_siege(sts, mats, sta)
 		"super":
 			_body(sts, mats, true, true)
 			_arms_halberd(sts, mats)
@@ -67,6 +81,12 @@ static func _build_template(kind: String, team: int) -> Node3D:
 	pivot.name = "ModelPivot"
 	pivot.add_child(mi)
 	root.add_child(pivot)
+	# 上膛箭矢独立成节点（弓兵/攻城车）：射击瞬间可隐藏，装填后再出现
+	if not sta.is_empty():
+		var ammo := MeshInstance3D.new()
+		ammo.name = "Ammo"
+		ammo.mesh = _commit(sta, mats)
+		pivot.add_child(ammo)
 	# 拆出的双腿：髋关节枢轴，供行走摆动
 	if kind in ["melee", "ranged", "super"]:
 		_build_legs(pivot, mats, kind == "super")
@@ -301,7 +321,7 @@ static func _arms_melee(sts: Dictionary, mats: Dictionary) -> void:
 	_sph(sts, mats, "gold", 0.028, h + Vector3(0, -0.045, 0), 8, 4)
 
 
-static func _arms_bow(sts: Dictionary, mats: Dictionary) -> void:
+static func _arms_bow(sts: Dictionary, mats: Dictionary, ammo: Dictionary = {}) -> void:
 	# 双臂前伸持弓
 	_limb(sts, mats, "steel", 0.048, 0.043,
 		Vector3(-0.245, 0.68, 0.03), Vector3(-0.235, 0.70, 0.20), 8)
@@ -322,10 +342,12 @@ static func _arms_bow(sts: Dictionary, mats: Dictionary) -> void:
 	_limb(sts, mats, "wood", 0.017, 0.020, p3, p4, 6)
 	_limb(sts, mats, "black", 0.005, 0.005, p0, p4, 4)
 	_box(sts, mats, "leather", Vector3(0.035, 0.12, 0.035), p2)
-	# 箭
-	_limb(sts, mats, "wood", 0.008, 0.008, Vector3(-0.10, 0.71, 0.295), Vector3(0.29, 0.71, 0.295), 4)
-	_cyl(sts, mats, "steel", 0.0, 0.022, 0.07, Vector3(0.315, 0.71, 0.295), 4, Vector3(0, 0, -90))
-	_box(sts, mats, "cloth", Vector3(0.05, 0.032, 0.012), Vector3(-0.075, 0.71, 0.295))
+	# 箭：沿 +Z 前指、搭在弓弦上（原先横指 +X，跟人物朝向/弹道方向都不一致）
+	# 放进 ammo：弓兵射击瞬间整支箭隐藏，飞行的是 Bullet 弹体，装填后再出现
+	var a: Dictionary = ammo
+	_limb(a, mats, "wood", 0.008, 0.008, Vector3(-0.25, 0.71, 0.04), Vector3(-0.25, 0.71, 0.55), 4)
+	_cyl(a, mats, "steel", 0.0, 0.022, 0.07, Vector3(-0.25, 0.71, 0.585), 4, Vector3(90, 0, 0))
+	_box(a, mats, "cloth", Vector3(0.016, 0.032, 0.05), Vector3(-0.25, 0.71, 0.10))
 	# 背后箭袋
 	_box(sts, mats, "leather", Vector3(0.085, 0.28, 0.075), Vector3(0.17, 0.78, -0.14), Vector3(-10.0, 0, -14.0))
 	for i in range(3):
@@ -369,7 +391,7 @@ static func _heavy_crest(sts: Dictionary, mats: Dictionary) -> void:
 
 # ==================== 攻城车（弩车） ====================
 
-static func _siege(sts: Dictionary, mats: Dictionary) -> void:
+static func _siege(sts: Dictionary, mats: Dictionary, ammo: Dictionary = {}) -> void:
 	# 双大轮
 	for s in [-1.0, 1.0]:
 		var c := Vector3(s * 0.47, 0.28, 0)
@@ -399,10 +421,13 @@ static func _siege(sts: Dictionary, mats: Dictionary) -> void:
 			Vector3(s * 0.37, 0.64, 0.33), 6)
 		_cyl(sts, mats, "bronze", 0.045, 0.05, 0.08, Vector3(s * 0.12, 0.64, 0.44), 8)
 	_limb(sts, mats, "black", 0.006, 0.006, Vector3(-0.37, 0.64, 0.33), Vector3(0.37, 0.64, 0.33), 4)
-	# 巨型弩箭
-	_limb(sts, mats, "wood", 0.026, 0.026, Vector3(0, 0.65, 0.05), Vector3(0, 0.65, 0.88), 6)
-	_cyl(sts, mats, "steel", 0.0, 0.05, 0.14, Vector3(0, 0.65, 0.94), 4, Vector3(90, 0, 0))
-	_box(sts, mats, "cloth", Vector3(0.10, 0.055, 0.012), Vector3(0, 0.65, 0.10))
+	# 巨型弩箭（上膛件 → ammo 独立节点：发射瞬间隐藏、装填后再出现）
+	var a2: Dictionary = ammo
+	_limb(a2, mats, "wood", 0.026, 0.026, Vector3(0, 0.65, 0.05), Vector3(0, 0.65, 0.88), 6)
+	_cyl(a2, mats, "steel", 0.0, 0.05, 0.14, Vector3(0, 0.65, 0.94), 4, Vector3(90, 0, 0))
+	for s in [-1.0, 1.0]:
+		_box(a2, mats, "cloth", Vector3(0.02, 0.11, 0.17), Vector3(s * 0.05, 0.65, 0.24))
+	_box(a2, mats, "cloth", Vector3(0.10, 0.055, 0.012), Vector3(0, 0.65, 0.10))
 	# 后部军旗
 	_limb(sts, mats, "wood", 0.018, 0.018, Vector3(0.31, 0.46, -0.38), Vector3(0.31, 1.22, -0.38), 6)
 	_box(sts, mats, "cloth", Vector3(0.30, 0.19, 0.014), Vector3(0.15, 1.10, -0.38))

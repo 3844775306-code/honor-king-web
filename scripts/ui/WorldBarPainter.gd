@@ -63,6 +63,12 @@ func _draw_unit(r: Dictionary) -> void:
 	var shield: float = float(r.get("shield", 0.0))
 	var tc: Color = r["team_color"]
 	var team: int = int(r.get("team", 0))
+	# 补刀提示：正在攻击且一次普攻即可击杀 → 整条血条改为灰白（带呼吸亮边）
+	var last_hit: bool = bool(r.get("last_hit", false))
+	var lh_pulse: float = 0.0
+	if last_hit:
+		lh_pulse = 0.5 + 0.5 * sin(_t * 7.0)
+		tc = Color(0.90, 0.92, 0.95).lerp(Color(1.0, 1.0, 1.0), lh_pulse * 0.35)
 	var top := Rect2(p, Vector2(w, h))
 	var hw: float = clampf(hp / mx, 0.0, 1.0) * w
 
@@ -73,6 +79,11 @@ func _draw_unit(r: Dictionary) -> void:
 	# 外框：深色底 + 队伍色细边
 	draw_rect(Rect2(p - Vector2(1, 1), Vector2(w + 2, h + 2)), Color(0.02, 0.03, 0.05, 0.94))
 	draw_rect(Rect2(p - Vector2(1, 1), Vector2(w + 2, h + 2)), Color(tc.r, tc.g, tc.b, 0.34), false, 1.0)
+	if last_hit:
+		# 补刀提示外光：白色呼吸描边 + 顶部一道亮线
+		draw_rect(Rect2(p - Vector2(1.5, 1.5), Vector2(w + 3, h + 3)),
+			Color(1.0, 1.0, 1.0, 0.35 + 0.45 * lh_pulse), false, 1.5)
+		draw_rect(Rect2(p + Vector2(0, -3.5), Vector2(w, 2)), Color(1, 1, 1, 0.25 + 0.35 * lh_pulse))
 
 	# 空槽（上亮下暗）
 	draw_rect(Rect2(p, Vector2(w, h * 0.5)), BAR_BG_TOP)
@@ -128,9 +139,10 @@ func _draw_unit(r: Dictionary) -> void:
 			x += 4.0
 		draw_rect(Rect2(sr.position, Vector2(1.0, h)), Color(1, 1, 1, 0.75))
 
-	# 塔：每 2000 血一格刻度（暗线 + 右侧微高光，像嵌进去的刻度）
+	# 刻度：塔默认每 2000 血一格；野怪 / 主宰先锋等由 HUD 指定每 1000 血一格
 	if bool(r.get("ticks", false)):
-		var step := 2000.0 / mx * w
+		var tick_hp: float = maxf(100.0, float(r.get("tick_step", 2000.0)))
+		var step := tick_hp / mx * w
 		if step > 5.0:
 			var tx := step
 			while tx < w - 1.0:
@@ -196,10 +208,27 @@ func _draw_unit(r: Dictionary) -> void:
 		if num != "" and h >= 10.0:
 			var yy := p + Vector2(0, h + fs_num + 4.0)
 			_text_center(num, yy, w, fs_num, Color(1, 1, 1, 0.97))
-	# 标记图标（血条上方一行，专属图标 + 右上角层数）
+	# 防御塔：血条下方一个指向塔身的小三角箭头（替代原名称 label）
+	if bool(r.get("turret_arrow", false)):
+		var tc_ar: Color = r.get("team_color", Color(1, 1, 1))
+		var ax: float = p.x + w * 0.5
+		var ay: float = p.y + h + 2.0
+		var aw: float = maxf(6.0, h * 0.5)
+		var ah: float = aw * 1.2
+		var tri := PackedVector2Array([
+			Vector2(ax - aw, ay), Vector2(ax + aw, ay), Vector2(ax, ay + ah),
+		])
+		draw_colored_polygon(tri, Color(tc_ar.r, tc_ar.g, tc_ar.b, 0.95))
+		draw_polyline(PackedVector2Array([tri[0], tri[1], tri[2], tri[0]]),
+			Color(0, 0, 0, 0.65), 1.2)
+	# 标记图标（血条上方一行）：加大尺寸；有名称文字时整行再上移，避免压住名称
 	var mlist: Array = r.get("marker_list", [])
 	if not mlist.is_empty():
-		MarkerIconScript.draw_row(self, p.x + w * 0.5, p.y - 34.0, mlist, 11.0)
+		var mr := 16.0
+		var my := p.y - mr * 2.0 - 6.0
+		if bool(r.get("show_name", false)):
+			my -= 26.0
+		MarkerIconScript.draw_row(self, p.x + w * 0.5, my, mlist, mr)
 
 # 居中绘制一行文字：阴影 + 描边 + 主体
 func _text_center(txt: String, pos: Vector2, width: float, fs: int, col: Color) -> void:
@@ -305,6 +334,10 @@ func _draw_epic(r: Dictionary) -> void:
 		var num: String = str(r.get("num_text", ""))
 		if num != "":
 			_text_center(num, p + Vector2(0, h + 26.0), w, 17, Color(1, 1, 1, 0.96))
+	var emlist: Array = r.get("marker_list", [])
+	if not emlist.is_empty():
+		var emr := 16.0
+		MarkerIconScript.draw_row(self, p.x + w * 0.5, p.y - emr * 2.0 - 36.0, emlist, emr)
 
 # ============================ 盾形图标 ============================
 func _draw_shield_icon(c: Vector2, s: float, col: Color) -> void:

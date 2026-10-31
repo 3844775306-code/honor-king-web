@@ -45,6 +45,95 @@ const HERO_REACH := {
 	"大禹": 3.5, "太乙真人": 3.5,
 }
 
+# ---------------- 轮椅英雄模型合成 ----------------
+# 原先这三个英雄直接拿轮椅 glb 当本体（只看得见一把椅子）。改为：角色本体（含骨骼动画）+ 座椅道具，
+# 本体按「髋部落在座面」的实测偏移上抬，并把非轮椅类动画全部替换成坐姿（站位动画会让本体浮在半空）。
+# 偏移/坐姿数据来自 GLB 实测：座面 y≈0.2026、wheelchair-sit 髋部 y≈0.0263（模型单位）。
+const WHEELCHAIR_BODY := {
+	"狄仁杰": "res://model/hero/character-male-c.glb",
+	"马可波罗": "res://model/hero/character-male-d.glb",
+	"太乙真人": "res://model/hero/character-male-f.glb",
+}
+const WHEELCHAIR_PROP := {
+	"狄仁杰": "res://model/hero/wheelchair.glb",
+	"马可波罗": "res://model/hero/wheelchair-power.glb",
+	"太乙真人": "res://model/hero/wheelchair-deluxe.glb",
+}
+const WC_SEAT_LIFT := 0.1763   # 本体上抬量（模型单位，乘模型放大倍数）
+const WC_SEAT_Z := -0.045      # 本体后移量：髋部对准座面中心
+# 动画替换：站立类 → 坐姿类（含死亡，避免本体从座面「站起来又摔倒」）
+const WC_ANIM_MAP := {
+	"walk": "wheelchair-move-forward",
+	"sprint": "wheelchair-move-forward",
+	"drive": "wheelchair-move-forward",
+}
+const WC_ANIM_SIT := "wheelchair-sit"
+
+static func is_wheelchair_hero(hero_name: String) -> bool:
+	return WHEELCHAIR_PROP.has(hero_name)
+
+# root：模型根（未放大）；body：角色本体实例（已按 s 放大）；s：本体放大倍数
+static func mount_wheelchair(root: Node3D, body: Node3D, hero_name: String, s: float) -> void:
+	if root == null or body == null or not is_instance_valid(body):
+		return
+	var path := str(WHEELCHAIR_PROP.get(hero_name, ""))
+	if path == "":
+		return
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return
+	var chair: Node3D = packed.instantiate()
+	chair.name = "Wheelchair"
+	chair.scale = Vector3.ONE * s
+	root.add_child(chair)
+	body.position = Vector3(0.0, WC_SEAT_LIFT * s, WC_SEAT_Z * s)
+	force_seated_anims(_find_ap(body))
+
+# 把本体 AnimationPlayer 里所有站立/攻击类 clip 换成坐姿 clip（保留原时长），
+# 让 idle/walk/attack/die 等既有调用点都自然呈现「坐在轮椅上」的姿态。
+static func force_seated_anims(ap: AnimationPlayer) -> void:
+	if ap == null or not is_instance_valid(ap):
+		return
+	# glb 动画在默认动画库里（AnimationPlayer 本身没有 remove/add，得走 AnimationLibrary）
+	var lib: AnimationLibrary = ap.get_animation_library(&"")
+	if lib == null:
+		var libs := ap.get_animation_library_list()
+		if libs.is_empty():
+			return
+		lib = ap.get_animation_library(libs[0])
+	if lib == null:
+		return
+	var seat: Animation = lib.get_animation(WC_ANIM_SIT)
+	if seat == null:
+		seat = lib.get_animation("sit")
+	if seat == null:
+		return
+	var names: Array = []
+	for nm in lib.get_animation_list():
+		names.append(str(nm))
+	for key in names:
+		if key.begins_with("wheelchair"):
+			continue
+		var src: Animation = seat
+		var mapped := str(WC_ANIM_MAP.get(key, ""))
+		if mapped != "" and lib.has_animation(mapped):
+			src = lib.get_animation(mapped)
+		var old: Animation = lib.get_animation(key)
+		var old_len := old.length if old != null else 0.25
+		var dup: Animation = src.duplicate()
+		dup.length = maxf(old_len, 0.05)   # 保留原 clip 时长：死亡延迟/动作窗按长度计算
+		lib.remove_animation(key)
+		lib.add_animation(key, dup)
+
+static func _find_ap(n: Node) -> AnimationPlayer:
+	if n is AnimationPlayer:
+		return n
+	for c in n.get_children():
+		var r := _find_ap(c)
+		if r != null:
+			return r
+	return null
+
 static func attach(instance: Node3D, hero_name: String, reach_m: float = -1.0) -> void:
 	if instance == null or not is_instance_valid(instance):
 		return

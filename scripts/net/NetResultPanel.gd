@@ -19,6 +19,7 @@ var _f := UiKit.font()
 var _pw: float = PANEL_W
 var _cw: float = COL_W
 var _backdrop: Control = null
+var _rank_result: Dictionary = {}
 
 # 同 host ResultsPanel._ui_scale()
 func _rs() -> float:
@@ -47,12 +48,16 @@ func _ready() -> void:
 
 func _on_result(p: Dictionary) -> void:
 	_payload = p
+	# 对战纪录：客户端各自把收到的结算写入本地历史
+	BattleHistory.record(p, "联机")
 	# 胜负语音：接管方/观战视角本方恒为蓝方 PLAYER
 	var win := int(p.get("winner", -1)) == Config.Team.PLAYER
 	if _backdrop != null:
 		_backdrop.set("accent", BLUE_TEAM if win else RED_TEAM)
 	UiKit.show_panel(self, 0.20)
 	SfxManager.play_announce("victory" if win else "defeat")
+	if _rank_result.is_empty() and not ("--net-test" in OS.get_cmdline_user_args()):
+		_rank_result = RankSystem.apply_result(win, false)
 	queue_redraw()
 
 func _text(pos: Vector2, txt: String, sz: int, col: Color) -> void:
@@ -119,6 +124,18 @@ func _draw() -> void:
 			"我方击杀 %d : %d  ·  本场总经济 %s" % [int(my_sum["kills"]), int(en_sum["kills"]),
 			_fmt_gold(int(my_sum["gold"]) + int(en_sum["gold"]))],
 			int(round(17.0 * rs)), Color(0.75, 0.8, 0.9))
+	if not _rank_result.is_empty():
+		var rank_txt := "排位 %s" % str(_rank_result.get("new_label", ""))
+		if bool(_rank_result.get("promoted", false)):
+			rank_txt += "  ↑"
+		elif bool(_rank_result.get("demoted", false)):
+			rank_txt += "  ↓"
+		elif bool(_rank_result.get("protected", false)):
+			rank_txt += "  保星"
+		elif bool(_rank_result.get("floor_protected", false)):
+			rank_txt += "  段位保护"
+		_text(Vector2(panel.position.x + _pw - 420.0, panel.position.y + 54.0),
+			rank_txt, int(round(18.0 * rs)), GOLD_COLOR)
 	# 两列列头（同 host _make_team_header：740×60 队色底 + 队名 23×rs + 总击杀/团队经济 16×rs）
 	var lx := panel.position.x + 10.0
 	var rx := panel.position.x + _pw - 10.0 - _cw

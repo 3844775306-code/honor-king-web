@@ -20,3 +20,9 @@ screenshots/
 
 # 本地临时调试脚本
 _probe_hitch.*
+
+# 本地大模型聊天配置（含 API key，不要提交）
+ai_chat.cfg
+
+# 灵宝本地存档（user:// 不可写时的兜底）
+lingbao.cfg

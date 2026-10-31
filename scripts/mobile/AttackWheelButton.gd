@@ -12,6 +12,7 @@ signal released(final_drag: Vector2, cancelled: bool)
 
 const TAP_THRESHOLD := 30.0      # 超过此拖拽距离才算“拖出去”（进入选敌）
 const CANCEL_RADIUS := 40.0      # 松手位置距按下起点小于此值且拖出去过 → 视为拖回按钮，取消
+const MIN_HOLD_MS := 120         # 快速点按也至少保持 120ms，保证 Hero 的物理帧能读到一次普攻
 
 var label_text := "普攻"
 var color := Color(0.9, 0.4, 0.3, 0.85)
@@ -50,6 +51,7 @@ var _origin := Vector2.ZERO      # 按下起点（局部坐标）
 var _drag := Vector2.ZERO        # 当前拖拽偏移
 var _max_drag := 0.0             # 本次手势的最大拖拽距离
 var _press := 0.0
+var _held_until := 0             # 点按保持窗口（毫秒），避免极短触摸被物理帧漏掉
 
 func _ready():
 	mouse_filter = MOUSE_FILTER_STOP
@@ -63,7 +65,7 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func is_held() -> bool:
-	return _active
+	return _active or Time.get_ticks_msec() < _held_until
 
 func get_drag() -> Vector2:
 	return _drag if _active else Vector2.ZERO
@@ -78,6 +80,7 @@ func _gui_input(event):
 				_origin = event.position
 				_drag = Vector2.ZERO
 				_max_drag = 0.0
+				_held_until = Time.get_ticks_msec() + MIN_HOLD_MS
 				UiKit.haptic(6)
 				pressed_changed.emit(true)
 				queue_redraw()

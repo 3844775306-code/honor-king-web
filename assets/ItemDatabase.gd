@@ -655,8 +655,8 @@ func get_synthesis_tree(item_id: String) -> String:
 	return " = ".join(parts) + "  →  +" + str(get_synthesis_cost(item_id, [])) + "金"
 
 
-# 获取推荐出装（按英雄职业）
-func get_recommended_items(hero_name: String) -> Array:
+# 内置推荐出装方案（每英雄 3 套，选人页可直接挑选）；传职业名时回落为每职业 1 套
+func get_recommended_variants(hero_name: String) -> Array:
 	# 每名英雄3套专属出装方案
 	var builds = {
 		# ==================== 战士 ====================
@@ -806,7 +806,7 @@ func get_recommended_items(hero_name: String) -> Array:
 		],
 	}
 	if builds.has(hero_name):
-		return builds[hero_name][randi() % 3]
+		return builds[hero_name]
 	# 兜底：按角色返回通用方案
 	var role_pools = {
 		"战士": ["battle_axe", "resist_boots", "ice_fist", "sage_power", "fierce_armor", "omen"],
@@ -815,4 +815,10 @@ func get_recommended_items(hero_name: String) -> Array:
 		"刺客": ["greed_blade", "resist_boots", "battle_axe", "sage_power", "breaker", "famous_blade"],
 		"辅助": ["guardian_glory", "cd_boots", "omen", "ice_storm", "dragon_shield", "heavy_armor"],
 	}
-	return role_pools.get(hero_name, role_pools["战士"])
+	return [role_pools.get(hero_name, role_pools["战士"])]
+
+
+# 获取推荐出装（取第一套内置方案；对联机/AI 等只要一套的调用方保持原语义）
+func get_recommended_items(hero_name: String) -> Array:
+	var vs := get_recommended_variants(hero_name)
+	return (vs[0] as Array).duplicate() if not vs.is_empty() else []

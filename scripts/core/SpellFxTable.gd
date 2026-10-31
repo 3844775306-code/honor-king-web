@@ -53,7 +53,8 @@ const SKILL_PROPS := {
 	"妲己": {0: "orbs", 1: "orbs"},
 	"李白": {0: "swords", 1: "swords"},
 	"后羿": {0: "sun_orb", 1: "sun_orb"},
-	"东皇太一": {0: "orbs"},
+	"东皇太一": {0: "orbs", 1: "orbs"},
+	"刘禅": {0: "mech_shield", 1: "mech_claw", 2: "mech_stamp"},
 }
 
 static func get_prop(hero_name: String, slot: int) -> String:
@@ -78,3 +79,4 @@ static func get_skill_shape(skill) -> String:
 			return "aura"
 		_:
 			return "bolt"
+

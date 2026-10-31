@@ -5,6 +5,9 @@ extends SubViewportContainer
 ## 无贴图依赖；模型取 Hero.HERO_MODEL_MAP，缺模型时退化为角色色胶囊体。
 ## 加载后按模型包围盒自动缩放并重新构图（相机/圆环/地台随模型贴脚）。
 
+const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
+const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
+
 var accent := Color(0.32, 0.62, 1.0)
 ## 渲染分辨率 / 轻量模式（加载界面 10 张缩略立绘用：关 MSAA/辉光/阴影，省 GPU）
 var render_size := Vector2i(900, 1100)
@@ -21,11 +24,23 @@ var _rim_light: OmniLight3D
 var _floor_light: OmniLight3D
 var _camera: Camera3D
 var _t := 0.0
+# —— 滑动查看视角（选人界面选定英雄后由外部开启）：水平=绕角色转，垂直=俯仰 ——
+var orbit_enabled := false
+var _orbit_yaw := 0.0        # 当前水平角（弧度，0 = 正面）
+var _orbit_pitch := 0.04     # 当前俯仰（弧度）
+var _orbit_dist := 7.4       # 相机到角色中心的距离
+var _orbit_focus := Vector3(0.0, 2.1, 0.0)
+var _drag_index := -1        # 正在拖拽的手指/鼠标（-1=未拖拽）
+var _drag_last := Vector2.ZERO
+const ORBIT_PITCH_MIN := -0.25
+const ORBIT_PITCH_MAX := 0.85
 
 
 func _ready() -> void:
 	stretch = true
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# 可滑动查看视角时吃输入，否则完全不挡上层点击/拖拽
+	mouse_filter = Control.MOUSE_FILTER_STOP if orbit_enabled else Control.MOUSE_FILTER_IGNORE
+	gui_input.connect(_on_orbit_input)
 	_viewport = SubViewport.new()
 	_viewport.size = render_size if render_size.x > 8 else Vector2i(900, 1100)
 	_viewport.transparent_bg = true
@@ -122,12 +137,67 @@ func _make_env() -> Environment:
 func _process(delta: float) -> void:
 	_t += delta
 	if _model != null and is_instance_valid(_model):
-		_model.rotation.y = sin(_t * 0.42) * 0.30
+		# 用户正在拖动视角时停掉自动摆头，避免手感打架
+		if _drag_index < 0:
+			_model.rotation.y = sin(_t * 0.42) * 0.30
 		_model.position.y = sin(_t * 0.9) * 0.02
 	if _ring != null and is_instance_valid(_ring):
 		_ring.rotation.y = _t * 0.35
 		if _ring_mat != null:
 			_ring_mat.emission_energy_multiplier = 1.8 + 0.9 * (0.5 + 0.5 * sin(_t * 1.6))
+	if orbit_enabled:
+		_apply_orbit()
+
+
+## 开/关「滑动查看视角」：开启后中央立绘区域吃拖拽事件（选人界面选定英雄后调用）
+func set_orbit_enabled(v: bool) -> void:
+	orbit_enabled = v
+	var want := Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
+	if mouse_filter != want:
+		mouse_filter = want
+
+
+## 拖拽/滑动 → 绕角色水平旋转 + 上下俯仰（限制角度避免钻到脚下/头顶）
+func _on_orbit_input(event: InputEvent) -> void:
+	if not orbit_enabled:
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_drag_index = 0
+			_drag_last = event.position
+		elif _drag_index == 0:
+			_drag_index = -1
+		return
+	if event is InputEventMouseMotion and _drag_index == 0:
+		_apply_drag(event.position - _drag_last)
+		_drag_last = event.position
+		return
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			_drag_index = event.index
+			_drag_last = event.position
+		elif _drag_index == event.index:
+			_drag_index = -1
+		return
+	if event is InputEventScreenDrag and _drag_index == event.index:
+		_apply_drag(event.position - _drag_last)
+		_drag_last = event.position
+
+
+func _apply_drag(delta: Vector2) -> void:
+	if delta == Vector2.ZERO:
+		return
+	_orbit_yaw -= delta.x * 0.009
+	_orbit_pitch = clampf(_orbit_pitch + delta.y * 0.006, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+
+
+## 按当前角度把相机放在角色中心球的球面上并看向中心
+func _apply_orbit() -> void:
+	if _camera == null:
+		return
+	var dir := Vector3(sin(_orbit_yaw) * cos(_orbit_pitch), sin(_orbit_pitch), cos(_orbit_yaw) * cos(_orbit_pitch))
+	_camera.position = _orbit_focus + dir * _orbit_dist
+	_camera.look_at(_orbit_focus)
 
 
 ## 切换展示英雄；缺模型时用角色色胶囊体兜底。未进树时先记下，进树后自动应用。
@@ -151,7 +221,13 @@ func _apply_hero(hero_name: String) -> void:
 		if packed != null:
 			var inst: Node3D = packed.instantiate()
 			root.add_child(inst)
+			# 轮椅英雄：本体 + 座椅合成（未放大模型，s=1），并把动画切到坐姿
+			if HeroWeapons.is_wheelchair_hero(hero_name):
+				HeroWeapons.mount_wheelchair(root, inst, hero_name, 1.0)
 			_play_first_anim(inst)
+			# 英睿：签名道具（预览模型是未放大的原始底座，道具按 1/3 换算回模型局部单位）
+			if hero_name == "英睿":
+				HeroYingrui.attach_props(root, 1.0 / 3.0)
 			created = true
 	if not created:
 		var cap := MeshInstance3D.new()
@@ -194,8 +270,11 @@ func _frame_model() -> void:
 	aabb = _model_aabb()
 	var c := aabb.get_center()
 	var h := maxf(aabb.size.y, 0.5)
-	_camera.position = c + Vector3(0.0, h * 0.08, h * 2.05)
-	_camera.look_at(c)
+	# 相机改为绕角色中心的球面机位（滑动手势直接改 _orbit_yaw/_orbit_pitch）
+	_orbit_focus = c
+	_orbit_dist = absf(h * 2.05) + 0.001
+	_orbit_pitch = clampf(atan2(h * 0.08, _orbit_dist), ORBIT_PITCH_MIN, ORBIT_PITCH_MAX)
+	_apply_orbit()
 	var foot := aabb.position.y + 0.02
 	var foot_r := clampf(maxf(aabb.size.x, aabb.size.z) * 0.62, 0.5, 3.0)
 	_ring.position = Vector3(c.x, foot, c.z)

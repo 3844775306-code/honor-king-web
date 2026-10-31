@@ -86,3 +86,26 @@ class SummonerGlyph extends Control:
 			return
 		ART.draw_icon(self, size * 0.5, d * 0.5 - 1.0,
 			ART.kind_for_summoner(summoner_name), false)
+
+
+## 装备图标（选人页出装顺序用，与对局商店同一套程序化图标）
+class ItemIcon extends Control:
+	const GLYPH = preload("res://scripts/ui/ItemGlyph.gd")
+	var item_name := ""
+	var tier := 1
+	var diameter := 44.0
+
+	func _init(p_item: String = "", p_tier: int = 1, p_d: float = 44.0) -> void:
+		item_name = p_item
+		tier = clampi(p_tier, 1, 5)
+		diameter = p_d
+		custom_minimum_size = Vector2(p_d, p_d)
+		size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var d := minf(size.x, size.y)
+		if d <= 2.0:
+			return
+		GLYPH.draw(self, Rect2(Vector2.ZERO, Vector2(d, d)), tier, UiKit.QUALITY_COLORS[tier], item_name)

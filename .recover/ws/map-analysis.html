@@ -1,0 +1,492 @@
+<title>Honor King — 地图结构分析</title>
+
+<style>
+  :root {
+    --bg: #faf7f0;
+    --surface: #ffffff;
+    --border: #e0d8c8;
+    --text: #2c2416;
+    --text-muted: #7a7258;
+    --accent: #c8960c;
+    --accent-dim: #8a6a15;
+    --river: #2e86c1;
+    --forest: #3a7d3a;
+    --red-team: #c0392b;
+    --gold: #d4a017;
+    --code-bg: #f3efe4;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1a1814;
+      --surface: #242118;
+      --border: #3d3528;
+      --text: #ebe5d5;
+      --text-muted: #9e9678;
+      --accent: #f0c040;
+      --accent-dim: #b8961c;
+      --river: #4da6e0;
+      --forest: #5aad5a;
+      --red-team: #e74c3c;
+      --gold: #f0c040;
+      --code-bg: #1f1c16;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #1a1814;
+    --surface: #242118;
+    --border: #3d3528;
+    --text: #ebe5d5;
+    --text-muted: #9e9678;
+    --accent: #f0c040;
+    --accent-dim: #b8961c;
+    --river: #4da6e0;
+    --forest: #5aad5a;
+    --red-team: #e74c3c;
+    --gold: #f0c040;
+    --code-bg: #1f1c16;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    line-height: 1.6;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+    margin-bottom: 0.25rem;
+  }
+
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1.25rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+    color: var(--accent-dim);
+    border-left: 3px solid var(--accent);
+    padding-left: 0.75rem;
+  }
+
+  h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 1.25rem 0 0.5rem;
+    color: var(--text);
+  }
+
+  p { margin: 0.5rem 0; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+    margin: 1rem 0;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+  }
+
+  .stat-card .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+  }
+
+  .stat-card .value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th, td {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: var(--surface);
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  .coord {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+    color: var(--accent-dim);
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.15em 0.55em;
+    border-radius: 3px;
+    margin-right: 0.3em;
+  }
+
+  .tag-red    { background: var(--red-team); color: #fff; }
+  .tag-blue   { background: var(--river); color: #fff; }
+  .tag-green  { background: var(--forest); color: #fff; }
+  .tag-gold   { background: var(--gold); color: #1a1814; }
+
+  .mermaid-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+
+  .callout.warn {
+    border-left-color: var(--red-team);
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.5rem 0;
+  }
+
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+</style>
+
+<h1>Honor King 地图结构分析</h1>
+<p class="subtitle">基于 <code>BattleManager.gd</code> 中 <code>_create_map()</code> 及相关函数的实际代码分析 &middot; 2026-08-09</p>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="label">地图总尺寸</div>
+    <div class="value">120 × 120</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">泉水坐标 (蓝方)</div>
+    <div class="value coord">(-53, 0, 53)</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">泉水坐标 (红方)</div>
+    <div class="value coord">(53, 0, -53)</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">泉水半径</div>
+    <div class="value">5.0</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">防御塔 (每方)</div>
+    <div class="value">10 座</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">兵线波次间隔</div>
+    <div class="value">33.0 秒</div>
+  </div>
+</div>
+
+<h2>地形层级</h2>
+
+<p>地图由 <strong>5 层视觉平面</strong> 叠加而成（从下到上）：</p>
+
+<table>
+  <tr><th>层</th><th>Y 坐标</th><th>颜色</th><th>说明</th></tr>
+  <tr><td>野外基底</td><td class="coord">-0.02</td><td><span class="tag tag-green">深绿</span></td><td>120×120 全图覆盖，作为野外底色</td></tr>
+  <tr><td>河道</td><td class="coord">-0.03</td><td><span class="tag tag-blue">深天蓝</span></td><td>对角线 20×141，旋转 45°，半透明 α=0.8</td></tr>
+  <tr><td>分路平面</td><td class="coord">0.05</td><td><span class="tag tag-green">森林绿</span></td><td>6 块矩形，覆盖三条兵线的路径</td></tr>
+  <tr><td>高地圆盘</td><td class="coord">0.2</td><td><span class="tag tag-gold">黄绿</span></td><td>两个半径 25 的圆形区域（泉水周围）</td></tr>
+  <tr><td>碰撞体</td><td class="coord">-0.1</td><td>—</td><td>StaticBody3D 盒子 120×0.1×120，射线检测用</td></tr>
+</table>
+
+<h2>三路结构</h2>
+
+<p>分路由 6 块 <code>PlaneMesh</code> 矩形构成，每条路在双方半区各有一块：</p>
+
+<table>
+  <tr><th>路</th><th>蓝方半区中心</th><th>红方半区中心</th><th>尺寸</th><th>旋转</th></tr>
+  <tr>
+    <td><strong>上路 (Top)</strong></td>
+    <td class="coord">(-55, 0, 0)</td>
+    <td class="coord">(55, 0, 0)</td>
+    <td>10 × 80</td>
+    <td>0°</td>
+  </tr>
+  <tr>
+    <td><strong>中路 (Mid)</strong></td>
+    <td class="coord">(-30, 0, 30)</td>
+    <td class="coord">(30, 0, -30)</td>
+    <td>10 × 80</td>
+    <td>-45°</td>
+  </tr>
+  <tr>
+    <td><strong>下路 (Bot)</strong></td>
+    <td class="coord">(0, 0, 55)</td>
+    <td class="coord">(0, 0, -55)</td>
+    <td>80 × 10</td>
+    <td>0°</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>坐标系约定</strong>：蓝方（玩家方）在 <code>(-Z, +X)</code> 象限，红方（敌方）在 <code>(+Z, -X)</code> 象限。<br>
+  中路沿对角线 <code>(-53,53) → (53,-53)</code> 方向，这也是河道方向。
+</div>
+
+<h2>防御塔布局</h2>
+
+<p>每方 <strong>10 座塔</strong>：上路 3 座（外/二/高地）+ 中路 3 座 + 下路 3 座 + 水晶 1 座。</p>
+
+<h3>蓝方 (Team 0)</h3>
+<table>
+  <tr><th>分路</th><th>外塔</th><th>二塔</th><th>高地塔</th></tr>
+  <tr>
+    <td>上路</td>
+    <td class="coord">(28, 0, 58)</td>
+    <td class="coord">(-15, 0, 56)</td>
+    <td class="coord">(-35, 0, 55)</td>
+  </tr>
+  <tr>
+    <td>中路</td>
+    <td class="coord">(-14, 0, 14)</td>
+    <td class="coord">(-27, 0, 27)</td>
+    <td class="coord">(-40, 0, 40)</td>
+  </tr>
+  <tr>
+    <td>下路</td>
+    <td class="coord">(-58, 0, -28)</td>
+    <td class="coord">(-56, 0, 15)</td>
+    <td class="coord">(-55, 0, 35)</td>
+  </tr>
+</table>
+<p style="margin-top:0.25rem"><strong>水晶</strong>：<span class="coord">(-53, 0, 53)</span></p>
+
+<h3>红方 (Team 1) — 镜像对称</h3>
+<table>
+  <tr><th>分路</th><th>外塔</th><th>二塔</th><th>高地塔</th></tr>
+  <tr>
+    <td>上路</td>
+    <td class="coord">(-28, 0, -58)</td>
+    <td class="coord">(15, 0, -56)</td>
+    <td class="coord">(35, 0, -55)</td>
+  </tr>
+  <tr>
+    <td>中路</td>
+    <td class="coord">(14, 0, -14)</td>
+    <td class="coord">(27, 0, -27)</td>
+    <td class="coord">(40, 0, -40)</td>
+  </tr>
+  <tr>
+    <td>下路</td>
+    <td class="coord">(58, 0, 28)</td>
+    <td class="coord">(56, 0, -15)</td>
+    <td class="coord">(55, 0, -35)</td>
+  </tr>
+</table>
+<p style="margin-top:0.25rem"><strong>水晶</strong>：<span class="coord">(53, 0, -53)</span></p>
+
+<table>
+  <tr><th>塔类型</th><th>生命</th><th>攻击</th><th>攻速</th><th>射程</th><th>双抗</th></tr>
+  <tr><td>外塔</td><td>7,500</td><td>510</td><td>1.0</td><td>890</td><td>200</td></tr>
+  <tr><td>二塔</td><td>8,500</td><td>510</td><td>1.0</td><td>890</td><td>200</td></tr>
+  <tr><td>高地塔</td><td>9,000</td><td>630</td><td>1.0</td><td>890</td><td>200</td></tr>
+  <tr><td>水晶</td><td>9,000</td><td>550</td><td>0.7</td><td>890</td><td>200</td></tr>
+</table>
+
+<h2>兵线路由</h2>
+
+<p>小兵沿 7 个路径点顺序移动，每条路的路径点对应防御塔位置。每 33 秒生成一波，包含近战兵、远程兵，10 分钟后加入炮车兵。</p>
+
+<h3>上路 (蓝方 → 红方)</h3>
+<p class="coord">(-35,55) → (-15,56) → (28,58) → (58,28) → (56,-15) → (55,-35) → (53,-53)</p>
+
+<h3>中路 (蓝方 → 红方)</h3>
+<p class="coord">(-40,40) → (-27,27) → (-14,14) → (14,-14) → (27,-27) → (40,-40) → (53,-53)</p>
+
+<h3>下路 (蓝方 → 红方)</h3>
+<p class="coord">(-55,35) → (-56,15) → (-58,-28) → (-28,-58) → (15,-56) → (35,-55) → (53,-53)</p>
+
+
+<h2>野区</h2>
+
+<h3>蓝方野区 (西北象限)</h3>
+<table>
+  <tr><th>野怪</th><th>位置</th><th>数量</th><th>生命</th><th>金币</th><th>经验</th></tr>
+  <tr><td><span class="tag tag-red">红 Buff</span></td><td class="coord">(0, 0, 40)</td><td>1</td><td>4,200</td><td>84</td><td>56</td></tr>
+  <tr><td><span class="tag tag-blue">蓝 Buff</span></td><td class="coord">(-35, 0, 0)</td><td>1</td><td>4,200</td><td>84</td><td>56</td></tr>
+  <tr><td>山豪 (三猪)</td><td class="coord">(-12, 0, 26)</td><td>2</td><td>1,600</td><td>45</td><td>32</td></tr>
+  <tr><td>烈雉 (鸟)</td><td class="coord">(25, 0, 45)</td><td>1</td><td>3,927</td><td>49</td><td>34</td></tr>
+  <tr><td>暗影狼</td><td class="coord">(-35, 0, 15)</td><td>2</td><td>2,800</td><td>38</td><td>28</td></tr>
+  <tr><td>魔种蜥蜴</td><td class="coord">(-47, 0, 5)</td><td>1</td><td>3,200</td><td>42</td><td>30</td></tr>
+  <tr><td>魔种猴</td><td class="coord">(-22, 0, 38)</td><td>1</td><td>2,800</td><td>42</td><td>30</td></tr>
+  <tr><td>沙蚕</td><td class="coord">(-45, 0, -25)</td><td>1</td><td>4,660</td><td>38</td><td>28</td></tr>
+  <tr><td>边路河道之灵</td><td class="coord">(-58, 0, -58)</td><td>1</td><td>2,500</td><td>70</td><td>28</td></tr>
+</table>
+
+<h3>红方野区 (东南象限) — 镜像</h3>
+<table>
+  <tr><th>野怪</th><th>位置</th><th>数量</th><th>生命</th><th>金币</th></tr>
+  <tr><td><span class="tag tag-red">红 Buff</span></td><td class="coord">(0, 0, -40)</td><td>1</td><td>4,200</td><td>84</td></tr>
+  <tr><td><span class="tag tag-blue">蓝 Buff</span></td><td class="coord">(35, 0, 0)</td><td>1</td><td>4,200</td><td>84</td></tr>
+  <tr><td>小山豪</td><td class="coord">(12, 0, -26)</td><td>2</td><td>1,600</td><td>45</td></tr>
+  <tr><td>烈雉 (鸟)</td><td class="coord">(-25, 0, -45)</td><td>1</td><td>3,927</td><td>49</td></tr>
+  <tr><td>暗影狼</td><td class="coord">(35, 0, -15)</td><td>2</td><td>2,800</td><td>38</td></tr>
+  <tr><td>魔种大蜥蜴</td><td class="coord">(47, 0, -5)</td><td>1</td><td>3,200</td><td>42</td></tr>
+  <tr><td>魔种猴</td><td class="coord">(22, 0, -38)</td><td>1</td><td>2,800</td><td>42</td></tr>
+  <tr><td>沙蚕</td><td class="coord">(45, 0, 25)</td><td>1</td><td>4,660</td><td>38</td></tr>
+  <tr><td>河道之灵</td><td class="coord">(58, 0, 58)</td><td>1</td><td>2,500</td><td>64</td></tr>
+</table>
+
+<h2>史诗级野怪</h2>
+
+<table>
+  <tr><th>野怪</th><th>位置</th><th>生命</th><th>攻击</th><th>首次刷新</th><th>刷新间隔</th><th>活动半径</th></tr>
+  <tr>
+    <td><strong>暴君 (Tyrant)</strong></td>
+    <td class="coord">(24, 0, 26)</td>
+    <td>14,635</td><td>290</td><td>4:00</td><td>—</td><td>8.0</td>
+  </tr>
+  <tr>
+    <td><strong>主宰 (Dragon)</strong></td>
+    <td class="coord">(-24, 0, -26)</td>
+    <td>12,000</td><td>250</td><td>4:00</td><td>4:00</td><td>8.0</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>暴君 Buff</strong>：为击杀方全队提供 <code>_apply_ak_buff(80+lv×3, 15%, 90s, physical)</code> + <code>_apply_ak_buff(120+lv×5, 15%, 90s, magic)</code>。<br>
+  <strong>主宰</strong>：提供 180 团队金币，并在兵线中生成<strong>主宰先锋</strong>替代普通小兵。
+</div>
+
+<h2>墙体与草丛</h2>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="label">墙体数量</div>
+    <div class="value">30</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">草丛数量</div>
+    <div class="value">44</div>
+  </div>
+</div>
+
+<p><strong>墙体分布</strong>：河道两侧 ×4、蓝方野区入口 ×6、红方野区入口 ×6、中路河道两侧 ×4、边路草丛墙 ×8、龙坑墙 ×6。</p>
+
+<p><strong>草丛分布</strong>：</p>
+<ul style="padding-left:1.25rem; margin:0.5rem 0;">
+  <li>上路草丛：蓝方 ×3、红方 ×3</li>
+  <li>下路草丛：蓝方 ×3、红方 ×3</li>
+  <li>中路河道：×6</li>
+  <li>野区草丛：蓝方 ×5、红方 ×5</li>
+  <li>龙坑草丛：×2</li>
+  <li>边路河道：蓝方 ×2、红方 ×2</li>
+  <li>中路两侧：×2</li>
+</ul>
+
+<h2>生命包</h2>
+
+<p>6 个生命包分布在边路关键位置：</p>
+<table>
+  <tr><th>位置</th><th>所属方</th></tr>
+  <tr><td class="coord">(24, 0, 58)</td><td>蓝方</td></tr>
+  <tr><td class="coord">(-58, 0, -24)</td><td>蓝方</td></tr>
+  <tr><td class="coord">(-17, 0, 17)</td><td>蓝方</td></tr>
+  <tr><td class="coord">(-24, 0, -58)</td><td>红方</td></tr>
+  <tr><td class="coord">(58, 0, 24)</td><td>红方</td></tr>
+  <tr><td class="coord">(17, 0, -17)</td><td>红方</td></tr>
+</table>
+
+<hr>
+
+<h2>发现问题</h2>
+
+<div class="callout warn">
+  <strong>1. 坐标编码错误 — 多处双负号</strong><br>
+  红方野区坐标使用了 <code>--</code>（双负号）语法，如 <code>Vector3(--12, 0, -26)</code>、<code>Vector3(--58, 0, --58)</code>。在 GDScript 中这会被解析为两次取反运算符，刚好得到正数，但这是巧合而非设计要求。应改为显式正数坐标。
+</div>
+
+<div class="callout warn">
+  <strong>2. 史诗野怪 Timer 初始化问题</strong><br>
+  <code>tyrant_timer</code> 和 <code>dragon_timer</code> 初始值为 <code>0.0</code>，意味着游戏开始时就会立即尝试生成。实际的 4 分钟延迟依赖 <code>_update_epic_monsters</code> 在 <code>game_time >= 240</code> 时才被调用。如果未来修改了时间判断逻辑，可能在 0 秒时错误生成。
+</div>
+
+<div class="callout warn">
+  <strong>3. 河道碰撞缺失</strong><br>
+  河道只有视觉平面，没有独立的碰撞体。地面碰撞统一由 120×120 的 StaticBody3D 提供，这意味着河道在碰撞检测上与普通地面无异 — 站在河道中没有减速或其他效果。
+</div>
+
+<div class="callout warn">
+  <strong>4. 高地圆盘非真实圆形</strong><br>
+  <code>_create_circle_plane</code> 创建的是方形 <code>PlaneMesh</code>（边长 = 半径×2），而非真正的圆盘。命名具有误导性 — 视觉上它是一个正方形的色块。
+</div>
+
+<div class="callout warn">
+  <strong>5. 野区活动范围环使用 TorusMesh 但不使用 MeshFactory</strong><br>
+  <code>_spawn_jungle_group</code>、<code>_spawn_tyrant</code>、<code>_spawn_dragon</code> 中的活动范围环（~15 行）仍使用原始 TorusMesh + StandardMaterial3D 创建，可改用 <code>MeshFactory.create_torus_ring()</code>。
+</div>
+
+<div class="callout warn">
+  <strong>6. 蓝方红 Buff 位置异常</strong><br>
+  蓝方红 Buff 位于 <code>(0, 0, 40)</code> — 在河道正上方，而非野区深处。这与其他野怪的位置模式不一致，可能是占位数据。
+</div>
+
+<div class="callout warn">
+  <strong>7. 沙蚕跨象限放置</strong><br>
+  蓝方沙蚕位于 <code>(-45, 0, -25)</code> — 这是红方半区（Z 为负），应为蓝方半区（Z 为正）的野怪。这是镜像逻辑不一致。
+</div>
+
+<div class="callout warn">
+  <strong>8. 墙体无碰撞尺寸变化</strong><br>
+  所有 30 面墙的位置都有硬编码坐标，但 <code>Wall</code> 实体使用的是默认碰撞体积。大量墙体之间没有形成连续的障碍物链，玩家可能从墙间缝隙穿过。
+</div>

@@ -1,0 +1,23 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[Debug] AI路径球显示已开启（F4切换）
+[Debug] 击杀奖励调试日志已开启（BattleManager.debug_kill_rewards）
+[A*]己 李白: (-60,60)->(-40,20) 路点40 终点(-40,20) 目标移动 0.1ms 标记0格
+[A*]己 不知火舞: (-60,60)->(-49,49) 路点13 终点(-49,49) 目标移动 0.1ms 标记0格
+[A*]己 狄仁杰: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]己 太乙真人: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]敌 马超: (60,-60)->(20,-40) 路点40 终点(20,-40) 目标移动 0.1ms 标记0格
+[A*]敌 甄姬: (60,-60)->(16,-13) 路点48 终点(16,-13) 目标移动 0.3ms 标记0格
+[A*]敌 狄仁杰: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+[A*]敌 吕布: (60,-60)->(-19,-47) 路点79 终点(-19,-47) 目标移动 0.1ms 标记0格
+[A*]敌 太乙真人: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+L panel pos=(849.0, 830.0) size=(702.0, 756.0) s=1.35 anchors=0.5,0.5
+L src_rows=266.0 n_sources=0
+L click row1 local=(260.0, 319.0) screen=(1200.0, 1260.65)
+L expanded_after_row1=-1
+L click close screen=(1511.85, 861.05)
+L panel_visible_after_close=false
+ERROR: 32 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.

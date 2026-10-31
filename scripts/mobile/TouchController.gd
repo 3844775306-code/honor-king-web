@@ -1,5 +1,7 @@
 extends Node
 const IconArt = preload("res://scripts/ui/IconArt.gd")
+const HeroArt = preload("res://scripts/ui/HeroArt.gd")
+const SkillArt = preload("res://scripts/ui/SkillArt.gd")
 ## 移动端触摸控制总控（autoload: TouchController）
 ## - 左下固定摇杆：移动（中心固定，仅距中心一定距离内按下才激活）
 ## - 右下技能按钮：按下瞄准、拖动定方向、松开施放（外圈金环按等级分段）
@@ -14,6 +16,13 @@ const SKILL_COUNT := 3
 const SKILL_SIZE := 260.0
 const UPGRADE_SIZE := 120.0
 const ACTIVE_SIZE := 230.0
+
+# 敌人索敌头像条：攻击范围内敌人 ≥2 时，沿技能扇形「外侧」同圆心弧线排布（点击锁定普攻/技能目标）
+const PICKER_MAX := 5
+const PICKER_SIZE := 118.0
+const PICKER_RADIUS := 800.0     # 比技能扇半径 560 再外扩一圈，落在技能键外沿之外
+const PICKER_ANGLE_MIN := 8.0    # 0°=普攻正上方（正方向朝屏幕左侧），与技能扇同角度基准
+const PICKER_ANGLE_MAX := 76.0
 
 # 普攻键 —— 技能扇形唯一的圆心
 const ATTACK_POS := Vector2(40, 40)
@@ -113,6 +122,8 @@ var _cancel_btn: CancelCastButton    # 拖动技能/召唤师瞄准时出现的�
 var _summoner_button: SkillTouchButton    # 召唤师技能按钮（按住拖方向、松开施放）
 var _recover_button: SkillTouchButton     # 恢复按钮（按下即时回血、显示 60s 冷却遮罩）
 var _extra_skill_button: SkillTouchButton  # 第4技能按钮(真实第4技能槽英雄=兰陵王隐身才显示)
+var _picker_root: Control = null           # 敌人索敌头像条容器
+var _picker_buttons: Array = []            # 复用的头像按钮池（_EnemyAvatar）
 
 var _move_mode_btn: MoveModeToggle        # 桌面 WASD 移动模式切换（手机端隐藏）
 
@@ -139,12 +150,20 @@ var move_mode := MOVE_MODE_DIR  # 默认前后左右（W/S/A/D 直接按屏幕�
 # 按住技能查看详情（状态与面板）
 var _skill_detail_panel: Panel = null
 var _skill_detail_title: Label = null
+var _skill_detail_tag: Label = null
 var _skill_detail_body: RichTextLabel = null
-var _fx_holder: Control = null      # 效果“圆底图标+数字”的承载体（详情面板下方，普通 Control 手动排布）
+var _skill_detail_icon: Control = null
+var _skill_detail_accent: ColorRect = null
+var _skill_detail_divider: ColorRect = null
+var _skill_detail_section: Label = null
+var _skill_detail_fx_title: Label = null
+var _skill_detail_hint: Label = null
+var _fx_holder: Control = null      # 效果“圆角徽章”的承载体（详情面板下方，普通 Control 手动排布）
 var _detail_index := -1              # 当前展示的技能详情（-1=无；0..2=英雄技能，3=召唤师）
 var _hold_start: Array = [-1.0, -1.0, -1.0, -1.0]   # 每个候选按钮的按住起始时刻（秒）
 
 var touch_active := false
+var intro_hidden := false   # 开局运镜期间隐藏全部触摸 HUD
 var hero: Hero = null
 
 # —— 右半屏拖拽相机（王者式：空白区拖动看视野，松手由 BattleManager 回正）——
@@ -159,8 +178,8 @@ func _ready():
 	# 电脑版与手机完全一致：两端都启用触摸操作层。
 	# 桌面端用鼠标模拟触摸（emulate_touch_from_mouse），可点击/拖拽触摸按钮操作；
 	# 移动端开启触摸→鼠标模拟，让普通 Button（商店/英雄选择等）响应触摸。
-	Input.set_emulate_touch_from_mouse(not OS.has_feature("mobile"))
-	Input.set_emulate_mouse_from_touch(OS.has_feature("mobile"))
+	Input.set_emulate_touch_from_mouse(not Config.on_mobile())
+	Input.set_emulate_mouse_from_touch(Config.on_mobile())
 	touch_active = true
 	_build_ui()
 	_update_visibility()
@@ -211,12 +230,82 @@ func _process(_delta):
 	if not touch_active:
 		return
 	if hero and is_instance_valid(hero):
+		_update_enemy_picker()
 		_update_skill_button_ui()
 		_push_attack_stats()
 		_update_skill_detail()
 
 func set_hero(h: Hero):
 	hero = h
+
+# ---------------- 敌人索敌头像条（技能扇形外侧弧线） ----------------
+
+# 每帧扫描玩家攻击范围内的敌人：≥2 个才出现头像；按距离排序取前 PICKER_MAX 个，
+# 沿与技能扇同圆心、更大半径的弧线布点；高亮 = 当前锁定目标（Hero.manual_target）。
+func _update_enemy_picker():
+	if _picker_root == null:
+		return
+	if not PlayerPrefs.opt_bool("lock_portrait", true):
+		_picker_root.visible = false
+		return
+	if hero == null or not is_instance_valid(hero) or hero.health <= 0:
+		_picker_root.visible = false
+		return
+	var reach: float = hero.attack_range * 0.01
+	var list: Array = []
+	for ent in get_tree().get_nodes_in_group("entities"):
+		if ent == hero or not (ent is GameEntity) or ent.health <= 0 or ent.team == hero.team:
+			continue
+		# 锁敌条只锁定英雄：小兵/防御塔/野怪一律不上头像（用下方推塔/小兵优先级键处理）
+		if not (ent is Hero):
+			continue
+		if (ent as Hero).is_invisible_to_enemy() or (ent as Hero).is_untargetable_by_enemies():
+			continue   # 隐身/不可选中的英雄不该出现在索敌条上
+		if hero.global_position.distance_to(ent.global_position) - ent.body_radius > reach:
+			continue
+		list.append(ent)
+	if list.is_empty():
+		_picker_root.visible = false
+		return   # 范围内没有敌方英雄时隐藏
+	var hpos: Vector3 = hero.global_position
+	list.sort_custom(func(a, b): return hpos.distance_squared_to(a.global_position) < hpos.distance_squared_to(b.global_position))
+	if list.size() > PICKER_MAX:
+		list = list.slice(0, PICKER_MAX)
+	_picker_root.visible = true
+	var n: int = list.size()
+	var atk_center := ATTACK_POS + Vector2(ATTACK_SIZE, ATTACK_SIZE) * 0.5
+	for i in range(_picker_buttons.size()):
+		var av = _picker_buttons[i]
+		if i >= n:
+			av.visible = false
+			continue
+		var ent = list[i]
+		var t := 0.0 if n <= 1 else float(i) / float(n - 1)
+		var ang := deg_to_rad(lerpf(PICKER_ANGLE_MIN, PICKER_ANGLE_MAX, t))
+		var pos: Vector2 = atk_center + Vector2(PICKER_RADIUS * sin(ang), PICKER_RADIUS * cos(ang))
+		_anchor_br(av, pos - Vector2(PICKER_SIZE, PICKER_SIZE) * 0.5, Vector2(PICKER_SIZE, PICKER_SIZE))
+		av.visible = true
+		av.entity = ent
+		av.hero_name = str(ent.display_name)
+		av.kind = "hero"   # 锁敌条只锁英雄
+		av.dead = false
+		av.locked = (hero.manual_target == ent)
+		av.queue_redraw()
+
+
+# 点头像：锁定该敌人（普攻自动追击/攻击、技能以此为瞄准目标）；再点一次取消锁定
+func _on_enemy_picker_tapped(ent) -> void:
+	if hero == null or not is_instance_valid(hero) or not is_instance_valid(ent):
+		return
+	if not (ent is Hero):
+		return   # 只允许锁定英雄
+	if hero.manual_target == ent:
+		hero.manual_target = null
+	else:
+		hero.manual_target = ent
+		if hero.current_target == null:
+			hero.current_target = ent
+	_update_enemy_picker()
 
 # 每帧把当前普攻伤害与攻击速度（次/秒）推送到普攻键上显示；
 # 若下一次普攻为强化普攻（亚瑟Q/孙悟空被动等），显示强化后的伤害并切换为金色高亮
@@ -273,24 +362,69 @@ func _create_skill_detail_panel():
 	var rs := _ui_mgr.ui_scale() if _ui_mgr else 1.35
 	_skill_detail_panel = Panel.new()
 	_skill_detail_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sb := UiKit.flat(0.94, 10, 2, Color(0.34, 0.34, 0.46, 0.9), Color(0.06, 0.06, 0.1, 0.94))
+	var sb := UiKit.flat(0.97, 16, 2, Color(0.44, 0.78, 1.0, 0.52),
+		Color(0.035, 0.055, 0.085, 0.97), 0.0, 16.0)
 	_skill_detail_panel.add_theme_stylebox_override("panel", sb)
 	_gameplay_root.add_child(_skill_detail_panel)
+	# 顶部强调线：给详情卡一个明确的第一眼层次，不靠满屏边框堆装饰
+	_skill_detail_accent = ColorRect.new()
+	_skill_detail_accent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_accent.color = Color(0.44, 0.78, 1.0, 0.8)
+	_skill_detail_panel.add_child(_skill_detail_accent)
+	_skill_detail_icon = _DetailSkillIcon.new()
+	_skill_detail_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_panel.add_child(_skill_detail_icon)
 	_skill_detail_title = Label.new()
 	_skill_detail_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skill_detail_title.add_theme_color_override("font_color", Color(1.0, 0.84, 0.42))
-	_skill_detail_title.add_theme_font_size_override("font_size", int(round(19.0 * rs)))
+	_skill_detail_title.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
+	_skill_detail_title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.65))
+	_skill_detail_title.add_theme_constant_override("outline_size", 2)
+	_skill_detail_title.add_theme_font_size_override("font_size", int(round(23.0 * rs)))
+	_skill_detail_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_skill_detail_panel.add_child(_skill_detail_title)
+	_skill_detail_tag = Label.new()
+	_skill_detail_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_tag.add_theme_color_override("font_color", Color(0.56, 0.76, 0.94, 0.95))
+	_skill_detail_tag.add_theme_font_size_override("font_size", int(round(14.0 * rs)))
+	_skill_detail_tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_skill_detail_panel.add_child(_skill_detail_tag)
+	_skill_detail_divider = ColorRect.new()
+	_skill_detail_divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_divider.color = Color(0.42, 0.58, 0.78, 0.22)
+	_skill_detail_panel.add_child(_skill_detail_divider)
+	_skill_detail_section = Label.new()
+	_skill_detail_section.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_section.text = "技能数据"
+	_skill_detail_section.add_theme_color_override("font_color", Color(0.52, 0.62, 0.76, 0.9))
+	_skill_detail_section.add_theme_font_size_override("font_size", int(round(12.0 * rs)))
+	_skill_detail_panel.add_child(_skill_detail_section)
 	_skill_detail_body = RichTextLabel.new()
 	_skill_detail_body.bbcode_enabled = true
 	_skill_detail_body.scroll_active = false
+	_skill_detail_body.fit_content = true
+	_skill_detail_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_skill_detail_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_skill_detail_body.add_theme_font_size_override("normal_font_size", int(round(14.0 * rs)))
+	_skill_detail_body.add_theme_font_size_override("normal_font_size", int(round(15.0 * rs)))
+	_skill_detail_body.add_theme_color_override("default_color", Color(0.84, 0.89, 0.96))
+	_skill_detail_body.add_theme_constant_override("line_separation", int(round(5.0 * rs)))
 	_skill_detail_panel.add_child(_skill_detail_body)
-	# 效果条目标签承载区（放数值行之后；open 时按 fx 数量重建并手动排布）
+	# 效果徽章区（放数值行之后；open 时按 fx 数量重建并手动排布）
+	_skill_detail_fx_title = Label.new()
+	_skill_detail_fx_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_fx_title.text = "附加效果"
+	_skill_detail_fx_title.add_theme_color_override("font_color", Color(0.52, 0.62, 0.76, 0.9))
+	_skill_detail_fx_title.add_theme_font_size_override("font_size", int(round(12.0 * rs)))
+	_skill_detail_panel.add_child(_skill_detail_fx_title)
 	_fx_holder = Control.new()
 	_fx_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_skill_detail_panel.add_child(_fx_holder)
+	_skill_detail_hint = Label.new()
+	_skill_detail_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_skill_detail_hint.text = "松开收起"
+	_skill_detail_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_skill_detail_hint.add_theme_color_override("font_color", Color(0.48, 0.56, 0.68, 0.85))
+	_skill_detail_hint.add_theme_font_size_override("font_size", int(round(11.0 * rs)))
+	_skill_detail_panel.add_child(_skill_detail_hint)
 	_skill_detail_panel.visible = false
 
 func _open_skill_detail(which: int):
@@ -316,56 +450,111 @@ func _open_skill_detail(which: int):
 		return
 	_detail_index = which
 	var rs := _ui_mgr.ui_scale() if _ui_mgr else 1.35
+	var accent := Vfx.color_for_hero(hero.display_name)
+	_skill_detail_panel.add_theme_stylebox_override("panel",
+		UiKit.flat(0.97, 16, 2, Color(accent.r, accent.g, accent.b, 0.58),
+			Color(0.035, 0.055, 0.085, 0.97), 0.0, 16.0))
+	_skill_detail_accent.color = Color(accent.r, accent.g, accent.b, 0.88)
+	# 头部：技能图标 + 技能名 +「槽位·等级」小标签
+	_skill_detail_icon.setup(hero.display_name, sk, which,
+		_summoner_button.icon_kind if which == 3 and _summoner_button else "")
 	_skill_detail_title.text = sk.skill_name
-	_skill_detail_title.add_theme_font_size_override("font_size", int(round(19.0 * rs)))
-	_skill_detail_body.text = body_text
-	_skill_detail_body.add_theme_font_size_override("normal_font_size", int(round(14.0 * rs)))
-	# 数值行下方重建“效果”圆底图标区（每项 = 汉字图标 + 数字）
-	var fx_h := _rebuild_fx_badges(fx_info.get("fx", []), rs)
-	# 尺寸：宽度固定，高度按“数值行数 + 图标行数”估算
-	var rows := body_text.count("\n")
-	var pad := 14.0 * rs
-	var title_h := 26.0 * rs
-	var gap := 6.0 * rs
-	var line_h := 14.0 * rs * 1.65
-	var panel_w := 330.0 * rs
-	var fx_gap := 8.0 * rs if fx_h > 0.0 else 0.0
-	var body_h := rows * line_h
-	var panel_h := pad + title_h + gap + body_h + fx_gap + fx_h + pad
-	_skill_detail_panel.size = Vector2(panel_w, panel_h)
-	_skill_detail_title.position = Vector2(pad, pad * 0.6)
-	_skill_detail_title.size = Vector2(panel_w - pad * 2.0, title_h)
-	var body_y := pad * 0.6 + title_h + gap
-	_skill_detail_body.position = Vector2(pad, body_y)
-	_skill_detail_body.size = Vector2(panel_w - pad * 2.0, body_h)
-	if fx_h > 0.0:
-		_fx_holder.position = Vector2(pad, body_y + body_h + fx_gap)
-		_fx_holder.size = Vector2(panel_w - pad * 2.0, fx_h)
-	_fx_holder.visible = fx_h > 0.0
-	# 放到按钮左侧，垂直与按钮中心对齐；越界则夹回屏幕内
-	var rect := btn.get_global_rect()
-	var px := rect.position.x - panel_w - 24.0 * rs
-	var py := rect.position.y + rect.size.y * 0.5 - panel_h * 0.5
+	_skill_detail_title.add_theme_font_size_override("font_size", int(round(23.0 * rs)))
+	_skill_detail_tag.text = _detail_slot_tag(which)
+	_skill_detail_tag.add_theme_font_size_override("font_size", int(round(13.5 * rs)))
+	# 数值区：RichTextLabel 开启 fit_content，用实际内容高度排版，避免长文本被裁切
 	var vp := get_viewport().get_visible_rect().size
+	var pad := 16.0 * rs
+	var panel_w := minf(380.0 * rs, vp.x - 28.0)
+	var content_w := panel_w - pad * 2.0
+	var icon_sz := 52.0 * rs
+	var header_h := maxf(icon_sz, 58.0 * rs)
+	var gap := 8.0 * rs
+	var section_h := 18.0 * rs
+	_skill_detail_body.add_theme_font_size_override("normal_font_size", int(round(15.0 * rs)))
+	_skill_detail_body.add_theme_constant_override("line_separation", int(round(5.0 * rs)))
+	_skill_detail_body.size = Vector2(content_w, 8.0)
+	_skill_detail_body.text = body_text
+	var body_h := maxf(_skill_detail_body.get_content_height(), 26.0 * rs)
+	# 附加效果徽章：宽卡两列、窄卡单列，全部塞进内容宽度内
+	var fx: Array = fx_info.get("fx", [])
+	var fx_h := _rebuild_fx_badges(fx, rs, content_w)
+	var fx_block_h := 0.0
+	if fx_h > 0.0:
+		fx_block_h = gap + section_h + fx_h
+	var hint_h := 17.0 * rs
+	var panel_h := pad * 0.65 + header_h + gap + section_h + body_h + fx_block_h + gap + hint_h + pad * 0.45
+	_skill_detail_panel.size = Vector2(panel_w, panel_h)
+	# 子元素布局
+	_skill_detail_accent.position = Vector2(pad, 1.0)
+	_skill_detail_accent.size = Vector2(panel_w - pad * 2.0, 3.0)
+	_skill_detail_icon.position = Vector2(pad, pad * 0.65)
+	_skill_detail_icon.size = Vector2(icon_sz, icon_sz)
+	var text_x := pad + icon_sz + 11.0 * rs
+	var text_w := panel_w - text_x - pad
+	_skill_detail_title.position = Vector2(text_x, pad * 0.65)
+	_skill_detail_title.size = Vector2(text_w, 28.0 * rs)
+	_skill_detail_tag.position = Vector2(text_x, pad * 0.65 + 28.0 * rs)
+	_skill_detail_tag.size = Vector2(text_w, 18.0 * rs)
+	var header_y := pad * 0.65 + header_h
+	_skill_detail_divider.position = Vector2(pad, header_y + gap * 0.5)
+	_skill_detail_divider.size = Vector2(content_w, 1.0)
+	_skill_detail_section.position = Vector2(pad, header_y + gap)
+	_skill_detail_section.size = Vector2(content_w, section_h)
+	var body_y := header_y + gap + section_h
+	_skill_detail_body.position = Vector2(pad, body_y)
+	_skill_detail_body.size = Vector2(content_w, body_h)
+	if fx_h > 0.0:
+		var fx_y := body_y + body_h + gap
+		_skill_detail_fx_title.position = Vector2(pad, fx_y)
+		_skill_detail_fx_title.size = Vector2(content_w, section_h)
+		_fx_holder.position = Vector2(pad, fx_y + section_h)
+		_fx_holder.size = Vector2(content_w, fx_h)
+	_fx_holder.visible = fx_h > 0.0
+	_skill_detail_fx_title.visible = fx_h > 0.0
+	_skill_detail_hint.position = Vector2(pad, panel_h - hint_h - pad * 0.45)
+	_skill_detail_hint.size = Vector2(content_w, hint_h)
+	# 优先放按钮正上方；纵向空间不足再退到左侧，最后夹回屏幕
+	var rect := btn.get_global_rect()
+	var px := rect.position.x + rect.size.x * 0.5 - panel_w * 0.5
+	var py := rect.position.y - panel_h - 18.0 * rs
+	if py < 10.0:
+		px = rect.position.x - panel_w - 20.0 * rs
+		py = rect.position.y + rect.size.y * 0.5 - panel_h * 0.5
 	px = clampf(px, 10.0, maxf(10.0, vp.x - panel_w - 10.0))
 	py = clampf(py, 10.0, maxf(10.0, vp.y - panel_h - 10.0))
 	_skill_detail_panel.position = Vector2(px, py)
 	_skill_detail_panel.visible = true
 
-# 重建“效果”圆底图标区；返回该区高度（无效果返回 0）。badge 手动排布，超出宽度自动换行。
-func _rebuild_fx_badges(fx: Array, rs: float) -> float:
+# 详情卡右上角“槽位 · 等级”标签（召唤师技能无等级成长）
+func _detail_slot_tag(which: int) -> String:
+	if which == 3:
+		return "召唤师技能"
+	var names := ["一技能", "二技能", "大招"]
+	var tag: String = names[which] if which >= 0 and which < names.size() else "技能"
+	if hero and which < hero.skill_levels.size():
+		var lv: int = hero.skill_levels[which]
+		var max_lv := 0
+		if which < _skill_buttons.size():
+			max_lv = _skill_buttons[which].max_level
+		if lv <= 0:
+			return tag + " · 未学习"
+		if max_lv > 0:
+			return tag + " · Lv.%d/%d" % [lv, max_lv]
+		return tag + " · Lv.%d" % lv
+	return tag
+
+# 重建“附加效果”徽章区；返回该区高度（无效果返回 0）。badge 手动排布，超出宽度自动换行。
+func _rebuild_fx_badges(fx: Array, rs: float, content_w: float) -> float:
 	if _fx_holder == null or fx.is_empty():
 		return 0.0
 	for c in _fx_holder.get_children():
 		c.visible = false
 		c.queue_free()
-	var pad := 14.0 * rs
-	var panel_w := 330.0 * rs
-	var bw := 72.0 * rs
-	var bh := 44.0 * rs
+	var bw := minf(104.0 * rs, content_w)
+	var bh := 52.0 * rs
 	var gap := 8.0 * rs
-	var usable := panel_w - pad * 2.0
-	var per_row := maxi(1, int(floor((usable + gap) / (bw + gap))))
+	var per_row := maxi(1, int(floor((content_w + gap) / (bw + gap))))
 	var n := fx.size()
 	var rows := int(ceil(float(n) / float(per_row)))
 	var k := 0
@@ -462,7 +651,7 @@ func _hide_skill_detail():
 	_detail_index = -1
 
 func _append_detail_row(buf: String, key: String, val: String) -> String:
-	return buf + "[color=#aeb6c0]" + key + "：[/color][color=#f2f6fa]" + val + "[/color]\n"
+	return buf + "[color=#7f8da2]" + key + "[/color]    [color=#e8eff8]" + val + "[/color]\n"
 
 # 详情面板“伤害”行的单段伤害文字：数值 + 可选“×N弹数” + 物/法色标（物=橙、法=紫，与图标一致）
 func _skill_dmg_part(dmg: int, cnt_suffix: String, is_magic: bool) -> String:
@@ -775,6 +964,9 @@ func _build_ui():
 	_gameplay_root.add_child(minion_btn)
 	_minion_button = minion_btn
 	_sync_priority_buttons()
+	if not PlayerPrefs.opt_bool("siege_keys", true):
+		_tower_button.visible = false
+		_minion_button.visible = false
 
 	# 技能扇形：1/2/3 技能在同一圆弧上「环绕」普攻键 —— 圆弧圆心 = 普攻中心，
 	# 各键中心到圆心的距离恒为 FAN_RADIUS；角度取 SKILL_FAN_ANGLES_DEG。
@@ -796,7 +988,8 @@ func _build_ui():
 		# 技能升级“+”按钮：位于技能上沿中央、水平不越出自身宽度，避免挤占相邻技能
 		var upg := TouchActionButton.new()
 		upg.label_text = "+"
-		upg.label_font_size = 72.0
+		upg.label_font_size = 0.0
+		upg.compact_badge = true
 		upg.color = Color(0.98, 0.84, 0.25, 0.95)
 		upg.hold_to_act = false
 		upg.emit_activated_on_press = true
@@ -819,6 +1012,21 @@ func _build_ui():
 	ex_btn.visible = false
 	_gameplay_root.add_child(ex_btn)
 	_extra_skill_button = ex_btn
+
+	# 敌人索敌头像条：攻击范围内多个敌人时，沿技能扇形外侧同圆心弧线排布，点按锁定目标
+	_picker_root = Control.new()
+	_picker_root.name = "EnemyPicker"
+	_picker_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_picker_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_picker_root.visible = false
+	_gameplay_root.add_child(_picker_root)
+	for _i in range(PICKER_MAX):
+		var av := _EnemyAvatar.new()
+		av.visible = false
+		av.tapped.connect(_on_enemy_picker_tapped)
+		_anchor_br(av, Vector2.ZERO, Vector2(PICKER_SIZE, PICKER_SIZE))
+		_picker_root.add_child(av)
+		_picker_buttons.append(av)
 
 	# 召唤师 / 恢复 / 回城：贴底同一横带（屏幕从左到右：回城 | 恢复 | 召唤师）
 	# 召唤师：按住瞄准（拖动=闪现等位移类技能的方向）、松开施放（王者荣耀式）
@@ -860,16 +1068,17 @@ func _build_ui():
 	_gameplay_root.add_child(rec)
 
 	# 主动装备 x2（放大后的大招上方；仅拥有对应主动装时显示）。
-	# 原位置(330/470, 830)被放大后的大招键及升级键占据，上移到其正上方；
-	# 避开右上角金币/推荐装“+”（y≤108）与取消施法键。
+	# 与技能键同款圆形按钮：程序化装备图标 + 名称条 + 冷却遮罩（不再是“装1/装2”纯文字）
 	var equip_pos := [Vector2(120, 1055), Vector2(370, 1055)]
 	for i in range(2):
-		var ab := TouchActionButton.new()
-		ab.label_text = "装%d" % (i + 1)
+		var ab := SkillTouchButton.new()
+		ab.skill_index = -1
+		ab.name_below = true
 		ab.color = Color(0.9, 0.75, 0.2, 0.85)
-		ab.hold_to_act = false
-		ab.emit_activated_on_press = true
-		ab.activated.connect(_on_active_pressed.bind(i))
+		var slot_i := i
+		ab.pressed_changed.connect(func(_idx: int, pressed: bool):
+			if pressed:
+				_on_active_pressed(slot_i))
 		_anchor_br(ab, equip_pos[i], Vector2(ACTIVE_SIZE, ACTIVE_SIZE))
 		_gameplay_root.add_child(ab)
 		_active_equip_buttons.append(ab)
@@ -935,10 +1144,15 @@ func _on_active_pressed(index: int):
 
 func _update_skill_button_ui():
 	var pts: int = hero.skill_points if hero else 0
-	for i in range(SKILL_COUNT):
-		var b: SkillTouchButton = _skill_buttons[i]
+	# 第4技能（真实第4槽英雄，如兰陵王·隐匿）：与 1/2/3 技能走完全相同的图标/冷却/读数推送，
+	# 只是固定 1 级（4 级自动解锁，无“+”升级钮），保证图标 UI 与其他技能一致。
+	var has4: bool = hero.skills.size() > 3 and hero.skills[3] != null
+	for i in range(SKILL_COUNT + (1 if has4 else 0)):
+		var b: SkillTouchButton = _skill_buttons[i] if i < SKILL_COUNT else _extra_skill_button
+		if b == null:
+			continue
 		# 等级金环数据：按技能最大等级分小段，亮段数=当前技能等级
-		b.max_level = hero.SKILL_MAX_LEVEL if i < 2 else hero.ULTIMATE_MAX_LEVEL
+		b.max_level = 1 if i >= 3 else (hero.SKILL_MAX_LEVEL if i < 2 else hero.ULTIMATE_MAX_LEVEL)
 		b.skill_level = hero.skill_levels[i] if i < hero.skill_levels.size() else 0
 		# 技能图标：英雄元素配色 + 技能纹样（SkillArt 程序化绘制）
 		b.art_hero = str(hero.display_name)
@@ -1011,11 +1225,17 @@ func _update_skill_button_ui():
 		b.charge_now = charge_cur
 		b.blocked = block_flag
 		b.block_cue = hero.skill_prereq_cue(i) if block_flag else ""
-		b.queue_redraw()
 		# 该技能当前可升级？（与 Hero.upgrade_skill 的成功条件一致）
 		var upgradeable: bool = hero.can_upgrade_skill(i)
+		b.upgrade_ready = upgradeable
+		b.queue_redraw()
 		if i < _upgrade_buttons.size():
-			_upgrade_buttons[i].visible = upgradeable
+			var ub = _upgrade_buttons[i]
+			ub.visible = upgradeable
+			# 可升级时“+”外圈旋转发光拖尾（推动相位并在状态切换时重绘）
+			if ub.glow != upgradeable:
+				ub.glow = upgradeable
+				ub.queue_redraw()
 	# 召唤师按钮：显示具体召唤师技能名（如“闪现/惩击”），并做冷却显示（无等级不画金环）
 	if _summoner_button:
 		var sname := "召唤"
@@ -1024,7 +1244,8 @@ func _update_skill_button_ui():
 			if real != "": sname = real
 		if _summoner_button.display_name != sname:
 			_summoner_button.display_name = sname
-			_summoner_button.name_below = true
+			# 名字居中画在圆内（name_below 会让名字条伸出按钮底部、并与惩击伤害数字重叠）
+			_summoner_button.name_below = false
 			_summoner_button.icon_kind = IconArt.kind_for_summoner(sname)
 			_summoner_button.color = IconArt.color_of(_summoner_button.icon_kind)
 		if hero.summoner_skill and hero.summoner_skill.cooldown > 0.001:
@@ -1055,40 +1276,27 @@ func _update_skill_button_ui():
 		_recover_button.art_hero = str(hero.display_name)
 		_recover_button.art_skill = hero.skills[4] if hero.skills.size() > 4 else null
 		_recover_button.queue_redraw()
-	# 第4技能按钮(兰陵王·隐身)：技能名/冷却遮罩与其余技能键一致；固定1级、无"+"升级钮
-	if _extra_skill_button and hero.skills.size() > 3 and hero.skills[3] != null:
-		var sk4: Skill = hero.skills[3]
-		var nm4 := str(sk4.skill_name)
-		if nm4 == "":
-			nm4 = "技4"
-		if _extra_skill_button.display_name != nm4:
-			_extra_skill_button.display_name = nm4
-		_extra_skill_button.max_level = 1
-		_extra_skill_button.skill_level = hero.skill_levels[3] if hero.skill_levels.size() > 3 else 1
-		var cd4: float = hero.skill_cooldowns[3] if hero.skill_cooldowns.size() > 3 else 0.0
-		var total4: float = maxf(sk4.cooldown, 0.001)
-		_extra_skill_button.cd_ratio = clampf(cd4 / total4, 0.0, 1.0)
-		_extra_skill_button.cd_total = total4
-		_extra_skill_button.mana_ok = hero.mana >= sk4.mana_cost
-		_extra_skill_button.in_window = false
-		_extra_skill_button.segments_left = 0
-		_extra_skill_button.icon_dmg = -1
-		_extra_skill_button.icon_dmg2 = 0
-		_extra_skill_button.icon_count = 0
-		_extra_skill_button.icon_fx = []
-		_extra_skill_button.icon_aa = false
-		_extra_skill_button.blocked = false
-		_extra_skill_button.charge_max = 0
-		_extra_skill_button.charge_now = 0
-		_extra_skill_button.sub_text = ""
-		_extra_skill_button.art_hero = str(hero.display_name)
-		_extra_skill_button.art_skill = sk4
-		_extra_skill_button.queue_redraw()
-
-	# 主动装备按钮：仅拥有对应主动装时显示
+	# 主动装备按钮：仅拥有对应主动装时显示；推送装备图标/品质/名称/冷却（与技能键同款视觉）
 	var ae_list := _ui_mgr._get_active_equip_list(hero) if _ui_mgr else []
 	for i in range(_active_equip_buttons.size()):
-		_active_equip_buttons[i].visible = i < ae_list.size()
+		var ab: SkillTouchButton = _active_equip_buttons[i]
+		ab.visible = i < ae_list.size()
+		if not ab.visible:
+			continue
+		var ae: Dictionary = ae_list[i]
+		var inm := str(ae.get("name", ""))
+		if inm == "":
+			inm = "装%d" % (i + 1)
+		if ab.display_name != inm:
+			ab.display_name = inm
+		ab.item_name = inm
+		var it: Dictionary = ItemDatabase.get_item(str(ae.get("id", "")))
+		ab.item_tier = int(it.get("tier", 1)) if not it.is_empty() else 1
+		var mx := maxf(float(ae.get("max_cd", 60.0)), 0.001)
+		ab.cd_total = mx
+		ab.cd_ratio = clampf(float(ae.get("cd_remaining", 0.0)) / mx, 0.0, 1.0)
+		ab.max_level = 0
+		ab.queue_redraw()
 	# 取消施法按钮：任一技能/召唤师按钮按住瞄准时显示；手指拖到其上时高亮
 	var aiming := false
 	var over_cancel := false
@@ -1110,15 +1318,19 @@ func _update_skill_button_ui():
 		_cancel_btn.visible = aiming
 		_cancel_btn.set_highlighted(over_cancel)
 
+func set_intro_hidden(hidden: bool) -> void:
+	intro_hidden = hidden
+	_update_visibility()
+
 func _update_visibility():
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var started := bm != null and bm.hero_selected
 	var blocked := _is_fullscreen_open()
-	_gameplay_root.visible = touch_active and started and not blocked
+	_gameplay_root.visible = touch_active and started and not blocked and not intro_hidden
 	touch_layer.visible = touch_active
 	# 桌面键盘移动模式切换：仅电脑端显示（手机只有摇杆移动）
 	if _move_mode_btn:
-		_move_mode_btn.visible = _gameplay_root.visible and not OS.has_feature("mobile")
+		_move_mode_btn.visible = _gameplay_root.visible and not Config.on_mobile()
 	# 屏幕下方原技能图标栏全部隐藏（两端统一，以触摸层替代）；
 	# 英雄头像（respawn 区）已移到小地图右侧横向排列，常显
 	var ui := _ui_mgr
@@ -1133,6 +1345,11 @@ func _update_visibility():
 	# 第4技能按钮可见性：仅真实拥有第4技能槽的英雄(兰陵王·隐身)时显示
 	if _extra_skill_button:
 		_extra_skill_button.visible = _gameplay_root.visible and hero != null and hero.skills.size() > 3 and hero.skills[3] != null
+	if _tower_button:
+		var _siege_on: bool = _gameplay_root.visible and PlayerPrefs.opt_bool("siege_keys", true)
+		_tower_button.visible = _siege_on
+		if _minion_button:
+			_minion_button.visible = _siege_on
 
 func _is_fullscreen_open() -> bool:
 	var ui := _ui_mgr
@@ -1168,7 +1385,29 @@ func _anchor_tl(ctrl: Control, from_tl: Vector2, size: Vector2):
 	ctrl.offset_right = from_tl.x + size.x
 	ctrl.offset_bottom = from_tl.y + size.y
 
-# 详情面板中的“效果”条目：圆底汉字图标 + 数字副文案（如 缓 25%·2.0秒 / 晕 1.5秒 / 盾 1200）
+# 详情卡头部技能缩略图：英雄技能走 SkillArt 元素纹样，召唤师技能走 IconArt 功能图标
+class _DetailSkillIcon extends Control:
+	var _hero_name := ""
+	var _skill: Skill = null
+	var _slot := 0
+	var _icon_kind := ""
+	func setup(hero_name: String, skill: Skill, slot: int, icon_kind: String) -> void:
+		_hero_name = hero_name
+		_skill = skill
+		_slot = slot
+		_icon_kind = icon_kind
+		queue_redraw()
+	func _draw():
+		var c := size * 0.5
+		var r := minf(size.x, size.y) * 0.5 - 2.0
+		draw_circle(c, r + 3.0, Color(0.02, 0.035, 0.06, 0.9))
+		if _icon_kind != "":
+			IconArt.draw_icon(self, c, r * 0.92, _icon_kind, false)
+		else:
+			SkillArt.draw_bg(self, c, r, _hero_name, _skill, _slot, true, true)
+		draw_arc(c, r + 2.0, 0.0, TAU, 36, Color(0.46, 0.78, 1.0, 0.62), 1.6, true)
+
+# 详情面板中的“附加效果”徽章：左侧圆底汉字图标 + 右侧数值，整体为圆角深色芯片
 class _FxBadge extends Control:
 	var _ic := "效"
 	var _col := Color.WHITE
@@ -1181,15 +1420,63 @@ class _FxBadge extends Control:
 		_rs = rs
 		queue_redraw()
 	func _draw():
-		var cx := size.x * 0.5
-		var rr := minf(size.x * 0.5, 13.0 * _rs)
-		var cy := 14.0 * _rs
-		draw_circle(Vector2(cx, cy), rr, Color(_col.r, _col.g, _col.b, 0.16))
-		draw_arc(Vector2(cx, cy), rr, 0.0, TAU, 24, Color(_col.r, _col.g, _col.b, 0.9), 1.4, true)
-		var hfs := int(round(17.0 * _rs))
-		draw_string(UiKit.font(), Vector2(cx, cy + hfs * 0.36), _ic,
-			HORIZONTAL_ALIGNMENT_CENTER, rr * 2.0, hfs, Color(1, 1, 1, 0.98))
+		var sb := UiKit.flat(0.92, 10, 1, Color(_col.r, _col.g, _col.b, 0.42),
+			Color(0.045, 0.065, 0.105, 0.94), 0.0, 0.0)
+		draw_style_box(sb, Rect2(Vector2.ZERO, size))
+		draw_rect(Rect2(Vector2(0, 8.0 * _rs), Vector2(2.4 * _rs, size.y - 16.0 * _rs)),
+			Color(_col.r, _col.g, _col.b, 0.9))
+		var center := Vector2(21.0 * _rs, size.y * 0.5)
+		var rr := 13.0 * _rs
+		draw_circle(center, rr, Color(_col.r, _col.g, _col.b, 0.18))
+		draw_arc(center, rr, 0.0, TAU, 24, Color(_col.r, _col.g, _col.b, 0.92), 1.4, true)
+		var hfs := int(round(16.0 * _rs))
+		UiKit.text(self, Vector2(center.x - rr, center.y + hfs * 0.36), _ic, hfs,
+			Color(0.97, 0.99, 1.0), HORIZONTAL_ALIGNMENT_CENTER, rr * 2.0)
 		if _sub != "":
-			var sfs := int(round(12.0 * _rs))
-			draw_string(UiKit.font(), Vector2(cx, 34.0 * _rs), _sub,
-				HORIZONTAL_ALIGNMENT_CENTER, size.x, sfs, Color(0.93, 0.96, 1.0, 0.95))
+			var sfs := int(round(13.0 * _rs))
+			var avail := size.x - 43.0 * _rs
+			while sfs > int(10.0 * _rs) and UiKit.font().get_string_size(
+					_sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sfs).x > avail:
+				sfs -= 1
+			UiKit.text(self, Vector2(39.0 * _rs, center.y + sfs * 0.36), _sub, sfs,
+				Color(0.90, 0.95, 1.0), HORIZONTAL_ALIGNMENT_LEFT, avail)
+
+
+# 索敌头像按钮：圆形立绘（英雄）或兵种图标（小兵/塔/野怪）+ 阵营色描边，锁定态金色双环
+class _EnemyAvatar extends Control:
+	signal tapped(ent)
+	var entity: Node3D = null
+	var hero_name := ""
+	var kind := "hero"
+	var locked := false
+	var dead := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _gui_input(ev: InputEvent) -> void:
+		var hit := false
+		if ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed:
+			hit = true
+		elif ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
+				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			hit = true
+		if hit:
+			tapped.emit(entity)
+			accept_event()
+
+	func _draw() -> void:
+		var c := size * 0.5
+		var r := minf(size.x, size.y) * 0.5 - 5.0
+		var foec := Color(1.0, 0.40, 0.34)
+		# 底盘 + 外圈（锁定=金色加粗双环）
+		draw_circle(c, r + 4.0, Color(0.02, 0.03, 0.05, 0.80))
+		if locked:
+			draw_arc(c, r + 4.0, 0.0, TAU, 40, Color(1.0, 0.84, 0.30, 0.95), 5.0, true)
+			draw_arc(c, r + 10.0, -PI * 0.9, -PI * 0.1, 18, Color(1.0, 0.86, 0.36, 0.55), 3.0, true)
+		else:
+			draw_arc(c, r + 2.0, 0.0, TAU, 36, Color(foec.r, foec.g, foec.b, 0.62), 2.6, true)
+		if kind == "hero":
+			HeroArt.draw_portrait(self, c, r, hero_name, foec, dead)
+		else:
+			IconArt.draw_icon(self, c, r * 0.94, kind, false)

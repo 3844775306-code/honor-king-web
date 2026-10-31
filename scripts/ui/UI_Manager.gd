@@ -4,6 +4,7 @@ extends CanvasLayer
 const SkillArt = preload("res://scripts/ui/SkillArt.gd")
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 const RosterView = preload("res://scripts/ui/RosterView.gd")
+const EntityIconArtScript = preload("res://scripts/ui/EntityIconArt.gd")
 
 # ---------- 通用样式辅助函数 ----------
 # UI 自适应缩放：以基准虚拟宽度 2400 为 1.0，叠加固定放大系数保证手机可读。
@@ -74,7 +75,6 @@ func _shop_categories() -> Dictionary:
 		"保命": ["blood_rage", "famous_blade", "revive", "primal_pearl", "immovable_firmament", "rage_ghost", "sereve_winter"],
 		"打野": ["hunter_knife", "guerrilla_blade", "chase_blade", "patrol_axe", "rune_blade", "greed_blade", "giant_grasp"],
 		"游走": roam,
-		"辅助": roam,
 	}
 
 # 分类页按钮：统一皮肤；选中时分类色描边 + 底边加粗强调
@@ -109,6 +109,7 @@ var target_detail_team_dot: ColorRect    # 姓名前的队色小方块
 var target_detail_hp_fill: StyleBoxFlat  # 血条填充样式，填充色跟随阵营
 var target_detail_hp_gloss: Control     # 血条质感层（高光/刻度/末端亮边）
 var target_detail_icons: Dictionary = {} # 属性徽章图标（键=属性名）
+var target_detail_entity_icon: Control   # 目标实体图标（英雄头像/塔/小兵/野怪）
 var kda_label: Label
 var time_chip: Panel
 
@@ -128,16 +129,35 @@ var rec_card: RecItemCard
 var recommended_equip_id: String = ""
 var recommended_equip_cost: int = 0
 var buy_plus_btn: TouchActionButton = null   # 推荐装备旁“+”快速购买（仅金币足够时显示）
+var rec_option_row: Control = null     # 多件素材都能买时的自选购买按钮列（上下两个同款，手动排布）
+var rec_option_btns: Array = []
+var rec_option_sig: String = ""
+var settings_btn: Button = null              # 推荐装下面的「设置」按钮
+var settings_panel: Control = null
+var surrender_status_label: Label = null
+var surrender_vote_running: bool = false
+const SURRENDER_MIN_TIME := 360.0            # 6 分钟后才能发起投降
+const SURRENDER_MIN_YES := 4                 # 本队 5 人中需 4 票通过
+# 推荐位自选卡：与上方推荐卡同宽（246）、同 UiKit.rec_card 卡片格式
+const REC_OPTION_W := 246.0
+const REC_OPTION_H := 84.0
+const REC_OPTION_TOP := 196.0
 var cached_recommended_list: Array = []
 var cached_recommended_for: String = ""
 
-# 战报：最多 3 条堆叠显示（超出替换最旧一条），单条最长 3.2s
-const KF_MAX := 3
-const KF_W := 420.0
-const KF_H := 40.0
+# 战报：每次只播 1 条，固定 2.0s（1.75s 停留 + 0.25s 淡出），多条累计进队列延迟播出
+const KF_MAX := 3               # 兼容旧引用（不再堆叠）
+const KF_QUEUE_MAX := 12        # 队列上限：超出丢最旧，避免大团战后播报跟不上
+const KF_W := 620.0
+const KF_H := 64.0
+const KF_ASSIST_H := 44.0       # 有助攻时的第二行（助攻者头像）
 const KF_GAP := 8.0
 const KF_TOP := 154.0
-var kill_feed_slots: Array = []
+const KF_SHOW := 1.75           # 停留
+const KF_FADE := 0.25           # 淡出（合计 2.0s/条）
+var kill_feed_slots: Array = [] # 兼容旧字段（现始终至多 1 个元素）
+var _kf_queue: Array = []       # [{actor,a_team,desc,victim,v_team,a_mark,v_mark,assists:[[name,team,mark],...]}]
+var _kf_cur: Panel = null       # 当前正在播的 1 条
 
 var shop_ui: Control = null
 var shop_category_container: HBoxContainer = null
@@ -158,8 +178,11 @@ var shop_grid_ids: Array = []            # 当前分类可见装备 id（键盘 
 var shop_grid_scroll: ScrollContainer = null
 
 var respawn_container: VBoxContainer
+var _respawn_sig: String = ""          # 复活/观战部件重建签名（避免每帧重建）
 var death_recap_panel            # DeathRecapView 实例（纯绘制死亡面板）
-var death_overlay: ColorRect = null   # 死亡全屏压暗层（UI 最底层：盖在 3D 场景上、其余面板之上）
+var death_overlay: ColorRect = null   # 死亡全屏压暗层（高 CanvasLayer：盖住 HUD/buff/技能键）
+var death_high_layer: CanvasLayer = null
+var death_recap_high_layer: CanvasLayer = null
 var death_recap_shown: bool = false
 var _band_children: int = -1
 var death_recap_closed: bool = false  # 玩家手动关闭后本局不再自动弹出
@@ -168,6 +191,7 @@ var hero_detail_panel            # RosterView 实例（双列对位英雄信息�
 var hero_detail_visible: bool = false
 var hero_detail_refresh_timer: float = 0.0
 var hero_detail_dim: ColorRect = null   # 移动端抽屉遮罩
+var chat_typing: bool = false   # 聊天输入框打开中（由 ChatBox 置位）
 
 # 团队决策面板
 var team_decision_panel: Panel = null
@@ -253,13 +277,17 @@ func flash_screen(color: Color, dur: float = 0.18) -> void:
 	_fx_flash_tween.tween_callback(func(): _fx_flash.visible = false)
 
 func _create_death_overlay():
+	# 独立高 CanvasLayer：触控技能键在 100 层，死亡压暗必须高于它才能盖住技能/装备键
+	death_high_layer = CanvasLayer.new()
+	death_high_layer.name = "DeathHighLayer"
+	death_high_layer.layer = UiKit.LAYER_RECAP - 1   # 104：盖住触控100/飘字103，低于死亡面板105
+	add_child(death_high_layer)
 	death_overlay = ColorRect.new()
 	death_overlay.color = Color(0.0, 0.0, 0.0, 0.5)
 	death_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	death_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	death_overlay.visible = false
-	add_child(death_overlay)
-	move_child(death_overlay, 0)
+	death_high_layer.add_child(death_overlay)
 
 
 # —— 同画布内 z 分带：常驻 HUD 永远在功能面板之下、死亡回放在两者之上 ——
@@ -312,11 +340,15 @@ func _clear_battle_hud() -> void:
 		if is_instance_valid(p):
 			p.queue_free()
 	kill_feed_slots.clear()
+	_kf_queue.clear()
+	_kf_cur = null
 	if shop_ui != null and is_instance_valid(shop_ui):
 		shop_ui.queue_free()
 		shop_ui = null
 	if death_overlay != null:
 		death_overlay.visible = false
+	if death_recap_panel != null:
+		death_recap_panel.visible = false
 	if recall_indicator != null:
 		recall_indicator.visible = false
 	if target_detail_panel != null:
@@ -379,17 +411,8 @@ func _create_recall_indicator():
 	recall_progress_bar.add_theme_stylebox_override("background", bg_style)
 	recall_indicator.add_child(recall_progress_bar)
 
-	# 回城文字
-	recall_label = Label.new()
-	recall_label.text = "回城"
-	recall_label.add_theme_font_size_override("font_size", int(round(18 * ui_scale())))
-	recall_label.add_theme_color_override("font_color", Color.WHITE)
-	recall_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	recall_label.add_theme_constant_override("outline_size", 2)
-	recall_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	recall_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	recall_label.size = Vector2(100, 100) * rs
-	recall_indicator.add_child(recall_label)
+	# 回城/传送：只留环形进度，不再在屏幕中央显示「回城/传送」字样
+	recall_label = null
 
 # ---------- UI 创建函数 ----------
 func _create_target_detail_panel():
@@ -399,8 +422,10 @@ func _create_target_detail_panel():
 	target_detail_panel = Panel.new()
 	var rs := ui_scale()
 	target_detail_panel.size = Vector2(330 * rs, 170 * rs)
-	# 两端统一：小地图已放大并内收，目标面板移到其下方；同时避让刘海
-	target_detail_panel.position = Vector2(40 + UiKit.safe_left(), 370 + UiKit.safe_top())
+	# 顶部横向带：插在英雄头像与右侧战况面板之间（5 头像右缘≈1190，战况面板左缘≈1619）
+	# 宽度收至 89%，视觉右缘≈1597，给面板阴影留出安全间距
+	target_detail_panel.position = Vector2(1200 + UiKit.safe_left(), 8 + UiKit.safe_top())
+	target_detail_panel.scale = Vector2(0.89, 0.97)
 	target_detail_panel.visible = false
 	# 面板底：深色玻璃 + 双层描边（外冷光 / 内高光）+ 柔和投影，比纯 flat 更有层次
 	var frame := UiKit.flat(0.94, 12, 2, Color(0.62, 0.74, 0.96, 0.22), Color(0.025, 0.045, 0.095, 0.92), 0.0, 16.0)
@@ -427,13 +452,20 @@ func _create_target_detail_panel():
 	accent_shine.size = Vector2(330, 5) * rs
 	accent_shine.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	target_detail_panel.add_child(accent_shine)
+	# 目标实体图标：英雄头像 / 塔 / 小兵 / 野怪（数据在 _update 中刷新）
+	target_detail_entity_icon = EntityIconControl.new()
+	target_detail_entity_icon.position = Vector2(12, 7) * rs
+	target_detail_entity_icon.size = Vector2(30, 30) * rs
+	target_detail_entity_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_detail_panel.add_child(target_detail_entity_icon)
+
 	target_detail_team_dot = ColorRect.new()
-	target_detail_team_dot.position = Vector2(16, 13) * rs
-	target_detail_team_dot.size = Vector2(10, 10) * rs
+	target_detail_team_dot.position = Vector2(47, 13) * rs
+	target_detail_team_dot.size = Vector2(8, 8) * rs
 	target_detail_panel.add_child(target_detail_team_dot)
 
 	var name_label = Label.new()
-	name_label.position = Vector2(32, 8) * rs; name_label.size = Vector2(180, 26) * rs
+	name_label.position = Vector2(60, 8) * rs; name_label.size = Vector2(146, 26) * rs
 	_apply_label_style(name_label, 17, Color.WHITE)
 	name_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
 	name_label.add_theme_constant_override("shadow_offset_x", 1)
@@ -581,30 +613,30 @@ func _connect_tap_to_action(ctrl: Control, action: Callable):
 
 func _create_info_labels():
 	# 电脑版与手机完全一致：顶部/右上/头像等布局两端统一
-	# 顶部信息带整体锚定在视口水平中心（宽度变化时保持居中）
-	var CENTER_X := 0.5
+	# 顶部信息带右锚定：紧贴推荐装备左侧，向左展开；中间让出目标信息面板的位置
+	var RIGHT_X := 1.0
 
-	# === 战况信息带（顶中央，可点击打开英雄面板）：击杀比分+经济对比板块整体×2 ===
+	# === 战况信息带（顶右侧，可点击打开英雄面板）：击杀比分+经济对比板块整体×2 ===
 	team_stats_bg = Panel.new()
-	team_stats_bg.anchor_left = CENTER_X; team_stats_bg.anchor_right = CENTER_X
-	# Request B 微调：中央带整体右移 100px（-240/240 → -140/340），给小地图右侧环形头像复位让位
-	team_stats_bg.offset_left = -145; team_stats_bg.offset_top = 6
-	team_stats_bg.offset_right = 315; team_stats_bg.offset_bottom = 150
+	team_stats_bg.anchor_left = RIGHT_X; team_stats_bg.anchor_right = RIGHT_X
+	# 2400 宽画布：右缘 2029（推荐装备左缘 2038），左缘 1619；目标面板占 1200..1605
+	team_stats_bg.offset_left = -781; team_stats_bg.offset_top = 6
+	team_stats_bg.offset_right = -371; team_stats_bg.offset_bottom = 150
 	_apply_panel_style(team_stats_bg, 0.62)
 	_connect_tap_to_action(team_stats_bg, Callable(self, "toggle_hero_detail"))
 	add_child(team_stats_bg)
 
 	time_chip = Panel.new()
-	time_chip.anchor_left = CENTER_X; time_chip.anchor_right = CENTER_X
-	time_chip.offset_left = -140; time_chip.offset_top = 8
-	time_chip.offset_right = 110; time_chip.offset_bottom = 52
+	time_chip.anchor_left = RIGHT_X; time_chip.anchor_right = RIGHT_X
+	time_chip.offset_left = -776; time_chip.offset_top = 8
+	time_chip.offset_right = -526; time_chip.offset_bottom = 52
 	_apply_panel_style(time_chip, 0.62)
 	_connect_tap_to_action(time_chip, Callable(self, "toggle_hero_detail"))
 	add_child(time_chip)
 	game_time_label = Label.new()
-	game_time_label.anchor_left = CENTER_X; game_time_label.anchor_right = CENTER_X
-	game_time_label.offset_left = -140; game_time_label.offset_top = 8
-	game_time_label.offset_right = 110; game_time_label.offset_bottom = 52
+	game_time_label.anchor_left = RIGHT_X; game_time_label.anchor_right = RIGHT_X
+	game_time_label.offset_left = -776; game_time_label.offset_top = 8
+	game_time_label.offset_right = -526; game_time_label.offset_bottom = 52
 	game_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	game_time_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_apply_label_style(game_time_label, 24, Color.WHITE)
@@ -612,9 +644,9 @@ func _create_info_labels():
 
 	# K/D/A（并入战况带第一行右侧，解决与战况信息重叠的问题）
 	kda_label = Label.new()
-	kda_label.anchor_left = CENTER_X
-	kda_label.offset_left = -120; kda_label.offset_top = 12
-	kda_label.offset_right = 300; kda_label.offset_bottom = 48
+	kda_label.anchor_left = RIGHT_X; kda_label.anchor_right = RIGHT_X
+	kda_label.offset_left = -773; kda_label.offset_top = 12
+	kda_label.offset_right = -379; kda_label.offset_bottom = 48
 	kda_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	kda_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_apply_label_style(kda_label, 20, Color.WHITE)
@@ -622,9 +654,9 @@ func _create_info_labels():
 
 	# 双方比分（战况带第二行）
 	team_stats_label = RichTextLabel.new()
-	team_stats_label.anchor_left = CENTER_X; team_stats_label.anchor_right = CENTER_X
-	team_stats_label.offset_left = -135; team_stats_label.offset_top = 82
-	team_stats_label.offset_right = 300; team_stats_label.offset_bottom = 142
+	team_stats_label.anchor_left = RIGHT_X; team_stats_label.anchor_right = RIGHT_X
+	team_stats_label.offset_left = -766; team_stats_label.offset_top = 82
+	team_stats_label.offset_right = -381; team_stats_label.offset_bottom = 142
 	team_stats_label.fit_content = true
 	team_stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_apply_rich_label_style(team_stats_label, 24)
@@ -643,12 +675,12 @@ func _create_info_labels():
 
 	# === 金币（右上角，可点击打开商店）===
 	# 稍向中心收，避免贴死角落
-	var gold_left := -250.0; var gold_right := -45.0
+	var gold_left := -286.0; var gold_right := -40.0
 	var gold_chip := Panel.new()
 	gold_chip.anchor_left = 1.0; gold_chip.anchor_top = 0.0; gold_chip.anchor_right = 1.0
 	# 金币芯片放大到 2 倍高度，字号取 HUD 正文档
 	gold_chip.offset_left = gold_left; gold_chip.offset_top = 8
-	gold_chip.offset_right = gold_right; gold_chip.offset_bottom = 45
+	gold_chip.offset_right = gold_right; gold_chip.offset_bottom = 62
 	_apply_panel_style(gold_chip, 0.55)
 	_connect_tap_to_action(gold_chip, Callable(self, "toggle_shop"))
 	add_child(gold_chip)
@@ -656,34 +688,58 @@ func _create_info_labels():
 	gold_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	gold_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	gold_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_apply_label_style(gold_label, 17, UiKit.C_GOLD)
+	_apply_label_style(gold_label, 23, UiKit.C_GOLD)
 	gold_chip.add_child(gold_label)
 
 	# === 推荐装备（紧贴金币芯片下方，旁边带“+”快速购买按钮）===
 	# 金币芯片底边 y=45，推荐卡从 y=53 起，横向与金币区右对齐
 	# 卡片式推荐位：品质图标 + 名称 + 价格/差额 + 金币进度条（原为一整行右对齐纯文本）
-	var rec_left := -410.0; var rec_right := -20.0
+	# 展开宽度与金币 UI 对齐：246（金币 -286..-40），右侧仍留给“+”按钮
+	var rec_left := -362.0; var rec_right := -116.0
 	recommended_equip_label = Label.new()
 	recommended_equip_label.visible = false
 	add_child(recommended_equip_label)
 	rec_card = RecItemCard.new()
 	rec_card.anchor_left = 1.0; rec_card.anchor_top = 0.0; rec_card.anchor_right = 1.0
-	rec_card.offset_left = rec_left; rec_card.offset_top = 53
-	rec_card.offset_right = rec_right; rec_card.offset_bottom = 137
+	rec_card.offset_left = rec_left; rec_card.offset_top = 70
+	rec_card.offset_right = rec_right; rec_card.offset_bottom = 190
 	rec_card.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(rec_card)
+	rec_card.buy_requested.connect(Callable(self, "buy_recommended"))
 	buy_plus_btn = TouchActionButton.new()
 	buy_plus_btn.label_text = "+"
-	buy_plus_btn.label_font_size = 64.0      # 更大更醒目的“+”
+	buy_plus_btn.label_font_size = 76.0      # 更大更醒目的“+”
 	buy_plus_btn.color = Color(0.98, 0.84, 0.25, 0.95)
 	buy_plus_btn.hold_to_act = false
 	buy_plus_btn.emit_activated_on_press = true
 	buy_plus_btn.activated.connect(Callable(self, "buy_recommended"))
 	buy_plus_btn.anchor_left = 1.0; buy_plus_btn.anchor_top = 0.0
-	buy_plus_btn.offset_left = -94; buy_plus_btn.offset_top = 61
-	buy_plus_btn.offset_right = -26; buy_plus_btn.offset_bottom = 133
+	buy_plus_btn.offset_left = -108; buy_plus_btn.offset_top = 79
+	buy_plus_btn.offset_right = -12; buy_plus_btn.offset_bottom = 181
 	buy_plus_btn.visible = false              # 初始隐藏，_update_recommended_equip 按金币刷新
 	add_child(buy_plus_btn)
+	# 多件素材都买得起时：推荐卡下方竖排自选卡（与推荐卡同宽 246、同卡片格式，玩家自己选买哪件）
+	rec_option_row = Control.new()
+	rec_option_row.anchor_left = 1.0; rec_option_row.anchor_top = 0.0; rec_option_row.anchor_right = 1.0
+	rec_option_row.offset_left = -362.0; rec_option_row.offset_top = REC_OPTION_TOP
+	rec_option_row.offset_right = -362.0 + REC_OPTION_W
+	rec_option_row.offset_bottom = REC_OPTION_TOP + (REC_OPTION_H + 6.0) * 2.0
+	rec_option_row.visible = false
+	add_child(rec_option_row)
+	# 设置按钮：推荐装下面，点开调音量 / 发起投降
+	settings_btn = Button.new()
+	settings_btn.text = "设置"
+	settings_btn.anchor_left = 1.0; settings_btn.anchor_top = 0.0; settings_btn.anchor_right = 1.0
+	settings_btn.offset_left = -104.0; settings_btn.offset_top = 308
+	settings_btn.offset_right = -12.0; settings_btn.offset_bottom = 344
+	settings_btn.add_theme_font_override("font", UiKit.font())
+	settings_btn.add_theme_font_size_override("font_size", 16)
+	settings_btn.add_theme_color_override("font_color", UiKit.C_TEXT)
+	settings_btn.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, false))
+	settings_btn.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, false))
+	settings_btn.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_GOLD, false))
+	settings_btn.pressed.connect(_open_settings)
+	add_child(settings_btn)
 
 	# Buff 改为底部中央图标条：见 _create_buff_icons / _update_buff_icons（右上方已不再放文字面板）
 
@@ -692,7 +748,7 @@ func _create_info_labels():
 	respawn_container = VBoxContainer.new()
 	respawn_container.anchor_left = 0.0; respawn_container.anchor_top = 0.0
 	# 环形头像×1.25 收到小地图右侧 (340,28)，行距收紧，避免与紧凑后的顶带挤在一起
-	respawn_container.position = Vector2(340 + UiKit.safe_left(), 28 + UiKit.safe_top())
+	respawn_container.position = Vector2(500 + UiKit.safe_left(), 28 + UiKit.safe_top())
 	respawn_container.add_theme_constant_override("separation", 6)
 	add_child(respawn_container)
 
@@ -728,9 +784,14 @@ func _create_hero_detail_panel():
 
 func _create_death_recap_panel():
 	# 死亡面板：纯绘制视图（击杀者/复活读秒/承伤构成/来源排行/自动归因），主机与联机客户端共用
+	# 放独立 CanvasLayer 105：压在 buff 图标、触控技能键和死亡压暗层之上
+	death_recap_high_layer = CanvasLayer.new()
+	death_recap_high_layer.name = "DeathRecapHighLayer"
+	death_recap_high_layer.layer = UiKit.LAYER_RECAP
+	add_child(death_recap_high_layer)
 	death_recap_panel = DeathRecapView.new()
 	death_recap_panel.visible = false
-	add_child(death_recap_panel)
+	death_recap_high_layer.add_child(death_recap_panel)
 	death_recap_panel.closed_by_user.connect(_close_death_recap)
 
 func _create_team_decision_panel():
@@ -898,69 +959,156 @@ func _format_hero_lane_line(h: Hero, assigned_lane: int, is_ai: bool) -> String:
 
 
 # ---------- 战报系统 ----------
-func show_kill_feed(actor: String, actor_team: int, desc: String, victim: String = "", victim_team: int = -1):
+## assists：[{name:String, team:int}]（可选；推塔时可含小兵）。英雄头像会自动带原初印记等级。
+func show_kill_feed(actor: String, actor_team: int, desc: String, victim: String = "", victim_team: int = -1,
+		assists: Array = []):
+	# 原初印记等级在“事件发生这一刻”取样（排队延迟播出时不跟着变）
+	var a_mark := _feed_mark_of(actor)
+	var v_mark := _feed_mark_of(victim)
+	var assist_rows: Array = []
+	for a in assists:
+		var nm := str(a.get("name", ""))
+		if nm == "":
+			continue
+		assist_rows.append([nm, int(a.get("team", actor_team)), _feed_mark_of(nm)])
 	# P3e：网络对局时把击杀/塔/龙/名刀/复活等全部战报经 NetSession 广播给接管客户端（全网单点入口）
 	if NetSession.mode == NetSession.Mode.HOST:
-		NetSession.broadcast_kill_feed(actor, actor_team, desc, victim, victim_team)
+		NetSession.broadcast_kill_feed(actor, actor_team, desc, victim, victim_team,
+			assist_rows, a_mark, v_mark)
 	# 播报语音（host/离线本地单点；接管客户端由 NetKillFeed 各自触发）
 	SfxManager.play_feed(actor, actor_team, desc, victim, victim_team)
-	# 立即上屏并堆叠；超过 3 条时替换最旧一条
-	if kill_feed_slots.size() >= KF_MAX:
-		var old = kill_feed_slots.pop_front()
-		if is_instance_valid(old):
-			old.queue_free()
-	var panel = _create_kill_feed_panel(actor, actor_team, desc, victim, victim_team)
-	kill_feed_slots.append(panel)
+	# 进队列：每条只播 1 条，前一条播满 2.0s 再播下一条
+	_kf_queue.append({"actor": actor, "a_team": actor_team, "desc": desc,
+		"victim": victim, "v_team": victim_team, "a_mark": a_mark, "v_mark": v_mark,
+		"assists": assist_rows})
+	while _kf_queue.size() > KF_QUEUE_MAX:
+		_kf_queue.pop_front()
+	_kf_pump()
+
+## 英雄当前原初印记等级（0~6，每 100 原初积分 1 级；非英雄返回 0）
+func _feed_mark_of(entity_name: String) -> int:
+	if entity_name == "":
+		return 0
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if e is Hero and e.display_name == entity_name:
+			return clampi(int((e as Hero).primitive_score / 100), 0, 6)
+	return 0
+
+## 单条播报出队：同一时刻只存在 1 条，播完（2.0s）自动接队首
+func _kf_pump() -> void:
+	if _kf_cur != null and is_instance_valid(_kf_cur):
+		return
+	if _kf_queue.is_empty():
+		return
+	var p: Dictionary = _kf_queue.pop_front()
+	var panel := _create_kill_feed_panel(p)
+	_kf_cur = panel
+	kill_feed_slots = [panel]
 	add_child(panel)
 	_layout_kill_feed()
-	var tween = create_tween()
-	tween.tween_interval(3.2)
-	tween.tween_property(panel, "modulate:a", 0.0, 0.45)
-	tween.tween_callback(func():
+	var tw := create_tween()
+	tw.tween_interval(KF_SHOW)
+	tw.tween_property(panel, "modulate:a", 0.0, KF_FADE)
+	tw.tween_callback(func():
 		if is_instance_valid(panel):
-			kill_feed_slots.erase(panel)
 			panel.queue_free()
-			_layout_kill_feed())
+		if _kf_cur == panel:
+			_kf_cur = null
+		kill_feed_slots.clear()
+		_kf_pump())
 
 func _layout_kill_feed():
 	var rs := ui_scale()
-	for i in range(kill_feed_slots.size()):
-		var p = kill_feed_slots[i]
+	for p in kill_feed_slots:
 		if not is_instance_valid(p):
 			continue
+		var h: float = KF_H + (KF_ASSIST_H if p.has_meta("kf_assist") else 0.0)
 		p.offset_left = -KF_W * 0.5 * rs
 		p.offset_right = KF_W * 0.5 * rs
-		p.offset_top = KF_TOP + float(i) * (KF_H + KF_GAP) * rs
-		p.offset_bottom = p.offset_top + KF_H * rs
+		p.offset_top = KF_TOP * rs
+		p.offset_bottom = p.offset_top + h * rs
 
-func _create_kill_feed_panel(actor: String, actor_team: int, desc: String, victim: String, victim_team: int) -> Panel:
+func _create_kill_feed_panel(p: Dictionary) -> Panel:
+	var actor: String = str(p.get("actor", ""))
+	var actor_team: int = int(p.get("a_team", 0))
+	var desc: String = str(p.get("desc", ""))
+	var victim: String = str(p.get("victim", ""))
+	var victim_team: int = int(p.get("v_team", -1))
+	var assists: Array = p.get("assists", [])
 	var panel = Panel.new()
 	panel.z_index = UiKit.Z_HUD_TOP
 	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_apply_panel_style(panel, 0.6)
+	var box = VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.add_theme_constant_override("separation", 0)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(box)
 	var hbox = HBoxContainer.new()
-	hbox.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox.custom_minimum_size = Vector2(0, KF_H * ui_scale())
+	hbox.add_theme_constant_override("separation", 10)
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(hbox)
+	box.add_child(hbox)
 
 	if actor != "":
-		var actor_label = Label.new(); actor_label.text = actor
-		_apply_label_style(actor_label, 18, Color(0.0,0.886,1.0) if Config.is_ally(actor_team) else Color(1.0,0.33,0.264))
+		var actor_icon := _make_feed_icon(actor, actor_team, int(p.get("a_mark", 0)), 40)
+		if actor_icon != null:
+			hbox.add_child(actor_icon)
+		var actor_label = Label.new(); actor_label.text = EntityIconArtScript.display_name(actor)
+		_apply_label_style(actor_label, 24, _feed_team_color(actor_team))
 		hbox.add_child(actor_label)
-	var desc_label = Label.new(); desc_label.text = desc; _apply_label_style(desc_label, 18, Color.WHITE)
+	var desc_label = Label.new(); desc_label.text = desc; _apply_label_style(desc_label, 24, Color.WHITE)
 	hbox.add_child(desc_label)
 	if victim != "":
-		var victim_label = Label.new(); victim_label.text = victim
-		var vcolor = Color(0.0,0.886,1.0) if Config.is_ally(victim_team) else (Color(1.0,0.33,0.264) if victim_team == Config.Team.PLAYER or victim_team == Config.Team.ENEMY else Color.PURPLE)
-		_apply_label_style(victim_label, 18, vcolor)
+		var victim_icon := _make_feed_icon(victim, victim_team, int(p.get("v_mark", 0)), 40)
+		if victim_icon != null:
+			hbox.add_child(victim_icon)
+		var victim_label = Label.new(); victim_label.text = EntityIconArtScript.display_name(victim)
+		_apply_label_style(victim_label, 24, _feed_team_color(victim_team))
 		hbox.add_child(victim_label)
+	# 第二行：助攻者图像（有助攻才加；仅推塔时可能含小兵）
+	if not assists.is_empty():
+		panel.set_meta("kf_assist", true)
+		var arow = HBoxContainer.new()
+		arow.alignment = BoxContainer.ALIGNMENT_CENTER
+		arow.custom_minimum_size = Vector2(0, KF_ASSIST_H * ui_scale())
+		arow.add_theme_constant_override("separation", 8)
+		arow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_child(arow)
+		var cap = Label.new(); cap.text = "助攻"; _apply_label_style(cap, 16, Color(0.72, 0.80, 0.94, 0.9))
+		arow.add_child(cap)
+		for a in assists:
+			var ic := _make_feed_icon(str(a[0]), int(a[1]), int(a[2]), 30)
+			if ic != null:
+				arow.add_child(ic)
 	return panel
+
+func _feed_team_color(team: int) -> Color:
+	if Config.is_ally(team):
+		return Color(0.0, 0.886, 1.0)
+	if team == Config.Team.PLAYER or team == Config.Team.ENEMY:
+		return Color(1.0, 0.33, 0.264)
+	return Color.PURPLE
+
+func _make_feed_icon(entity_name: String, team: int, mark_level: int = 0, sz: float = 26.0) -> Control:
+	var sp := EntityIconArtScript.spec_for(entity_name)
+	if sp.is_empty():
+		return null
+	sp["mark"] = mark_level
+	var px := sz * ui_scale()
+	var ic := EntityIconControl.new()
+	ic.custom_minimum_size = Vector2(px, px)
+	ic.size = Vector2(px, px)
+	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ic.setup(sp, _feed_team_color(team))
+	return ic
 
 # ---------- 伤害/金币/治疗弹出 ----------
 # 错开分布：同一位置多个数值时水平分散
-func _get_stagger_offset(world_pos: Vector3) -> float:
+# 同目标短时间多次伤害：数值向四周散开（8 方向环绕，绕满一圈半径再加一级）
+func _get_stagger_offset(world_pos: Vector3) -> Vector2:
 	var key = (world_pos * 10).round() / 10.0  # 0.1 精度取整
 	if not _popup_offsets.has(key):
 		_popup_offsets[key] = {"count": 0, "timer": 0.0}
@@ -968,81 +1116,108 @@ func _get_stagger_offset(world_pos: Vector3) -> float:
 	info.timer = 0.35  # 重置窗口
 	var idx = info.count
 	info.count += 1
-	# 0, +18, -18, +36, -36, ...
-	if idx == 0: return 0.0
-	var sign = 1 if idx % 2 == 0 else -1
-	var mag = ceil(idx / 2.0) * 18
-	return sign * mag
-func show_damage_number(world_pos: Vector3, damage: float, is_crit: bool, is_magic: bool):
+	if idx == 0:
+		return Vector2.ZERO
+	var ang := float(idx - 1) * TAU / 8.0
+	var ring := 1.0 + float((idx - 1) / 8)
+	var r := 20.0 * ring
+	return Vector2(cos(ang) * r, sin(ang) * r)
+
+func show_damage_number(world_pos: Vector3, damage: float, is_crit: bool, is_magic: bool, shielded: bool = false, true_dmg: bool = false):
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
-	var label = Label.new(); label.text = str(int(damage))
+	var dmg := int(damage)
 	var base_size: int = 16
-	if damage >= 1000: base_size = 50
-	elif damage >= 500: base_size = 40
-	elif damage >= 300: base_size = 30
-	elif damage >= 100: base_size = 22
-	label.add_theme_font_size_override("font_size", int(round(base_size * ui_scale())))
-	label.add_theme_color_override("font_color", Color.PURPLE if is_magic else Color.ORANGE)
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.92))
-	# 描边按字号缩放：伤害数字大小差 16→50px，固定 3px 描边在大字上几乎看不出
-	label.add_theme_constant_override("outline_size", clampi(int(round(base_size * 0.20 * ui_scale())), 3, 12))
-	if is_crit: label.add_theme_color_override("font_outline_color", UiKit.C_GOLD); label.add_theme_constant_override("outline_size", clampi(int(round((base_size + 10) * 0.20 * ui_scale())), 4, 14)); label.add_theme_font_size_override("font_size", int(round((base_size + 10) * ui_scale())))
-	var stagger_x = _get_stagger_offset(world_pos)
+	if dmg >= 1000: base_size = 50
+	elif dmg >= 500: base_size = 40
+	elif dmg >= 300: base_size = 30
+	elif dmg >= 100: base_size = 22
+	var rs := ui_scale()
+	var fs := base_size + (10 if is_crit else 0)
+	var px := int(round(fs * rs))
+	var label = Label.new(); label.text = str(dmg)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_size_override("font_size", px)
+	# 数字配色：真伤红 / 护盾吸收白 / 法术品紫 / 物理暖橙 / 暴击亮金（描边跟着换深色）
+	var col: Color = Color(1.0, 0.30, 0.26) if true_dmg else (Color(0.96, 0.97, 1.0) if shielded else (Color(1.0, 0.90, 0.45) if is_crit else (Color(0.74, 0.53, 1.0) if is_magic else Color(1.0, 0.76, 0.34))))
+	var edge: Color = Color(0.30, 0.02, 0.02, 1.0) if true_dmg else (Color(0.10, 0.10, 0.14, 0.96) if shielded else (Color(0.40, 0.24, 0.02, 1.0) if is_crit else Color(0.12, 0.05, 0.02, 0.96)))
+	label.add_theme_color_override("font_color", col)
+	label.add_theme_color_override("font_outline_color", edge)
+	# 描边按字号缩放：伤害数字大小差 16→60px，固定 3px 描边在大字上几乎看不出
+	label.add_theme_constant_override("outline_size", clampi(int(round(fs * 0.22 * rs)), 3, 14))
+	# 柔和投影：把数字从杂乱战场背景里托出来（暴击不加，避免和金描边糊成一圈）
+	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.5))
+	label.add_theme_constant_override("shadow_offset_x", maxi(1, int(round(fs * 0.05 * rs))))
+	label.add_theme_constant_override("shadow_offset_y", maxi(1, int(round(fs * 0.08 * rs))))
+	label.add_theme_constant_override("shadow_outline_size", 0)
+	var stagger_off: Vector2 = _get_stagger_offset(world_pos)
 	# 暴击：在伤害数字左前方自绘四芒星爆点图标（fallback 字体无此字形，随 Label 一起上浮/淡出）
 	if is_crit:
-		var _cfs := int(round((base_size + 10) * ui_scale()))
 		var mark := CritMark.new()
-		var _iw := _cfs * 0.62
-		var _ih := _cfs * 0.7
-		mark.position = Vector2(-(_iw + _cfs * 0.22), (label.size.y - _ih) * 0.5 + _cfs * 0.06)
+		var _iw := px * 0.62
+		var _ih := px * 0.7
 		mark.size = Vector2(_iw, _ih)
 		label.add_child(mark)
-	label.position = screen_pos - label.size / 2 + Vector2(stagger_x, 0); add_child(label)
-	var tween = create_tween(); tween.tween_property(label, "position:y", label.position.y - 60, 1.0)
-	tween.parallel().tween_property(label, "modulate:a", 0.0, 0.8); tween.tween_callback(label.queue_free)
+	add_child(label)
+	label.size = label.get_combined_minimum_size()
+	if is_crit and label.get_child_count() > 0:
+		var mark: Control = label.get_child(0)
+		mark.position = Vector2(-(mark.size.x + px * 0.22), (label.size.y - mark.size.y) * 0.5 + px * 0.06)
+	label.position = screen_pos - label.size * 0.5 + stagger_off
+	# 弹入：先放大再回弹（暴击弹得更狠），之后匀速上浮淡出，比纯平移更有打击感
+	label.pivot_offset = label.size * 0.5
+	label.scale = Vector2(1.45, 1.45)
+	var rise: float = (66.0 if is_crit else 54.0) * rs
+	var tween = create_tween()
+	tween.tween_property(label, "scale", Vector2.ONE, 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var tween2 = create_tween()
+	tween2.tween_property(label, "position:y", label.position.y - rise, 1.0).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween2.parallel().tween_property(label, "modulate:a", 0.0, 0.45).set_delay(0.55)
+	tween2.tween_callback(label.queue_free)
 
-func show_gold_popup(world_pos: Vector3, amount: int, own_kill := false):
+func show_gold_popup(world_pos: Vector3, amount: int, own_kill := false, last_hit := false):
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
-	var stagger_x = _get_stagger_offset(world_pos)
-	if not own_kill:
-		var label = Label.new(); label.text = "+%dg" % amount
-		label.add_theme_font_size_override("font_size", int(round(34 * ui_scale())))
-		label.add_theme_color_override("font_color", UiKit.C_GOLD)
-		label.add_theme_color_override("font_outline_color", Color.BLACK)
-		label.add_theme_constant_override("outline_size", 3)
-		label.position = screen_pos - label.size / 2 + Vector2(stagger_x, 0); add_child(label)
-		# 金币弹出统一停留约2秒：上浮1.4s、末段0.6s淡出
-		var tween = create_tween()
-		tween.tween_property(label, "position:y", label.position.y - 55, 1.4)
-		tween.parallel().tween_property(label, "modulate:a", 0.0, 0.6).set_delay(1.4)
-		tween.tween_callback(label.queue_free)
+	var stagger_off: Vector2 = _get_stagger_offset(world_pos)
+	var rs := ui_scale()
+	# 金币弹出统一用矢量徽标：自己击杀=金色小剑+大号，助攻/自然金币=👍+金币图标+常规号
+	var pop := ValuePopup.new()
+	if own_kill:
+		SfxManager.play_ui_sfx("last_hit" if last_hit else "coin")
+		pop.setup("+%dg" % amount, "sword", UiKit.C_GOLD, rs, 34)
 	else:
-		# 自己击杀：数值前多画1把金色小剑（纯矢量绘制，引擎字体无剑字形），同样停留约2秒
-		SfxManager.play_ui_sfx("coin")
-		var pop := KillGoldPopup.new()
-		pop.setup(amount, ui_scale())
-		var size := pop.measure()
-		pop.position = screen_pos - size / 2 + Vector2(stagger_x, 0)
-		add_child(pop)
-		var tween = create_tween()
-		tween.tween_property(pop, "position:y", pop.position.y - 55, 1.4)
-		tween.parallel().tween_property(pop, "modulate:a", 0.0, 0.6).set_delay(1.4)
-		tween.tween_callback(pop.queue_free)
+		# 非补刀金币（助攻/兵线/自然经济）：数值前面画一个竖大拇指
+		pop.setup("+%dg" % amount, "thumb", Color(1.0, 0.87, 0.40), rs, 30, "coin")
+	pop.position = screen_pos - pop.size / 2 + stagger_off
+	add_child(pop)
+	pop.pivot_offset = pop.size * 0.5
+	pop.scale = Vector2(1.3, 1.3)
+	var tween = create_tween()
+	tween.tween_property(pop, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# 金币弹出统一停留约2秒：上浮1.4s、末段0.6s淡出
+	var tween2 = create_tween()
+	tween2.tween_property(pop, "position:y", pop.position.y - 55, 1.4).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween2.parallel().tween_property(pop, "modulate:a", 0.0, 0.6).set_delay(1.4)
+	tween2.tween_callback(pop.queue_free)
 
 func show_heal_number(world_pos: Vector3, amount: int):
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
-	var label = Label.new(); label.text = "+%d" % amount
-	label.add_theme_font_size_override("font_size", int(round(24 * ui_scale())))
-	label.add_theme_color_override("font_color", Color.GREEN)
-	label.add_theme_color_override("font_outline_color", Color.BLACK)
-	label.add_theme_constant_override("outline_size", 2)
-	var stagger_x = _get_stagger_offset(world_pos)
-	label.position = screen_pos - label.size / 2 + Vector2(stagger_x, 0); add_child(label)
-	var tween = create_tween(); tween.tween_property(label, "position:y", label.position.y - 45, 0.9)
-	tween.parallel().tween_property(label, "modulate:a", 0.0, 0.7); tween.tween_callback(label.queue_free)
+	var stagger_off: Vector2 = _get_stagger_offset(world_pos)
+	var rs := ui_scale()
+	# 治疗：绿色十字徽标 + 数值，比纯绿字更易和伤害数字区分
+	var pop := ValuePopup.new()
+	pop.setup("+%d" % amount, "cross", Color(0.50, 1.0, 0.60), rs, 26)
+	pop.position = screen_pos - pop.size / 2 + stagger_off
+	add_child(pop)
+	pop.pivot_offset = pop.size * 0.5
+	pop.scale = Vector2(1.25, 1.25)
+	var tween = create_tween()
+	tween.tween_property(pop, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	var tween2 = create_tween()
+	tween2.tween_property(pop, "position:y", pop.position.y - 46, 0.9).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween2.parallel().tween_property(pop, "modulate:a", 0.0, 0.55).set_delay(0.35)
+	tween2.tween_callback(pop.queue_free)
 
 # ---------- 商店系统 ----------
 func _open_shop():
@@ -1780,15 +1955,243 @@ func _update_recommended_equip():
 		rec_card.maxed = bool(b.get("maxed", false))
 		rec_card.slot_full = bool(b.get("slot_full", false))
 		rec_card.gold = int(battle.hero.gold) if battle.hero else 0
-		# 金币不足自动收起成图标；买得起后自动展开
-		rec_card.set_collapsed_for_gold(not can_buy and str(b.get("id", "")) != "" and not rec_card.maxed)
+		# 金币不足自动收起成图标；买得起后自动展开（以卡片自身可买判定兜底）
+		var affordable_now: bool = can_buy or rec_card.affordable()
+		rec_card.set_collapsed_for_gold(not affordable_now and str(b.get("id", "")) != "" and not rec_card.maxed)
 		rec_card.queue_redraw()
+		can_buy = affordable_now
 	if buy_plus_btn:
 		buy_plus_btn.visible = can_buy and not (rec_card != null and rec_card.collapsed)
+	_sync_rec_options(b.get("options", []), int(battle.hero.gold))
+
+# 推荐位自选选项：素材组合变化才重建；金币变化只刷新可点状态。
+# 版式与上方推荐卡完全一致（同宽 246 / 同 UiKit.rec_card 卡片 + 收起态），不再用一排普通按钮
+func _sync_rec_options(opts: Array, gold: int) -> void:
+	if rec_option_row == null:
+		return
+	var sig := ""
+	for o in opts:
+		sig += str(o["id"]) + "|"
+	if sig != rec_option_sig:
+		rec_option_sig = sig
+		for c in rec_option_row.get_children():
+			rec_option_row.remove_child(c)
+			c.queue_free()
+		rec_option_btns.clear()
+		var pi := 0
+		for o in opts:
+			var card := RecItemCard.new()
+			card.name = "RecOption_%d" % pi
+			card.mouse_filter = Control.MOUSE_FILTER_STOP
+			# 右锚定：收起态（offset_left=-208）与推荐卡同款，从右往左收，不会跑出屏幕
+			card.anchor_left = 1.0
+			card.anchor_right = 1.0
+			card.offset_left = -REC_OPTION_W
+			card.offset_right = 0.0
+			card.offset_top = float(pi) * (REC_OPTION_H + 6.0)
+			card.offset_bottom = card.offset_top + REC_OPTION_H
+			card.item_name = str(o["name"])
+			card.tier = int(o.get("tier", 1))
+			card.cost = int(o["cost"])
+			card.gold = gold
+			card.slot_full = false
+			card.tap_buy = true
+			card.left_full = -REC_OPTION_W
+			card.left_collapsed = -minf(REC_OPTION_W, 208.0)
+			card.set_collapsed_for_gold(gold < int(o["cost"]))
+			card.buy_requested.connect(_shop_quick_buy.bind(str(o["id"])))
+			rec_option_row.add_child(card)
+			rec_option_btns.append({"card": card, "cost": int(o["cost"])})
+			pi += 1
+		rec_option_row.visible = not opts.is_empty()
+	for e in rec_option_btns:
+		var c2: RecItemCard = e["card"]
+		c2.gold = gold
+		c2.set_collapsed_for_gold(gold < int(e["cost"]))
+		c2.queue_redraw()
+	# 设置按钮跟随推荐位高度下移，避免压住自选卡
+	if settings_btn != null:
+		var rows: int = rec_option_btns.size()
+		var st_top: float = 308.0
+		if rows > 0:
+			st_top = REC_OPTION_TOP + float(rows) * (REC_OPTION_H + 6.0) + 8.0
+		settings_btn.offset_top = st_top
+		settings_btn.offset_bottom = st_top + 36.0
+
+# ==================== 设置面板（音量 / 投降） ====================
+func _master_volume_pct() -> float:
+	var idx := AudioServer.get_bus_index("Master")
+	if idx < 0:
+		return 100.0
+	return clampf(db_to_linear(AudioServer.get_bus_volume_db(idx)) * 100.0, 0.0, 100.0)
+
+func _apply_master_volume(pct: float) -> void:
+	var idx := AudioServer.get_bus_index("Master")
+	if idx < 0:
+		return
+	AudioServer.set_bus_mute(idx, pct <= 0.5)
+	AudioServer.set_bus_volume_db(idx, linear_to_db(clampf(pct, 0.0, 100.0) / 100.0))
+
+func _settings_label(txt: String, size: int, col: Color) -> Label:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_override("font", UiKit.font())
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", col)
+	return l
+
+func _open_settings() -> void:
+	if settings_panel != null and is_instance_valid(settings_panel):
+		settings_panel.visible = true
+		return
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	settings_panel = Control.new()
+	settings_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(settings_panel)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	settings_panel.add_child(dim)
+	var card := Panel.new()
+	card.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	card.offset_left = -250.0; card.offset_right = 250.0
+	card.offset_top = -170.0; card.offset_bottom = 170.0
+	card.add_theme_stylebox_override("panel", UiKit.panel_style(0.98, 18.0))
+	settings_panel.add_child(card)
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 26.0; vb.offset_top = 20.0
+	vb.offset_right = -26.0; vb.offset_bottom = -20.0
+	vb.add_theme_constant_override("separation", 18)
+	card.add_child(vb)
+	var title := _settings_label("设置", 26, UiKit.C_GOLD)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	# 音量
+	var vol_row := HBoxContainer.new()
+	vol_row.add_theme_constant_override("separation", 12)
+	vol_row.add_child(_settings_label("音量", 18, UiKit.C_TEXT))
+	var slider := HSlider.new()
+	slider.min_value = 0.0; slider.max_value = 100.0; slider.step = 1.0
+	slider.value = _master_volume_pct()
+	slider.custom_minimum_size = Vector2(270.0, 30.0)
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	vol_row.add_child(slider)
+	var vol_val := _settings_label("%d%%" % int(slider.value), 18, UiKit.C_EXP)
+	vol_val.custom_minimum_size = Vector2(56.0, 0.0)
+	vol_row.add_child(vol_val)
+	vb.add_child(vol_row)
+	slider.value_changed.connect(func(v: float) -> void:
+		vol_val.text = "%d%%" % int(v)
+		_apply_master_volume(v))
+	# 投降
+	var sur := Button.new()
+	sur.text = "发起投降"
+	sur.custom_minimum_size = Vector2(0.0, 44.0)
+	sur.add_theme_font_override("font", UiKit.font())
+	sur.add_theme_font_size_override("font_size", 20)
+	sur.add_theme_color_override("font_color", UiKit.C_TEXT)
+	sur.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_DANGER, true))
+	sur.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_DANGER, true))
+	sur.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_DANGER, true))
+	sur.add_theme_stylebox_override("disabled", UiKit.skin_button("disabled", UiKit.C_DANGER, true))
+	sur.pressed.connect(_start_surrender_vote)
+	var sur_hint := _settings_label("", 15, UiKit.C_TEXT_DIM)
+	if battle != null:
+		if battle.game_time < SURRENDER_MIN_TIME:
+			sur.disabled = true
+			sur_hint.text = "对局满 6:00 后才可发起投降"
+		else:
+			sur_hint.text = "需本队 5 人中至少 4 人同意"
+	vb.add_child(sur)
+	vb.add_child(sur_hint)
+	surrender_status_label = _settings_label("", 16, UiKit.C_GOLD)
+	surrender_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(surrender_status_label)
+	# 关闭
+	var close := Button.new()
+	close.text = "关闭"
+	close.custom_minimum_size = Vector2(0.0, 40.0)
+	close.add_theme_font_override("font", UiKit.font())
+	close.add_theme_font_size_override("font_size", 18)
+	close.add_theme_color_override("font_color", UiKit.C_TEXT)
+	close.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_TEAM0, false))
+	close.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_TEAM0, false))
+	close.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_TEAM0, false))
+	close.pressed.connect(_close_settings)
+	vb.add_child(close)
+
+func _close_settings() -> void:
+	if settings_panel != null and is_instance_valid(settings_panel):
+		settings_panel.visible = false
+
+## 发起投降：满 6 分钟 + 本队 5 人中 4 票同意才结束对局（单人/联机 host 的 AI 队友按局势表态）
+func _start_surrender_vote() -> void:
+	if surrender_vote_running:
+		return
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	if battle == null or battle.game_over:
+		return
+	if battle.game_time < SURRENDER_MIN_TIME:
+		_hud_toast("对局满 6:00 后才可发起投降", true)
+		return
+	surrender_vote_running = true
+	var total := 1
+	var yes := 1
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if e is Hero and e.team == Config.player_team and e != battle.hero:
+			total += 1
+	var losing: bool = battle.team_player_gold < battle.team_enemy_gold or battle.team_player_kills < battle.team_enemy_kills
+	_update_surrender_status(yes, total)
+	for e2 in get_tree().get_nodes_in_group("heroes"):
+		if not (e2 is Hero) or e2.team != Config.player_team or e2 == battle.hero:
+			continue
+		await get_tree().create_timer(randf_range(0.5, 1.0)).timeout
+		if not is_instance_valid(self) or battle.game_over:
+			surrender_vote_running = false
+			return
+		if losing or randf() < 0.3:
+			yes += 1
+		_update_surrender_status(yes, total)
+	surrender_vote_running = false
+	if yes >= SURRENDER_MIN_YES:
+		_update_surrender_status(yes, total, "投降通过（%d/%d），对局结束" % [yes, total])
+		_hud_toast("投降通过（%d/%d）" % [yes, total])
+		_close_settings()
+		battle.crystal_destroyed(Config.player_team)
+	else:
+		_update_surrender_status(yes, total, "投降未通过（%d/%d，需 4 票）" % [yes, total])
+		_hud_toast("投降未通过（%d/%d 票）" % [yes, total], true)
+
+func _update_surrender_status(yes: int, total: int, txt: String = "") -> void:
+	if surrender_status_label == null or not is_instance_valid(surrender_status_label):
+		return
+	surrender_status_label.text = txt if txt != "" else "投降投票中… %d/%d" % [yes, total]
+
+## HUD 轻提示（不依赖商店面板，淡出后销毁）
+func _hud_toast(txt: String, bad: bool = false) -> void:
+	var l := Label.new()
+	l.text = txt
+	l.add_theme_font_override("font", UiKit.font())
+	l.add_theme_font_size_override("font_size", 22)
+	l.add_theme_color_override("font_color", Color(1.0, 0.55, 0.5) if bad else Color(0.60, 1.0, 0.66))
+	l.add_theme_color_override("font_outline_color", Color.BLACK)
+	l.add_theme_constant_override("outline_size", 5)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	l.position = Vector2(vp.x * 0.5 - 300.0, vp.y * 0.22)
+	l.custom_minimum_size = Vector2(600.0, 0.0)
+	add_child(l)
+	var tw := l.create_tween()
+	tw.tween_property(l, "modulate:a", 0.0, 1.1).set_delay(1.2)
+	tw.tween_callback(l.queue_free)
 
 # 推荐带数据打包（纯计算，供本类主界面 _update_recommended_equip 与 NetSession own.rb 快照广播单源调用；
 # 客户端无 ItemDatabase 合成链，只把 text/cost/show/id 画出来）
-func _compute_recommended_bundle(hero: Hero) -> Dictionary:
+func _compute_recommended_bundle(hero: Hero, with_options: bool = true) -> Dictionary:
 	if hero == null:
 		return {"id": "", "text": "", "cost": 0, "show": false, "name": "", "tier": 2, "maxed": false, "slot_full": false}
 	var best := _get_best_recommended_item(hero)
@@ -1848,7 +2251,63 @@ func _compute_recommended_bundle(hero: Hero) -> Dictionary:
 		var suffix = " → " + parent_name if parent_name != "" else ""
 		out_text = "推荐: %s (%s)%s" % [item["name"], cost_text, suffix]
 	# 加号购买按钮：仅在金币足够买下推荐项时显示
-	return {"id": best, "text": out_text, "cost": out_cost, "show": hero.gold >= out_cost, "name": str(item["name"]), "tier": int(item.get("tier", 2)), "maxed": false, "slot_full": hero.equipment_slots.size() >= Hero.MAX_EQUIPMENT_SLOTS}
+	# 多件可选：目标大件缺的素材里金币买得起的有 2 件以上时，全列出来让玩家自己挑
+	var opts: Array = [] if (not with_options or (is_final and hero.gold >= out_cost)) else _recommended_options(hero, best, list)
+	return {"id": best, "text": out_text, "cost": out_cost, "show": hero.gold >= out_cost, "name": str(item["name"]), "tier": int(item.get("tier", 2)), "maxed": false, "slot_full": hero.equipment_slots.size() >= Hero.MAX_EQUIPMENT_SLOTS, "options": opts}
+
+# 目标大件缺失的素材中「现在买得起」的清单（≥2 件才返回，让玩家自选）
+func _recommended_options(hero: Hero, best_id: String, list: Array) -> Array:
+	if best_id == "":
+		return []
+	var target_id := best_id if best_id in list else ""
+	if target_id == "":
+		for rid in list:
+			if hero.equipment_slots.has(rid):
+				continue
+			if rid != best_id and _item_depends_on(rid, best_id):
+				target_id = rid
+				break
+	if target_id == "":
+		return []
+	var missing: Array = []
+	_collect_missing_leaves(hero, target_id, missing)
+	var opts: Array = []
+	var seen := {}
+	for mid in missing:
+		if seen.has(mid):
+			continue
+		seen[mid] = true
+		var mi = ItemDatabase.get_item(mid)
+		if mi.is_empty():
+			continue
+		if hero.gold < float(mi.get("cost", 0)):
+			continue
+		opts.append({"id": mid, "name": str(mi.get("name", mid)), "cost": int(mi.get("cost", 0)), "tier": int(mi.get("tier", 1))})
+	if opts.size() < 2:
+		return []
+	if opts.size() > 2:
+		opts.resize(2)   # 最多同时推荐 2 件
+	return opts
+
+func _item_depends_on(id: String, comp: String) -> bool:
+	if id == comp:
+		return true
+	for req in ItemDatabase.get_item(id).get("requires", []):
+		if _item_depends_on(str(req), comp):
+			return true
+	return false
+
+func _collect_missing_leaves(hero: Hero, id: String, out: Array) -> void:
+	var item = ItemDatabase.get_item(id)
+	if item.is_empty():
+		return
+	var reqs: Array = item.get("requires", [])
+	if reqs.is_empty():
+		if not hero.equipment_slots.has(id):
+			out.append(id)
+		return
+	for req in reqs:
+		_collect_missing_leaves(hero, str(req), out)
 
 func _sell_equipment(item_id: String):
 	var hero = get_tree().get_first_node_in_group("battle_manager").hero
@@ -2227,7 +2686,7 @@ func show_yuanliu_pick(hero: Hero, reopen: bool = false) -> void:
 		var pick_name: String = o[0]
 		var is_cur: bool = reopen and pick_name == cur_pick
 		if is_cur:
-			b.text = "✔ 当前·【%s】  %s" % [o[0], o[1]]
+			b.text = "√ 当前·【%s】  %s" % [o[0], o[1]]
 		else:
 			b.text = "【%s】  %s" % [o[0], o[1]]
 		b.custom_minimum_size = Vector2(0, 92.0 * rs)
@@ -2630,7 +3089,26 @@ func _refresh_hero_detail_panel():
 		var row: Dictionary = _roster_row(e as Hero, battle)
 		row["own"] = e == battle.hero
 		rows.append(row)
-	hero_detail_panel.set_rows(rows)
+	hero_detail_panel.set_rows(rows, "attr", _vanguard_info(battle))
+
+## 对局信息：主宰/暗影/风暴被击败后的先锋波数（我方/敌方）
+func _vanguard_info(battle) -> Dictionary:
+	if battle == null:
+		return {}
+	var my_w: int = battle.vanguard_waves_left(Config.player_team)
+	var en_w: int = battle.vanguard_waves_left(Config.Team.ENEMY)
+	var nm: String = battle.vanguard_wave_name()
+	var txt := ""
+	var col: Color = UiKit.C_TEXT_DIM
+	if my_w > 0:
+		txt = "%s 我方 %d 波 · 敌方 %d 波" % [nm, my_w, en_w]
+		col = UiKit.C_GOLD
+	elif en_w > 0:
+		txt = "%s 我方 %d 波 · 敌方 %d 波" % [nm, my_w, en_w]
+		col = UiKit.C_TEAM1
+	else:
+		txt = ("%s 已出完" % nm) if bool(battle.vanguard_ever) else "主宰先锋 未出动"
+	return {"vanguard": txt, "vanguard_color": col}
 
 ## 单英雄行数据（供 RosterView 双列对位绘制；与客户端 NetSession 行载荷字段同名）
 func _roster_row(h: Hero, battle) -> Dictionary:
@@ -2679,6 +3157,7 @@ func _roster_row(h: Hero, battle) -> Dictionary:
 		"hp_ratio": float(h.health) / float(h.actual_max_health) if h.actual_max_health > 0.0 else 1.0,
 		"dead": bool(h.is_dead), "respawn": float(h.respawn_timer),
 		"chips": chips, "skills": skills, "equips": equips, "is_ai": bool(h.is_ai),
+		"mark": clampi(int(h.primitive_score / 100), 0, 6),
 	}
 
 func _update_death_recap():
@@ -2712,23 +3191,54 @@ func _show_death_recap(hero: Hero):
 		death_recap_panel.offset_top = -sz.y * 0.5 + 8.0
 		death_recap_panel.offset_bottom = sz.y * 0.5 + 8.0
 func _update_respawn_widgets():
-	for child in respawn_container.get_children(): child.queue_free()
-	# 第一排：我方英雄（含残血/复活读秒，始终显示）
+	# 只在「阵亡状态 / 观战目标」变化时重建：此前每帧重建会持续泄漏空行节点，移动端跑久了内存越吃越多
+	if respawn_container == null or not is_instance_valid(respawn_container):
+		return
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	var heroes := get_tree().get_nodes_in_group("heroes")
+	var player_dead: bool = battle != null and is_instance_valid(battle.hero) and battle.hero.is_dead
+	var spec_id: int = 0
+	if battle != null and is_instance_valid(battle.spectate_hero):
+		spec_id = battle.spectate_hero.get_instance_id()
+	var sig := "%s|%d" % [player_dead, spec_id]
+	for h in heroes:
+		if not is_instance_valid(h):
+			continue
+		sig += "|%d:%s" % [h.get_instance_id(), h.is_dead]
+	if sig == _respawn_sig:
+		return
+	_respawn_sig = sig
+	for child in respawn_container.get_children():
+		respawn_container.remove_child(child)
+		child.queue_free()
+	# 第一排：我方英雄（含残血/复活读秒，始终显示）；玩家阵亡时可点存活队友观战
 	var ally_row := HBoxContainer.new()
 	ally_row.add_theme_constant_override("separation", 10)
-	for h in get_tree().get_nodes_in_group("heroes"):
+	for h in heroes:
 		if not is_instance_valid(h) or not Config.is_ally(h.team): continue
-		var widget = RespawnWidget.new(); widget.hero = h; ally_row.add_child(widget)
+		var widget = RespawnWidget.new()
+		widget.hero = h
+		widget.spectatable = player_dead and h != battle.hero and not h.is_dead
+		widget.spectating = battle != null and battle.spectate_hero == h
+		widget.spectate_clicked.connect(_on_respawn_spectate_clicked)
+		ally_row.add_child(widget)
 	respawn_container.add_child(ally_row)
 	# 第二排：已阵亡的敌方英雄（复活后自动从第二排消失）
 	var enemy_row := HBoxContainer.new()
 	enemy_row.add_theme_constant_override("separation", 10)
 	var any_enemy := false
-	for h in get_tree().get_nodes_in_group("heroes"):
+	for h in heroes:
 		if not is_instance_valid(h) or Config.is_ally(h.team) or not h.is_dead: continue
 		var widget = RespawnWidget.new(); widget.hero = h; enemy_row.add_child(widget); any_enemy = true
 	if any_enemy:
 		respawn_container.add_child(enemy_row)
+	else:
+		enemy_row.queue_free()
+
+func _on_respawn_spectate_clicked(target: Hero):
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	if battle != null:
+		battle.set_spectate_target(target)
 
 # ---------- 公开控制接口（供移动端触摸按钮调用） ----------
 ## 全屏面板（商店 / 英雄面板）打开时，英雄应停止响应键盘与摇杆：
@@ -2737,6 +3247,9 @@ func blocks_gameplay_input() -> bool:
 	if shop_ui != null and is_instance_valid(shop_ui) and shop_ui.visible:
 		return true
 	if hero_detail_panel != null and is_instance_valid(hero_detail_panel) and hero_detail_visible:
+		return true
+	# 聊天输入中：别让 WASD/技能键把英雄带跑
+	if chat_typing:
 		return true
 	return false
 
@@ -2829,14 +3342,14 @@ func _create_attribute_panel():
 	attribute_panel = Panel.new()
 	attribute_panel.size = Vector2(panel_w, panel_h)
 	# 紧贴小地图下方（小地图：inset 40 + 300 见 BattleManager），顶边固定、向下展开
-	attr_panel_top = 40.0 + UiKit.safe_top() + 300.0 + 10.0
+	attr_panel_top = 40.0 + UiKit.safe_top() + 450.0 + 10.0
 	attribute_panel.position = Vector2(40.0 + UiKit.safe_left(), attr_panel_top)
 	_apply_panel_style(attribute_panel, 0.5)
 	add_child(attribute_panel)
 
 	# 折叠标题条：点击切换展开/收起（收起时只保留这一条，宽度与小地图对齐）
 	attr_header = Label.new()
-	attr_header.text = "属性  ▾"
+	attr_header.text = "属性  ▼"
 	attr_header.position = Vector2(pad, 2.0 * rs)
 	attr_header.size = Vector2(panel_w - pad * 2.0, head_h)
 	attr_header.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -2869,9 +3382,7 @@ func _create_attribute_panel():
 
 	# 建完即按默认折叠态布局（_update_attribute_panel 每帧还会按 attr_collapsed 校正行显隐）
 	_layout_attribute_panel()
-	# 攻击目标信息框让位：属性标题条占住小地图正下方，目标框下移到其下
-	if target_detail_panel:
-		target_detail_panel.position.y = attr_panel_top + attr_header_h + 4.0 + 8.0
+	# 目标信息框固定在顶部队列（头像与战况面板之间），不再跟随属性面板下移
 
 # 属性面板布局：顶边固定在小地图下方，展开/收起只改高度，向下伸展
 func _layout_attribute_panel():
@@ -2880,7 +3391,8 @@ func _layout_attribute_panel():
 	var rs := ui_scale()
 	var pad := 12.0 * rs
 	var h: float = (attr_header_h + 4.0) if attr_collapsed else attr_panel_h_full
-	var w: float = (300.0 if attr_collapsed else attr_panel_w_full)
+	# 收起态底板宽度必须跟小地图同宽（小地图 450，见 BattleManager），否则窄一截看着就是底板错位
+	var w: float = (450.0 if attr_collapsed else attr_panel_w_full)
 	attribute_panel.size = Vector2(w, h)
 	attribute_panel.position.y = attr_panel_top
 	if attr_header:
@@ -2890,7 +3402,7 @@ func _layout_attribute_panel():
 	for lab in attr_row_labels:
 		if is_instance_valid(lab):
 			lab.visible = not attr_collapsed
-	attr_header.text = "属性  ▾" if attr_collapsed else "属性  ▴"
+	attr_header.text = "属性  ▼" if attr_collapsed else "属性  ▲"
 
 func toggle_attribute_panel():
 	if attribute_panel == null:
@@ -2982,11 +3494,16 @@ func update(battle: BattleManager):
 			Color(1.0, 0.42, 0.38) if fps < 30 else (Color(1.0, 0.82, 0.35) if fps < 50 else Color(0.55, 0.95, 0.65)))
 	# 刷新Buff显示
 	# 回城指示器
-	if hero.is_recalling:
+	if hero.is_recalling or hero.is_teleporting or hero.dayu_teleport_channeling:
 		recall_indicator.visible = true
-		var pct = (1.0 - hero.recall_timer / Hero.RECALL_DURATION) * 100.0
+		var pct := 0.0
+		if hero.is_recalling:
+			pct = (1.0 - hero.recall_timer / Hero.RECALL_DURATION) * 100.0
+		elif hero.is_teleporting:
+			pct = clampf(hero.teleport_progress, 0.0, 1.0) * 100.0
+		else:
+			pct = clampf(hero.dayu_teleport_progress, 0.0, 1.0) * 100.0
 		recall_progress_bar.value = pct
-		recall_label.text = "%.1fs" % hero.recall_timer
 	else:
 		recall_indicator.visible = false
 	_update_buff_icons(hero)
@@ -3002,11 +3519,11 @@ func update(battle: BattleManager):
 	team_stats_label.push_color(Color(1.0, 0.33, 0.264))
 	team_stats_label.add_text(_format_gold(battle.team_enemy_gold))
 	team_stats_label.pop()
-	# 第二行在「比分面板」内水平居中（面板中心相对屏幕中心 +85，不能按屏幕中心摆）
+	# 第二行在「比分面板」内水平居中（面板右锚定，中心相对屏幕右缘 -576）
 	var plain := "%s %d vs %d %s" % [_format_gold(battle.team_player_gold), battle.team_player_kills, battle.team_enemy_kills, _format_gold(battle.team_enemy_gold)]
 	var tw := UiKit.font().get_string_size(plain, HORIZONTAL_ALIGNMENT_LEFT, -1, int(round(24 * ui_scale()))).x
-	team_stats_label.offset_left = 85.0 - tw * 0.5
-	team_stats_label.offset_right = 85.0 + tw * 0.5 + 4.0
+	team_stats_label.offset_left = -576.0 - tw * 0.5
+	team_stats_label.offset_right = -576.0 + tw * 0.5 + 4.0
 
 	_update_recommended_equip()
 	_update_death_recap()
@@ -3026,8 +3543,10 @@ func update(battle: BattleManager):
 		target_detail_team_dot.color = tcol
 		target_detail_hp_fill.bg_color = tcol
 		var name_lab: Label = target_detail_labels["name"]
-		name_lab.text = target.display_name
+		name_lab.text = EntityIconArtScript.display_name(str(target.display_name))
 		name_lab.add_theme_color_override("font_color", tcol.lightened(0.3))
+		if target_detail_entity_icon != null:
+			target_detail_entity_icon.setup(EntityIconArtScript.spec_for(str(target.display_name)), tcol)
 		var lv_lab: Label = target_detail_labels["level"]
 		lv_lab.text = "Lv.%d" % target.level if target is Hero else ""
 		target_detail_hp_bar.max_value = maxf(1.0, target.max_health)
@@ -3132,42 +3651,83 @@ func _format_gold(g: int) -> String:
 	return str(g)
 
 # ---------- 内部类 ----------
+class EntityIconControl extends Control:
+	# 战报/目标面板通用实体图标（英雄头像 / 防御塔 / 小兵 / 野怪）
+	const Art = preload("res://scripts/ui/EntityIconArt.gd")
+	var spec: Dictionary = {}
+	var team_col := Color.WHITE
+	func setup(sp: Dictionary, col: Color) -> void:
+		spec = sp
+		team_col = col
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		queue_redraw()
+	func _draw() -> void:
+		if spec.is_empty():
+			return
+		Art.draw(self, size * 0.5, minf(size.x, size.y) * 0.5, spec, team_col)
+
 class RecItemCard extends Control:
 	# 推荐装备卡：数据由 _update_recommended_equip 推送，绘制走 UiKit.rec_card（host/客户端共用）
+	signal buy_requested
 	var item_name := ""
 	var tier := 2
 	var cost := 0
 	var gold := 0
 	var maxed := false
 	var slot_full := false
+	var tap_buy := false            # true=点一下直接买（推荐位自选卡）；false=点按只收/展（主推荐卡）
+	var left_full := -362.0         # 展开态左偏移（右锚定；主卡 246 宽：-362..-116）
+	var left_collapsed := -208.0    # 收起态左偏移（只留图标宽度）
 	var collapsed := false          # 点按收起：只留右侧装备图标
-	var auto_collapsed := false     # 因金币不足自动收起；金币够了自动展开
+	var _last_should_collapse := false
+	var _glow_t := 0.0              # 可购买发光拖尾相位（仅 affordable 时推进）
+	func _process(delta: float) -> void:
+		if affordable():
+			_glow_t += delta
+			queue_redraw()
 	func affordable() -> bool:
 		return cost > 0 and gold >= cost
 	func set_collapsed_for_gold(should_collapse: bool) -> void:
+		# 只在金币状态切换时自动收/展，避免每帧覆盖玩家刚点出的状态
+		if should_collapse == _last_should_collapse:
+			return
+		_last_should_collapse = should_collapse
 		if should_collapse:
 			if not collapsed:
 				collapsed = true
-				auto_collapsed = true
-				offset_left = -96.0
+				offset_left = left_collapsed
 				queue_redraw()
-		elif auto_collapsed:
+		elif collapsed:
 			collapsed = false
-			auto_collapsed = false
-			offset_left = -410.0
+			offset_left = left_full
 			queue_redraw()
 	func _gui_input(ev: InputEvent) -> void:
-		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
-				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-			collapsed = not collapsed
-			auto_collapsed = false
-			offset_left = -96.0 if collapsed else -410.0   # 收起时缩成图标大小，避免挡住后方面板
+		var is_tap := false
+		if ev is InputEventMouseButton:
+			var mb := ev as InputEventMouseButton
+			is_tap = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+		elif ev is InputEventScreenTouch:
+			is_tap = (ev as InputEventScreenTouch).pressed
+		if is_tap:
+			# 自选卡：点一下就买；主推荐卡：收起态点击=展开，展开且买不起时才允许点回收起（购买走右侧“+”）
+			if tap_buy:
+				buy_requested.emit()
+				accept_event()
+				return
+			if collapsed:
+				collapsed = false
+				offset_left = left_full
+			elif not affordable():
+				collapsed = true
+				offset_left = left_collapsed    # 收起态宽度必须容得下图标本身
 			queue_redraw()
 			accept_event()
 	func _draw() -> void:
 		if collapsed:
 			var s := minf(size.y - 8.0, 84.0)
 			var ir := Rect2(size.x - s - 4.0, (size.y - s) * 0.5, s, s)
+			if affordable():
+				_glow_ring(ir.get_center(), s * 0.5 + 5.0)
 			UiKit.item_icon(self, ir, tier, item_name)
 			if not affordable() and not maxed:
 				# 暂不可购买：叠灰罩 + 灰字
@@ -3176,6 +3736,18 @@ class RecItemCard extends Control:
 					22, Color(0.78, 0.80, 0.86), HORIZONTAL_ALIGNMENT_CENTER, s)
 			return
 		UiKit.rec_card(self, Rect2(Vector2.ZERO, size), item_name, tier, cost, gold, maxed, slot_full)
+		if affordable():
+			# 图标矩形与 UiKit.rec_card 内部一致（窄卡会收缩图标）
+			var ic := UiKit.rec_icon_rect(Rect2(Vector2.ZERO, size))
+			_glow_ring(ic.get_center(), ic.size.x * 0.5 + 5.0)
+	# 图标四周一圈旋转发光拖尾：3 段渐变弧随时间旋转、尾端淡出
+	func _glow_ring(c: Vector2, r: float) -> void:
+		for gi in 3:
+			var a0 := _glow_t * 3.2 + TAU * float(gi) / 3.0
+			for gk in 6:
+				var gt := float(gk) / 6.0
+				draw_arc(c, r + gt * 7.0, a0, a0 + 1.0, 10,
+					Color(1.0, 0.86, 0.32, (1.0 - gt) * 0.6), 5.0 - gt * 2.6, true)
 
 class SkillIcon extends Control:
 	var skill: Skill = null
@@ -3189,6 +3761,11 @@ class SkillIcon extends Control:
 	var is_active_equip: bool = false
 	var active_equip_id: String = ""
 	var blue: bool = false
+	var _glow_t := 0.0              # 可升级“+”发光相位
+	func _process(delta: float) -> void:
+		if hero and hero.skill_points > 0 and slot < 3 and hero.can_upgrade_skill(slot):
+			_glow_t += delta
+			queue_redraw()
 	func _draw():
 		var center = size / 2; var radius = min(size.x, size.y) / 2 - 2
 		# 蓝=就绪，灰=冷却/无法力/未学习
@@ -3207,18 +3784,22 @@ class SkillIcon extends Control:
 			var ratio = cd_remaining / max_cd
 			var end_angle = -PI/2 + 2 * PI * ratio
 			draw_arc(center, radius + 4, -PI/2, end_angle, 32, Color(0, 0, 0, 0.6), 4.0)
-		# 文字
+		# 方案A：就绪不写字，冷却只显示整数秒；文字统一描边并真正居中
 		var font = UiKit.font()
-		var text = "就绪"
-		if skill_level <= 0:
-			text = "0"
-		elif cd_remaining > 0:
-			text = "%.1f" % cd_remaining
-		var text_size = 20
-		draw_string(font, center + Vector2(-text_size * len(text) / 4.0, text_size/2), text,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, text_size, Color.WHITE)
+		var text := ""
+		if skill_level > 0 and cd_remaining > 0:
+			text = str(ceili(cd_remaining))
+		if text != "":
+			var fs := 26
+			var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			UiKit.text(self, center + Vector2(-tw * 0.5, fs * 0.36), text, fs,
+				Color(0.97, 0.94, 0.86))
 		if hero and hero.skill_points > 0 and slot < 3 and hero.can_upgrade_skill(slot):
-			draw_string(font, center + Vector2(-10, -radius - 8), "+", HORIZONTAL_ALIGNMENT_CENTER, -1, 60, UiKit.C_GOLD)
+			# 小而克制的右上角金色升级点，不再用 60px 大加号压住技能图标
+			var pp: Vector2 = center + Vector2(radius * 0.70, -radius * 0.70)
+			draw_circle(pp, maxf(7.0, radius * 0.16), Color(1.0, 0.84, 0.30, 0.96))
+			draw_arc(pp, maxf(7.0, radius * 0.16), 0, TAU, 20, Color(1, 1, 1, 0.65), 1.2, true)
+			draw_string(font, pp + Vector2(-6, 6), "+", HORIZONTAL_ALIGNMENT_CENTER, -1, 18, Color(0.12, 0.09, 0.04))
 
 class StatIcon extends Control:
 	# 属性徽章“图标”：程序化彩色圆徽章 + 中央「图形图标」（爱心=生命、剑=物理攻击…）。
@@ -3368,20 +3949,47 @@ class HeroDisc extends Control:
 				glyph, HORIZONTAL_ALIGNMENT_CENTER, r * 2.0, fs, st[1].lightened(0.25))
 
 class RespawnWidget extends Control:
+	signal spectate_clicked(hero: Hero)
 	const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 	# 左侧英雄圆圈头像（整体 ×1.25 放大；Request B 初版 ×1.5 → 微调复位 ×1.25）
 	var hero: Hero = null
 	var ring_radius: float = 45.0 * 1.25
-	
+	var spectatable := false
+	var spectating := false
+	var _hover := false
+
 	func _ready():
 		# 单元尺寸 ×1.25：环形头像(直径≈112.5)放进 130px 单元内不互相挤碰
-		custom_minimum_size = Vector2(104 * 1.25, 120 * 1.25)
-		mouse_filter = Control.MOUSE_FILTER_IGNORE   # 纯显示，不拦截触摸
+		custom_minimum_size = Vector2(104 * 1.25, 118.0)
+		if spectatable:
+			mouse_filter = Control.MOUSE_FILTER_STOP
+			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			tooltip_text = "点击切换视角，观战该队友"
+			mouse_entered.connect(func(): _hover = true; queue_redraw())
+			mouse_exited.connect(func(): _hover = false; queue_redraw())
+		else:
+			mouse_filter = Control.MOUSE_FILTER_IGNORE   # 纯显示，不拦截触摸
 		set_process(true)
+
+	func _gui_input(event):
+		if not spectatable:
+			return
+		var pressed := false
+		if event is InputEventMouseButton:
+			pressed = event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+		elif event is InputEventScreenTouch:
+			pressed = event.pressed
+		if pressed:
+			accept_event()
+			spectate_clicked.emit(hero)
+
 	func _process(_delta): queue_redraw()
 	func _draw():
 		if not is_instance_valid(hero): return
 		var center = size / 2
+		if spectatable:
+			var ring_col := Color(1.0, 0.86, 0.32, 0.95) if spectating else Color(0.75, 0.92, 1.0, 0.9 if _hover else 0.5)
+			draw_arc(center, ring_radius + 7.5, 0, 2 * PI, 48, ring_col, 4.5 if spectating else 2.5, true)
 		var bg_color = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(hero.team) else Color(1.0, 0.33, 0.264, 1.0)
 		# 阵亡后底色变深：我方=近黑，敌方(第二排)=暗红，一眼区分两排归属
 		if hero.is_dead:
@@ -3398,15 +4006,6 @@ class RespawnWidget extends Control:
 			var hp_ratio = hero.health / hero.actual_max_health
 			var hp_color = Color.GREEN if hp_ratio > 0.5 else Color.YELLOW if hp_ratio > 0.25 else Color.RED
 			draw_arc(center, ring_radius + 3.75, -PI/2, -PI/2 + 2*PI*hp_ratio, 48, hp_color, 5.0)
-		var name_lv = hero.display_name + " Lv." + str(hero.level)
-		# 名字着色随阵营：敌方(第二排)浅红、己方白色；移到头像圆圈正上方（超宽按单元宽度自动缩字）
-		var name_col = Color(1.0, 0.6, 0.5, 1.0) if not Config.is_ally(hero.team) else Color.WHITE
-		var name_fs := 18
-		var name_sz = UiKit.font().get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs)
-		if name_sz.x > size.x - 4.0:
-			name_fs = maxi(11, int(name_fs * (size.x - 4.0) / name_sz.x))
-			name_sz = UiKit.font().get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs)
-		UiKit.text(self, Vector2(center.x - name_sz.x * 0.5, center.y - ring_radius - 5.0), name_lv, name_fs, name_col)
 		# 鲁班七号被动扫射层数显示
 		if hero.display_name == "鲁班七号" and not hero.is_dead:
 			var passive_ready = hero.luban_skill_enhanced or hero.luban_passive_stacks >= 5
@@ -3482,55 +4081,122 @@ class DamageChart extends Control:
 			draw_string(font, Vector2(group_center - name_width/2, bottom_y + 20), src_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
 			x_start += (bar_width + bar_spacing) * 4 + 20
 
-class KillGoldPopup extends Control:
-	# 自己击杀掉落的金币弹出：数值前多画1把金色小剑，停留约2秒。
-	# fallback 字体没有剑/金币字形，整颗弹出全部用 draw_* 指令矢量绘制。
-	var amount := 0
+class ValuePopup extends Control:
+	# 战场漂浮数值（金币 / 治疗）：左侧矢量徽标 + 数值，停留约2秒后淡出。
+	# fallback 字体没有剑/金币/十字字形，整个弹出全部用 draw_* 指令矢量绘制。
+	var text := ""
+	var icon := "coin"          # coin / sword / cross / thumb
+	var icon2 := ""             # 第二枚徽标（非补刀金币 = 👍 + 金币）
+	var col := Color(1.0, 0.84, 0.35)
 	var rs := 1.0
-	func setup(a: int, scale: float):
-		amount = a
+	var fs := 34
+	func setup(txt: String, icon_kind: String, color: Color, scale: float, font_size: int = 34, icon_kind2: String = "") -> void:
+		text = txt
+		icon = icon_kind
+		icon2 = icon_kind2
+		col = color
 		rs = scale
+		fs = font_size
 		var m := measure()
 		custom_minimum_size = m
 		size = m   # 直接作为 CanvasLayer 的子节点，无容器自动布局，需显式给尺寸
 		mouse_filter = Control.MOUSE_FILTER_IGNORE   # 纯显示，不拦截触摸
 		queue_redraw()
+	func _icon_w() -> float:
+		var w: float = round((26.0 if icon == "cross" else 30.0) * rs)
+		if icon2 == "":
+			return w
+		return w + round(5.0 * rs) + round((26.0 if icon2 == "cross" else 30.0) * rs)
 	func measure() -> Vector2:
 		var font: Font = UiKit.font()
-		var fs := int(round(34 * rs))
-		var asc := font.get_ascent(fs)
-		var desc := font.get_descent(fs)
-		var text_w := font.get_string_size("+%dg" % amount, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		var icon_w: float = round(30 * rs)
+		var px := int(round(fs * rs))
+		var asc := font.get_ascent(px)
+		var desc := font.get_descent(px)
+		var text_w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, px).x
+		var icon_w: float = _icon_w()
 		var gap: float = round(8 * rs)
-		return Vector2(icon_w + gap + text_w, maxf(asc + desc, round(24 * rs)))
+		return Vector2(icon_w + gap + text_w, maxf(asc + desc, icon_w * 1.15))
 	func _draw():
 		var font: Font = UiKit.font()
-		var fs := int(round(34 * rs))
-		var gold := Color(1.0, 0.83, 0.1, 1.0)
-		var txt := "+%dg" % amount
-		var asc := font.get_ascent(fs)
-		var desc := font.get_descent(fs)
-		var text_w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		# 金色小剑（与 StatIcon 的 sword 图形同款坐标，k 以图标格宽为单位）
-		var icon_w: float = round(30 * rs)
-		var ic_center := Vector2(icon_w * 0.5, size.y * 0.5)
-		var k: float = icon_w * 0.36
-		var e0 := ic_center + Vector2(-0.5 * k, 0.7 * k)
-		var e1 := ic_center + Vector2(0.85 * k, -0.55 * k)
-		var d := (e1 - e0).normalized()
-		var n := Vector2(-d.y, d.x)
-		draw_line(e0 - n * k * 0.28, e0 + n * k * 0.28, gold, 2.2)   # 护手
-		draw_line(e0, e1, gold, 3.6)                                  # 刃身
-		draw_circle(e0 - d * k * 0.18, maxf(1.2, k * 0.12), gold)    # 柄部圆球
-		# "+Xg" 文本（描边 + 金芯）
+		var px := int(round(fs * rs))
+		var asc := font.get_ascent(px)
+		var desc := font.get_descent(px)
+		var icon_w: float = _icon_w()
+		var w1: float = round((26.0 if icon == "cross" else 30.0) * rs)
+		var ic_center := Vector2(w1 * 0.5, size.y * 0.5)
+		match icon:
+			"sword":
+				_draw_sword(ic_center, w1)
+			"cross":
+				_draw_cross(ic_center, w1)
+			"thumb":
+				_draw_thumb(ic_center, w1)
+			_:
+				_draw_coin(ic_center, w1)
+		if icon2 != "":
+			var w2: float = round((26.0 if icon2 == "cross" else 30.0) * rs)
+			var c2 := Vector2(w1 + round(5.0 * rs) + w2 * 0.5, size.y * 0.5)
+			match icon2:
+				"sword":
+					_draw_sword(c2, w2)
+				"cross":
+					_draw_cross(c2, w2)
+				"thumb":
+					_draw_thumb(c2, w2)
+				_:
+					_draw_coin(c2, w2)
 		var x0: float = icon_w + round(8 * rs)
 		var baseline := size.y * 0.5 - (asc + desc) * 0.5 + asc
-		var outline := Color(0, 0, 0, 0.9)
-		draw_string_outline(font, Vector2(x0, baseline), txt, HORIZONTAL_ALIGNMENT_LEFT,
-				text_w, fs, maxi(1, int(round(3 * rs))), outline)
-		draw_string(font, Vector2(x0, baseline), txt, HORIZONTAL_ALIGNMENT_LEFT,
-				text_w, fs, gold)
+		draw_string_outline(font, Vector2(x0, baseline), text, HORIZONTAL_ALIGNMENT_LEFT,
+				-1, px, maxi(2, int(round(px * 0.22))), Color(0.10, 0.06, 0.02, 0.95))
+		draw_string(font, Vector2(x0, baseline), text, HORIZONTAL_ALIGNMENT_LEFT, -1, px, col)
+	# 金色小剑（与 StatIcon 的 sword 图形同款坐标，k 以图标格宽为单位）
+	func _draw_sword(c: Vector2, w: float) -> void:
+		var k: float = w * 0.36
+		var e0 := c + Vector2(-0.5 * k, 0.7 * k)
+		var e1 := c + Vector2(0.85 * k, -0.55 * k)
+		var d := (e1 - e0).normalized()
+		var n := Vector2(-d.y, d.x)
+		draw_line(e0 - n * k * 0.28, e0 + n * k * 0.28, col, 2.2)   # 护手
+		draw_line(e0, e1, col, 3.6)                                  # 刃身
+		draw_circle(e0 - d * k * 0.18, maxf(1.2, k * 0.12), col)    # 柄部圆球
+	# 治疗十字：圆角底 + 粗十字，和伤害数字明显区分
+	func _draw_cross(c: Vector2, w: float) -> void:
+		var k: float = w * 0.30
+		var tw: float = maxf(2.4, k * 0.46)
+		draw_circle(c, w * 0.36, Color(0, 0, 0, 0.35))
+		draw_line(c + Vector2(-k, 0), c + Vector2(k, 0), col, tw)
+		draw_line(c + Vector2(0, -k), c + Vector2(0, k), col, tw)
+		draw_circle(c, tw * 0.5, Color(1, 1, 1, 0.55))
+	# 👍（非补刀金币）：矢量竖大拇指 —— fallback 字体没有 emoji 字形，只能自己画
+	func _draw_thumb(c: Vector2, w: float) -> void:
+		var k: float = w * 0.30
+		var line: Color = Color(0.12, 0.07, 0.02, 0.55)
+		# 手掌：圆 + 矩形叠成圆角块
+		draw_circle(c + Vector2(0.30 * k, 0.42 * k), 0.72 * k, col)
+		draw_rect(Rect2(c + Vector2(-0.42 * k, -0.32 * k), Vector2(0.72 * k, 1.44 * k)), col)
+		# 拇指：斜向上 + 圆头
+		var t0 := c + Vector2(0.02 * k, -0.26 * k)
+		var t1 := c + Vector2(-0.62 * k, -1.02 * k)
+		draw_line(t0, t1, col, maxf(2.0, 0.46 * k))
+		draw_circle(t1, maxf(1.4, 0.30 * k), col)
+		# 袖口
+		draw_rect(Rect2(c + Vector2(-0.42 * k, 0.86 * k), Vector2(1.5 * k, 0.34 * k)), col.darkened(0.24))
+		# 指缝：三条暗线，读成手指
+		for n in range(3):
+			var y: float = c.y + (0.10 + 0.34 * float(n)) * k
+			draw_line(Vector2(c.x - 0.30 * k, y), Vector2(c.x + 0.92 * k, y), line, maxf(1.0, 0.10 * k))
+		# 高光
+		draw_circle(c + Vector2(-0.10 * k, -0.05 * k), maxf(1.0, 0.12 * k), Color(1, 1, 1, 0.45))
+
+	# 金币：外圈金环 + 内圈亮面 + 高光弧 + 底部投影
+	func _draw_coin(c: Vector2, w: float) -> void:
+		var r: float = w * 0.38
+		draw_circle(c + Vector2(0.8, 1.2), r, Color(0, 0, 0, 0.40))
+		draw_circle(c, r, col.darkened(0.28))
+		draw_circle(c, r * 0.84, col)
+		draw_circle(c, r * 0.50, col.darkened(0.34))
+		draw_arc(c, r * 0.84, PI * 1.10, PI * 1.62, 10, Color(1, 1, 1, 0.55), maxf(1.0, r * 0.18))
 
 class BuffIcon extends Control:
 	const BuffArt = preload("res://scripts/ui/BuffArt.gd")

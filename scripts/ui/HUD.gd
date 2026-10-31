@@ -51,10 +51,18 @@ func _update_health_bars():
 		if not is_instance_valid(entity): continue
 		if entity is Hero:
 			if entity.health <= 0 and not entity.is_reviving: continue
-			if not entity.visible: continue
+			if not entity.visible:
+				# 英雄血条是常驻 Control：敌方脱离视野后必须显式隐藏，
+				# 否则会停留在最后位置（表现就是“人已走远血条还挂着”）
+				var hidden_info = hero_info_controls.get(entity)
+				if hidden_info != null and is_instance_valid(hidden_info):
+					hidden_info.visible = false
+				continue
 			_update_hero_bar(entity, cam, cam_forward)
 			continue
 		if entity.health <= 0: continue
+		if entity is Tripod and (entity as Tripod).is_r_tripod:
+			continue   # 大招乾鼎不可攻击，不画血条
 		if not entity.visible: continue
 		_update_unit_row(entity, cam, cam_forward, cam_pos, vp_rect, delta)
 	bars.rows = _row_buf
@@ -172,7 +180,12 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 	row["hp"] = hp
 	row["max_hp"] = mx
 	row["epic"] = is_epic
-	row["ticks"] = is_turret
+	# 野怪 / 主宰先锋：血条每 1000 血一条分隔线；塔保持 2000 一格
+	var is_vanguard := false
+	if entity is Minion:
+		is_vanguard = str((entity as Minion).minion_type) in ["dragon", "storm", "shadow_dragon"]
+	row["ticks"] = is_turret or is_monster or is_vanguard
+	row["tick_step"] = 2000.0 if is_turret else 1000.0
 
 	row["team"] = int(entity.team)
 	# 玩家自己的血条恒为绿色（与阵营无关）
@@ -186,6 +199,15 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 			_: row["team_color"] = Color(0.945, 0.925, 0.251, 1.0)
 
 	row["interfere"] = 0.0
+	# 补刀提示（放宽）：屏幕内任意敌方单位，剩余血量 < 玩家一次普攻（按护甲减免后）→ 血条转灰白
+	row["last_hit"] = false
+	if _bm and _bm.hero and is_instance_valid(_bm.hero):
+		var _ph = _bm.hero
+		if entity != _ph and not Config.is_ally(int(entity.team)) and hp > 0.0:
+			var _res: float = maxf(0.0, float(entity.armor) - float(_ph.flat_phys_pen))
+			var _aa: float = float(_ph.actual_attack_damage) * (1.0 - _res / (_res + 602.0))
+			if hp < _aa:
+				row["last_hit"] = true
 	row["shield_icon"] = false
 	if is_turret:
 		var turret = entity as Turret
@@ -210,8 +232,9 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 	row["doom"] = doom
 
 	# 文本：名称/血量（血量键值不变就不重建字符串）
-	var is_herolike: bool = is_turret or is_monster
-	row["show_name"] = is_herolike
+	# 防御塔不再显示名称文字，改为血条下方一个指向塔身的小三角箭头
+	row["show_name"] = is_monster
+	row["turret_arrow"] = is_turret
 	# 默认隐藏具体血量数值（如需按距离显示，把下面的 false 换成 dist <= 26.0）
 	row["show_numbers"] = false
 	row["name_text"] = str(row["disp_name"])
@@ -223,7 +246,8 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 	# 标记图标：只对真有标记的单位收集（数组元素含层数，由绘制器画成专属图标）
 	var mlist: Array = row["marker_list"]
 	mlist.clear()
-	if is_monster and dist <= 26.0 and entity is GameEntity and not entity.markers.is_empty():
+	# 小兵/野怪都显示被动标记图标（此前只给野怪收集，小兵层数完全看不见）
+	if dist <= 28.0 and entity is GameEntity and not entity.markers.is_empty():
 		for src in entity.get_marker_sources():
 			var cnt: int = entity.count_markers(src)
 			if cnt > 0:

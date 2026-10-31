@@ -31,6 +31,7 @@ CollisionSystem="*res://scripts/core/CollisionSystem.gd"
 PathFinder="*res://scripts/core/PathFinder.gd"
 TouchController="*res://scripts/mobile/TouchController.gd"
 NetSession="*res://scripts/net/NetSession.gd"
+ChatService="*res://scripts/core/ChatService.gd"
 SfxManager="*res://scripts/core/SfxManager.gd"
 Vfx="*res://scripts/core/VfxFactory.gd"
 PostFX="*res://scripts/core/PostFX.gd"
@@ -135,6 +136,7 @@ theme/custom_font="res://assets/theme/ui_font.tres"
 [rendering]
 
 renderer/rendering_method="mobile"
+renderer/rendering_method.web="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
 lights_and_shadows/directional_shadow/size=2048
 lights_and_shadows/directional_shadow/max_distance=60.0

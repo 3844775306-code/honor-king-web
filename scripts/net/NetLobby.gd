@@ -4,10 +4,11 @@
 #   MENU    标题 + 单机/建房/加入（IP:端口 可编辑）
 #   ROOM    在线名单；host 有「开始选人」，guest 等房主发起
 #   SELECT  大厅选人：host 与每个 client 各自窗口选「职责→英雄→召唤师」并锁定；
-#           前 5 席全员锁齐后 host 的「开始对局」才点亮（严格一人一职，空位 AI 补）
+#           前 5 席全员锁齐后自动开局（严格一人一职，空位 AI 补）
 #
 # 开局流程：host 点「开始选人」→ NetSession.begin_pick()（phase=SELECT）
-#   → host 点「开始对局」（全员锁齐才允许）→ NetSession.start_match()（phase=BATTLE）
+#   → 全员锁定后 host 延迟约 1.4s 自动 NetSession.start_match()（phase=BATTLE）
+#   → 先盖一层加载界面（复用 LoadingScreen），至少 0.45s 后再切场景
 #   → host 进 scenes/battle.tscn（按锁定阵容直接开局，不再弹 BM 选人）
 #   → client 进 scenes/net_client.tscn，开局后接管自己在选人阶段锁定的英雄
 #
@@ -21,10 +22,35 @@ extends Control
 enum UIState { MENU, ROOM, SELECT }
 
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
+const MenuBackdropScript = preload("res://scripts/ui/MenuBackdrop.gd")
+const TacticalMapScript = preload("res://scripts/ui/TacticalMap.gd")
 const BTN_W := 640.0
 const BTN_H := 96.0
 const PAGE_PAD_X := 64          # 页面左右内边距
 const PAGE_PAD_Y := 40          # 页面上下内边距
+# 顺序选人（与单机 BattleManager 同款蛇形 10 步：[team, seat]，team0=我方）
+const SEL_DRAFT_ORDER := [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2], [1, 2], [1, 3], [0, 3], [0, 4], [1, 4]]
+const SEL_DRAFT_TURN_TIME := 20.0
+const AUTO_START_DELAY := 1.4   # 全员锁定 → 自动开局前的停顿（给「全员就绪」反馈）
+const ROUTE_DELAY := 0.45       # 加载层最短显示时长，之后才切场景
+
+# --- 操作设置页（PlayerPrefs.opt_* / set_opt，键名与局内读取保持一致） ---
+const CTRL_KEYS := ["siege_keys", "target_prio", "auto_chase", "lock_portrait", "flash_dir",
+	"skill_sens", "cam_sens", "move_preview", "auto_atk"]
+const CTRL_LABELS := {
+	"siege_keys": "小兵 / 推塔键",
+	"target_prio": "优先攻击目标",
+	"auto_chase": "自动追击距离",
+	"lock_portrait": "锁敌头像显示",
+	"flash_dir": "轻点闪现方向",
+	"skill_sens": "技能轮盘灵敏度",
+	"cam_sens": "镜头灵敏度",
+	"move_preview": "位移预览显示",
+	"auto_atk": "自动普通攻击",
+}
+const CTRL_TARGET_TEXTS := ["百分比血量", "绝对血量", "距离最近"]
+const CTRL_CHASE_TEXTS := ["标准（超出攻击范围 3 米）", "近（超出 1 米）", "关"]
+const CTRL_SENS_STEPS := [0.6, 0.8, 1.0, 1.2, 1.4, 1.6]
 
 # 统一调色板（取自 UiKit，保留 COL_* 变量名避免大范围改引用）
 var COL_BG: Color = UiKit.C_PANEL_BG
@@ -42,6 +68,7 @@ var _ui := UIState.MENU
 var _role := -1              # -1=无；0=房主；1=玩家（guest）
 var _connecting := false
 var _menu_btns: Array[Button] = []
+var _tac_map = null          # 主菜单战术沙盘（点图选分路）
 var _ip_edit: LineEdit = null
 var _port_edit: LineEdit = null
 var _status: Label = null    # MENU 下的状态行
@@ -59,7 +86,13 @@ var _sel_sid := ""           # 其 SkillDatabase id
 var _pick_status: Label = null
 var _pick_summary: Label = null
 var _pick_confirm_btn: Button = null
-var _host_go_btn: Button = null
+var _auto_start_lab: Label = null   # 底栏状态行：全员锁定后自动进入对局（原「开始对局」按钮位）
+var _auto_start_wait := -1.0        # host：全员就绪后的开局倒计时（<0 = 未就绪）
+var _auto_start_done := false       # host：已触发过自动开局（防重入）
+var _loading: LoadingScreen = null  # 进入对局的加载层（复用单机 LoadingScreen）
+var _route_pending := ""            # 待切换场景路径（空 = 无）
+var _route_delay := 0.0             # 加载层剩余显示时间
+var _route_count := 0               # 已触发的切场景次数（探针/防重入）
 var _blocked_roles := {}     # 本机不可选的职责（他人已占）
 var _my_seat := 1            # 本机在场席位下标（1..5；>5 即旁观）
 var _prev: HeroPreview = null      # 中央 3D 立绘
@@ -87,10 +120,28 @@ var _lane_info: Label = null           # 房间页「本机分路：…」值
 var _diff_btn: Button = null           # 菜单页「AI 难度」循环按钮
 var _lane_role := ""                   # 选人页本机分路对应职责
 var _lane_locked := false              # 选人页是否强制锁该职责（被队友占用则不锁）
+# --- 顺序选人（draft：host 权威；空/无此字段 = 旧流程同时选人） ---
+var _draft_step := -1              # -1=无顺序；0..9=当前步；10=已完成
+var _draft_left := 0.0             # 剩余秒（host 权威值，各端本地递减显示）
+var _draft_turn: Array = []        # 当前步 [team, seat]
+var _draft_picks := {}             # "team-seat" -> 英雄名（我方 AI/敌方席位也按顺序自动选，用于展示/占位）
+var _draft_taken := {}             # 展示阵容/他人已选英雄（本机不可再选）
+var _draft_ai_timer := 0.0         # host：AI/敌方席位自动选人等待计时
+var _draft_ai_wait := 0.0
+var _draft_auto_sent := false      # guest：本回合超时自动选已提交
+var _stage_sub: Label = null       # 顶部阶段副行（顺序/倒计时）
+var _last_state := {}              # 最近一次大厅状态（取玩家名等）
 var _preview_name: Label = null    # 中栏英雄预览：名字
 var _preview_role: Label = null    # 中栏英雄预览：职责
 var _preview_summ: Label = null    # 中栏英雄预览：召唤师技能
 var _preview_summ_icon = null      # 中栏英雄预览：召唤师技能图标
+var _preview_tip: Label = null     # 中栏底部提示（含本局分路说明）
+var _prev_skill_row: HBoxContainer = null    # 中栏英雄预览：3 个英雄技能 chip 行
+var _prev_skill_tip: PanelContainer = null   # 技能 chip 悬停浮层
+var _build_row: HBoxContainer = null         # 出装方案按钮行（内置推荐 + 已存方案）
+var _build_hero := ""                        # 当前出装方案归属英雄
+var _build_ids: Array = []                   # 当前套用的出装 id 列表
+var _hero_cfg_cache := {}                    # BattleManager.hero_configs 懒加载缓存（只读）
 
 
 func _ready() -> void:
@@ -165,9 +216,10 @@ func _clear_stack() -> void:
 	_pick_status = null
 	_pick_summary = null
 	_pick_confirm_btn = null
-	_host_go_btn = null
+	_auto_start_lab = null
 	_prev = null
 	_stage_title = null
+	_stage_sub = null
 	_countdown_lab = null
 	_my_slots = null
 	_enemy_slots = null
@@ -247,153 +299,196 @@ func _mk_btn(text: String, accent: Color, filled := false, min_size := Vector2.Z
 
 func _show_menu() -> void:
 	_clear_stack()
-	_set_page_pad(int(PAGE_PAD_X), int(PAGE_PAD_Y))
+	_set_page_pad(0, 0)
 	_ui = UIState.MENU
 	_role = -1
 	_connecting = false
 
-	# 两栏铺满：左 42% 品牌区 / 右 58% 菜单按钮列
-	var root := HBoxContainer.new()
-	root.add_theme_constant_override("separation", 48)
-	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	root.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_stack.add_child(root)
+	# 全屏舞台：动态网格背景 + 中央战术沙盘 + 左右两栏（品牌 / 操作）
+	var stage := Control.new()
+	stage.name = "MenuStage"
+	stage.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stage.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stage.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_stack.add_child(stage)
 
-	# —— 左栏：品牌区 ——
-	var brand := _panel_block(UiKit.C_GOLD, 0.45)
-	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	brand.size_flags_stretch_ratio = 42.0
-	brand.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(brand)
-	var bcol := VBoxContainer.new()
-	bcol.add_theme_constant_override("separation", 20)
-	brand.add_child(bcol)
+	var bg = MenuBackdropScript.new()
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	stage.add_child(bg)
 
-	var title := _mk_label("荣耀王者", int(_fs(UiKit.FS_HUGE) * 2.0), COL_TITLE)
+	var map = TacticalMapScript.new()
+	map.name = "TacticalMap"
+	map.anchor_left = 0.275
+	map.anchor_top = 0.085
+	map.anchor_right = 0.715
+	map.anchor_bottom = 0.845
+	stage.add_child(map)
+	map.lane_picked.connect(_select_lane)
+	_tac_map = map
+
+	# 沙盘下方：当前分路说明（沿用 _style_lane_btns 的文案更新）
+	var lane_row := HBoxContainer.new()
+	lane_row.anchor_left = 0.275
+	lane_row.anchor_top = 0.855
+	lane_row.anchor_right = 0.715
+	lane_row.anchor_bottom = 0.905
+	lane_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	stage.add_child(lane_row)
+	_lane_sub_lab = _mk_label("", _fs(UiKit.FS_MD), UiKit.C_GOLD)
+	lane_row.add_child(_lane_sub_lab)
+	_lane_btns.clear()
+	_style_lane_btns()
+	map.set_lane(PlayerPrefs.get_lane())
+
+	# —— 左栏：品牌 + 段位 ——
+	var left := VBoxContainer.new()
+	left.anchor_left = 0.040
+	left.anchor_top = 0.105
+	left.anchor_right = 0.258
+	left.anchor_bottom = 0.905
+	left.add_theme_constant_override("separation", 14)
+	stage.add_child(left)
+
+	var title := _mk_label("荣耀王者", int(_fs(UiKit.FS_HUGE) * 1.85), COL_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	bcol.add_child(title)
+	title.add_theme_color_override("font_outline_color", Color(0.30, 0.16, 0.02, 0.85))
+	title.add_theme_constant_override("outline_size", 14)
+	left.add_child(title)
 
-	var sub := _mk_label("HONORKING · 5v5 联机版（主机权威）", _fs(UiKit.FS_LG), COL_SUB)
+	var sub := _mk_label("HONORKING", _fs(UiKit.FS_LG), COL_SUB)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	bcol.add_child(sub)
+	left.add_child(sub)
 
-	# 金色分隔线
 	var line := ColorRect.new()
-	line.color = Color(UiKit.C_GOLD.r, UiKit.C_GOLD.g, UiKit.C_GOLD.b, 0.75)
-	line.custom_minimum_size = Vector2(280, 4)
+	line.color = Color(UiKit.C_GOLD.r, UiKit.C_GOLD.g, UiKit.C_GOLD.b, 0.8)
+	line.custom_minimum_size = Vector2(220, 3)
 	line.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	bcol.add_child(line)
+	left.add_child(line)
 
-	var desc := _mk_label("单机人机对局 / 自建房间 / 局域网加入；开局前同屏选英雄与召唤师技能。", _fs(UiKit.FS_MD), COL_TEXT)
+	var desc := _mk_label("5v5 峡谷 · 主机权威联机\n单机人机 / 自建房间 / 局域网加入", _fs(UiKit.FS_MD), COL_TEXT)
 	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	bcol.add_child(desc)
+	left.add_child(desc)
 
-	# 中段留白
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	bcol.add_child(spacer)
+	left.add_child(spacer)
 
-	var ver := _mk_label("HonorKing · 主机权威联机（M0~M2）", _fs(UiKit.FS_SM), COL_DIM)
+	# 段位卡（单机结算写入 user://rank.json，回主菜单刷新）
+	var rs := RankSystem.state()
+	var rank_panel := _panel_block(RankSystem.tier_color(rs), 0.34, 14, 18.0)
+	rank_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_child(rank_panel)
+	var rv := VBoxContainer.new()
+	rv.add_theme_constant_override("separation", 2)
+	rank_panel.add_child(rv)
+	var r_title := _mk_label("当前段位", _fs(UiKit.FS_XS), COL_DIM)
+	r_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	rv.add_child(r_title)
+	var r_name := _mk_label(RankSystem.label(rs), _fs(UiKit.FS_XL), UiKit.C_GOLD)
+	r_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	rv.add_child(r_name)
+	var r_stars := _mk_label(RankSystem.star_text(rs), _fs(UiKit.FS_MD), RankSystem.tier_color(rs).lightened(0.25))
+	r_stars.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	rv.add_child(r_stars)
+	var r_meta := _mk_label("胜 %d · 负 %d · 勇者积分 %d/%d" % [
+		int(rs.get("wins", 0)), int(rs.get("losses", 0)),
+		int(rs.get("points", 0)), RankSystem.MAX_POINTS,
+	], _fs(UiKit.FS_XS), COL_SUB)
+	r_meta.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	rv.add_child(r_meta)
+
+	var ver := _mk_label("HonorKing · 主机权威联机", _fs(UiKit.FS_XS), COL_DIM)
 	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	bcol.add_child(ver)
+	left.add_child(ver)
 
-	# —— 右栏：菜单按钮列（垂直居中） ——
-	var right := _panel_block(UiKit.C_TEAM0, 0.40)
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.size_flags_stretch_ratio = 58.0
-	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(right)
-	var mcol := VBoxContainer.new()
-	mcol.add_theme_constant_override("separation", 20)
-	mcol.alignment = BoxContainer.ALIGNMENT_CENTER
-	right.add_child(mcol)
+	# —— 右栏：操作按钮列 ——
+	var right := VBoxContainer.new()
+	right.anchor_left = 0.740
+	right.anchor_top = 0.130
+	right.anchor_right = 0.962
+	right.anchor_bottom = 0.900
+	right.alignment = BoxContainer.ALIGNMENT_CENTER
+	right.add_theme_constant_override("separation", 16)
+	stage.add_child(right)
 
-	var b_single := _mk_btn("🎮  单机游戏（本地人机对局）", UiKit.C_GOLD, true)
+	var b_single := _mk_btn("▶  单机开局", UiKit.C_GOLD, true, Vector2(420, 88))
+	b_single.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_single.pressed.connect(_start_singleplayer)
-	mcol.add_child(b_single)
+	right.add_child(b_single)
 
-	# 分路选择：一行 5 芯片（写 PlayerPrefs，房间页与联机选人页沿用）
-	var lane_row := HBoxContainer.new()
-	lane_row.add_theme_constant_override("separation", 4)
-	lane_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	mcol.add_child(lane_row)
-	var lane_cap := _mk_label("分路", _fs(UiKit.FS_SM), COL_GOLD)
-	lane_cap.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lane_row.add_child(lane_cap)
-	_lane_btns.clear()
-	for lane in HeroPickData.LANES:
-		var lb := _mk_lane_btn(str(lane))
-		lane_row.add_child(lb)
-		_lane_btns[str(lane)] = lb
-	_lane_sub_lab = _mk_label("", _fs(UiKit.FS_XS), COL_DIM)
-	_lane_sub_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	mcol.add_child(_lane_sub_lab)
-	_style_lane_btns()
+	var room_row := HBoxContainer.new()
+	room_row.add_theme_constant_override("separation", 12)
+	right.add_child(room_row)
+	var b_host := _mk_btn("■  创建房间", UiKit.C_TEAM0, false, Vector2(1, 72))
+	b_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_host.pressed.connect(_create_host)
+	room_row.add_child(b_host)
+	var b_join := _mk_btn("◆  加入房间", UiKit.C_TEAM0, false, Vector2(1, 72))
+	b_join.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_join.pressed.connect(_join_room)
+	room_row.add_child(b_join)
+	if Config.on_web():
+		# 浏览器内无法监听端口：网页版隐藏建房，只能加入桌面主机
+		b_host.text = "■  创建房间（网页不可用）"
+		b_host.disabled = true
 
-	# AI 难度：单行循环按钮（写 PlayerPrefs；进对局时 BattleManager 应用到 AiConfig，联机为主机生效）
+	# 连接参数（收成一行细输入，保持可用但不抢视线）
+	var conn := HBoxContainer.new()
+	conn.add_theme_constant_override("separation", 8)
+	right.add_child(conn)
+	var lab_ip := _mk_label("主机", _fs(UiKit.FS_XS), COL_DIM)
+	conn.add_child(lab_ip)
+	var ip_edit := LineEdit.new()
+	ip_edit.text = "127.0.0.1"
+	ip_edit.custom_minimum_size = Vector2(0, 44)
+	ip_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ip_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	ip_edit.placeholder_text = "局域网 IP"
+	conn.add_child(ip_edit)
+	var port_edit := LineEdit.new()
+	port_edit.text = "7000"
+	port_edit.custom_minimum_size = Vector2(96, 44)
+	port_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	port_edit.placeholder_text = "端口"
+	conn.add_child(port_edit)
+	_ip_edit = ip_edit
+	_port_edit = port_edit
+
+	var act_row := HBoxContainer.new()
+	act_row.add_theme_constant_override("separation", 10)
+	right.add_child(act_row)
+	var b_loadout := _mk_btn("≡  备战", UiKit.C_TEAM0, false, Vector2(1, 60))
+	b_loadout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_loadout.pressed.connect(_open_loadout)
+	act_row.add_child(b_loadout)
+	var b_history := _mk_btn("★  纪录", UiKit.C_TEAM0, false, Vector2(1, 60))
+	b_history.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_history.pressed.connect(_open_history)
+	act_row.add_child(b_history)
+	var b_controls := _mk_btn("⚙  设置", UiKit.C_TEAM0, false, Vector2(1, 60))
+	b_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_controls.pressed.connect(_open_controls)
+	act_row.add_child(b_controls)
+	_menu_btns = [b_single, b_host, b_join, b_loadout, b_history, b_controls]
+
 	var diff_row := HBoxContainer.new()
-	diff_row.add_theme_constant_override("separation", 12)
-	diff_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	mcol.add_child(diff_row)
-	var diff_cap := _mk_label("AI难度", _fs(UiKit.FS_SM), COL_GOLD)
-	diff_cap.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	diff_row.add_child(diff_cap)
-	_diff_btn = _mk_btn("", UiKit.C_GOLD, false, Vector2(520, 48))
-	_diff_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	diff_row.add_theme_constant_override("separation", 10)
+	right.add_child(diff_row)
+	_diff_btn = _mk_btn("", UiKit.C_GOLD, false, Vector2(1, 52))
+	_diff_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_diff_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
 	_diff_btn.pressed.connect(_cycle_difficulty)
 	diff_row.add_child(_diff_btn)
 	_refresh_difficulty_btn()
 
-	var b_host := _mk_btn("🏠  创建房间（本机当主机，等他人加入）", UiKit.C_TEAM0)
-	b_host.pressed.connect(_create_host)
-	mcol.add_child(b_host)
-
-	var b_join := _mk_btn("🌐  加入房间（连接他人主机）", UiKit.C_TEAM0)
-	b_join.pressed.connect(_join_room)
-	mcol.add_child(b_join)
-
-	var b_loadout := _mk_btn("⚙  备战 · 出装方案", UiKit.C_TEAM0)
-	b_loadout.pressed.connect(_open_loadout)
-	mcol.add_child(b_loadout)
-	_menu_btns = [b_single, b_host, b_join, b_loadout]
-
-	# 连接参数行
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	mcol.add_child(row)
-
-	var lab_ip := _mk_label("主机IP", _fs(UiKit.FS_MD), COL_TEXT)
-	lab_ip.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	row.add_child(lab_ip)
-
-	var ip_edit := LineEdit.new()
-	ip_edit.text = "127.0.0.1"
-	ip_edit.custom_minimum_size = Vector2(240, 54)
-	ip_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	ip_edit.placeholder_text = "局域网 IP"
-	row.add_child(ip_edit)
-
-	var lab_port := _mk_label("端口", _fs(UiKit.FS_MD), COL_TEXT)
-	row.add_child(lab_port)
-
-	var port_edit := LineEdit.new()
-	port_edit.text = "7000"
-	port_edit.custom_minimum_size = Vector2(120, 54)
-	port_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	port_edit.placeholder_text = "端口"
-	row.add_child(port_edit)
-	_ip_edit = ip_edit
-	_port_edit = port_edit
-
 	_status = _mk_label("", _fs(UiKit.FS_SM), COL_TEXT)
-	mcol.add_child(_status)
+	right.add_child(_status)
 
-	var hint := _mk_label("说明：host 点「开始选人」后，本窗与每个已连玩家各自弹面板选英雄+召唤师；全员锁齐后 host 才可开局；开局后才加入的连接自动接管空闲同队 AI。", _fs(UiKit.FS_SM), COL_DIM)
+	var hint := _mk_label("点沙盘上的路 = 选分路；建房后点「开始选人」，全员锁定自动开局。",
+		_fs(UiKit.FS_XS), COL_DIM)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(BTN_W, 0)
-	mcol.add_child(hint)
+	right.add_child(hint)
 
 
 func _set_menu_enabled(on: bool) -> void:
@@ -433,6 +528,8 @@ func _style_lane_btns() -> void:
 func _select_lane(lane: String) -> void:
 	PlayerPrefs.set_lane(lane)
 	_style_lane_btns()
+	if _tac_map != null and is_instance_valid(_tac_map):
+		_tac_map.set_lane(lane)
 
 
 # AI 难度循环切换：青铜→白银→…→王者→青铜（本机偏好，联机时主机生效）
@@ -445,11 +542,10 @@ func _refresh_difficulty_btn() -> void:
 	var d := PlayerPrefs.get_ai_difficulty()
 	var t: Dictionary = AiConfig.DIFF_TABLE.get(d, {})
 	if _diff_btn != null:
-		_diff_btn.text = "%s · 反应 %.2fs · 精度 %d%% · 预判 %d 帧（点击切换）" % [
+		_diff_btn.text = "AI难度 · %s · 反应%.2fs · 命中%d%%" % [
 			AiConfig.difficulty_name(d),
 			float(t.get("reaction_delay", 0.0)),
 			int(round(float(t.get("skill_accuracy", 1.0)) * 100.0)),
-			int(t.get("prediction_frames", 0)),
 		]
 
 
@@ -511,6 +607,125 @@ func _open_loadout() -> void:
 	if _connecting:
 		return
 	get_tree().call_deferred("change_scene_to_file", "res://scenes/loadout.tscn")
+
+
+func _open_history() -> void:
+	if _connecting:
+		return
+	var panel := BattleHistoryPanel.new()
+	add_child(panel)
+
+
+# ---------- 操作设置（页内切换，不弹独立窗口） ----------
+
+# 9 行：左说明 Label + 右循环切换按钮；点按钮立即写 PlayerPrefs（进对局生效）
+func _open_controls() -> void:
+	if _connecting:
+		return
+	_clear_stack()
+	_set_page_pad(int(PAGE_PAD_X), int(PAGE_PAD_Y))
+
+	var panel := _panel_block(UiKit.C_TEAM0, 0.42)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_stack.add_child(panel)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 14)
+	panel.add_child(col)
+
+	var title := _mk_label("操作设置", int(_fs(UiKit.FS_HUGE) * 1.6), COL_TITLE)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(title)
+
+	var tip := _mk_label("设置立即保存，进入对局生效。", _fs(UiKit.FS_SM), COL_DIM)
+	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(tip)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_child(scroll)
+
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 10)
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(rows)
+
+	for entry in CTRL_KEYS:
+		var key := str(entry)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 24)
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rows.add_child(row)
+
+		var lab := _mk_label(str(CTRL_LABELS.get(key, key)), _fs(UiKit.FS_MD), COL_TEXT)
+		lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(lab)
+
+		var ctrl_btn := _mk_btn(_ctrl_btn_text(key), UiKit.C_GOLD, false, Vector2(520, 48))
+		ctrl_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+		ctrl_btn.pressed.connect(_cycle_ctrl.bind(key, ctrl_btn))
+		row.add_child(ctrl_btn)
+
+	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
+	back.pressed.connect(_show_menu)
+	col.add_child(back)
+
+
+# 当前值 → 按钮显示串（页面构建与点击切换共用）
+func _ctrl_btn_text(key: String) -> String:
+	match key:
+		"siege_keys":
+			return "开启" if PlayerPrefs.opt_bool(key, true) else "隐藏"
+		"target_prio":
+			return str(CTRL_TARGET_TEXTS[clampi(PlayerPrefs.opt_int(key, 0), 0, 2)])
+		"auto_chase":
+			return str(CTRL_CHASE_TEXTS[clampi(PlayerPrefs.opt_int(key, 0), 0, 2)])
+		"lock_portrait":
+			return "开启" if PlayerPrefs.opt_bool(key, true) else "关闭"
+		"flash_dir":
+			return "跟随移动方向" if PlayerPrefs.opt_int(key, 0) == 0 else "智能寻敌"
+		"skill_sens", "cam_sens":
+			return "%.1fx" % PlayerPrefs.opt_float(key, 1.0)
+		"move_preview":
+			return "开启" if PlayerPrefs.opt_bool(key, true) else "关闭"
+		"auto_atk":
+			return "开启" if PlayerPrefs.opt_bool(key, true) else "关闭"
+	return str(key)
+
+
+# 循环切换：读当前值 → 下一档 → 写 PlayerPrefs → 刷新按钮文字
+func _cycle_ctrl(key: String, btn: Button) -> void:
+	match key:
+		"siege_keys":
+			PlayerPrefs.set_opt(key, not PlayerPrefs.opt_bool(key, true))
+		"target_prio":
+			PlayerPrefs.set_opt(key, (clampi(PlayerPrefs.opt_int(key, 0), 0, 2) + 1) % 3)
+		"auto_chase":
+			PlayerPrefs.set_opt(key, (clampi(PlayerPrefs.opt_int(key, 0), 0, 2) + 1) % 3)
+		"lock_portrait":
+			PlayerPrefs.set_opt(key, not PlayerPrefs.opt_bool(key, true))
+		"flash_dir":
+			PlayerPrefs.set_opt(key, 1 - clampi(PlayerPrefs.opt_int(key, 0), 0, 1))
+		"skill_sens", "cam_sens":
+			var cur := PlayerPrefs.opt_float(key, 1.0)
+			var idx := 0
+			for i in CTRL_SENS_STEPS.size():
+				if absf(float(CTRL_SENS_STEPS[i]) - cur) < 0.01:
+					idx = i
+					break
+			PlayerPrefs.set_opt(key, float(CTRL_SENS_STEPS[(idx + 1) % CTRL_SENS_STEPS.size()]))
+		"move_preview":
+			PlayerPrefs.set_opt(key, not PlayerPrefs.opt_bool(key, true))
+		"auto_atk":
+			PlayerPrefs.set_opt(key, not PlayerPrefs.opt_bool(key, true))
+	if btn != null and is_instance_valid(btn):
+		btn.text = _ctrl_btn_text(key)
 
 
 # ---------- ROOM ----------
@@ -598,9 +813,9 @@ func _show_room() -> void:
 	lane_row.add_child(_lane_info)
 	_refresh_lane_info()
 
-	var foot_text := "发起后本窗与每位已连玩家会各自弹出选人面板；全员锁齐后你的「开始对局」才点亮。"
+	var foot_text := "发起后本窗与每位已连玩家会各自弹出选人面板；全员锁齐后自动进入对局（无需点按钮）。"
 	if _role == 0:
-		_start_btn = _mk_btn("▶  开始选人（全员选英雄）", UiKit.C_HEAL, true)
+		_start_btn = _mk_btn("»  开始选人（全员选英雄）", UiKit.C_HEAL, true)
 		_start_btn.pressed.connect(_on_begin_pick)
 		rcol.add_child(_start_btn)
 	else:
@@ -637,7 +852,7 @@ func _refresh_room(state: Dictionary) -> void:
 	if _roster_lab != null:
 		_roster_lab.text = names
 	if _start_btn != null:
-		_start_btn.text = "▶  开始选人（在线 %d 人）" % count
+		_start_btn.text = "»  开始选人（在线 %d 人）" % count
 		_start_btn.disabled = count < 1
 
 
@@ -658,10 +873,365 @@ func _roster_text(players: Dictionary) -> String:
 func _on_begin_pick() -> void:
 	if _role != 0:
 		return
+	_auto_start_done = false
+	_auto_start_wait = -1.0
+	_host_draft_reset()
 	NetSession.begin_pick()
+	_host_draft_push()
+
+
+# ---------- 顺序选人：host 推进 10 步蛇形、各端只做倒计时显示（旧端无 draft → 同时选人） ----------
+
+func _process(delta: float) -> void:
+	if _route_pending != "":
+		_tick_route(delta)
+		return
+	if _ui != UIState.SELECT:
+		return
+	_tick_auto_start(delta)
+	if _draft_step < 0:
+		return
+	if _draft_active():
+		_draft_left = maxf(0.0, _draft_left - delta)
+		if _role == 0:
+			_host_draft_tick(delta)
+		else:
+			_guest_draft_tick()
+		_tick_draft_ui()
+		return
+	_tick_draft_ui()
+	# 顺序已结束仍有真人未锁（中途加入/掉线重排）→ host 补齐，避免挡住自动开局
+	if _role == 0 and _draft_done():
+		for pid in NetSession.players:
+			var pp := int(pid)
+			if pp == 1 or NetSession.get_picks().has(pp):
+				continue
+			var hero := _draft_pick_hero(0)
+			if hero == "":
+				break
+			NetSession.host_force_pick(pp, hero, "flash")
+
+
+# ---------- 全员就绪 → 自动开局（host 权威；无需任何人点按钮） ----------
+
+func _tick_auto_start(delta: float) -> void:
+	if _role != 0 or _auto_start_done:
+		return
+	if not NetSession._all_active_picked() or (_draft_step >= 0 and not _draft_done()):
+		_auto_start_wait = -1.0   # 未锁齐 / 顺序选人未走完 / 有人解锁 → 取消待开局计时
+		return
+	if _auto_start_wait < 0.0:
+		_auto_start_wait = AUTO_START_DELAY   # 刚锁齐：起计时并给「全员就绪」反馈
+	var left := _auto_start_wait
+	_auto_start_wait -= delta
+	if _auto_start_lab != null:
+		_auto_start_lab.text = "全员已就绪 · %.1fs 后进入对局…" % maxf(left, 0.0)
+		_auto_start_lab.add_theme_color_override("font_color", COL_OK)
+	if _auto_start_wait > 0.0:
+		return
+	_auto_start_done = true   # 防重入：本局只触发一次
+	NetSession.start_match()
+
+
+# ---------- 进入对局：加载层（复用 LoadingScreen）→ 延迟切场景 ----------
+
+func _show_loading_then(path: String) -> void:
+	if _route_pending != "" or _route_count > 0:
+		return   # 防重入：已在过场中/已切过场景
+	_route_pending = path
+	_route_delay = ROUTE_DELAY
+	if _loading == null or not is_instance_valid(_loading):
+		_loading = LoadingScreen.new()
+		_loading.manual_progress = true
+		_loading.hold_full = true
+		_loading.process_mode = Node.PROCESS_MODE_ALWAYS
+		_loading.setup(_loading_heroes(), "进入对局", "王者峡谷 · 5v5", 0.4)
+		add_child(_loading)
+	_loading.visible = true
+	_loading.set_progress(0.0)
+
+
+func _tick_route(delta: float) -> void:
+	_route_delay -= delta
+	if _loading != null and is_instance_valid(_loading):
+		_loading.set_progress(clampf(1.0 - maxf(_route_delay, 0.0) / ROUTE_DELAY, 0.0, 1.0))
+	if _route_delay > 0.0:
+		return
+	var path := _route_pending
+	_route_pending = ""
+	_route_count += 1
+	get_tree().call_deferred("change_scene_to_file", path)
+
+
+# 加载界面阵容：我方真人锁定 + 顺序选人的展示位（AI 补位/敌方），无数据时占位
+func _loading_heroes() -> Array:
+	var out: Array = []
+	var seats: Array = _seat_rows(_last_state)["seats"]
+	var t_ally: int = Config.player_team
+	var t_foe: int = 1 - Config.player_team
+	for i in 5:
+		var hn := ""
+		if i < seats.size():
+			hn = str(seats[i].get("hero", ""))
+		if hn == "":
+			hn = str(_draft_picks.get("0-%d" % i, ""))
+		var role := str(HeroPickData.HERO_ROLE.get(hn, ""))
+		var ent := { "name": hn if hn != "" else "—",
+			"role": role if role != "" else "我方 %d 号位" % (i + 1), "team": t_ally }
+		if i == 0:
+			ent["is_player"] = true
+		out.append(ent)
+	for i in 5:
+		var hn2 := str(_draft_picks.get("1-%d" % i, ""))
+		var role2 := str(HeroPickData.HERO_ROLE.get(hn2, ""))
+		out.append({ "name": hn2 if hn2 != "" else "—",
+			"role": role2 if role2 != "" else "敌方 %d 号位" % (i + 1), "team": t_foe })
+	return out
+
+
+func _draft_active() -> bool:
+	return _draft_step >= 0 and _draft_step < SEL_DRAFT_ORDER.size()
+
+
+func _draft_done() -> bool:
+	return _draft_step >= SEL_DRAFT_ORDER.size()
+
+
+func _draft_is_my_turn() -> bool:
+	if not _draft_active() or _draft_turn.size() < 2:
+		return false
+	return int(_draft_turn[0]) == 0 and int(_draft_turn[1]) == _my_seat - 1
+
+
+# 我方第 seat 席（0-based）对应的 peer；超过真人数 = AI 席位（与 _seat_rows 同序、去重）
+func _seat_peer(seat: int) -> int:
+	var ids: Array = [1]
+	for p in NetSession.players:
+		if not ids.has(int(p)):
+			ids.append(int(p))
+	ids.sort()
+	if seat < 0 or seat >= ids.size():
+		return -1
+	return int(ids[seat])
+
+
+# 本机此刻能否锁定（草稿齐 + 轮到自己 + 未结束）
+func _pick_ready() -> bool:
+	if _sel_hero == "" or _sel_sid == "" or _draft_done():
+		return false
+	return not (_draft_active() and not _draft_is_my_turn())
+
+
+func _hero_pickable(hname: String) -> bool:
+	if hname == "" or not HeroPickData.HERO_ROLE.has(hname):
+		return false
+	var role := str(HeroPickData.HERO_ROLE[hname])
+	if _draft_taken.has(hname) or _blocked_roles.has(role):
+		return false
+	if _lane_locked and role != _lane_role:
+		return false
+	return true
+
+
+# 本分路内随机一名可选的英雄（超时自动选，同单机 _random_lane_hero）
+func _random_lane_hero() -> String:
+	var pool: Array = []
+	for hn in HeroPickData.HERO_ROLE:
+		var h := str(hn)
+		if str(HeroPickData.HERO_ROLE[h]) == _lane_role and _hero_pickable(h):
+			pool.append(h)
+	if pool.is_empty():
+		for hn in HeroPickData.HERO_ROLE:
+			if _hero_pickable(str(hn)):
+				pool.append(str(hn))
+	if pool.is_empty():
+		return ""
+	return str(pool[randi() % pool.size()])
+
+
+# host：按「全局唯一 + 本队一职一人」挑展示用英雄（我方 AI 不占房主分路，同单机语义）
+func _draft_pick_hero(team: int) -> String:
+	var used := {}
+	var roles := {}
+	var picks := NetSession.get_picks()
+	for k in _draft_picks:
+		var h := str(_draft_picks[k])
+		used[h] = true
+		if int(str(k).split("-")[0]) == team:
+			roles[str(HeroPickData.HERO_ROLE.get(h, ""))] = true
+	for pid in picks:
+		used[str(picks[pid].get("hero", ""))] = true
+		if team == 0:
+			roles[str(picks[pid].get("role", ""))] = true   # 敌方职责与本方独立
+	var pool: Array = []
+	var fallback: Array = []
+	for hn in HeroPickData.HERO_ROLE:
+		var h2 := str(hn)
+		if used.has(h2):
+			continue
+		fallback.append(h2)
+		var role := str(HeroPickData.HERO_ROLE[h2])
+		if roles.has(role) or (team == 0 and role == _lane_role):
+			continue
+		pool.append(h2)
+	if pool.is_empty():
+		pool = fallback
+	if pool.is_empty():
+		return ""
+	return str(pool[randi() % pool.size()])
+
+
+func _draft_turn_label() -> String:
+	if _draft_turn.size() < 2:
+		return ""
+	var team := int(_draft_turn[0])
+	var seat := int(_draft_turn[1])
+	if team == 1:
+		return "红方 %d 号位" % (seat + 1)
+	var pid := _seat_peer(seat)
+	if pid <= 0:
+		return "我方 %d 号位 · AI" % (seat + 1)
+	return "我方 %d 号位 · %s" % [seat + 1, _player_name(pid, _last_state)]
+
+
+func _draft_title_text() -> String:
+	if _draft_done():
+		return "双方阵容已定"
+	if not _draft_active():
+		return "选择英雄"
+	return "第 %d/10 步 · %s 选人" % [_draft_step + 1, _draft_turn_label()]
+
+
+func _draft_sub_text() -> String:
+	if _draft_done():
+		return "阵容已定 · 全员就绪后自动进入对局"
+	if not _draft_active():
+		return ""
+	var left := int(ceil(maxf(0.0, _draft_left)))
+	if _draft_is_my_turn():
+		return "轮到你选 · 剩余 %ds · 选英雄→召唤师→锁定" % left
+	return "等待 %s · 剩余 %ds" % [_draft_turn_label(), left]
+
+
+func _tick_draft_ui() -> void:
+	if _stage_title != null:
+		_stage_title.text = _draft_title_text()
+	if _stage_sub != null:
+		_stage_sub.text = _draft_sub_text()
+	if _countdown_lab != null:
+		if _draft_active():
+			_countdown_lab.text = str(int(ceil(maxf(0.0, _draft_left))))
+		else:
+			_countdown_lab.text = "√" if _draft_done() else "∞"
+
+
+func _host_draft_reset() -> void:
+	_draft_step = 0
+	_draft_left = SEL_DRAFT_TURN_TIME
+	_draft_turn = SEL_DRAFT_ORDER[0]
+	_draft_picks = {}
+	_draft_taken = {}
+	_draft_ai_timer = 0.0
+	_draft_ai_wait = randf_range(1.2, 2.2)
+
+
+func _host_draft_push() -> void:
+	NetSession.set_draft({
+		"step": _draft_step,
+		"left": _draft_left,
+		"turn": _draft_turn,
+		"picks": _draft_picks.duplicate(true),
+	})
+
+
+func _host_draft_advance() -> void:
+	_draft_step += 1
+	_draft_left = SEL_DRAFT_TURN_TIME
+	_draft_ai_timer = 0.0
+	_draft_ai_wait = randf_range(1.2, 2.2)
+	_draft_turn = SEL_DRAFT_ORDER[_draft_step] if _draft_step < SEL_DRAFT_ORDER.size() else []
+	_host_draft_push()
+
+
+func _host_draft_tick(delta: float) -> void:
+	if _draft_turn.size() < 2:
+		return
+	var team := int(_draft_turn[0])
+	var seat := int(_draft_turn[1])
+	var pid := _seat_peer(seat) if team == 0 else -1
+	if pid > 0:
+		# 真人回合：锁定后推进；剩 1s 仍没锁 → host 代选兜底（客户端自己 0s 会先自动选）
+		if NetSession.get_picks().has(pid):
+			_host_draft_advance()
+		elif _draft_left <= 1.0:
+			_host_auto_pick(pid)
+		return
+	# AI 席位／敌方 5 席：像单机一样等 1~2s 再自动选，作为展示阵容
+	_draft_ai_timer += delta
+	if _draft_ai_timer >= _draft_ai_wait or _draft_left <= 0.0:
+		var hero := _draft_pick_hero(team)
+		_draft_picks["%d-%d" % [team, seat]] = hero
+		_host_draft_advance()
+
+
+func _host_auto_pick(pid: int) -> void:
+	var mine := pid == _self_peer()
+	var hero := ""
+	if mine:
+		hero = _sel_hero if _hero_pickable(_sel_hero) else _random_lane_hero()
+	if hero == "":
+		hero = _draft_pick_hero(0)
+	if hero == "":
+		return
+	var summ := _sel_sid if (mine and _sel_sid != "") else "flash"
+	if NetSession.host_force_pick(pid, hero, summ):
+		_host_draft_advance()
+
+
+func _guest_draft_tick() -> void:
+	if not _draft_is_my_turn() or _draft_auto_sent or _draft_left > 0.0:
+		return
+	_draft_auto_sent = true
+	var hero := _sel_hero if _hero_pickable(_sel_hero) else _random_lane_hero()
+	if hero == "":
+		return
+	NetSession.send_pick(hero, _sel_sid if _sel_sid != "" else "flash")
+	if _pick_status != null:
+		_pick_status.text = "超时自动锁定 %s" % hero
+		_pick_status.add_theme_color_override("font_color", COL_SUB)
+
+
+# 采纳主机广播的顺序状态（旧端/无字段 → -1 退化同时选人）
+func _apply_draft_state(d) -> void:
+	var nd: Dictionary = d if d is Dictionary else {}
+	if nd.is_empty():
+		_draft_step = -1
+		_draft_left = 0.0
+		_draft_turn = []
+		_draft_picks = {}
+		return
+	var step := int(nd.get("step", -1))
+	if step != _draft_step:
+		_draft_auto_sent = false
+	_draft_step = step
+	_draft_left = float(nd.get("left", SEL_DRAFT_TURN_TIME))
+	_draft_turn = nd.get("turn", [])
+	_draft_picks = nd.get("picks", {})
+
+
+func _draft_reset_local() -> void:
+	_draft_step = -1
+	_draft_left = 0.0
+	_draft_turn = []
+	_draft_picks = {}
+	_draft_taken = {}
+	_draft_auto_sent = false
 
 
 func _leave_room() -> void:
+	_draft_reset_local()
+	_auto_start_done = false
+	_auto_start_wait = -1.0
 	NetSession.disconnect_network()
 	_show_menu()
 	_status_text("已离开房间", COL_SUB)
@@ -791,6 +1361,16 @@ func _show_select(state: Dictionary) -> void:
 			continue
 		if str(s.role) != "":
 			_blocked_roles[str(s.role)] = true
+	# 顺序选人的展示阵容（我方 AI/敌方席）也占英雄与职责：本机不可再选
+	_draft_taken = {}
+	if _draft_step >= 0:
+		for k in _draft_picks:
+			var dh := str(_draft_picks[k])
+			if dh == "" or not HeroPickData.HERO_ROLE.has(dh):
+				continue
+			_draft_taken[dh] = true
+			if str(k).begins_with("0-"):
+				_blocked_roles[str(HeroPickData.HERO_ROLE[dh])] = true
 	# 分路 → 职责：未被队友占用则锁死本局职责，否则放开并提示
 	_lane_role = HeroPickData.lane_role(PlayerPrefs.get_lane())
 	_lane_locked = _lane_role != "" and not _blocked_roles.has(_lane_role)
@@ -839,21 +1419,23 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var tv := VBoxContainer.new()
 	tv.alignment = BoxContainer.ALIGNMENT_CENTER
 	tv.add_theme_constant_override("separation", 0)
-	_stage_title = _mk_label("选择英雄", _fs(UiKit.FS_XL), COL_TITLE)
+	_stage_title = _mk_label(_draft_title_text(), _fs(UiKit.FS_XL), COL_TITLE)
 	_stage_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tv.add_child(_stage_title)
-	# 副行：默认玩法说明；接分路锁定时改为分路提示
+	# 副行：顺序选人时显示回合/倒计时；无顺序时沿用玩法说明 + 分路提示
 	var lane := PlayerPrefs.get_lane()
-	var lane_hint := "联机自选 · 全员锁定后房主开局"
-	if _lane_locked:
-		lane_hint = "本机分路：%s · 只能选择%s" % [lane, _lane_role]
-	elif _lane_role != "":
-		lane_hint = "本机分路「%s」已被队友占用，可选其他职责" % lane
-	var sub := _mk_label(lane_hint, _fs(UiKit.FS_XS), COL_SUB)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tv.add_child(sub)
+	var stage_sub_txt := _draft_sub_text()
+	if stage_sub_txt == "":
+		stage_sub_txt = "联机自选 · 全员锁定后自动开局"
+		if _lane_locked:
+			stage_sub_txt = "本机分路：%s · 只能选择%s" % [lane, _lane_role]
+		elif _lane_role != "":
+			stage_sub_txt = "本机分路「%s」已被队友占用，可选其他职责" % lane
+	_stage_sub = _mk_label(stage_sub_txt, _fs(UiKit.FS_XS), COL_SUB)
+	_stage_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tv.add_child(_stage_sub)
 	mv.add_child(tv)
-	mv.add_child(_mk_count_ring(_stage_seconds(state)))
+	mv.add_child(_mk_count_ring(int(ceil(maxf(0.0, _draft_left))) if _draft_active() else _stage_seconds(state)))
 
 	# 右：敌方 mini 席位槽
 	var right := HBoxContainer.new()
@@ -867,7 +1449,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	right.add_child(_enemy_slots)
 	h.add_child(right)
 
-	# 填充 mini 槽（我方取真实席位，缺位 = AI 补齐；敌方 5 席 = AI）
+	# 填充 mini 槽（我方取真实席位，缺位 = AI 补齐；敌方 5 席 = AI；顺序选人时显示已选英雄）
 	var seats: Array = data["seats"]
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
 		var mine := false
@@ -878,8 +1460,13 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 			mine = bool(s.is_me)
 			ttl = "%d · %s" % [i + 1, str(s.name)]
 			sub_txt = str(s.hero) if str(s.hero) != "" else "待选"
+		else:
+			var ah := str(_draft_picks.get("0-%d" % i, ""))
+			if ah != "":
+				sub_txt = ah
 		_my_slots.add_child(_mk_mini_slot(ttl, sub_txt, UiKit.C_TEAM0, mine))
-		_enemy_slots.add_child(_mk_mini_slot("%d · 敌方" % (i + 1), "AI", UiKit.C_TEAM1, false))
+		var eh := str(_draft_picks.get("1-%d" % i, ""))
+		_enemy_slots.add_child(_mk_mini_slot("%d · 敌方" % (i + 1), "AI" if eh == "" else eh, UiKit.C_TEAM1, false))
 	return bar
 
 
@@ -1036,10 +1623,33 @@ func _build_center_stage() -> Control:
 	_prev_chip_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_prev_chip_row)
 
-	var tip := _mk_label("点英雄卡选英雄 → 右侧选召唤师 → 点锁定；锁后仍可改选再锁", _fs(UiKit.FS_XS), COL_DIM)
-	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(tip)
+	# 英雄技能 chip 行：3 个技能（图标 + 名称 + 类型/冷却），悬停看伤害/效果简介
+	_prev_skill_row = HBoxContainer.new()
+	_prev_skill_row.add_theme_constant_override("separation", 8)
+	_prev_skill_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_prev_skill_row)
+
+	# 推荐出装方案行：内置 3 套 + 玩家已存方案 + 恢复推荐，点击即写本局推荐出装
+	var bbar := HBoxContainer.new()
+	bbar.add_theme_constant_override("separation", 8)
+	v.add_child(bbar)
+	var blab := _mk_label("推荐出装", _fs(UiKit.FS_XS), COL_SUB)
+	blab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bbar.add_child(blab)
+	var bscroll := ScrollContainer.new()
+	bscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	bscroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	bscroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bscroll.custom_minimum_size = Vector2(0, 44)
+	bbar.add_child(bscroll)
+	_build_row = HBoxContainer.new()
+	_build_row.add_theme_constant_override("separation", 6)
+	bscroll.add_child(_build_row)
+
+	_preview_tip = _mk_label("点英雄卡选英雄 → 右侧选召唤师 → 点锁定；锁后仍可改选再锁", _fs(UiKit.FS_XS), COL_DIM)
+	_preview_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_preview_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_preview_tip)
 	return box
 
 
@@ -1093,7 +1703,7 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	return p
 
 
-# 底部 300：左职业 tab + hero 横条 | 右召唤师 2 列 + 详情 + 离开/锁定/开始对局
+# 底部 300：左职业 tab + hero 横条 | 右召唤师 2 列 + 详情 + 离开/锁定 + 自动开局状态行
 func _build_select_bottom() -> Control:
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 10)
@@ -1194,7 +1804,7 @@ func _build_select_bottom() -> Control:
 	brow.add_theme_constant_override("separation", 8)
 	rv.add_child(brow)
 	if _my_seat <= NetSession.MAX_SIDE_PLAYERS:
-		_pick_confirm_btn = _mk_btn("✔  锁定选择", UiKit.C_TEAM0, true, Vector2(340, 92))
+		_pick_confirm_btn = _mk_btn("√  锁定选择", UiKit.C_TEAM0, true, Vector2(340, 92))
 		_pick_confirm_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 		_pick_confirm_btn.pressed.connect(_on_pick_confirm)
 		brow.add_child(_pick_confirm_btn)
@@ -1205,11 +1815,10 @@ func _build_select_bottom() -> Control:
 	_leave_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	_leave_btn.pressed.connect(_leave_room)
 	brow.add_child(_leave_btn)
-	if _role == 0:
-		_host_go_btn = _mk_btn("▶  开始对局（全员锁齐后可用）", UiKit.C_HEAL, true, Vector2(340, 92))
-		_host_go_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-		_host_go_btn.pressed.connect(_host_start_battle)
-		rv.add_child(_host_go_btn)
+	# 底栏状态行（替代原「开始对局」按钮）：全员锁定后自动进入对局
+	_auto_start_lab = _mk_label("全员锁定后自动进入对局（0 人已锁）", _fs(UiKit.FS_XS), COL_SUB)
+	_auto_start_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rv.add_child(_auto_start_lab)
 	return bar
 
 
@@ -1268,11 +1877,13 @@ func _rebuild_strip() -> void:
 	_style_pick_cards()
 
 
-# 180×112 英雄卡：英雄名 + 职责（被他人占的职责置灰并标「已被占」）
+# 180×112 英雄卡：英雄名 + 职责（他人已占/分路不符/非本机回合 置灰并标原因）
 func _mk_hero_card(hname: String, role: String, accent: Color) -> Button:
 	# 分路锁定时非本职责英雄置灰不可点（「分路不符」）
 	var lane_bad: bool = _lane_locked and role != _lane_role
-	var blocked: bool = _blocked_roles.has(role) or lane_bad
+	var taken: bool = _draft_taken.has(hname)
+	var waiting: bool = _draft_active() and not _draft_is_my_turn()
+	var blocked: bool = _blocked_roles.has(role) or lane_bad or taken or waiting or _draft_done()
 	var b := Button.new()
 	b.custom_minimum_size = Vector2(180, 118)
 	b.disabled = blocked
@@ -1291,8 +1902,14 @@ func _mk_hero_card(hname: String, role: String, accent: Color) -> Button:
 	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(nm)
 	var tag := role
-	if lane_bad:
+	if taken:
+		tag = "已被占"
+	elif lane_bad:
 		tag = "分路不符"
+	elif waiting:
+		tag = "等待他人"
+	elif _draft_done():
+		tag = "已选定"
 	elif _blocked_roles.has(role):
 		tag = "已被占"
 	var rl := _mk_label(tag, _fs(UiKit.FS_XS), COL_DIM if blocked else accent.lightened(0.35))
@@ -1354,21 +1971,30 @@ func _refresh_select(state: Dictionary, data: Dictionary) -> void:
 		else:
 			_pick_summary.text = "请先选英雄与召唤师技能，再点「锁定选择」"
 			_pick_summary.add_theme_color_override("font_color", COL_DIM)
+		# 顺序选人：非本机回合/已结束覆盖为排队提示
+		if _draft_active() and not _draft_is_my_turn():
+			_pick_summary.text = "等待 %s · 剩余 %ds" % [_draft_turn_label(), int(ceil(maxf(0.0, _draft_left)))]
+			_pick_summary.add_theme_color_override("font_color", COL_SUB)
+		elif _draft_done():
+			_pick_summary.text = "阵容已定 · 即将自动进入对局"
+			_pick_summary.add_theme_color_override("font_color", COL_OK)
 	if _pick_confirm_btn != null:
-		_pick_confirm_btn.disabled = _sel_hero == "" or _sel_sid == ""
-	if _role == 0 and _host_go_btn != null:
-		var ready := true
+		_pick_confirm_btn.disabled = not _pick_ready()
+	if _auto_start_lab != null:
 		var locked_n := 0
 		for s in data["seats"]:
 			if str(s.hero) != "":
 				locked_n += 1
-			else:
-				ready = false
-		_host_go_btn.disabled = not ready
-		if ready:
-			_host_go_btn.text = "▶  开始对局（%d 人已锁）" % locked_n
+		var total := maxi((data["seats"] as Array).size(), 1)
+		if _auto_start_done:
+			_auto_start_lab.text = "全员已就绪 · 正在进入对局…"
+			_auto_start_lab.add_theme_color_override("font_color", COL_OK)
+		elif locked_n >= total:
+			_auto_start_lab.text = "全员已就绪 · 正在进入对局…"
+			_auto_start_lab.add_theme_color_override("font_color", COL_OK)
 		else:
-			_host_go_btn.text = "▶  开始对局（等全员锁齐）"
+			_auto_start_lab.text = "全员锁定后自动进入对局（%d/%d 已锁）" % [locked_n, total]
+			_auto_start_lab.add_theme_color_override("font_color", COL_SUB)
 
 
 func _pick_hero(hname: String) -> void:
@@ -1379,6 +2005,15 @@ func _pick_hero(hname: String) -> void:
 		if _pick_status != null:
 			_pick_status.text = "本机分路：%s · 只能选择%s" % [PlayerPrefs.get_lane(), _lane_role]
 			_pick_status.add_theme_color_override("font_color", COL_ERR)
+		return
+	# 顺序选人：非本机回合全部不可选；展示阵容/他人已选的英雄不可再选
+	if _draft_active() and not _draft_is_my_turn():
+		_show_pick_error("还没轮到你 · 等待 %s" % _draft_turn_label())
+		return
+	if _draft_done():
+		return
+	if _draft_taken.has(hname):
+		_show_pick_error("%s 已被选走，请另选" % hname)
 		return
 	if _blocked_roles.has(role):
 		return
@@ -1468,7 +2103,7 @@ func _hide_summ_tip() -> void:
 
 func _sync_pick_ui() -> void:
 	if _pick_confirm_btn != null:
-		_pick_confirm_btn.disabled = _sel_hero == "" or _sel_sid == ""
+		_pick_confirm_btn.disabled = not _pick_ready()
 	if _pick_summary != null and _sel_hero != "" and _sel_sid != "":
 		_pick_summary.text = "待锁定：%s · %s + %s" % [str(HeroPickData.HERO_ROLE[_sel_hero]), _sel_hero, _sel_summ]
 		_pick_summary.add_theme_color_override("font_color", COL_GOLD)
@@ -1490,11 +2125,13 @@ func _refresh_preview() -> void:
 			_prev.set_accent(rcol)
 	else:
 		_preview_name.text = "请选择英雄"
-	_preview_role.text = ("职责 · " + role) if role != "" else "职责 —"
+	_preview_role.text = ("定位 · " + role) if role != "" else "定位 —"
 	_preview_role.add_theme_color_override("font_color", rcol.lightened(0.2))
 	if _prev_role_chip != null:
 		_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(rcol, 0.55, 12))
-	_preview_summ.text = "召唤师 · " + (_sel_summ if _sel_summ != "" else "未选择")
+	var rec_sid := HeroPickData.recommended_summoner(_sel_hero) if _sel_hero != "" else ""
+	var rec_tag := "（推荐）" if (rec_sid != "" and not _summ_manual) else ""
+	_preview_summ.text = "召唤师 · " + (_sel_summ if _sel_summ != "" else "未选择") + rec_tag
 	if _preview_summ_icon != null:
 		_preview_summ_icon.set_summoner(_sel_summ)
 	# 技能 chip 行：召唤师技能的类型/冷却/法力 + 可锁定状态
@@ -1511,8 +2148,198 @@ func _refresh_preview() -> void:
 		_prev_chip_row.add_child(_mk_chip(
 			"可锁定" if (_sel_hero != "" and _sel_sid != "") else "先选英雄+召唤师",
 			UiKit.C_HEAL if (_sel_hero != "" and _sel_sid != "") else UiKit.C_DANGER))
+	_refresh_skill_chips()
+	_refresh_build_row()
+	if _preview_tip != null:
+		_preview_tip.text = ("分路：%s · 只能选择%s英雄 · 锁后仍可改选再锁" % [PlayerPrefs.get_lane(), _lane_role]) if _lane_locked else "点英雄卡选英雄 → 右侧选召唤师 → 点锁定；锁后仍可改选再锁"
 	_style_pick_cards()
 
+
+# —— 英雄技能预览 + 推荐出装（对齐单机选人页）——
+
+# 英雄配置（技能 id / 推荐召唤师）懒取 BattleManager.hero_configs，大厅不重复维护一份数据
+func _hero_cfg(hero: String) -> Dictionary:
+	if _hero_cfg_cache.is_empty():
+		var bm := BattleManager.new()
+		if bm != null:
+			_hero_cfg_cache = bm.hero_configs
+			bm.free()
+	return _hero_cfg_cache.get(hero, {})
+
+# 中栏技能 chip：3 个英雄技能（图标 + 名称 + 类型/冷却/法力），悬停看简介
+func _refresh_skill_chips() -> void:
+	if _prev_skill_row == null:
+		return
+	for c in _prev_skill_row.get_children():
+		_prev_skill_row.remove_child(c)
+		c.queue_free()
+	if _sel_hero == "":
+		return
+	var skills: Array = _hero_cfg(_sel_hero).get("skills", [])
+	for i in skills.size():
+		var sid := str(skills[i])
+		var sk: Skill = SkillDatabase.get_skill(sid)
+		var chip := PanelContainer.new()
+		chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.55, 12))
+		chip.mouse_filter = Control.MOUSE_FILTER_STOP
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 7)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(SelectArt.SkillGlyph.new(_sel_hero, sk, i, 38))
+		var info := VBoxContainer.new()
+		info.add_theme_constant_override("separation", 0)
+		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var nm := _mk_label("%d  %s" % [i + 1, str(sk.skill_name) if sk != null else sid], _fs(UiKit.FS_SM), COL_TEXT)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info.add_child(nm)
+		var meta := "技能" if sk == null else "%s · 冷却 %ds" % [_skill_kind(int(sk.type)), int(round(sk.cooldown))]
+		var ml := _mk_label(meta, _fs(UiKit.FS_XS), COL_SUB)
+		ml.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info.add_child(ml)
+		row.add_child(info)
+		chip.add_child(row)
+		chip.mouse_entered.connect(_show_skill_tip.bind(chip, sk, i))
+		chip.mouse_exited.connect(_hide_skill_tip)
+		_prev_skill_row.add_child(chip)
+
+# 技能 chip 悬停浮层：类型/冷却/法力/距离 + 伤害·范围·持续·控制简介
+func _show_skill_tip(card: Control, sk: Skill, idx: int) -> void:
+	if _prev_skill_tip != null and is_instance_valid(_prev_skill_tip):
+		_prev_skill_tip.queue_free()
+	_prev_skill_tip = PanelContainer.new()
+	_prev_skill_tip.custom_minimum_size = Vector2(360, 0)
+	_prev_skill_tip.z_index = 200
+	_prev_skill_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prev_skill_tip.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_TEAM0, true, 0.94))
+	add_child(_prev_skill_tip)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 3)
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prev_skill_tip.add_child(v)
+	var nm_text := ("%d  %s" % [idx + 1, str(sk.skill_name)]) if sk != null else ("技能 %d" % (idx + 1))
+	var nm := _mk_label(nm_text, _fs(UiKit.FS_LG), COL_GOLD)
+	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(nm)
+	if sk != null:
+		var meta := "类型：%s · 冷却 %.1fs" % [_skill_kind(int(sk.type)), sk.cooldown]
+		if sk.mana_cost > 0:
+			meta += " · 法力 %d" % sk.mana_cost
+		if sk.cast_range > 0.0:
+			meta += " · 距离 %.0fm" % sk.cast_range
+		var ml := _mk_label(meta, _fs(UiKit.FS_SM), COL_SUB)
+		ml.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		v.add_child(ml)
+		var desc := _skill_desc(sk)
+		if desc != "":
+			var dl := _mk_label(desc, _fs(UiKit.FS_SM), COL_TEXT)
+			dl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			v.add_child(dl)
+	_prev_skill_tip.reset_size()
+	var vp := get_viewport_rect().size
+	var pos := card.global_position + Vector2(16, 16)
+	pos.x = clampf(pos.x, 8.0, maxf(8.0, vp.x - _prev_skill_tip.size.x - 8.0))
+	pos.y = clampf(pos.y, 8.0, maxf(8.0, vp.y - _prev_skill_tip.size.y - 8.0))
+	_prev_skill_tip.global_position = pos
+
+func _hide_skill_tip() -> void:
+	if _prev_skill_tip != null and is_instance_valid(_prev_skill_tip):
+		_prev_skill_tip.visible = false
+
+# 技能简介：仅汇总 Skill 已有字段（伤害/范围/持续/护盾/控制），不编造文案
+func _skill_desc(sk: Skill) -> String:
+	var parts: Array = []
+	var dmg := sk.damage + sk.phy_damage + sk.mag_damage
+	if dmg > 0.0: parts.append("伤害 %d" % int(round(dmg)))
+	if sk.radius > 0.0: parts.append("范围 %.0fm" % sk.radius)
+	if sk.duration > 0.0: parts.append("持续 %.1fs" % sk.duration)
+	if sk.shield_amount > 0.0: parts.append("护盾 %d" % int(round(sk.shield_amount)))
+	if sk.applies_stun > 0.0: parts.append("眩晕 %.1fs" % sk.applies_stun)
+	if sk.applies_knockup > 0.0: parts.append("击飞 %.1fs" % sk.applies_knockup)
+	if sk.applies_slow > 0.0: parts.append("减速 %d%%" % int(round(sk.applies_slow * 100.0)))
+	return " · ".join(parts)
+
+# 出装方案按钮行：内置 3 套推荐 + 玩家已存方案 + 恢复推荐（点击写本局推荐出装）
+func _refresh_build_row() -> void:
+	if _build_row == null:
+		return
+	for c in _build_row.get_children():
+		_build_row.remove_child(c)
+		c.queue_free()
+	if _sel_hero == "":
+		return
+	if _build_hero != _sel_hero:
+		_load_build(_sel_hero)
+	var presets := _preset_builds(_sel_hero)
+	for i in presets.size():
+		var ids := _clean_build_items(presets[i])
+		_build_row.add_child(_mk_build_btn("方案%d" % (i + 1), ids, _build_items_tooltip(ids), UiKit.C_TEAM0))
+	var builds: Array = HeroBuildStore.get_builds(_sel_hero)
+	for i in mini(builds.size(), 6):
+		var ids := _clean_build_items((builds[i] as Dictionary).get("items", []))
+		_build_row.add_child(_mk_build_btn(str((builds[i] as Dictionary).get("name", "方案")), ids,
+			_build_items_tooltip(ids), UiKit.C_GOLD))
+	_build_row.add_child(_mk_build_btn("恢复推荐", _preset_build(_sel_hero, 0), "回到内置推荐方案1", UiKit.C_GOLD))
+
+func _mk_build_btn(text: String, ids: Array, tip: String, accent: Color) -> Button:
+	var active: bool = ids == _build_ids
+	var b := Button.new()
+	b.text = text
+	b.tooltip_text = tip
+	b.custom_minimum_size = Vector2(92, 34)
+	b.add_theme_font_size_override("font_size", _fs(UiKit.FS_XS))
+	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", accent, active))
+	b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", accent, active))
+	b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", accent, true))
+	b.add_theme_color_override("font_color", Color.WHITE if active else COL_TEXT)
+	b.pressed.connect(_pick_build.bind(ids))
+	return b
+
+# 点击方案：写成该英雄的本局推荐出装（对局内 UI_Manager 按 override 排序推荐/快买）
+func _pick_build(ids: Array) -> void:
+	if _sel_hero == "":
+		return
+	_build_ids = _clean_build_items(ids)
+	ItemDatabase.set_recommended_override(_sel_hero, _build_ids)
+	_refresh_build_row()
+
+# 切英雄时载入出装：本局 override > 已存方案1 > 内置推荐方案1（与单机选人一致）
+func _load_build(hero: String) -> void:
+	_build_hero = hero
+	var ov: Array = ItemDatabase.get_recommended_override(hero)
+	if not ov.is_empty():
+		_build_ids = _clean_build_items(ov)
+	elif not HeroBuildStore.get_builds(hero).is_empty():
+		_build_ids = _clean_build_items(HeroBuildStore.get_builds(hero)[0].get("items", []))
+	else:
+		_build_ids = _preset_build(hero, 0)
+
+func _preset_builds(hero: String) -> Array:
+	var vs: Array = ItemDatabase.get_recommended_variants(hero)
+	if vs.is_empty():
+		vs = ItemDatabase.get_recommended_variants(str(_hero_cfg(hero).get("role", "战士")))
+	return vs
+
+func _preset_build(hero: String, idx: int) -> Array:
+	var vs := _preset_builds(hero)
+	if vs.is_empty():
+		return []
+	return _clean_build_items(vs[clampi(idx, 0, vs.size() - 1)])
+
+func _clean_build_items(src: Array) -> Array:
+	var out: Array = []
+	for it in src:
+		var id := str(it)
+		if id != "" and not out.has(id) and not ItemDatabase.get_item(id).is_empty():
+			out.append(id)
+	return out.slice(0, 6)
+
+# 方案按钮 tooltip：列出 6 件装备名
+func _build_items_tooltip(items: Array) -> String:
+	var names: PackedStringArray = []
+	for id in items:
+		var it: Dictionary = ItemDatabase.get_item(str(id))
+		names.append(str(it.get("name", id)))
+	return " · ".join(names)
 
 func _on_pick_confirm() -> void:
 	if _sel_hero == "" or _sel_sid == "":
@@ -1520,6 +2347,12 @@ func _on_pick_confirm() -> void:
 	# 分路锁定时锁定前再校验一次职责
 	if _lane_locked and str(HeroPickData.HERO_ROLE.get(_sel_hero, "")) != _lane_role:
 		_show_pick_error("本机分路：%s · 只能锁定%s英雄" % [PlayerPrefs.get_lane(), _lane_role])
+		return
+	# 顺序选人：非本机回合不可锁定
+	if _draft_active() and not _draft_is_my_turn():
+		_show_pick_error("还没轮到你选人 · 等待 %s" % _draft_turn_label())
+		return
+	if _draft_done():
 		return
 	if _pick_status != null:
 		_pick_status.text = ""
@@ -1531,14 +2364,6 @@ func _on_pick_confirm() -> void:
 		if _pick_status != null:
 			_pick_status.text = "已提交，等待房主确认…"
 			_pick_status.add_theme_color_override("font_color", COL_SUB)
-
-
-func _host_start_battle() -> void:
-	if _role != 0:
-		return
-	if _host_go_btn != null:
-		_host_go_btn.disabled = true
-	NetSession.start_match()
 
 
 func _show_pick_error(msg: String) -> void:
@@ -1575,11 +2400,15 @@ func _mk_card_btn(text: String, accent: Color) -> Button:
 func _on_lobby_state(state: Dictionary) -> void:
 	if NetSession.cli_mode:
 		return
+	_last_state = state
 	var ph := int(state.get("phase", NetSession.Phase.LOBBY))
 	_set_menu_enabled(true)
 	if _role == -1:
 		_role = 1 if NetSession.mode == NetSession.Mode.CLIENT else 0
 	if ph == NetSession.Phase.SELECT:
+		# 顺序选人：host 以自己的推进为准，guest 采纳主机广播（无 draft 字段 = 旧流程同时选人）
+		if _role != 0:
+			_apply_draft_state(state.get("draft", {}))
 		# 大厅选人阶段：host 与每个 client 同屏选人。
 		# 每次状态事件都整体重建面板（他人锁定改灰 / 掉线腾出职责 / 旁观升席都即时生效；
 		# _adopt_self_choice 会保留本机未锁草稿，锁定态则采纳权威值）。
@@ -1609,6 +2438,8 @@ func _on_connect_failed(msg: String) -> void:
 func _on_host_gone() -> void:
 	if NetSession.cli_mode:
 		return
+	_auto_start_done = false
+	_auto_start_wait = -1.0
 	NetSession.disconnect_network()
 	if _ui != UIState.MENU:
 		_show_menu()
@@ -1631,8 +2462,8 @@ func _self_peer() -> int:
 
 
 func _route_battle() -> void:
-	get_tree().call_deferred("change_scene_to_file", "res://scenes/battle.tscn")
+	_show_loading_then("res://scenes/battle.tscn")
 
 
 func _route_client() -> void:
-	get_tree().call_deferred("change_scene_to_file", "res://scenes/net_client.tscn")
+	_show_loading_then("res://scenes/net_client.tscn")

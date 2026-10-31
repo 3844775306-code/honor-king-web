@@ -1,0 +1,22 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[Debug] AI路径球显示已开启（F4切换）
+[Debug] 击杀奖励调试日志已开启（BattleManager.debug_kill_rewards）
+[A*]己 马超: (-60,60)->(-20,40) 路点40 终点(-20,40) 目标移动 0.1ms 标记0格
+[A*]己 妲己: (-60,60)->(-49,49) 路点13 终点(-49,49) 目标移动 0.1ms 标记0格
+[A*]己 孙尚香: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]己 刘禅: (-60,60)->(-48,53) 路点12 终点(-48,53) 目标移动 0.1ms 标记0格
+[A*]敌 马超: (60,-60)->(20,-40) 路点40 终点(20,-40) 目标移动 0.1ms 标记0格
+[A*]敌 妲己: (60,-60)->(13,-15) 路点47 终点(13,-15) 目标移动 0.1ms 标记0格
+[A*]敌 元流之子: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+[A*]敌 夏侯惇: (60,-60)->(-19,-47) 路点79 终点(-19,-47) 目标移动 0.2ms 标记0格
+[A*]敌 刘禅: (60,-60)->(47,19) 路点78 终点(47,19) 目标移动 0.2ms 标记0格
+L grect=[P: (849.0, 830.0), S: (702.0, 756.0)] visible=true
+[SKILL t=1.2] 孙尚香 casts 翻滚突袭(1) Lv1 CD=5.0 cost=20
+L row1 screen=(1200.0, 1260.65) row0=[P: (24.0, 262.0), S: (472.0, 38.0)]
+L expanded=-1
+L expanded_final=-1 hit_page=0
+ERROR: 32 RID allocations of type 'N13RendererDummy15MaterialStorage13DummyMaterialE' were leaked at exit.
+ERROR: 3 RID allocations of type 'N13RendererDummy15MaterialStorage11DummyShaderE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N13RendererDummy9DummyMeshE' were leaked at exit.
+ERROR: 32 RID allocations of type 'N17RendererSceneCull8InstanceE' were leaked at exit.

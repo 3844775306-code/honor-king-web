@@ -62,6 +62,51 @@ var _zone_shader: Shader
 var _last_shake_msec: int = 0
 
 const SPELL_FX = preload("res://scripts/core/SpellFxTable.gd")
+# 联机 FX kind（与 NetSession/NetClientBattle 常量同值）
+const NET_FX_ZONE := 1     # FX_SPELL：客户端同款 ground_zone 地面法阵
+const NET_FX_RING := 21    # FX_WAVE_RING：地面冲击环
+const NET_FX_BURST := 24   # 通用技能命中爆发
+const NET_FX_DASH := 25    # 位移起手环
+const NET_FX_ULT := 26     # 大招爆发
+const NET_FX_PILLAR := 27  # 地面光柱
+const NET_FX_GLOW := 28    # 蓄力/护盾起手光
+
+# #43 联机 FX 插桩：host 侧技能视觉入快照流（非 HOST 自动 no-op）；同 caster+kind 节流防爆量
+var _net_fx_ms := {}
+
+func _net_push(kind: int, pos: Vector3, team: int, r: float, life: float,
+		caster: String = "", min_ms: int = 120) -> void:
+	if NetSession.mode != NetSession.Mode.HOST:
+		return
+	var key := "%d|%s" % [kind, caster]
+	var now := Time.get_ticks_msec()
+	if now - int(_net_fx_ms.get(key, -999999)) < min_ms:
+		return
+	_net_fx_ms[key] = now
+	NetSession.push_net_fx(kind, pos, team, r, life, caster)
+
+# 最近英雄名（FX 事件不带 caster 时，客户端据此取元素配色）
+func _net_caster_at(pos: Vector3) -> String:
+	if get_tree() == null:
+		return ""
+	var best := ""
+	var bd := 12.0
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if not is_instance_valid(e):
+			continue
+		var d: float = e.global_position.distance_to(pos)
+		if d < bd:
+			bd = d
+			best = str(e.display_name)
+	return best
+
+func _net_team_at(pos: Vector3) -> int:
+	if get_tree() == null:
+		return 0
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if is_instance_valid(e) and e.global_position.distance_to(pos) < 8.0:
+			return int(e.team)
+	return 0
 
 func _ready():
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -243,6 +288,7 @@ func footstep(pos: Vector3, color: Color = Color(0.70, 0.64, 0.54), size: float 
 func cast_glow(pos: Vector3, color: Color, radius: float = 1.0, dur: float = 0.5) -> void:
 	if quality <= 0 or _near_limit(0):
 		return
+	_net_push(NET_FX_GLOW, pos, _net_team_at(pos), radius, dur, _net_caster_at(pos), 150)
 	_ring(pos, radius, color, dur, 1.0, 0.35)
 	_burst(color, Color(1, 1, 1), pos + Vector3.UP * 0.4, 8, dur, 0.40, 2.2, Vector3.UP, 25.0, -2.0, true)
 
@@ -260,7 +306,8 @@ func cast_charge(hero_name: String, pos: Vector3, facing: Vector3 = Vector3.ZERO
 	var sf: float = 1.35 if big else 1.0
 	# duration>0：按真实前摇对齐（Hero 传 maxf(windup, 0.24/0.40)）；否则沿用旧档位
 	var dur: float = duration if duration > 0.0 else (0.40 if big else 0.28)
-	var base := Vector3(pos.x, 0.05, pos.z)
+	_net_push(NET_FX_GLOW, pos, _net_team_at(pos), 1.4, dur, hero_name, 80)
+	var base := ground_pos(pos)
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
 	root.position = base
@@ -410,7 +457,7 @@ func cast_charge(hero_name: String, pos: Vector3, facing: Vector3 = Vector3.ZERO
 func telegraph(pos: Vector3, radius: float, color: Color, dur: float = 0.65) -> void:
 	if quality <= 0 or get_tree() == null or _near_limit(1):
 		return
-	var base := Vector3(pos.x, 0.06, pos.z)
+	var base := ground_pos(pos)
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
 	root.position = base
@@ -597,9 +644,11 @@ func _element_flourish(el_name: String, col: Color, col2: Color, base: Vector3,
 func shockwave(pos: Vector3, radius: float, color: Color, dur: float = 0.45) -> void:
 	if quality <= 0:
 		return
-	_ring(pos, radius, color, dur, 1.0, 0.55)
-	_ring(pos, radius * 0.62, color.lerp(Color.WHITE, 0.35), dur * 0.75, 1.0, 0.3)
-	_light(pos + Vector3.UP * 1.0, color, 3.0, 0.18)
+	_net_push(NET_FX_RING, pos, _net_team_at(pos), radius, dur, _net_caster_at(pos), 100)
+	var gp := ground_pos(pos)
+	_ring(gp, radius, color, dur, 1.0, 0.55)
+	_ring(gp, radius * 0.62, color.lerp(Color.WHITE, 0.35), dur * 0.75, 1.0, 0.3)
+	_light(gp + Vector3.UP * 1.0, color, 3.0, 0.18)
 
 ## 光束（引导类技能：安琪拉R、后羿R弹道等）
 # ---------- 持续锁定光束（防御塔用：细光束一直连到当前目标） ----------
@@ -798,19 +847,46 @@ func screen_flash(color: Color, dur: float = 0.18) -> void:
 		ui.flash_screen(color, dur)
 
 # ---------------- P1 逐技能签名表现 ----------------
+# #43 联机：把一次技能出手折算成一条 FX 事件（大招=大爆发 / 区域=地面法阵 / 位移=脚下环 / 其余=命中爆发）
+func _net_spell_evt(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3, skill) -> void:
+	var is_ult: bool = slot == 2 and SPELL_FX.has_ult(hero_name)
+	var shape: String = SPELL_FX.get_skill_shape(skill) if skill != null else "bolt"
+	var pos: Vector3 = target_pos if target_pos != Vector3.ZERO else caster_pos
+	var kind := NET_FX_BURST
+	var rr := 2.2
+	var life := 0.6
+	if is_ult:
+		kind = NET_FX_ULT
+		rr = 3.4
+		life = 1.0
+	elif shape == "dash":
+		kind = NET_FX_DASH
+		pos = caster_pos
+		rr = 1.8
+		life = 0.45
+	elif shape == "zone" or shape == "aura":
+		kind = NET_FX_ZONE   # FX_SPELL：客户端用同款 Vfx.ground_zone 还原
+		rr = clampf(float(skill.radius) if skill != null else 2.5, 1.4, 6.5)
+		life = 0.9
+		if skill != null and float(skill.duration) >= 1.5:
+			life = clampf(float(skill.duration), 1.0, 4.0)
+	_net_push(kind, pos, _net_team_at(pos), rr, life, hero_name, 100)
+
 ## 技能出手统一入口：签名大招走 SpellFxTable，其余走通用元素爆发。
 ## slot: 0/1/2（对应 1/2/3 技能）；caster_pos 为手口位置（只用 x/z 定位地面法阵）。
 func play_spell(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,
 		skill, facing: Vector3, _is_local: bool) -> void:
 	if quality <= 0 or get_tree() == null:
 		return
+	# #43 联机：技能出手视觉入 FX 流（客户端看不到 host 的 play_spell 本地特效）
+	_net_spell_evt(hero_name, slot, caster_pos, target_pos, skill)
 	if slot != 2 or not SPELL_FX.has_ult(hero_name):
 		# P2：非签名技能按「技能类型 + 元素」自动分档，50+ 技能无需逐个手写
 		var s_el: Dictionary = element_data(element_of(hero_name))
 		var s_col: Color = s_el["c"]
 		var s_col2: Color = s_el["c2"]
-		var scp := Vector3(caster_pos.x, 0.08, caster_pos.z)
-		var sgy := Vector3(target_pos.x, 0.08, target_pos.z)
+		var scp := ground_pos(caster_pos)
+		var sgy := ground_pos(target_pos)
 		var sfdir: Vector3 = facing.normalized() if facing.length() > 0.01 else Vector3.FORWARD
 		_burst(s_col, s_col2, caster_pos, 10 if slot < 2 else 14, 0.5, s_el["size"], s_el["speed"], sfdir, 55.0, s_el["gravity"])
 		var shape := SPELL_FX.get_skill_shape(skill)
@@ -841,8 +917,8 @@ func play_spell(hero_name: String, slot: int, caster_pos: Vector3, target_pos: V
 	var el: Dictionary = element_data(str(entry.get("el", element_of(hero_name))))
 	var col: Color = el["c"]
 	var col2: Color = el["c2"]
-	var cp := Vector3(caster_pos.x, 0.08, caster_pos.z)
-	var gy := Vector3(target_pos.x, 0.08, target_pos.z)
+	var cp := ground_pos(caster_pos)
+	var gy := ground_pos(target_pos)
 	var fdir: Vector3 = facing.normalized() if facing.length() > 0.01 else Vector3.FORWARD
 	_burst(col, col2, caster_pos, 18, 0.6, el["size"], el["speed"], fdir, 55.0, el["gravity"])
 	sigil(cp, col, 2.2, 0.55)
@@ -888,7 +964,7 @@ func sigil(pos: Vector3, color: Color, radius: float = 3.0, dur: float = 0.9) ->
 		return
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
-	root.position = pos
+	root.position = ground_pos(pos)
 	_add_root(root)
 	var disc := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
@@ -1147,9 +1223,10 @@ func preview_ring(radius: float, team: int) -> Node3D:
 func pillar(pos: Vector3, color: Color, radius: float = 2.0, height: float = 8.0, dur: float = 0.8) -> void:
 	if quality <= 0 or get_tree() == null:
 		return
+	_net_push(NET_FX_PILLAR, pos, _net_team_at(pos), radius, dur, _net_caster_at(pos), 100)
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
-	root.position = pos
+	root.position = ground_pos(pos)
 	_add_root(root)
 	var mi := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
@@ -1181,12 +1258,14 @@ func pillar(pos: Vector3, color: Color, radius: float = 2.0, height: float = 8.0
 
 ## 环形爆发：双圈冲击波 + 上冲粒子
 func nova(pos: Vector3, color: Color, radius: float = 3.4) -> void:
+	_net_push(NET_FX_BURST, pos, _net_team_at(pos), radius, 0.55, _net_caster_at(pos), 120)
 	shockwave(pos, radius, color, 0.55)
 	shockwave(pos, radius * 0.68, color.lerp(Color.WHITE, 0.35), 0.42)
 	_burst(color, Color.WHITE, pos + Vector3.UP * 0.9, 16, 0.7, 0.6, 5.0, Vector3.UP, 55.0, -1.0)
 
 ## 连斩：三道扇形刀光 + 落点火花
 func slash_fx(from: Vector3, to: Vector3, color: Color) -> void:
+	_net_push(NET_FX_BURST, to, _net_team_at(to), 2.0, 0.5, _net_caster_at(from), 120)
 	var dir := to - from
 	dir.y = 0.0
 	if dir.length() < 0.5:
@@ -1283,7 +1362,7 @@ func _delayed_ring(pos: Vector3, radius: float, color: Color, delay: float, dur:
 	if get_tree() == null:
 		return
 	var t := get_tree().create_timer(delay)
-	t.timeout.connect(func(): _ring(pos, radius, color, dur, 1.8, 0.4))
+	t.timeout.connect(func(): _ring(ground_pos(pos), radius, color, dur, 1.8, 0.4))
 
 func _delayed_pillar(pos: Vector3, color: Color, delay: float) -> void:
 	if get_tree() == null:
@@ -1424,6 +1503,12 @@ func _spawn_skill_prop(hero_name: String, slot: int, caster_pos: Vector3, target
 			orbs_fx(caster_pos, color)
 		"sun_orb":
 			sun_orb_fx(caster_pos, color)
+		"mech_shield":
+			mech_shield_fx(caster_pos, color)
+		"mech_claw":
+			mech_claw_fx(caster_pos, target_pos, color)
+		"mech_stamp":
+			mech_stamp_fx(caster_pos, color)
 
 ## 小乔·扇子：实体扇面 + 5 根扇骨，旋转飞向目标
 func fan_fx(caster_pos: Vector3, target_pos: Vector3, color: Color) -> void:
@@ -1461,37 +1546,66 @@ func fan_fx(caster_pos: Vector3, target_pos: Vector3, color: Color) -> void:
 	tw.chain().tween_callback(root.queue_free)
 	hit_spark(dest, color, Vector3.UP, 0.9)
 
-## 小乔·旋风：三层旋转环 + 上升气流粒子
+## 小乔·旋风：中央风柱 + 三层螺旋环（倾斜 → 旋转可见）+ 上升气流粒子
 func tornado_fx(pos: Vector3, color: Color) -> void:
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
 	root.add_to_group(GROUP_PROP)
-	root.position = Vector3(pos.x, 0.0, pos.z)
+	root.position = ground_pos(pos)
 	_add_root(root)
 	var mats: Array[StandardMaterial3D] = []
+	# 中央风柱：下粗上细、加色混合的漏斗，替代原来的实心圆柱
+	var cone := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.3
+	cm.bottom_radius = 0.95
+	cm.height = 2.7
+	cm.radial_segments = 16
+	cm.rings = 1
+	cm.cap_top = false
+	cm.cap_bottom = false
+	cone.mesh = cm
+	cone.position.y = 1.35
+	cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var cone_mat := _prop_mat(color.lerp(Color.WHITE, 0.5), 0.20, 2.4)
+	cone_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	cone.material_override = cone_mat
+	root.add_child(cone)
+	mats.append(cone_mat)
+	# 三层倾斜环：绕 Y 自转，倾斜角让旋转看得出来，读作螺旋上升
 	for i in range(3):
 		var mi := MeshInstance3D.new()
 		var torus := TorusMesh.new()
-		var base_r := 1.05 - 0.22 * float(i)
-		torus.inner_radius = base_r * 0.72
+		var base_r := 1.05 - 0.2 * float(i)
+		torus.inner_radius = base_r * 0.7
 		torus.outer_radius = base_r
+		torus.rings = 28
+		torus.ring_segments = 8
 		mi.mesh = torus
-		mi.position.y = 0.28 + 0.5 * float(i)
+		mi.position.y = 0.34 + 0.62 * float(i)
+		mi.rotation.x = deg_to_rad(15.0 + 5.0 * float(i))
+		mi.rotation.z = deg_to_rad(-10.0 + 6.0 * float(i))
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		var mat := _prop_mat(color.lerp(Color.WHITE, 0.2 + 0.16 * float(i)), 0.42, 1.8)
+		var mat := _prop_mat(color.lerp(Color.WHITE, 0.22 + 0.14 * float(i)), 0.52, 2.4)
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 		mi.material_override = mat
 		root.add_child(mi)
 		mats.append(mat)
 		var spin := mi.create_tween()
 		spin.set_loops()
-		spin.tween_property(mi, "rotation:y", TAU, 0.55 - 0.08 * float(i))
+		spin.tween_property(mi, "rotation:y", TAU, 0.5 - 0.06 * float(i)).from(0.0)
 	_ring(Vector3(pos.x, 0.06, pos.z), 1.0, color, 0.55, 1.7, 0.4)
-	_burst(color, color.lerp(Color.WHITE, 0.4), root.position + Vector3.UP * 0.4, 22, 0.9, 0.55, 3.0, Vector3.UP, 35.0, -3.0)
+	# 上升气流：主角 + 细碎副色，向上螺旋
+	_burst(color, color.lerp(Color.WHITE, 0.5), root.position + Vector3.UP * 0.3, 26, 0.95, 0.5, 3.4, Vector3.UP, 42.0, -4.5)
+	_burst(color.lerp(Color.WHITE, 0.65), color, root.position + Vector3.UP * 0.9, 10, 0.7, 0.28, 2.2, Vector3.UP, 26.0, -2.0)
 	var tw := root.create_tween()
-	tw.tween_interval(1.4)
-	for mat in mats:
-		tw.tween_property(mat, "albedo_color:a", 0.0, 0.35)
-	tw.tween_callback(root.queue_free)
+	tw.set_parallel(true)
+	tw.tween_property(cone_mat, "albedo_color:a", 0.0, 0.55).set_delay(0.9)
+	tw.tween_property(cone, "scale", Vector3(1.35, 0.75, 1.35), 1.45)
+	for i in range(3):
+		tw.tween_property(mats[i + 1], "albedo_color:a", 0.0, 0.35).set_delay(1.05)
+	tw.chain().tween_callback(root.queue_free)
+
 
 ## 冰柱用的多棱水晶网格：底粗、腰部鼓、顶部收尖，切面有轻微不规则。
 func _crystal_mesh(rad: float, h: float, sides: int = 6, twist: float = 0.0) -> ArrayMesh:
@@ -1555,7 +1669,7 @@ func ice_pillars_fx(pos: Vector3, color: Color, count: int = 6, radius: float = 
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
 	root.add_to_group(GROUP_PROP)
-	root.position = Vector3(pos.x, 0.0, pos.z)
+	root.position = ground_pos(pos)
 	_add_root(root)
 	var mats: Array[StandardMaterial3D] = []
 	# 布局：1 根中心主冰柱 + 环形副冰柱；中低画质先减数量，保留冰阵轮廓
@@ -1666,7 +1780,7 @@ func ice_pillars_fx(pos: Vector3, color: Color, count: int = 6, radius: float = 
 ## 冰柱到期碎裂：碎冰四散 + 霜环
 func _ice_shatter(pos: Vector3, color: Color, radius: float, root: Node3D) -> void:
 	_burst(color.lerp(Color.WHITE, 0.4), color, Vector3(pos.x, 0.7, pos.z), 18, 0.5, 0.34, 3.2, Vector3.UP, 70.0, 7.0)
-	_ring(Vector3(pos.x, 0.08, pos.z), radius * 0.9, color, 0.32, 1.5, 0.26)
+	_ring(ground_pos(pos), radius * 0.9, color, 0.32, 1.5, 0.26)
 	if is_instance_valid(root):
 		root.queue_free()
 
@@ -1710,7 +1824,7 @@ func swords_fx(caster_pos: Vector3, target_pos: Vector3, color: Color) -> void:
 	var root := Node3D.new()
 	root.add_to_group(GROUP_FX)
 	root.add_to_group(GROUP_PROP)
-	root.position = Vector3(target_pos.x, 0.0, target_pos.z)
+	root.position = ground_pos(target_pos)
 	_add_root(root)
 	var mat := _prop_mat(color.lerp(Color.WHITE, 0.5), 0.92, 1.6)
 	for i in range(4):
@@ -1734,6 +1848,80 @@ func swords_fx(caster_pos: Vector3, target_pos: Vector3, color: Color) -> void:
 	tw.tween_property(mat, "albedo_color:a", 0.0, 0.30)
 	tw.tween_callback(root.queue_free)
 
+## 通用能量球：核心发光球 + 加色外壳 + 两条倾斜旋转光环 + 环绕粒子 + 点光。
+## 东皇能量球 / 亚瑟圣盾 / 施法法球共用，替代原来的“单个纯色球”。
+## style: "energy"(默认) / "void"(暗紫) / "holy"(金色)
+func make_orb(color: Color, radius: float = 0.6, style: String = "energy") -> Node3D:
+	var root := Node3D.new()
+	root.name = "Orb"
+	var hot: float = 0.58 if style == "holy" else 0.45
+	# 核心：高亮发光球
+	var core := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius * 0.60
+	sm.height = radius * 1.20
+	sm.radial_segments = 18
+	sm.rings = 10
+	core.mesh = sm
+	core.material_override = _add_mat(color.lerp(Color.WHITE, hot), 0.98, 2.6)
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(core)
+	# 外壳：加色球罩（软边光晕，不再硬边单球）
+	var shell := MeshInstance3D.new()
+	var sh := SphereMesh.new()
+	sh.radius = radius
+	sh.height = radius * 2.0
+	sh.radial_segments = 18
+	sh.rings = 10
+	shell.mesh = sh
+	shell.material_override = _add_mat(color, 0.26 if style == "holy" else 0.18, 1.4)
+	shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(shell)
+	# 两条倾斜光环：由 spin_orb() 每帧驱动，形成能量流动感
+	var rings: Array = []
+	for i in range(2):
+		var rm := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = radius * (0.94 + 0.08 * float(i))
+		tm.outer_radius = radius * (1.08 + 0.10 * float(i))
+		tm.rings = 20
+		tm.ring_segments = 6
+		rm.mesh = tm
+		rm.material_override = _add_mat(color.lerp(Color.WHITE, 0.32), 0.55, 1.9)
+		rm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		rm.rotation = Vector3(PI * 0.5, 0.0, PI * 0.30 * float(i + 1))
+		root.add_child(rm)
+		rings.append(rm)
+	root.set_meta("rings", rings)
+	# 环绕光斑粒子
+	if quality >= 1:
+		var pr := _charge_particles(12, 0.55, color, radius * 0.55, 1.0)
+		pr.emitting = true
+		pr.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		pr.emission_sphere_radius = radius * 0.85
+		pr.gravity = Vector3.ZERO
+		pr.initial_velocity_min = 0.05
+		pr.initial_velocity_max = 0.35
+		root.add_child(pr)
+	# 点光：让球体真的照亮周围
+	var lt := OmniLight3D.new()
+	lt.light_color = color
+	lt.light_energy = 1.0
+	lt.omni_range = maxf(3.0, radius * 6.0)
+	root.add_child(lt)
+	return root
+
+## 能量球光环自转（调用方在 _process/_physics_process 里用累计时间驱动）
+func spin_orb(root: Node3D, t: float) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	var rings: Array = root.get_meta("rings", [])
+	for i in range(rings.size()):
+		var r = rings[i]
+		if is_instance_valid(r):
+			r.rotation.y = t * (2.2 + 0.9 * float(i)) * (1.0 if i == 0 else -1.0)
+			r.rotation.z = PI * 0.30 * float(i + 1) + sin(t * 1.6 + float(i)) * 0.18
+
 ## 安琪拉/妲己·法球：3 颗实体光球绕施法者旋转
 func orbs_fx(caster_pos: Vector3, color: Color, count: int = 3) -> void:
 	var root := Node3D.new()
@@ -1741,28 +1929,30 @@ func orbs_fx(caster_pos: Vector3, color: Color, count: int = 3) -> void:
 	root.add_to_group(GROUP_PROP)
 	root.position = caster_pos + Vector3.UP * 1.3
 	_add_root(root)
-	var mat := _prop_mat(color.lerp(Color.WHITE, 0.35), 0.95, 1.8)
+	var orbs: Array = []
 	for i in range(count):
-		var mi := MeshInstance3D.new()
-		var sm := SphereMesh.new()
-		sm.radius = 0.22
-		sm.height = 0.44
-		sm.radial_segments = 10
-		sm.rings = 6
-		mi.mesh = sm
-		mi.material_override = mat
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# 每颗法球都换成“核心+外壳+双光环+粒子”的分层球体
+		var o: Node3D = make_orb(color, 0.30, "energy")
 		var ang := TAU * float(i) / float(count)
-		mi.position = Vector3(cos(ang) * 0.65, sin(float(i) * 2.0) * 0.15, sin(ang) * 0.65)
-		root.add_child(mi)
+		o.position = Vector3(cos(ang) * 0.65, sin(float(i) * 2.0) * 0.15, sin(ang) * 0.65)
+		root.add_child(o)
+		orbs.append(o)
 	var tw := root.create_tween()
 	tw.set_loops(2)
 	tw.tween_property(root, "rotation:y", TAU, 0.7)
 	_light(root.position, color, 2.0, 0.3)
-	var tw2 := root.create_tween()
-	tw2.tween_interval(1.3)
-	tw2.tween_property(mat, "albedo_color:a", 0.0, 0.30)
-	tw2.tween_callback(root.queue_free)
+	# 光环自转 + 球体脉动（0.6s 内连续可见）
+	var spin_t := 0.0
+	while spin_t < 1.2:
+		spin_t += 0.05
+		for o in orbs:
+			if is_instance_valid(o):
+				spin_orb(o, spin_t)
+		await get_tree().create_timer(0.05).timeout
+	for o in orbs:
+		if is_instance_valid(o):
+			o.queue_free()
+	root.queue_free()
 
 ## 后羿·太阳：发光球体 + 8 道旋转光芒
 func sun_orb_fx(pos: Vector3, color: Color) -> void:
@@ -1807,6 +1997,431 @@ func sun_orb_fx(pos: Vector3, color: Color) -> void:
 	tw.tween_property(cmat, "albedo_color:a", 0.0, 0.30)
 	tw.tween_property(ray_mat, "albedo_color:a", 0.0, 0.30)
 	tw.tween_callback(root.queue_free)
+
+## 刘禅·小霸王护盾（Q）：六片机械盾板绕身环转 + 脚底齿轮盘 + 蒸汽喷口
+func mech_shield_fx(caster_pos: Vector3, color: Color) -> void:
+	var holder := Node3D.new()
+	holder.add_to_group(GROUP_FX)
+	holder.add_to_group(GROUP_PROP)
+	_add_root(holder)
+	var bm = _bm()
+	var host: Node3D = null
+	if bm and bm.hero and is_instance_valid(bm.hero) and bm.hero.global_position.distance_to(caster_pos) < 4.0:
+		host = bm.hero
+		host.add_child(holder)
+		holder.position = Vector3.ZERO
+	else:
+		holder.position = caster_pos
+	var hot := color.lerp(Color(1.0, 0.62, 0.22), 0.5)
+	var spin_root := Node3D.new()
+	spin_root.position.y = 1.02
+	holder.add_child(spin_root)
+	# 六片六边形盾板（金属 PBR + 接缝自发光），绕英雄环转
+	for i in range(6):
+		var a := TAU * float(i) / 6.0
+		var plate := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.30
+		cm.bottom_radius = 0.34
+		cm.height = 0.09
+		cm.radial_segments = 6
+		plate.mesh = cm
+		plate.material_override = MeshFactory.metal_pbr(Color(0.56, 0.60, 0.68), 0.30, hot)
+		plate.position = Vector3(cos(a) * 0.95, 0.0, sin(a) * 0.95)
+		plate.rotation = Vector3(PI * 0.5, -a, 0.0)   # 面片朝外，读成包围式护盾
+		plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		spin_root.add_child(plate)
+		# 每片盾板内侧的发光棱线
+		var edge := MeshInstance3D.new()
+		var eb := BoxMesh.new()
+		eb.size = Vector3(0.06, 0.34, 0.34)
+		edge.mesh = eb
+		edge.material_override = _add_mat(Color(1.0, 0.72, 0.34), 0.55, 2.4)
+		edge.position = plate.position * 0.86
+		edge.rotation.y = -a
+		edge.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		spin_root.add_child(edge)
+	var tw_spin := holder.create_tween()
+	tw_spin.set_loops()
+	tw_spin.tween_property(spin_root, "rotation:y", TAU, 2.2).as_relative()
+	var g1 := _gear_disc(holder, 1.02, 0.10, 18, 0.12, 0.34, Color(0.22, 0.24, 0.29), hot, 0.10)
+	var g2 := _gear_disc(holder, 0.66, 0.06, 12, 0.10, 0.18, Color(0.58, 0.62, 0.70), Color(0, 0, 0, 0), 0.17)
+	var t1 := holder.create_tween()
+	t1.set_loops()
+	t1.tween_property(g1, "rotation:y", TAU, 3.0).as_relative()
+	var t2 := holder.create_tween()
+	t2.set_loops()
+	t2.tween_property(g2, "rotation:y", -TAU, 1.8).as_relative()
+	if quality >= 1:
+		var steam := _charge_particles(14, 0.7, Color(0.86, 0.90, 0.96), 0.20, 1.0)
+		steam.emitting = true
+		steam.position = Vector3.UP * 0.22
+		steam.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+		steam.emission_ring_radius = 0.85
+		steam.emission_ring_inner_radius = 0.55
+		steam.emission_ring_height = 0.1
+		steam.gravity = Vector3(0.0, 1.6, 0.0)
+		steam.initial_velocity_min = 0.4
+		steam.initial_velocity_max = 1.3
+		holder.add_child(steam)
+	hit_spark(caster_pos + Vector3.UP * 0.9, color, Vector3.UP, 0.9)
+	var tw := holder.create_tween()
+	tw.tween_interval(2.4)
+	tw.tween_method(Callable(self, "_fade_geo").bind(holder), 0.0, 1.0, 0.5)
+	tw.tween_callback(holder.queue_free)
+
+## 刘禅·机关魔爪（W）：真齿轮底盘 + 三只液压机械臂（装甲/关节齿轮/三指爪）+ 蒸汽火花
+func mech_claw_fx(caster_pos: Vector3, target_pos: Vector3, color: Color) -> void:
+	var root := Node3D.new()
+	root.add_to_group(GROUP_FX)
+	root.add_to_group(GROUP_PROP)
+	root.position = ground_pos(target_pos)
+	_add_root(root)
+	var steel := Color(0.58, 0.62, 0.70)
+	var dark := Color(0.20, 0.22, 0.27)
+	var hot := color.lerp(Color(1.0, 0.58, 0.20), 0.5)
+	# 1) 齿轮底盘：大齿轮（中心孔）+ 上层小齿轮反向旋转
+	var g1 := _gear_disc(root, 1.88, 0.22, 22, 0.20, 0.55, dark, hot, 0.12)
+	var g2 := _gear_disc(root, 1.18, 0.10, 14, 0.14, 0.30, steel, Color(0, 0, 0, 0), 0.25)
+	var s1 := root.create_tween()
+	s1.set_loops()
+	s1.tween_property(g1, "rotation:y", TAU, 2.8).as_relative()
+	var s2 := root.create_tween()
+	s2.set_loops()
+	s2.tween_property(g2, "rotation:y", -TAU, 1.6).as_relative()
+	# 2) 三只机械臂：大臂 + 关节齿轮 + 装甲前臂 + 液压杆 + 三指爪
+	for i in range(3):
+		var arm := Node3D.new()
+		arm.rotation.y = TAU * float(i) / 3.0
+		arm.position.y = 2.05
+		root.add_child(arm)
+		var upper := MeshInstance3D.new()
+		var ucm := CylinderMesh.new()
+		ucm.top_radius = 0.16
+		ucm.bottom_radius = 0.23
+		ucm.height = 1.05
+		ucm.radial_segments = 10
+		upper.mesh = ucm
+		upper.material_override = MeshFactory.metal_pbr(dark, 0.38, hot)
+		upper.position = Vector3(0.0, 0.42, 0.22)
+		upper.rotation.x = deg_to_rad(-12.0)
+		upper.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		arm.add_child(upper)
+		# 关节齿轮（正对前方，像肘部减速器）
+		var joint := MeshInstance3D.new()
+		joint.mesh = MeshFactory.build_gear(0.30, 0.14, 12, 0.09, 0.09)
+		joint.material_override = MeshFactory.metal_pbr(steel, 0.26, hot)
+		joint.position = Vector3(0.0, 0.0, 0.0)
+		joint.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		arm.add_child(joint)
+		# 装甲前臂
+		var fore := MeshInstance3D.new()
+		var fbm := BoxMesh.new()
+		fbm.size = Vector3(0.34, 0.28, 1.45)
+		fore.mesh = fbm
+		fore.material_override = MeshFactory.metal_pbr(steel, 0.30, hot)
+		fore.position = Vector3(0.0, -0.18, 0.92)
+		fore.rotation.x = deg_to_rad(-22.0)
+		fore.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		arm.add_child(fore)
+		# 液压杆（发光）+ 铆钉
+		for k in range(2):
+			var rod := MeshInstance3D.new()
+			var rcm := CylinderMesh.new()
+			rcm.top_radius = 0.045
+			rcm.bottom_radius = 0.045
+			rcm.height = 1.05
+			rcm.radial_segments = 8
+			rod.mesh = rcm
+			rod.material_override = _add_mat(Color(1.0, 0.66, 0.28), 0.75, 2.2)
+			rod.position = Vector3((float(k) - 0.5) * 0.30, -0.02, 0.75)
+			rod.rotation.x = deg_to_rad(68.0)
+			rod.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			arm.add_child(rod)
+		for k in range(3):
+			var rivet := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = 0.055
+			sm.height = 0.11
+			sm.radial_segments = 8
+			sm.rings = 4
+			rivet.mesh = sm
+			rivet.material_override = MeshFactory.metal_pbr(Color(0.74, 0.78, 0.84), 0.22)
+			rivet.position = Vector3((float(k) - 1.0) * 0.12, -0.02, 0.55 + 0.32 * float(k))
+			rivet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			arm.add_child(rivet)
+		# 三指爪：向内收拢的锥形指 + 发光指节
+		for k in range(3):
+			var claw := MeshInstance3D.new()
+			var ccm := CylinderMesh.new()
+			ccm.top_radius = 0.015
+			ccm.bottom_radius = 0.085
+			ccm.height = 0.66
+			ccm.radial_segments = 8
+			claw.mesh = ccm
+			claw.material_override = MeshFactory.metal_pbr(steel, 0.24, hot)
+			var ca := TAU * float(k) / 3.0
+			claw.position = Vector3(cos(ca) * 0.26, -0.62, 1.42 + sin(ca) * 0.26)
+			claw.rotation = Vector3(deg_to_rad(150.0), -ca, 0.0)
+			claw.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			arm.add_child(claw)
+			var tip := MeshInstance3D.new()
+			var tsm := SphereMesh.new()
+			tsm.radius = 0.05
+			tsm.height = 0.10
+			tsm.radial_segments = 8
+			tsm.rings = 4
+			tip.mesh = tsm
+			tip.material_override = _add_mat(Color(1.0, 0.74, 0.34), 0.9, 3.0)
+			tip.position = Vector3(cos(ca) * 0.34, -0.86, 1.52 + sin(ca) * 0.34)
+			tip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			arm.add_child(tip)
+		var drop := arm.create_tween()
+		drop.tween_property(arm, "position:y", 0.62, 0.17).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	# 3) 冲击：齿轮环扩散 + 火花 + 蒸汽
+	var ring := _gear_disc(root, 1.0, 0.08, 16, 0.16, 0.7, steel, hot, 0.16)
+	var rw := ring.create_tween()
+	rw.set_parallel(true)
+	rw.tween_property(ring, "scale", Vector3(2.6, 2.6, 2.6), 0.45).set_ease(Tween.EASE_OUT)
+	rw.tween_property(ring, "rotation:y", TAU, 0.45)
+	hit_spark(root.position + Vector3.UP * 0.4, color, Vector3.UP, 1.1)
+	for k in range(6):
+		var a := TAU * float(k) / 6.0
+		_streak(root.position + Vector3.UP * 0.28, root.position + Vector3(cos(a) * 1.9, 0.12, sin(a) * 1.9), hot)
+	camera_shake(0.10, 0.18)
+	if quality >= 1:
+		var pr := _charge_particles(18, 0.55, hot, 0.16, 1.0)
+		pr.emitting = true
+		pr.position = Vector3.UP * 0.3
+		pr.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		pr.emission_sphere_radius = 1.15
+		pr.gravity = Vector3(0.0, -3.0, 0.0)
+		root.add_child(pr)
+		var steam := _charge_particles(16, 0.8, Color(0.88, 0.92, 0.98), 0.22, 0.8)
+		steam.emitting = true
+		steam.position = Vector3.UP * 0.2
+		steam.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+		steam.emission_ring_radius = 1.3
+		steam.emission_ring_inner_radius = 0.6
+		steam.emission_ring_height = 0.2
+		steam.gravity = Vector3(0.0, 2.2, 0.0)
+		steam.initial_velocity_min = 0.6
+		steam.initial_velocity_max = 1.8
+		root.add_child(steam)
+	var tw := root.create_tween()
+	tw.tween_interval(0.85)
+	tw.tween_method(Callable(self, "_fade_geo").bind(root), 0.0, 1.0, 0.3)
+	tw.tween_callback(root.queue_free)
+
+
+## 刘禅·暴走熊猫（R）：齿轮法阵 + 机甲熊猫（装甲躯干/护肩/齿轮关节/发光胸核）抬升
+func mech_stamp_fx(pos: Vector3, color: Color) -> void:
+	var root := Node3D.new()
+	root.add_to_group(GROUP_FX)
+	root.add_to_group(GROUP_PROP)
+	root.position = ground_pos(pos)
+	_add_root(root)
+	var steel := Color(0.60, 0.64, 0.72)
+	var dark := Color(0.19, 0.21, 0.26)
+	var hot := color.lerp(Color(1.0, 0.62, 0.22), 0.45)
+	# 1) 齿轮法阵：三层（外大齿轮 / 内齿轮反向 / 细符文环）
+	var g_out := _gear_disc(root, 2.55, 0.16, 26, 0.22, 1.15, dark, hot, 0.10)
+	var g_in := _gear_disc(root, 1.65, 0.10, 18, 0.16, 0.55, steel, hot, 0.20)
+	var rune := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.62
+	tm.outer_radius = 0.70
+	tm.rings = 36
+	tm.ring_segments = 8
+	rune.mesh = tm
+	rune.material_override = _add_mat(Color(1.0, 0.72, 0.34), 0.6, 2.6)
+	rune.rotation.x = -PI * 0.5
+	rune.position.y = 0.26
+	rune.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(rune)
+	var t_out := root.create_tween()
+	t_out.set_loops()
+	t_out.tween_property(g_out, "rotation:y", TAU, 3.2).as_relative()
+	var t_in := root.create_tween()
+	t_in.set_loops()
+	t_in.tween_property(g_in, "rotation:y", -TAU, 1.9).as_relative()
+	# 2) 机甲熊猫：全部装甲件（无纯色球体）
+	var body := Node3D.new()
+	body.position = Vector3(0.0, 0.08, 0.0)
+	root.add_child(body)
+	var torso := MeshInstance3D.new()
+	var cap := CapsuleMesh.new()
+	cap.radius = 1.02
+	cap.height = 2.10
+	cap.radial_segments = 16
+	cap.rings = 8
+	torso.mesh = cap
+	torso.material_override = MeshFactory.metal_pbr(dark, 0.34, hot)
+	torso.position.y = 1.35
+	torso.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(torso)
+	# 胸甲 + 发光胸核
+	var chest := MeshInstance3D.new()
+	var cbm := BoxMesh.new()
+	cbm.size = Vector3(1.30, 1.00, 0.52)
+	chest.mesh = cbm
+	chest.material_override = MeshFactory.metal_pbr(steel, 0.28, hot)
+	chest.position = Vector3(0.0, 1.62, 0.52)
+	chest.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(chest)
+	var core := MeshInstance3D.new()
+	var csm := SphereMesh.new()
+	csm.radius = 0.30
+	csm.height = 0.60
+	csm.radial_segments = 12
+	csm.rings = 6
+	core.mesh = csm
+	core.material_override = _add_mat(Color(1.0, 0.74, 0.34), 0.9, 3.2)
+	core.position = Vector3(0.0, 1.66, 0.80)
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(core)
+	# 护肩 + 关节齿轮 + 手臂 + 拳
+	for i in range(2):
+		var sx: float = -1.0 if i == 0 else 1.0
+		var pauldron := MeshInstance3D.new()
+		var pbm := BoxMesh.new()
+		pbm.size = Vector3(0.80, 0.52, 0.92)
+		pauldron.mesh = pbm
+		pauldron.material_override = MeshFactory.metal_pbr(steel, 0.26, hot)
+		pauldron.position = Vector3(sx * 1.12, 1.98, 0.06)
+		pauldron.rotation.z = deg_to_rad(-12.0 * sx)
+		pauldron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body.add_child(pauldron)
+		var sj := MeshInstance3D.new()
+		sj.mesh = MeshFactory.build_gear(0.34, 0.12, 12, 0.09, 0.10)
+		sj.material_override = MeshFactory.metal_pbr(dark, 0.30, hot)
+		sj.position = Vector3(sx * 1.16, 1.86, 0.10)
+		sj.rotation.y = PI * 0.5
+		sj.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body.add_child(sj)
+		var arm := MeshInstance3D.new()
+		var acm := CapsuleMesh.new()
+		acm.radius = 0.30
+		acm.height = 1.30
+		arm.mesh = acm
+		arm.material_override = MeshFactory.metal_pbr(dark, 0.36, hot)
+		arm.position = Vector3(sx * 1.30, 1.22, 0.06)
+		arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body.add_child(arm)
+		var fist := MeshInstance3D.new()
+		var fbm2 := BoxMesh.new()
+		fbm2.size = Vector3(0.62, 0.56, 0.64)
+		fist.mesh = fbm2
+		fist.material_override = MeshFactory.metal_pbr(steel, 0.28, hot)
+		fist.position = Vector3(sx * 1.34, 0.72, 0.10)
+		fist.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body.add_child(fist)
+		# 耳朵（金属圆盘）+ 头 + 面罩 + 鼻子
+		var ear := MeshInstance3D.new()
+		var ecm := CylinderMesh.new()
+		ecm.top_radius = 0.24
+		ecm.bottom_radius = 0.24
+		ecm.height = 0.12
+		ecm.radial_segments = 12
+		ear.mesh = ecm
+		ear.material_override = MeshFactory.metal_pbr(dark, 0.32, hot)
+		ear.position = Vector3(sx * 0.60, 3.02, 0.0)
+		ear.rotation.z = PI * 0.5
+		ear.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body.add_child(ear)
+	var head := MeshInstance3D.new()
+	var hcm := CapsuleMesh.new()
+	hcm.radius = 0.56
+	hcm.height = 1.00
+	hcm.radial_segments = 14
+	hcm.rings = 7
+	head.mesh = hcm
+	head.material_override = MeshFactory.metal_pbr(steel, 0.30, hot)
+	head.position = Vector3(0.0, 2.62, 0.02)
+	head.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(head)
+	var visor := MeshInstance3D.new()
+	var vbm := BoxMesh.new()
+	vbm.size = Vector3(0.78, 0.16, 0.14)
+	visor.mesh = vbm
+	visor.material_override = _add_mat(Color(1.0, 0.68, 0.28), 0.85, 3.0)
+	visor.position = Vector3(0.0, 2.70, 0.50)
+	visor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(visor)
+	var snout := MeshInstance3D.new()
+	var sbm := BoxMesh.new()
+	sbm.size = Vector3(0.36, 0.26, 0.18)
+	snout.mesh = sbm
+	snout.material_override = MeshFactory.metal_pbr(dark, 0.32, hot)
+	snout.position = Vector3(0.0, 2.46, 0.52)
+	snout.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(snout)
+	# 背后齿轮光环
+	var halo := MeshInstance3D.new()
+	halo.mesh = MeshFactory.build_gear(1.45, 0.10, 18, 0.16, 0.85)
+	halo.material_override = MeshFactory.metal_pbr(steel, 0.28, hot)
+	halo.position = Vector3(0.0, 1.70, -0.85)
+	halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body.add_child(halo)
+	var t_halo := halo.create_tween()
+	t_halo.set_loops()
+	t_halo.tween_property(halo, "rotation:z", TAU, 4.0).as_relative()
+	var rise := body.create_tween()
+	rise.set_parallel(true)
+	rise.tween_property(body, "position", Vector3(0.0, 1.05, 0.0), 0.55).set_ease(Tween.EASE_OUT)
+	rise.tween_property(body, "scale", Vector3(1.22, 1.22, 1.22), 0.55).set_ease(Tween.EASE_OUT)
+	# 3) 冲击波 + 蒸汽 + 火花
+	shockwave(ground_pos(pos), 4.2, color, 0.5)
+	if quality >= 1:
+		var pr := _charge_particles(24, 0.9, hot, 0.18, 1.0)
+		pr.emitting = true
+		pr.position = Vector3.UP * 0.4
+		pr.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		pr.emission_sphere_radius = 2.4
+		pr.gravity = Vector3(0.0, 3.2, 0.0)
+		root.add_child(pr)
+		var steam := _charge_particles(20, 1.0, Color(0.90, 0.94, 1.0), 0.26, 0.8)
+		steam.emitting = true
+		steam.position = Vector3.UP * 0.3
+		steam.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+		steam.emission_ring_radius = 2.2
+		steam.emission_ring_inner_radius = 1.2
+		steam.emission_ring_height = 0.3
+		steam.gravity = Vector3(0.0, 2.6, 0.0)
+		steam.initial_velocity_min = 0.8
+		steam.initial_velocity_max = 2.2
+		root.add_child(steam)
+	camera_shake(0.14, 0.26)
+	var tw := root.create_tween()
+	tw.tween_interval(0.95)
+	tw.tween_method(Callable(self, "_fade_geo").bind(root), 0.0, 1.0, 0.45)
+	tw.tween_callback(root.queue_free)
+
+## 平放的齿轮 MeshInstance3D（XY 平面网格绕 X 轴转 -90° 贴地）
+func _gear_disc(parent: Node3D, radius: float, thickness: float, teeth: int, tooth_h: float,
+		hole: float, color: Color, glow: Color, y: float) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = MeshFactory.build_gear(radius, thickness, teeth, tooth_h, hole)
+	mi.material_override = MeshFactory.metal_pbr(color, 0.30, glow)
+	mi.rotation.x = -PI * 0.5
+	mi.position.y = y
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
+
+## 统一淡出：遍历子节点设置实例透明度（不依赖材质透明度）
+func _fade_geo(v: float, root: Node) -> void:
+	if not is_instance_valid(root):
+		return
+	for c in root.get_children():
+		if c is GeometryInstance3D:
+			(c as GeometryInstance3D).transparency = v
+		elif c is Node3D:
+			_fade_geo(v, c)
+
+## 地面特效统一抬升：任何地面类型（野区起伏/分路/高地/泉水）之上，避免被地面遮住。
+func ground_pos(pos: Vector3) -> Vector3:
+	return Vector3(pos.x, maxf(pos.y, Config.GROUND_FX_Y), pos.z)
 
 # ---------------- 内部 ----------------
 func _bm():
@@ -2043,24 +2658,93 @@ func lyf_dart_clear(target: Node3D, burst_fx: bool = true) -> void:
 
 
 func _lyf_make_dart(color: Color) -> Node3D:
+	# 写实向十字飞镖：金属刃体 + 刃口加色描边 + 金轮毂 + 尾环；刃面法线为本地 +Z，
+	# 子节点 Spin 负责自旋（叫「飞镖」就该看得见四片刃在转，而不是一根光锥）。
 	var node := Node3D.new()
 	node.name = "LyfDart"
-	var mat := _add_mat(color, 0.95, 2.4)
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	var blade := MeshInstance3D.new()
-	var cone := CylinderMesh.new()
-	cone.top_radius = 0.0
-	cone.bottom_radius = 0.055
-	cone.height = 0.36
-	cone.radial_segments = 6
-	cone.rings = 1
-	blade.mesh = cone
-	blade.material_override = mat
-	blade.position = Vector3(0, 0.14, 0)
-	blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	node.add_child(blade)
-	attach_trail(node, color, 0.09, 0.12, 2, Color(1.0, 1.0, 1.0, 0.35))
+	var spin := Node3D.new()
+	spin.name = "Spin"
+	node.add_child(spin)
+	var blades := MeshFactory.build_shuriken(4, 0.045, 0.215, 0.030, 26.0)
+	var body := MeshInstance3D.new()
+	body.name = "Blades"
+	body.mesh = blades
+	body.material_override = MeshFactory.blade_metal(Color(0.32, 0.30, 0.28), Color(1.0, 0.46, 0.10), 0.24)
+	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(body)
+	# 刃口发光描边：同网格微放大 + 加色
+	var edge := MeshInstance3D.new()
+	edge.name = "Edge"
+	edge.mesh = blades
+	edge.material_override = _add_mat(color, 0.34, 3.0)
+	edge.scale = Vector3(1.05, 1.05, 1.6)
+	edge.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(edge)
+	if quality <= 1:
+		attach_trail(node, color, 0.08, 0.12, 2, Color(1.0, 0.95, 0.8, 0.40))
+		return node   # 低画质：只留刃体 + 描边，省掉轮毂/能量核/尾环
+	# 轮毂（金属）+ 中心热核
+	var hub := MeshInstance3D.new()
+	var hub_mesh := CylinderMesh.new()
+	hub_mesh.top_radius = 0.052
+	hub_mesh.bottom_radius = 0.058
+	hub_mesh.height = 0.075
+	hub_mesh.radial_segments = 12
+	hub.mesh = hub_mesh
+	hub.material_override = MeshFactory.blade_metal(Color(0.62, 0.48, 0.20), Color(1.0, 0.62, 0.20), 0.18)
+	hub.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(hub)
+	var core := MeshInstance3D.new()
+	var core_mesh := SphereMesh.new()
+	core_mesh.radius = 0.036
+	core_mesh.height = 0.072
+	core_mesh.radial_segments = 10
+	core_mesh.rings = 6
+	core.mesh = core_mesh
+	core.material_override = _add_mat(Color(1.0, 0.86, 0.55), 0.9, 4.0)
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(core)
+	# 尾环：让飞镖有「配重环」轮廓
+	var ring := MeshInstance3D.new()
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = 0.10
+	ring_mesh.outer_radius = 0.135
+	ring_mesh.rings = 16
+	ring_mesh.ring_segments = 6
+	ring.mesh = ring_mesh
+	ring.material_override = MeshFactory.blade_metal(Color(0.42, 0.34, 0.22), Color(1.0, 0.5, 0.14), 0.3)
+	ring.position = Vector3(0, 0, -0.02)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	spin.add_child(ring)
+	attach_trail(node, color, 0.10, 0.14, 4, Color(1.0, 0.95, 0.8, 0.40))
 	return node
+
+
+## Q 施放：飞镖本体从李元芳手里飞向目标（比一条光束更有「掷出暗器」的实感）
+func lyf_throw_dart(from: Vector3, to: Vector3, color: Color = LYF_DART_COL, speed: float = 26.0) -> void:
+	if quality <= 0 or get_tree() == null or _near_limit(1):
+		return
+	var dir := to - from
+	var dist := dir.length()
+	if dist < 0.05:
+		return
+	var d := _lyf_make_dart(color)
+	_add_root(d)
+	d.global_position = from
+	var nd := dir / dist
+	var ax := Vector3.UP.cross(nd)
+	if ax.length() < 0.001:
+		ax = Vector3.RIGHT
+	d.basis = Basis(ax.normalized(), Vector3.UP, nd)   # 刀面法线 = 飞行方向
+	d.scale = Vector3.ONE * 1.3
+	var dur := clampf(dist / maxf(speed, 6.0), 0.07, 0.22)
+	var tw := d.create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(d, "global_position", to, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var spin := d.get_node_or_null("Spin")
+	if spin != null and is_instance_valid(spin):
+		tw.tween_property(spin, "rotation:z", TAU * 2.0, dur).set_trans(Tween.TRANS_LINEAR)
+	tw.chain().tween_callback(d.queue_free)
 
 
 func _lyf_orbit_free(entry: Dictionary, burst_fx: bool) -> void:
@@ -2103,8 +2787,16 @@ func _process(delta: float) -> void:
 			if d == null or not is_instance_valid(d):
 				continue
 			var ang: float = float(entry["angle"]) + TAU * float(i) / n
-			(d as Node3D).position = Vector3(cos(ang) * 0.78, 1.02 + sin(ang * 2.0 + float(i)) * 0.07, sin(ang) * 0.78)
-			(d as Node3D).rotation = Vector3(PI * 0.42, -ang + PI * 0.5, sin(float(Time.get_ticks_msec()) * 0.009 + float(i)) * 0.22)
+			var d3 := d as Node3D
+			d3.position = Vector3(cos(ang) * 0.78, 1.02 + sin(ang * 2.0 + float(i)) * 0.07, sin(ang) * 0.78)
+			# 刀面法线对准环绕切线（飞镖是「横着削」过去的），Spin 子节点持续自转
+			var tang := Vector3(-sin(ang), 0.0, cos(ang)).normalized()
+			var ax := Vector3.UP.cross(tang)
+			if ax.length() > 0.001:
+				d3.basis = Basis(ax.normalized(), Vector3.UP, tang)
+			var spin := d3.get_node_or_null("Spin")
+			if spin != null and is_instance_valid(spin):
+				(spin as Node3D).rotation.z += delta * 17.0
 		var ring = entry.get("ring")
 		if ring != null and is_instance_valid(ring):
 			(ring as Node3D).rotation.y += delta * 1.6
@@ -2384,4 +3076,8 @@ func fade_out(node: Node3D, dur: float = 0.3) -> void:
 	var nt := node.create_tween()
 	nt.tween_interval(dur)
 	nt.tween_callback(node.queue_free)
+
+
+
+
 

@@ -67,20 +67,16 @@ func process_passive(delta: float) -> void:
 		if hero.arthur_w_active:
 			hero.arthur_w_angle += delta * PI * 2 / 3.0
 			while hero.arthur_w_shields.size() < 3:
-				var sm = MeshInstance3D.new(); sm.mesh = SphereMesh.new()
-				sm.mesh.radius = 0.5; sm.mesh.height = 1.0
-				var smat = StandardMaterial3D.new()
-				smat.albedo_color = Color.GOLD
-				smat.emission_enabled = true
-				smat.emission = Color.GOLD
-				smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				sm.material_override = smat
-				hero.get_parent().add_child(sm); hero.arthur_w_shields.append(sm)
+				# 圣盾：核心+外壳+双光环+粒子+点光的分层球体（原来是单个纯金色球）
+				var sm: Node3D = Vfx.make_orb(Color(0.98, 0.86, 0.36), 0.52, "holy")
+				hero.get_parent().add_child(sm)
+				hero.arthur_w_shields.append(sm)
 			for _i in range(3):
 				var ang_w2 = hero.arthur_w_angle + _i * PI * 2 / 3.0
 				var shield_pos2 = hero.global_position + Vector3(cos(ang_w2) * 3.5, 1.0, sin(ang_w2) * 3.5)
 				if _i < hero.arthur_w_shields.size() and is_instance_valid(hero.arthur_w_shields[_i]):
 					hero.arthur_w_shields[_i].position = shield_pos2
+					Vfx.spin_orb(hero.arthur_w_shields[_i], hero.arthur_w_angle * 3.0 + float(_i))
 				for ent in hero.get_tree().get_nodes_in_group("entities"):
 					if ent != hero and ent.health > 0 and ent.team != hero.team:
 						if shield_pos2.distance_to(ent.global_position) <= 2.0:
@@ -104,13 +100,10 @@ func process_passive(delta: float) -> void:
 		var orb_speed = (PI * 2 / 3.0) * (1.0 + hero.donghuang_speed_boost)
 		hero.donghuang_orb_angle += delta * orb_speed
 		while hero.donghuang_orb_meshes.size() < hero.donghuang_orbs:
-			var om = MeshInstance3D.new(); om.mesh = SphereMesh.new()
-			om.mesh.radius = 0.6; om.mesh.height = 1.2
-			var omat = StandardMaterial3D.new(); omat.albedo_color = Color.PURPLE
-			omat.emission_enabled = true; omat.emission = Color.PURPLE
-			omat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			om.material_override = omat
-			hero.get_parent().add_child(om); hero.donghuang_orb_meshes.append(om)
+			# 能量球：暗紫分层球体（核心+外壳+双光环+粒子+点光），替掉原来的纯色球
+			var om: Node3D = Vfx.make_orb(Color(0.62, 0.32, 1.0), 0.62, "void")
+			hero.get_parent().add_child(om)
+			hero.donghuang_orb_meshes.append(om)
 		while hero.donghuang_orb_meshes.size() > hero.donghuang_orbs:
 			var old_m2 = hero.donghuang_orb_meshes.pop_back()
 			if is_instance_valid(old_m2): old_m2.queue_free()
@@ -119,6 +112,7 @@ func process_passive(delta: float) -> void:
 			var orb_pos = hero.global_position + Vector3(cos(ang) * 2.5, 1.0, sin(ang) * 2.5)
 			if _j < hero.donghuang_orb_meshes.size() and is_instance_valid(hero.donghuang_orb_meshes[_j]):
 				hero.donghuang_orb_meshes[_j].position = orb_pos
+				Vfx.spin_orb(hero.donghuang_orb_meshes[_j], hero.donghuang_orb_angle * 2.5 + float(_j) * 1.7)
 			for ent in hero.get_tree().get_nodes_in_group("entities"):
 				if ent != hero and ent.health > 0 and ent.team != hero.team:
 					if orb_pos.distance_to(ent.global_position) <= 1.5:

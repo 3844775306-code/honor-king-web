@@ -1,0 +1,284 @@
+ERROR: Failed to open 'user://logs/godot2026-10-31T01.43.16.log'.
+   at: copy (core/io/dir_access.cpp:429)
+ERROR: Failed to open log file for writing: user://logs/godot.log
+   at: rotate_file (core/io/logger.cpp:169)
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+       [2] _ready (res://scripts/core/BattleManager.gd:234)
+       [3] _ready (res://devfx42/probe.gd:10)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _prewarm_battle_assets (res://scripts/core/BattleManager.gd:339)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Condition "!is_inside_tree()" is true. Returning: Transform3D()
+   at: get_global_transform (scene/3d/node_3d.cpp:649)
+   GDScript backtrace (most recent call first):
+       [0] spawn_single_minion (res://scripts/core/BattleManager.gd:5174)
+       [1] _drain_minion_spawn_queue (res://scripts/core/BattleManager.gd:5095)
+       [2] _process (res://scripts/core/BattleManager.gd:4692)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+ERROR: Parameter "material" is null.
+   at: material_get_instance_shader_parameters (servers/rendering/dummy/storage/material_storage.cpp:264)
+WARNING: 181 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+ERROR: Pages in use exist at exit in PagedAllocator: N20RasterizerSceneDummy21GeometryInstanceDummyE
+   at: ~PagedAllocator (./core/templates/paged_allocator.h:170)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: Leaked instance dependency: Bug - did not call instance_notify_deleted when freeing.
+   at: ~Dependency (servers/rendering/storage/utilities.cpp:56)
+WARNING: 534 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 4 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)

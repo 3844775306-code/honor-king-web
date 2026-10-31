@@ -86,6 +86,7 @@ var kill: int = 0                     # 不死累计击杀数
 var primitive_score: int = 0          # 原初积分
 var continuous_deaths: int = 0        # 连续死亡次数
 var shield_remaining: float = 0.0
+var _next_damage_is_true: bool = false   # take_true_damage 的一次性标记：跳过护盾 + 红字
 var shield_timer: float = 0.0
 var kai_combat_timer: float = 0.0
 var wangzhaojun_combat_timer: float = 0.0
@@ -98,8 +99,10 @@ var _frozen_tint_active: bool = false             # 冰冻染色状态
 var suppress_timer: float = 0.0
 var silence_timer: float = 0.0
 # 受控时长统计（死亡回放"受控时长"用）：记录处于任一控制下的真实时间区间（仅Hero统计）
-var cc_segments: Array = []      # [{start,end}] 已结束的控制区间（秒，按时间单调追加）
+var cc_segments: Array = []      # [{start,end,hero,skill}] 已结束的控制区间（秒，按时间单调追加）
 var cc_seg_start: float = -1.0   # 当前未结束控制区间的起始时刻；-1 = 未受控
+var cc_seg_hero: String = ""     # 当前控制来源英雄名（进入控制时抓取 last_attacker）
+var cc_seg_skill: int = -999     # 当前控制来源技能 id（进入控制时抓取 _last_skill_id）
 var toughness: float = 0.0
 var grievous_wounds: float = 1.0
 var grievous_wounds_timer: float = 0.0
@@ -447,9 +450,17 @@ func _update_cc_segment() -> void:
 	if under_cc:
 		if cc_seg_start < 0.0:
 			cc_seg_start = t
+			cc_seg_hero = ""
+			cc_seg_skill = -999
+		if cc_seg_hero == "" and last_attacker != null and is_instance_valid(last_attacker):
+			cc_seg_hero = str(last_attacker.display_name)
+			cc_seg_skill = _last_skill_id
 	elif cc_seg_start >= 0.0:
-		cc_segments.append({"start": cc_seg_start, "end": t})
+		cc_segments.append({"start": cc_seg_start, "end": t,
+			"hero": cc_seg_hero, "skill": cc_seg_skill})
 		cc_seg_start = -1.0
+		cc_seg_hero = ""
+		cc_seg_skill = -999
 
 # 返回最近 window 秒内处于控制状态的总时长（秒）；顺带清理窗口外的旧区间
 func get_cc_duration(window: float) -> float:
@@ -466,6 +477,37 @@ func get_cc_duration(window: float) -> float:
 	if cc_seg_start >= 0.0:
 		total += maxf(0.0, t - maxf(cc_seg_start, thr))
 	return total
+
+# 按「来源英雄 + 技能」聚合近 window 秒受控时长；未记录的来源归入「未知来源」。
+func get_cc_breakdown(window: float) -> Array:
+	var t := Time.get_ticks_msec() / 1000.0
+	var thr := t - window
+	while not cc_segments.is_empty() and cc_segments[0]["end"] < thr:
+		cc_segments.pop_front()
+	var agg: Dictionary = {}
+	for s in cc_segments:
+		var a := maxf(float(s["start"]), thr)
+		var b := minf(float(s["end"]), t)
+		if b > a:
+			_add_cc_span(agg, str(s.get("hero", "")), int(s.get("skill", -999)), b - a)
+	if cc_seg_start >= 0.0:
+		var a2 := maxf(cc_seg_start, thr)
+		if t > a2:
+			_add_cc_span(agg, cc_seg_hero, cc_seg_skill, t - a2)
+	var out: Array = []
+	for k in agg.keys():
+		out.append(agg[k])
+	out.sort_custom(func(x, y): return float(x["duration"]) > float(y["duration"]))
+	return out
+
+func _add_cc_span(agg: Dictionary, hero_name: String, skill_id: int, dur: float) -> void:
+	if dur <= 0.01:
+		return
+	var key := hero_name + "|" + str(skill_id)
+	if not agg.has(key):
+		agg[key] = {"hero": hero_name, "skill": skill_id, "duration": 0.0}
+	agg[key]["duration"] = float(agg[key]["duration"]) + dur
+
 func _process(delta: float) -> void:
 	if knockup_timer > 0:
 		knockup_timer -= delta * (1.0 + toughness)
@@ -567,8 +609,30 @@ func _update_shield_visual() -> void:
 			mat.emission_energy_multiplier = 1.1
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			_shield_fx.material_override = mat
+			# 护盾泡加两条倾斜光环：避免“纯色球”观感（全英雄护盾技能共用）
+			for ri in range(2):
+				var rim := MeshInstance3D.new()
+				var trm := TorusMesh.new()
+				trm.inner_radius = 1.06 + 0.06 * float(ri)
+				trm.outer_radius = 1.18 + 0.06 * float(ri)
+				trm.rings = 24
+				trm.ring_segments = 6
+				rim.mesh = trm
+				rim.material_override = mat
+				rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				rim.rotation = Vector3(PI * 0.5 + 0.32 * float(ri), 0.0, PI * 0.18 * float(ri + 1))
+				rim.name = "ShieldRim%d" % ri
+				_shield_fx.add_child(rim)
 			add_child(_shield_fx)
 		_shield_fx.position = Vector3(0, 0.95, 0)
+		# 光环缓慢自转 + 呼吸式缩放
+		var st := Time.get_ticks_msec() / 1000.0
+		_shield_fx.rotation.y = st * 0.85
+		var rim_a := _shield_fx.get_node_or_null("ShieldRim0")
+		var rim_b := _shield_fx.get_node_or_null("ShieldRim1")
+		if rim_a != null: rim_a.rotation.y = -st * 1.4
+		if rim_b != null: rim_b.rotation.z = PI * 0.36 + sin(st * 2.0) * 0.2
+		_shield_fx.scale = Vector3.ONE * (1.0 + 0.035 * sin(st * 4.2))
 		_shield_fx.visible = true
 		var ratio := clampf(shield_remaining / maxf(1.0, actual_max_health * 0.5), 0.25, 1.0)
 		var s := 0.82 + 0.18 * ratio
@@ -674,9 +738,18 @@ func _apply_healing(amount: float) -> float:
 		health += actual
 	return max(actual, 0.0)
 
+## 真伤（无视护盾）：一次性标记后走常规 take_damage，弹红字
+func take_true_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id: int = 0, pen_percent: float = 0.0) -> void:
+	_next_damage_is_true = true
+	take_damage(amount, source, is_magic, skill_id, pen_percent)
+	_next_damage_is_true = false
+
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id:int=0, pen_percent: float = 0.0, is_crit_forced: int = -1):
 	if health <= 0:
 		return
+	# 真伤标记（take_true_damage 一次性置位）：无视护盾且弹红字
+	var is_true_damage: bool = _next_damage_is_true
+	_next_damage_is_true = false
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var _raw_amount := amount   # 调试：保存原始伤害
 	var _is_magic_debug := is_magic   # 调试：保存伤害类型
@@ -888,15 +961,15 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		if skill_id > 0 and (self is Hero or self is JungleMonster or self is Turret):
 			SfxManager.try_skill_hit_sfx(source.display_name, is_magic)
 		
-	# 护盾吸收
-	if shield_remaining > 0:
+	# 护盾吸收（真伤无视护盾，跳过此块；被护盾吃掉的伤害弹白字）
+	if shield_remaining > 0 and not is_true_damage:
 		if shield_remaining >= actual:
 			shield_remaining -= actual
 			_damage_feedback(actual, is_magic)
-			NetSession.push_net_dmg(global_position, actual, is_crit, is_magic)
+			NetSession.push_net_dmg(global_position, actual, is_crit, is_magic, true, false)
 			var _ui = get_tree().get_first_node_in_group("ui") as UI_Manager
 			if _ui:
-				_ui.show_damage_number(global_position, actual, is_crit, is_magic)
+				_ui.show_damage_number(global_position, actual, is_crit, is_magic, true, false)
 			return
 		else:
 			actual = 0
@@ -932,11 +1005,11 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			source._debug_skill_info = ""
 		print("[DAMAGE t=", "%.1f" % _dbg_gt3, "] ", source.display_name, " → ", display_name, " : raw=", str(round(_raw_amount)), " → actual=", str(round(actual)), " (", label, ", ", res_name, "=", str(round(res_val)), _dbg_pen_str, ")", _dbg_extra)
 
-	# 数值弹出
-	NetSession.push_net_dmg(global_position, actual, is_crit, is_magic)
+	# 数值弹出（真伤弹红字）
+	NetSession.push_net_dmg(global_position, actual, is_crit, is_magic, false, is_true_damage)
 	var ui = get_tree().get_first_node_in_group("ui") as UI_Manager
 	if ui:
-		ui.show_damage_number(global_position, actual, is_crit, is_magic)
+		ui.show_damage_number(global_position, actual, is_crit, is_magic, false, is_true_damage)
 
 	# 伤后装备效果
 	if source is Hero:
@@ -989,7 +1062,22 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			print("[死亡分支] t=%.1f %s hp=%.1f 来源=%s skill=%d" % [bm.game_time, display_name, health, source.display_name if source else "无", skill_id])
 		if self is Turret and source:
 			bm.award_tower_gold(1-team,display_name)
-			ui.show_kill_feed(source.display_name, source.team, "已摧毁", display_name, team)
+			# 推塔助攻：附近同队英雄全部列头像；小兵按类型各列一个（推塔才考虑小兵）
+			var t_assists: Array = []
+			var seen_minion: Dictionary = {}
+			for e2 in get_tree().get_nodes_in_group("entities"):
+				if e2 == source or not (e2 is GameEntity) or e2.team != source.team:
+					continue
+				if not (e2 is Hero or e2 is Minion):
+					continue
+				if e2.global_position.distance_to(global_position) > 12.0:
+					continue
+				if e2 is Hero:
+					t_assists.append({"name": e2.display_name, "team": e2.team})
+				elif seen_minion.size() < 3 and not seen_minion.has(e2.display_name):
+					seen_minion[e2.display_name] = true
+					t_assists.append({"name": e2.display_name, "team": e2.team})
+			ui.show_kill_feed(source.display_name, source.team, "已摧毁", display_name, team, t_assists)
 		if source is Hero:
 			if self is Hero:
 				if bm:

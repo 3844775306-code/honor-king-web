@@ -26,6 +26,7 @@ const C_CARD_OWN := Color(0.035, 0.215, 0.115, 0.94)
 const PAD := 0.965
 
 var rows: Array = []
+var hud_info: Dictionary = {}   # 顶部附加战况（如主宰先锋波数）
 var mode := "attr"
 var panel_h := 1200.0
 var _row_h := 200.0
@@ -35,7 +36,7 @@ func _ready() -> void:
 	visible = false
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-func set_rows(r: Array, md: String = "attr") -> void:
+func set_rows(r: Array, md: String = "attr", info: Dictionary = {}) -> void:
 	# 两队各自按总经济降序（并列时按击杀、再按名字稳定排序），列内名次即队内经济名次
 	rows = r.duplicate()
 	rows.sort_custom(func(a, b):
@@ -49,6 +50,7 @@ func set_rows(r: Array, md: String = "attr") -> void:
 			return ka > kb
 		return str(a.get("name", "")) < str(b.get("name", "")))
 	mode = md
+	hud_info = info
 	# 只更新数据，不在这里显示面板：面板开关必须由持有者统一控制，
 	# 否则关闭后下一次秒级刷新会把已关闭的面板重新弹出来。
 	if visible:
@@ -106,7 +108,7 @@ func _draw() -> void:
 	# 关闭按钮
 	var cr := _close_rect()
 	draw_style_box(UiKit.flat(0.7, 8, 1, Color(0.45, 0.55, 0.72, 0.6), Color(0.10, 0.12, 0.18, 0.9), 0.0, 4.0), cr)
-	UiKit.text(self, Vector2(cr.position.x, cr.position.y + cr.size.y * 0.74), "×", 22,
+	UiKit.text(self, Vector2(cr.position.x, cr.position.y + cr.size.y * 0.74), "×", 27,
 		Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, cr.size.x)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -133,21 +135,27 @@ func _header() -> void:
 		eg += int(r.get("gold", 0)); ek += int(r.get("k", 0)); ea += int(r.get("a", 0))
 		if not bool(r.get("dead", false)): el += 1
 	# 左上：我方标题 + 汇总（蓝）
-	UiKit.text(self, Vector2(44.0, 44.0), "我方" if mode != "team" else "我方队伍", 30, C_ALLY)
-	UiKit.text(self, Vector2(140.0, 43.0), "经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(ag), ak, al], 19, Color(0.82, 0.90, 1.0))
+	UiKit.text(self, Vector2(44.0, 44.0), "我方" if mode != "team" else "我方队伍", 37, C_ALLY)
+	UiKit.text(self, Vector2(140.0, 43.0), "经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(ag), ak, al], 23, Color(0.82, 0.90, 1.0))
 	# 右上：敌方标题 + 汇总（红，右对齐）
 	var rx := PANEL_W - 44.0
-	UiKit.text(self, Vector2(rx - 340.0, 44.0), "敌方", 30, C_ENEMY, HORIZONTAL_ALIGNMENT_RIGHT, 340.0)
-	UiKit.text(self, Vector2(rx - 560.0, 43.0), "敌方 经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(eg), ek, el], 19,
+	UiKit.text(self, Vector2(rx - 340.0, 44.0), "敌方", 37, C_ENEMY, HORIZONTAL_ALIGNMENT_RIGHT, 340.0)
+	UiKit.text(self, Vector2(rx - 560.0, 43.0), "敌方 经济 %s · 击杀 %d · 存活 %d/5" % [_fmt_gold(eg), ek, el], 23,
 		Color(1.0, 0.82, 0.78), HORIZONTAL_ALIGNMENT_RIGHT, 420.0)
 	# 中间：经济差
 	var diff := ag - eg
 	var diff_col := Color(0.40, 0.95, 0.55) if diff >= 0 else Color(1.0, 0.36, 0.30)
 	UiKit.text(self, Vector2(PANEL_W * 0.5 - 130.0, 44.0), "经济差 %s%d" % ["+" if diff >= 0 else "-", absi(diff)],
-		23, diff_col, HORIZONTAL_ALIGNMENT_CENTER, 260.0)
+		28, diff_col, HORIZONTAL_ALIGNMENT_CENTER, 300.0)
 	# 图例（自己=绿底板）
-	UiKit.text(self, Vector2(44.0, 76.0), "两列各按本队经济从高到低 · 绿底=你 · 点面板外或 × 关闭", 17,
+	UiKit.text(self, Vector2(44.0, 76.0), "两列各按本队经济从高到低 · 绿底=你 · 点面板外或 × 关闭", 21,
 		Color(0.62, 0.70, 0.82))
+	# 主宰/暗影/风暴被击败后的先锋波数（标注我方/敌方）
+	var vg_txt := str(hud_info.get("vanguard", ""))
+	if vg_txt != "":
+		var vg_col: Color = hud_info.get("vanguard_color", Color(0.86, 0.92, 1.0))
+		UiKit.text(self, Vector2(PANEL_W - 44.0 - 700.0, 76.0), vg_txt, 21, vg_col,
+			HORIZONTAL_ALIGNMENT_RIGHT, 700.0)
 	draw_rect(Rect2(24.0, 88.0, PANEL_W - 48.0, 1.0), Color(0.40, 0.50, 0.66, 0.30))
 
 # ---------- 单行卡 ----------
@@ -157,7 +165,7 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 	var plate := C_CARD_ALLY if ally_side else C_CARD_ENEMY
 	if r.is_empty():
 		draw_style_box(UiKit.flat(0.42, 12, 1, Color(accent.r, accent.g, accent.b, 0.22), Color(0.05, 0.06, 0.09, 0.55), 0.0, 6.0), rect)
-		UiKit.text(self, rect.position + Vector2(0.0, rect.size.y * 0.5), "（暂无英雄）", 19, C_DIM,
+		UiKit.text(self, rect.position + Vector2(0.0, rect.size.y * 0.5), "（暂无英雄）", 23, C_DIM,
 			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x)
 		return
 	var dead := bool(r.get("dead", false))
@@ -173,19 +181,34 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 	var W := rect.size.x
 	var H := rect.size.y
 	var hero_name := str(r.get("hero", r.get("name", "")))
+	# 版式按卡片高度等比放大，尽量占满整块面板：上半 = 头像/名字/KDA，下半 = 技能+装备+全部属性
+	var k := clampf(H / 206.0, 0.85, 1.45)
+	var top := y + 8.0 * k
+	# 分区线（画在最底层，头像可压在线上）
+	draw_rect(Rect2(x + 18.0, y + H * 0.50, W - 36.0, 1.0), Color(accent.r, accent.g, accent.b, 0.28))
 	# 队内名次徽章（含绿色=自己时描边绿）
-	draw_circle(Vector2(x + 36.0, y + 40.0), 19.0, Color(accent.r, accent.g, accent.b, 0.18))
-	draw_arc(Vector2(x + 36.0, y + 40.0), 19.0, 0.0, TAU, 26, Color(accent.r, accent.g, accent.b, 0.85), 2.0, true)
-	UiKit.text(self, Vector2(x + 17.0, y + 49.0), str(rank), 24, accent.lightened(0.35), HORIZONTAL_ALIGNMENT_CENTER, 38.0)
-	# 头像（程序化立绘，与选人界面同源）
-	HeroArt.draw_portrait(self, Vector2(x + 104.0, y + 74.0), 44.0, hero_name, accent, dead)
+	var br := 19.0 * k
+	var bc := Vector2(x + 30.0 * k + 8.0, top + br)
+	draw_circle(bc, br, Color(accent.r, accent.g, accent.b, 0.18))
+	draw_arc(bc, br, 0.0, TAU, 26, Color(accent.r, accent.g, accent.b, 0.85), 2.0 * k, true)
+	UiKit.text(self, Vector2(bc.x - br, bc.y + 9.0 * k), str(rank), int(28.0 * k), accent.lightened(0.35),
+		HORIZONTAL_ALIGNMENT_CENTER, br * 2.0)
+	# 头像（程序化立绘，与选人界面同源）——明显放大
+	var pr := clampf(H * 0.27, 40.0, 66.0)
+	var pc := Vector2(x + 44.0 * k + pr, top + pr + 4.0)
+	HeroArt.draw_portrait(self, pc, pr, hero_name, accent, dead)
+	# 原初印记等级：环上符文 + 段位色（1~6，不显示数字）
+	HeroArt.draw_primitive_mark(self, pc, pr, int(r.get("mark", 0)))
 	# 名字 / 等级·分路·状态
 	var nm := str(r.get("name", "?"))
 	if bool(r.get("is_ai", false)):
 		nm += " [AI]"
 	if own:
 		nm += "  （你）"
-	UiKit.text(self, Vector2(x + 162.0, y + 58.0), nm, 29,
+	var nx := pc.x + pr + 18.0 * k
+	var name_fs := int(clampf(H * 0.175, 27.0, 40.0))
+	var name_base := top + name_fs * 0.98
+	UiKit.text(self, Vector2(nx, name_base), nm, name_fs,
 		C_OWN.lightened(0.25) if own else (Color.WHITE if ally_side else Color(1.0, 0.72, 0.68)))
 	var sub := "Lv.%d" % int(r.get("level", 1))
 	var role := str(r.get("role", ""))
@@ -195,19 +218,28 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 		sub += "  ·  %ds 复活" % int(ceil(float(r.get("respawn", 0.0))))
 	elif float(r.get("hp_ratio", 1.0)) < 0.3:
 		sub += "  ·  残血"
-	UiKit.text(self, Vector2(x + 162.0, y + 88.0), sub, 18, C_GOLD if not dead else Color(1.0, 0.48, 0.42))
-	# 血条
-	var hp_w := 200.0
-	draw_rect(Rect2(x + 162.0, y + 98.0, hp_w, 6.0), Color(0.08, 0.11, 0.16, 0.9))
-	draw_rect(Rect2(x + 162.0, y + 98.0, hp_w * clampf(float(r.get("hp_ratio", 1.0)), 0.0, 1.0), 6.0),
+	var sub_fs := int(clampf(H * 0.105, 20.0, 26.0))
+	UiKit.text(self, Vector2(nx, name_base + sub_fs + 10.0 * k), sub, sub_fs,
+		C_GOLD if not dead else Color(1.0, 0.48, 0.42))
+	# 血条（加宽加高）
+	var hp_w := clampf(W * 0.24, 190.0, 300.0)
+	var hp_y := name_base + sub_fs + 18.0 * k
+	var hp_h := 7.0 * k
+	draw_rect(Rect2(nx, hp_y, hp_w, hp_h), Color(0.08, 0.11, 0.16, 0.9))
+	draw_rect(Rect2(nx, hp_y, hp_w * clampf(float(r.get("hp_ratio", 1.0)), 0.0, 1.0), hp_h),
 		Color(0.32, 0.92, 0.48) if not dead else Color(0.55, 0.32, 0.30))
 	# 右上：KDA / 经济
-	var rx := x + W - 24.0
-	UiKit.text(self, Vector2(rx - 230.0, y + 52.0), "%d / %d / %d" % [int(r.get("k", 0)), int(r.get("d", 0)), int(r.get("a", 0))],
-		26, Color(0.92, 0.95, 1.0), HORIZONTAL_ALIGNMENT_RIGHT, 224.0)
-	UiKit.text(self, Vector2(rx - 230.0, y + 84.0), "经济 %s" % _fmt_gold(int(r.get("gold", 0))), 23, C_GOLD,
-		HORIZONTAL_ALIGNMENT_RIGHT, 224.0)
-	# 技能图标 4 个（1/2/3 + 召唤）：真实程序化技能图标
+	var rx := x + W - 22.0
+	var kda_fs := int(clampf(H * 0.155, 25.0, 33.0))
+	UiKit.text(self, Vector2(rx - 250.0, name_base), "%d / %d / %d" % [int(r.get("k", 0)), int(r.get("d", 0)), int(r.get("a", 0))],
+		kda_fs, Color(0.92, 0.95, 1.0), HORIZONTAL_ALIGNMENT_RIGHT, 250.0)
+	UiKit.text(self, Vector2(rx - 250.0, name_base + sub_fs + 10.0 * k), "经济 %s" % _fmt_gold(int(r.get("gold", 0))),
+		int(clampf(H * 0.13, 22.0, 28.0)), C_GOLD, HORIZONTAL_ALIGNMENT_RIGHT, 230.0)
+	# 下半区：技能图标 4 个（1/2/3 + 召唤，放大）+ 装备 6 格（放大）+ 全部属性徽章
+	var band_cy := y + H * 0.75
+	var sk_r := clampf(H * 0.125, 19.0, 30.0)
+	var sk_step := sk_r * 2.0 + 10.0 * k
+	var sk_x := x + 26.0 + sk_r
 	var sk: Array = r.get("skills", [])
 	for i in range(4):
 		var has := i < sk.size()
@@ -216,43 +248,53 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 		var lv := int(sk[i][2]) if has else 0
 		var cd := float(sk[i][3]) if has else 0.0
 		var stype := int(sk[i][4]) if has and (sk[i] as Array).size() > 4 else -1
-		var cpos := Vector2(x + 176.0 + float(i) * 56.0, y + 152.0)
-		SkillArt.draw_icon(self, cpos, 21.0, hero_name, sname, stype, slot, lv > 0, cd <= 0.0)
+		var cpos := Vector2(sk_x + float(i) * sk_step, band_cy)
+		SkillArt.draw_icon(self, cpos, sk_r, hero_name, sname, stype, slot, lv > 0, cd <= 0.0)
 		if cd > 0.0:
 			var frac := clampf(cd / maxf(cd + 0.01, 6.0), 0.0, 1.0)
-			draw_arc(cpos, 20.4, -PI * 0.5, -PI * 0.5 + TAU * frac, 20, Color(0, 0, 0, 0.72), 4.0, true)
+			draw_arc(cpos, sk_r * 0.97, -PI * 0.5, -PI * 0.5 + TAU * frac, 22, Color(0, 0, 0, 0.72), 4.0 * k, true)
 		if lv > 0:
-			UiKit.text(self, Vector2(cpos.x + 11.0, cpos.y + 30.0), "%d" % lv, 14, C_GOLD)
-	# 装备图标 6 格
+			UiKit.text(self, Vector2(cpos.x - sk_r * 0.5, cpos.y + sk_r * 1.42), "%d" % lv, int(17.0 * k), C_GOLD,
+				HORIZONTAL_ALIGNMENT_CENTER, sk_r)
+	# 装备图标 6 格（放大到约 1.4 倍）
+	var eq_s := clampf(H * 0.19, 26.0, 42.0)
+	var eq_gap := 6.0 * k
+	var eq_x := sk_x + 3.0 * sk_step + sk_r + 22.0 * k
 	var eq: Array = r.get("equips", [])
 	for i in range(6):
-		var ir := Rect2(x + 416.0 + float(i) * 33.0, y + 128.0, 27.0, 27.0)
+		var ir := Rect2(eq_x + float(i) * (eq_s + eq_gap), band_cy - eq_s * 0.5, eq_s, eq_s)
 		if i < eq.size():
 			var e: Array = eq[i]
 			UiKit.item_icon(self, ir, int(e[1]) if e.size() > 1 else 1, str(e[0]))
 		else:
 			draw_style_box(UiKit.flat(0.5, 5, 1, Color(0.30, 0.36, 0.46, 0.5), Color(0.06, 0.07, 0.10, 0.55), 0.0, 0.0), ir)
-	# 属性徽章（装备下方，最多 4 条）
+	# 属性徽章：剩余宽度内换行画「全部」属性（含魔抗），不再只显示前 4 条
 	var chips: Array = r.get("chips", [])
-	var cx := x + 416.0
-	var cy2 := y + 184.0
-	var shown := 0
+	var chip_fs := int(clampf(H * 0.092, 17.0, 22.0))
+	var line_h := float(int(chip_fs * 1.62))
+	var cx := eq_x + 6.0 * (eq_s + eq_gap) + 18.0 * k
+	var cy := band_cy - line_h * 0.5
+	var wrap_x1 := x + W - 18.0
 	for c in chips:
-		if shown >= 4:
-			break
-		if cx > x + W - 30.0:
-			break
-		cx = _chip(cx, cy2, str(c[0]), c[1], str(c[2]))
-		shown += 1
+		var txt := str(c[2])
+		var w_px := UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, chip_fs).x
+		var need := 22.0 + w_px + 12.0
+		if cx + need > wrap_x1:
+			cx = eq_x + 6.0 * (eq_s + eq_gap) + 18.0 * k
+			cy += line_h
+			if cy + line_h * 0.5 > y + H - 6.0:
+				break
+		cx = _chip(cx, cy, str(c[0]), c[1], txt, chip_fs)
 	# 死亡压暗
 	if dead:
 		draw_style_box(UiKit.flat(0.55, 12, 0, Color(0, 0, 0, 0), Color(0.02, 0.02, 0.04, 0.55), 0.0, 0.0), rect)
 
-func _chip(x: float, baseline: float, glyph: String, col: Color, txt: String) -> float:
-	_glyph(Vector2(x + 8.0, baseline - 6.0), 8.0, glyph, col)
-	UiKit.text(self, Vector2(x + 22.0, baseline), txt, 16, col.lightened(0.32))
-	var w := UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
-	return x + 26.0 + w + 10.0
+func _chip(x: float, baseline: float, glyph: String, col: Color, txt: String, font_size: int = 19) -> float:
+	var gr := font_size * 0.42
+	_glyph(Vector2(x + gr + 1.0, baseline - gr * 0.72), gr, glyph, col)
+	UiKit.text(self, Vector2(x + gr * 2.0 + 5.0, baseline), txt, font_size, col.lightened(0.32))
+	var w := UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	return x + gr * 2.0 + w + 16.0
 
 func _glyph(c: Vector2, r: float, id: String, col: Color) -> void:
 	var w := maxf(r * 0.34, 1.2)

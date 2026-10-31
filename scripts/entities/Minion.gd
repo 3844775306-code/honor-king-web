@@ -11,6 +11,7 @@ var auto_search_timer: float = 0.0
 var minion_type: String = "melee"
 var visual: Node3D = null   # 模型实例（攻城车等无骨骼动画的兵种靠程序化后坐表现攻击）
 var _proc_visual: bool = false
+var _ammo_node: MeshInstance3D = null   # 模型上膛的箭（弓兵/攻城车）：射击瞬间隐藏、装填后恢复
 var _death_anim_started: bool = false
 var _wp_idx_cached: int = -1      # 路点到达半径缓存（塔位路点会被塔基推挤，半径需放宽）
 var _wp_reach: float = 1.0
@@ -32,6 +33,7 @@ func _create_visual():
 		add_child(instance)
 		visual = instance
 		_proc_visual = true
+		_ammo_node = instance.get_node_or_null("ModelPivot/Ammo") as MeshInstance3D
 		# 程序化模型：阵营色/金属度已合并进 2 个材质并烘焙到顶点色，跳过逐面材质染色
 		WalkFeel.attach(self, instance, _walk_opts())
 	else:
@@ -68,6 +70,16 @@ func _create_visual():
 		# 暗影先锋视觉模型1.5倍缩放，碰撞半径同步放大
 		col.shape.radius = body_radius * 1.5 if display_name == "shadow_dragon" else body_radius
 		add_child(col)
+
+
+# 弹道出膛点（世界坐标）：兵种模型自身的箭尖 / 弩口 / 龙嘴，随模型缩放与朝向走
+func _attack_muzzle() -> Vector3:
+	var local: Vector3 = MinionModelScript.muzzle_local(display_name)
+	if visual != null and is_instance_valid(visual):
+		var pivot: Node3D = visual.get_node_or_null("ModelPivot")
+		var base: Node3D = pivot if pivot != null else visual
+		return base.global_transform * local
+	return global_position + Vector3(0, 1.2, 0)
 
 
 func get_hit_flash_root() -> Node3D:
@@ -226,11 +238,29 @@ func _siege_recoil() -> void:
 	else:
 		recoil_node = visual
 	var base := recoil_node.position
+	var base_rot := recoil_node.rotation
 	var tw := create_tween()
-	tw.tween_property(recoil_node, "position:z", base.z - dist, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(recoil_node, "position:z", base.z, 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	# 后坐 + 炮口上跳（0.06s 打出后坐，0.28s 缓慢回位）
+	tw.tween_property(recoil_node, "position:z", base.z - dist, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(recoil_node, "rotation:x", base_rot.x - 0.075, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(recoil_node, "position:z", base.z, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(recoil_node, "rotation:x", base_rot.x, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
 	var fwd := Vector3(sin(rotation.y), 0.0, cos(rotation.y))
-	Vfx.cast_glow(global_position + Vector3.UP * 0.8 + fwd * 0.7, Color(1.0, 0.72, 0.35), 0.5, 0.18)
+	# 出膛瞬间：炮口焰 + 火光球（弩箭同时由 _fire_ammo 从模型上隐藏）
+	Vfx.muzzle(_attack_muzzle(), fwd, Color(1.0, 0.72, 0.35), Color(1.0, 0.95, 0.8))
+	Vfx.cast_glow(_attack_muzzle() + fwd * 0.22, Color(1.0, 0.55, 0.2), 0.65, 0.2)
+
+# 箭已离弦：隐藏模型上膛的箭（弓兵/攻城车共用），按射击间隔装填后重新出现
+func _fire_ammo() -> void:
+	if _ammo_node == null or not is_instance_valid(_ammo_node):
+		return
+	_ammo_node.visible = false
+	var interval: float = 1.0 / maxf(attack_speed, 0.15)
+	var reload: float = clampf(interval * 0.75, 0.3, 1.8)
+	var t := get_tree().create_timer(reload)
+	t.timeout.connect(func() -> void:
+		if is_instance_valid(_ammo_node) and health > 0.0:
+			_ammo_node.visible = true)
 
 func _physics_process(delta):
 	if health <= 0: return
@@ -274,8 +304,9 @@ func _physics_process(delta):
 					bullet.team = team
 					bullet.target = current_target
 					bullet.source = self
-					bullet.global_position = global_position + Vector3(0, 0.5, 0)
+					bullet.global_position = _attack_muzzle()
 					get_parent().add_child(bullet)
+					_fire_ammo()   # 箭已离弦：藏起模型上膛的箭，装填后恢复
 				else:
 					var tp := current_target.global_position   # 先取坐标：这一击可能击杀目标，之后 current_target 变 null
 					rotation.y = atan2((tp - global_position).normalized().x, (tp - global_position).normalized().z)
@@ -419,4 +450,18 @@ func die(killer):
 		SfxManager.try_vanguard_down_sfx(team, global_position)
 	if not is_dead:
 		_proc_death()
+		_start_sink_away()
 	super.die(killer)
+
+
+# 倒地后缓缓沉入地面再消失（不再是一落地就被 queue_free 掉）
+func _start_sink_away() -> void:
+	var depth: float = 2.4 if display_name in ["dragon", "storm", "shadow_dragon"] else 1.5
+	var fall: float = 0.62
+	var sink: float = 0.88
+	# 延长节点存活时间到「倒地 + 下沉」结束之后
+	death_delay_override = fall + sink + 0.06
+	var tw := create_tween()
+	tw.tween_interval(fall)
+	tw.tween_property(self, "position:y", global_position.y - depth, sink) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)

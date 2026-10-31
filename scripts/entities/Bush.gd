@@ -11,6 +11,8 @@ func _ready():
 	# 程序化灌木模型（替代原 grass-large.glb）：坐标哈希取种子，镜像对称不被破坏
 	var seed_b: int = int(round(absf(position.x) * 10.0)) * 131 + int(round(absf(position.z) * 10.0)) * 17
 	add_child(DecorMesh.bush_visual(seed_b))
+	# 草丛里点缀小花（低面数、顶点色，整丛一份网格）
+	add_child(DecorMesh.flower_visual(seed_b))
 
 	# 区域检测
 	var col = CollisionShape3D.new()

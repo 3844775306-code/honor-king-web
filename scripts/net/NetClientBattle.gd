@@ -1,5 +1,6 @@
 extends Node3D
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
+const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const NetModels = preload("res://scripts/net/NetModels.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
@@ -38,6 +39,8 @@ const SNAP_FX := 8
 const SNAP_EVENTS := 9        # #44 数值弹出/经验珠/攻击动作事件段（host v5 idx9，仿 FX 缓冲/去重）
 const SNAP_SCORE := 10        # 顶部实时战况（击杀比分+经济比分）：{pk,ek,pg,eg}（host 全量统计）
 const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _build_respawn_rows 尾段；长度守卫防旧 host）
+const SNAP_VISION := 12       # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
+const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 const MOVE_JUMP_UNITS := 100.0    # 相邻快照样本位移超此即判瞬移/位移技能/回城：直接贴最新，不插值滑行
 
 # —— #43 FX 播放参数（与 NetSession 快照 fx 段一致）——
@@ -64,6 +67,11 @@ const FX_HOUYI_EXPLODE := 20 # Bullet.on_hit 后羿R 命中爆炸组（C 段插�
 const FX_WAVE_RING := 21     # 扩散冲击环（薄环外扩一次性，刘禅R 波等）
 const FX_XQ_WHIRL := 22      # 小乔2 甜蜜恋风：粉色渐缩旋风柱（~1s，固定粉，不看 team）
 const FX_MACHAO_SPEAR := 23  # 马超Q/W 落地标枪（10s 地标）
+const FX_SKILL_BURST := 24   # 通用技能命中爆发（元素色光球+环，一次扩散）
+const FX_SKILL_DASH := 25    # 位移技能起手（脚下元素色环）
+const FX_SKILL_ULT := 26     # 大招爆发（更大更久，元素色）
+const FX_PILLAR := 27        # 地面光柱（技能柱/落地柱）
+const FX_SKILL_GLOW := 28    # 施法蓄力/护盾起手光
 
 # —— #44 events kind 与行字段（与 NetSession 快照 events 段对齐）——
 #   段 = [seq(int), row, ...]；行 = [fid, kind, x, y, z, ...kind 专属]
@@ -82,6 +90,8 @@ const EV_ACT := 4
 const EV_DMG_AMT := 5
 const EV_DMG_CRIT := 6
 const EV_DMG_MAG := 7
+const EV_DMG_SHIELD := 8
+const EV_DMG_TRUE := 9
 const EV_GOLD_AMT := 5
 const EV_GOLD_OWN := 6
 const EV_EXP_TX := 5
@@ -109,6 +119,23 @@ class _BladeMark:
 		draw_colored_polygon(pts, Color(1.0, 0.86, 0.25, 1.0))
 		draw_line(Vector2(w * 0.05, h), Vector2(w * 0.9, h * 0.18), Color(1.0, 0.68, 0.1, 1.0), maxf(fs * 0.13, 2.0))
 		draw_line(Vector2(0.0, h * 0.75), Vector2(w * 0.2, h * 0.58), Color(0.5, 0.32, 0.05, 1.0), maxf(fs * 0.14, 2.0))
+
+# 普通金币徽标（近似复刻主机 ValuePopup 的矢量金币；label 上浮/淡出时随父 modulate 同步）
+class _CoinMark:
+	extends Control
+	var fs := 24.0
+	func _init(fs0: float) -> void:
+		fs = fs0
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+	func _draw() -> void:
+		var r := fs * 0.42
+		var c := size * 0.5
+		var gold := Color(1.0, 0.86, 0.30, 1.0)
+		draw_circle(c + Vector2(0.8, 1.2), r, Color(0, 0, 0, 0.40))
+		draw_circle(c, r, gold.darkened(0.28))
+		draw_circle(c, r * 0.84, gold)
+		draw_circle(c, r * 0.50, gold.darkened(0.34))
+		draw_arc(c, r * 0.84, PI * 1.10, PI * 1.62, 10, Color(1, 1, 1, 0.55), maxf(1.0, r * 0.18))
 
 # —— 实体类型（与 NetSession 打包一致）——
 const NET_HERO := 0
@@ -154,6 +181,7 @@ var _rtime := -1.0        # 渲染插值时钟（游戏秒）：收到首个快�
                           # 相邻两个快照样本之间逐帧匀速扫过，杜绝 15Hz 离散目标"追赶→被拽走"的一顿一顿
 
 var _views := {}          # net_id -> {node, type, team, name, hp, maxhp, bar_off, target, set}
+var _vision_views := {}   # iid -> VisionSpirit（联机客户端表现副本）
 var _tower_locks := {}      # 防御塔锁定光束：key(塔位) -> {mesh, from, to, cur, t}
 var _map_applied := false
 var _static_root: Node3D = null
@@ -181,6 +209,9 @@ var _cam_focus := Vector3.ZERO
 var _cam_yaw := 225.0     # 度数；默认看向对角方向
 var _cam_pitch := 42.0
 var _cam_dist := 36.0
+# 开局镜头拉近（同 host BattleManager._begin_intro）：从高远机位插值回固定跟随位
+const CAM_INTRO_DUR := 2.8
+var _cam_intro_t := -1.0   # <0 = 尚未开始；>=0 运镜已进行秒数
 var _mouse_screen := Vector2()
 var _pending_skill := -1
 var _ret_point := Vector3.ZERO   # 鼠标在地面的交点（画准星）
@@ -194,6 +225,7 @@ var _hud: Hud
 var _status := ""
 
 # —— 接管触摸层（NetTouchPad）与直驱输入状态 ——
+var _atk_ring: MeshInstance3D = null   # 本机英雄普攻按住时贴地显示攻击范围圈
 var _pad: NetTouchPadScript
 var _reach := 0.0          # manifest 里的普攻判定距离（米，Hero._aa_engage_reach 同义）
 var _d_ax := 0.0           # 上次发送的 C_DRIVE 状态（键盘 x/z + 摇杆 xy + 移动模式）
@@ -262,6 +294,7 @@ var _go: NetResultPanelScript
 # —— 施法预览（按住技能钮/键盘 type0 按住瞄准时显示；世界空间贴地，复刻主机 Hero 预览三件套）——
 var _pv_range: MeshInstance3D = null   # 自身施法范围圈（type0/1 用）
 var _pv_aoe: MeshInstance3D = null     # AoE 实心填充圆 / type0 瞄准小标记
+var _pv_impact: MeshInstance3D = null  # 半径型技能的第二段落点范围（吕布R/太乙Q 等）
 var _pv_arrow: Node3D = null           # 线性/位移方向箭头（箭身+箭头）
 var _pv_shaft: MeshInstance3D = null
 var _pv_head: MeshInstance3D = null
@@ -325,6 +358,8 @@ func _process(delta: float) -> void:
 		return
 	if not _map_applied:
 		_apply_map_if_ready()
+	_update_atk_ring()
+	_update_epic_rings()
 	# 野区营地范围圈：到出生秒数才亮起（普通 30s / 角落空间之灵 60s），与主机营地在野怪首刷时才出现的节奏一致
 	if _state == 1 and not _camp_rings.is_empty():
 		for cr in _camp_rings:
@@ -448,6 +483,8 @@ func _process(delta: float) -> void:
 		_mm.active = _owned and _state == 1 and not _first_person
 		_mm.obj = _obj
 		_mm.jg = _jg
+		# 全图技能弹（后羿R / 鲁班2）：按弹体实际位置在小地图上画
+		_mm.shot_bullets = _mm_global_bullet_rows()
 		if _owned:
 			_mm.own_pos = _self_pos()
 			_mm.own_recalling = int(_own.get("recalling", 0))
@@ -611,6 +648,8 @@ func _on_snapshot(snap: Array) -> void:
 				_views[nid] = v
 			v.type = typ
 			v.team = team
+			if typ == NET_HERO:
+				v.pname = str(ent[17]) if ent.size() > 17 else ""
 			v.hp = hp
 			v.maxhp = maxhp
 			v.target = pos
@@ -636,6 +675,9 @@ func _on_snapshot(snap: Array) -> void:
 				# idx15：朝向（弧度）供客户端小地图画朝向箭头
 				if ent.size() > 15:
 					v.rot = float(ent[15])
+				# idx16：草丛隐藏（主机 hidden_in_bush）→ 客户端血条上方画“隐”图标
+				if ent.size() > 16:
+					v.hidden = int(ent[16]) == 1
 			elif typ == NET_TURRET:
 				if ent.size() > 8:
 					v.under_attack = int(ent[8])
@@ -662,6 +704,8 @@ func _on_snapshot(snap: Array) -> void:
 					v.dying_until = Time.get_ticks_msec() + 2400
 			elif ent.size() > 8:
 				v.lyf = ent[8]
+				if ent.size() > 9:
+					v.mk = ent[9]
 			if not v.set:
 				v.node.global_position = pos
 				v.set = true
@@ -693,6 +737,35 @@ func _on_snapshot(snap: Array) -> void:
 		_respawn_rows = snap[SNAP_RESPAWN]
 	else:
 		_respawn_rows = []
+	if snap.size() > SNAP_VISION:
+		_apply_vision_spirits(snap[SNAP_VISION])
+	else:
+		_apply_vision_spirits([])
+
+func _apply_vision_spirits(rows: Array) -> void:
+	if _mm != null:
+		_mm.vision_rows = rows
+	if _vis_root == null:
+		return
+	var seen := {}
+	for row in rows:
+		var sid := int(row[0])
+		seen[sid] = true
+		var v = _vision_views.get(sid)
+		if v == null or not is_instance_valid(v):
+			v = VisionSpiritScript.new()
+			v.client_mode = true
+			_vis_root.add_child(v)
+			_vision_views[sid] = v
+		v.apply_net_state(Vector3(float(row[1]), 0.0, float(row[2])),
+			int(row[3]) == 1, float(row[4]), int(row[5]))
+	for sid in _vision_views.keys():
+		if seen.has(sid):
+			continue
+		var old = _vision_views[sid]
+		if is_instance_valid(old):
+			old.queue_free()
+		_vision_views.erase(sid)
 
 # —— #42 子弹代理：host 每帧弹体列表 → 客户端 MeshInstance3D 池；两帧采样速度外推，视觉平滑 ——
 func _apply_bullets(snap: Array) -> void:
@@ -705,6 +778,8 @@ func _apply_bullets(snap: Array) -> void:
 		var by := float(row[2])
 		var bz := float(row[3])
 		var team := int(row[4])
+		# idx8：全图技能弹标记（1=后羿R / 2=鲁班2）；旧 host 无此列
+		var gsf := int(row[8]) if row.size() > 8 else 0
 		seen[bid] = true
 		var b = _bullets.get(bid)
 		if b == null:
@@ -717,6 +792,7 @@ func _apply_bullets(snap: Array) -> void:
 			b.x = bx; b.y = by; b.z = bz
 			b.px = bx; b.py = by; b.pz = bz
 			b.arr_ms = now
+			b.gs = gsf
 			_bullets[bid] = b
 			var m0: Node3D = b.m as Node3D
 			if m0 != null:
@@ -732,12 +808,43 @@ func _apply_bullets(snap: Array) -> void:
 		b.x = bx; b.y = by; b.z = bz
 		b.team = team
 		b.arr_ms = now
+		b.gs = gsf
 		_bullets[bid] = b
 	# 消失剔除（Mesh 回池复用，避免每帧 new/free）
 	for bid in _bullets.keys():
 		if not seen.has(bid):
-			_release_bullet(_bullets[bid])
+			var bb: Dictionary = _bullets[bid]
+			# 全图技能弹消失 → 若消失点贴着某个敌方英雄，给小地图打命中反馈
+			var gs := int(bb.get("gs", 0))
+			if gs > 0 and _mm != null:
+				var bpos := Vector3(float(bb.x), float(bb.y), float(bb.z))
+				var best_id := -1
+				var best_d := 6.0
+				for nid in _views:
+					var hv: Dictionary = _views[nid]
+					if int(hv.get("type", -1)) != NET_HERO or float(hv.get("hp", 0.0)) <= 0.0:
+						continue
+					var hd: float = _view_pos(hv).distance_to(bpos)
+					if hd < best_d:
+						best_d = hd
+						best_id = int(nid)
+				if best_id >= 0:
+					_mm.shot_hits[best_id] = [Time.get_ticks_msec(), gs]
+			_release_bullet(bb)
 			_bullets.erase(bid)
+
+
+# 小地图用：全图技能弹 [世界坐标, 飞行方向, 类型(1=后羿R/2=鲁班2)]
+func _mm_global_bullet_rows() -> Array:
+	var out: Array = []
+	for bid in _bullets:
+		var b: Dictionary = _bullets[bid]
+		var gs := int(b.get("gs", 0))
+		if gs <= 0:
+			continue
+		out.append([Vector3(float(b.x), float(b.y), float(b.z)),
+			Vector3(float(b.vx), 0.0, float(b.vz)), gs])
+	return out
 
 
 func _obtain_bullet(team: int, kind: int) -> Dictionary:
@@ -865,7 +972,8 @@ func _apply_fx(snap: Array) -> void:
 			life = 0.5
 		var caster := str(row[9]) if row.size() > 9 else ""
 		var n: Node3D = _build_fx(kind, team, rr, life, caster)
-		n.position = p
+		# 主机推送的贴地特效 y 可能为 0；客户端统一抬到所有地面类型之上
+		n.position = Vfx.ground_pos(p)
 		_vis_root.add_child(n)
 		_fx_live.append({"n": n, "born_ms": now, "life_ms": life * 1000.0, "kind": kind, "r": rr, "team": team})
 		_fx_seen_fid[fid] = true
@@ -887,6 +995,10 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 	var team_col := COL_ALLY_DIM
 	if team == TEAM_ENEMY:
 		team_col = COL_ENEMY
+	# 技能视觉（host VfxFactory 插桩）：元素色优先，缺失用阵营色（≤2 MeshInstance）
+	if kind == FX_SKILL_BURST or kind == FX_SKILL_DASH or kind == FX_SKILL_ULT \
+			or kind == FX_SKILL_GLOW or kind == FX_PILLAR:
+		return _build_skill_fx(kind, team, r, caster)
 	if kind == FX_MACHAO_SPEAR:
 		var spear := HeroWeapons.spear_marker(team)
 		root.add_child(spear)
@@ -905,8 +1017,11 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 		root.set_meta("mats", mats)
 		return root
 	if kind == FX_WAVE_RING:
-		# 扩散冲击环：薄 ring 外扩（非 zone，走 one-shot 由小展开），橙系
+		# 扩散冲击环：薄 ring 外扩（非 zone，走 one-shot 由小展开）；有施法者名时用元素色
 		var wcol := Color(1.0, 0.45, 0.1, 0.7)
+		if caster != "":
+			var wc: Color = Vfx.color_for_hero(caster)
+			wcol = Color(wc.r, wc.g, wc.b, 0.7)
 		var wring: MeshInstance3D = MeshFactory.create_torus_ring(maxf(r - 0.15, 0.02), maxf(r, 0.15), wcol, true, 0.7, true)
 		wring.rotation.x = deg_to_rad(90)
 		wring.position.y = 0.12
@@ -919,24 +1034,46 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 		root.set_meta("mats", mats)
 		return root
 	if kind == FX_XQ_WHIRL:
-		# 小乔2 甜蜜恋风：粉色渐缩旋风柱（body 底 1.8 顶 1.5、高 3.0，world pos 已抬 y1.5）
-		var body := MeshInstance3D.new()
-		var cyl := CylinderMesh.new()
-		cyl.top_radius = 1.5
-		cyl.bottom_radius = 1.8
-		cyl.height = 3.0
-		body.mesh = cyl
-		var wmat := StandardMaterial3D.new()
-		wmat.albedo_color = Color(1.0, 0.5, 0.7, 0.6)
-		wmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		wmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		wmat.emission_enabled = true
-		wmat.emission = Color(1.0, 0.3, 0.6, 0.5)
-		wmat.set_meta("base_a", 0.6)
-		body.material_override = wmat
-		root.add_child(body)
-		mats.append(wmat)
+		# 小乔2 甜蜜恋风：与 host Vfx.tornado_fx 同款——中央风柱 + 三层螺旋环（world pos 已抬 y1.5）
+		var pink := Color(1.0, 0.52, 0.74)
+		var cone := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.3
+		cm.bottom_radius = 0.95
+		cm.height = 2.7
+		cm.radial_segments = 16
+		cm.rings = 1
+		cm.cap_top = false
+		cm.cap_bottom = false
+		cone.mesh = cm
+		cone.position.y = -0.15
+		var cone_mat := StandardMaterial3D.new()
+		cone_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		cone_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cone_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		cone_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		cone_mat.albedo_color = Color(pink.r, pink.g, pink.b, 0.20)
+		cone_mat.emission_enabled = true
+		cone_mat.emission = pink
+		cone_mat.emission_energy_multiplier = 2.4
+		cone_mat.set_meta("base_a", 0.20)
+		cone.material_override = cone_mat
+		root.add_child(cone)
+		mats.append(cone_mat)
+		for i in range(3):
+			var br := 1.05 - 0.2 * float(i)
+			var ring := MeshFactory.create_torus_ring(br * 0.7, br, pink.lerp(Color.WHITE, 0.22 + 0.14 * float(i)), true, 0.52, true)
+			ring.position.y = -1.16 + 0.62 * float(i)
+			ring.rotation.x = deg_to_rad(15.0 + 5.0 * float(i))
+			ring.rotation.z = deg_to_rad(-10.0 + 6.0 * float(i))
+			root.add_child(ring)
+			mats.append(ring.material_override)
+		for m4 in mats:
+			var sm4 := m4 as StandardMaterial3D
+			if sm4 != null:
+				sm4.set_meta("base_a", sm4.albedo_color.a)
 		root.set_meta("mats", mats)
+		root.set_meta("rings", root.get_children().slice(1))
 		return root
 	# 地面盘主体 + 外圈。颜色跟随 helper 具体画布，team 仅用于 spell/terrain 红蓝方。
 	var pool_col := Color(0.3, 0.7, 1.0, 0.5)      # 甄姬水系默认
@@ -980,6 +1117,38 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 	return root
 
 
+# 技能视觉轻量还原（≤2 MeshInstance）：host VfxFactory 插桩的通用技能事件；
+# 元素色优先（caster 由快照行末位带过来），缺失退回阵营色。
+func _build_skill_fx(kind: int, team: int, r: float, caster: String) -> Node3D:
+	var root := Node3D.new()
+	var col: Color = COL_ALLY_DIM if team != TEAM_ENEMY else COL_ENEMY
+	if caster != "":
+		col = Vfx.color_for_hero(caster)
+	col.a = 1.0
+	var mats: Array = []
+	if kind == FX_PILLAR:
+		var core: MeshInstance3D = MeshFactory.create_cylinder(maxf(r * 0.5, 0.2), maxf(r, 0.25), maxf(r * 2.6, 1.5), Color(col.r, col.g, col.b, 0.5), 0.6)
+		core.position.y = maxf(r * 1.3, 0.8)
+		root.add_child(core)
+		mats.append(core.material_override)
+	else:
+		var glow: MeshInstance3D = MeshFactory.create_sphere(maxf(r * 0.55, 0.25), Color(col.r, col.g, col.b, 0.55), true, 0.65)
+		glow.position.y = 0.5
+		root.add_child(glow)
+		mats.append(glow.material_override)
+		var ring: MeshInstance3D = MeshFactory.create_torus_ring(maxf(r * 0.55, 0.2), maxf(r, 0.3), col, true, 1.0, true)
+		ring.rotation.x = deg_to_rad(90)
+		ring.position.y = 0.12
+		root.add_child(ring)
+		mats.append(ring.material_override)
+	for m in mats:
+		var sm := m as StandardMaterial3D
+		if sm != null:
+			sm.set_meta("base_a", sm.albedo_color.a)
+	root.set_meta("mats", mats)
+	return root
+
+
 func _fx_is_zone(kind: int) -> bool:
 	return kind == FX_SPELL or kind == FX_TERRAIN or kind == FX_WATER_ZONE \
 		or kind == FX_LYF_STORM or kind == FX_YL_POOL or kind == FX_MACHAO_SPEAR
@@ -991,14 +1160,21 @@ func _anim_fx(fx: Dictionary, t: float) -> void:
 	var k := clampf(t / life, 0.0, 1.0)
 	var kind := int(fx.kind)
 	if kind == FX_XQ_WHIRL:
-		# host tween：1s 内 scale→(0.5,0.3,0.5) 且 alpha 全程渐隐 → 这里由满→缩/淡
-		var sc := lerpf(1.0, 0.5, k)
-		nn.scale = Vector3(sc, lerpf(1.0, 0.3, k), sc)
+		# 与 host 同款：三层倾斜环绕 Y 自转 + 整体稍长高、末段淡出
+		var sc := lerpf(1.0, 1.15, minf(1.0, k * 2.0))
+		nn.scale = Vector3(sc, lerpf(1.0, 0.85, k), sc)
+		if nn.has_meta("rings"):
+			var ri := 0
+			for ring in nn.get_meta("rings"):
+				if ring is Node3D:
+					(ring as Node3D).rotation.y = t * (7.0 + 1.6 * float(ri))
+				ri += 1
 		if nn.has_meta("mats"):
+			var fade := 1.0 - clampf((k - 0.65) / 0.35, 0.0, 1.0)
 			for mi2 in nn.get_meta("mats"):
 				var sm2 := mi2 as StandardMaterial3D
 				if sm2 != null:
-					sm2.albedo_color.a = clampf(float(sm2.get_meta("base_a", 1.0)) * (1.0 - k), 0.0, 1.0)
+					sm2.albedo_color.a = clampf(float(sm2.get_meta("base_a", 1.0)) * fade, 0.0, 1.0)
 		return
 	if kind == FX_HOUYI_EXPLODE:
 		var s := 0.5 + 1.6 * k   # 扩散冲击波
@@ -1082,7 +1258,9 @@ func _apply_events(snap: Array) -> void:
 		var p := Vector3(float(row[EV_ROW_X]), float(row[EV_ROW_Y]), float(row[EV_ROW_Z]))
 		if kind == EV_DMG:
 			_spawn_dmg_label(p, int(round(float(row[EV_DMG_AMT]))),
-				int(row[EV_DMG_CRIT]) != 0, int(row[EV_DMG_MAG]) != 0)
+				int(row[EV_DMG_CRIT]) != 0, int(row[EV_DMG_MAG]) != 0,
+				row.size() > EV_DMG_SHIELD and int(row[EV_DMG_SHIELD]) != 0,
+				row.size() > EV_DMG_TRUE and int(row[EV_DMG_TRUE]) != 0)
 		elif kind == EV_GOLD:
 			_spawn_gold_label(p, int(round(float(row[EV_GOLD_AMT]))), int(row[EV_GOLD_OWN]) != 0)
 		elif kind == EV_EXP:
@@ -1107,7 +1285,7 @@ func _build_event_layer() -> void:
 # 死亡全屏压暗（复刻 host UI_Manager._create_death_overlay：黑色 0.5，复活即消失；层 21 在 HUD 之上、面板之下）
 func _build_death_overlay() -> void:
 	_death_cl = CanvasLayer.new()
-	_death_cl.layer = UiKit.LAYER_DIM   # 死亡全屏压暗：盖住 HUD(20)/buff图标(60)/小地图(80)，低于触控(100)与面板
+	_death_cl.layer = UiKit.LAYER_RECAP - 1   # 104：盖住触控技能键(100)与飘字(103)，低于死亡面板(105)/结算(110)
 	add_child(_death_cl)
 	_death_tint = ColorRect.new()
 	_death_tint.color = Color(0.0, 0.0, 0.0, 0.5)
@@ -1117,19 +1295,22 @@ func _build_death_overlay() -> void:
 	_death_cl.add_child(_death_tint)
 
 
-# PostFX：本地英雄受击红晕 + 阵亡去饱和（纯表现；与 host BattleManager._sync_postfx 同逻辑）
+# PostFX：本地英雄受击红晕 + 阵亡去饱和 + 低血量屏幕血光（纯表现；与 host BattleManager._sync_postfx 同逻辑）
 func _sync_postfx() -> void:
 	if not _owned:
 		PostFX.set_dead(false)
+		PostFX.set_low_hp(1.0)
 		_pfx_hp = -1.0
 		return
 	if int(_own.get("alive", 1)) == 0:
 		PostFX.set_dead(true)
+		PostFX.set_low_hp(0.0)
 		_pfx_hp = -1.0
 		return
 	PostFX.set_dead(false)
 	var hp := float(_own.get("hp", 0.0))
 	var maxhp := maxf(float(_own.get("maxhp", 1.0)), 1.0)
+	PostFX.set_low_hp(clampf(hp / maxhp, 0.0, 1.0))
 	if _pfx_hp >= 0.0 and hp < _pfx_hp:
 		var lost := (_pfx_hp - hp) / maxhp
 		PostFX.damage(clampf(0.3 + lost * 4.0, 0.0, 1.0), clampf(lost * 3.0, 0.0, 0.6))
@@ -1142,16 +1323,25 @@ func _sync_postfx() -> void:
 	_pfx_hp = hp
 
 
-# PostFX：离开联机战斗场景时复位死亡去饱和，避免回大厅后画面仍压暗
+# PostFX：离开联机战斗场景时复位死亡去饱和/低血红屏，避免回大厅后画面仍压暗
 func _exit_tree() -> void:
 	PostFX.set_dead(false)
+	PostFX.set_low_hp(1.0)
 	Engine.time_scale = 1.0   # 本地顿帧兜底复位（防止中途退出卡在慢放）
 	if is_instance_valid(SfxManager):
 		SfxManager.stop_all()
 
 
-# 同一位置错开（复刻主机 UI_Manager._get_stagger_offset 的 0/+/- 排布）
-func _popup_stagger(wp: Vector3) -> float:
+# 视图节点当前世界位置（小地图绘制/距离判定用；无节点时退回快照目标点）
+func _view_pos(v: Dictionary) -> Vector3:
+	if v.has("node") and v["node"] != null:
+		var n: Node3D = v["node"]
+		return n.global_position
+	return Vector3(float(v.get("x", 0.0)), 0.0, float(v.get("z", 0.0)))
+
+
+# 同一位置错开（复刻主机 UI_Manager._get_stagger_offset：同目标多次伤害向四周散开）
+func _popup_stagger(wp: Vector3) -> Vector2:
 	var key: Vector3 = (wp * 10.0).round() / 10.0
 	var now := Time.get_ticks_msec()
 	if not _pop_offsets.has(key) or now - int(_pop_offsets[key]["ms"]) > 350:
@@ -1161,13 +1351,15 @@ func _popup_stagger(wp: Vector3) -> float:
 	info["count"] = int(info["count"]) + 1
 	info["ms"] = now
 	if idx == 0:
-		return 0.0
-	var sign := 1 if idx % 2 == 0 else -1
-	var mag: float = ceil(idx / 2.0) * 18.0
-	return sign * mag
+		return Vector2.ZERO
+	var ang := float(idx - 1) * TAU / 8.0
+	var ring := 1.0 + float((idx - 1) / 8)
+	var r := 20.0 * ring
+	return Vector2(cos(ang) * r, sin(ang) * r)
 
 
-func _spawn_dmg_label(wp: Vector3, dmg: int, crit: bool, magic: bool) -> void:
+
+func _spawn_dmg_label(wp: Vector3, dmg: int, crit: bool, magic: bool, shielded: bool = false, true_dmg: bool = false) -> void:
 	var cam := _cam
 	if cam == null or _pop_root == null:
 		return
@@ -1181,31 +1373,43 @@ func _spawn_dmg_label(wp: Vector3, dmg: int, crit: bool, magic: bool) -> void:
 	elif dmg >= 500: base = 40
 	elif dmg >= 300: base = 30
 	elif dmg >= 100: base = 22
+	var px := int(round((base + (10 if crit else 0)) * s))
 	var lab := Label.new()
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lab.text = str(dmg)
-	lab.add_theme_font_size_override("font_size", int(round(base * s)))
-	lab.add_theme_color_override("font_color", Color.PURPLE if magic else Color.ORANGE)
-	lab.add_theme_color_override("font_outline_color", Color.BLACK)
-	lab.add_theme_constant_override("outline_size", 3)
+	# 与主机一致：真伤红 / 护盾吸收白 / 法术紫 / 物理橙 / 暴击金
+	var col := Color(1.0, 0.30, 0.26) if true_dmg else (Color(0.96, 0.97, 1.0) if shielded else (Color(1.0, 0.90, 0.45) if crit else (Color(0.74, 0.53, 1.0) if magic else Color(1.0, 0.76, 0.34))))
+	var edge := Color(0.30, 0.02, 0.02, 1.0) if true_dmg else (Color(0.10, 0.10, 0.14, 0.96) if shielded else (Color(0.40, 0.24, 0.02, 1.0) if crit else Color(0.12, 0.05, 0.02, 0.96)))
+	lab.add_theme_color_override("font_color", col)
+	lab.add_theme_color_override("font_outline_color", edge)
+	lab.add_theme_constant_override("outline_size", clampi(int(round(px * 0.22)), 3, 14))
+	lab.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.5))
+	lab.add_theme_constant_override("shadow_offset_x", maxi(1, int(round(px * 0.05))))
+	lab.add_theme_constant_override("shadow_offset_y", maxi(1, int(round(px * 0.08))))
+	lab.add_theme_constant_override("shadow_outline_size", 0)
 	if crit:
-		lab.add_theme_color_override("font_outline_color", UiKit.C_GOLD)
-		lab.add_theme_constant_override("outline_size", 4)
-		lab.add_theme_font_size_override("font_size", int(round((base + 10) * s)))
 		# 暴击：数字左前方四芒星爆点（复刻 host UI_Manager.CritMark，随 Label 一起上浮/淡出）
-		var _cfs := int(round((base + 10) * s))
 		var mark := _CritMark.new()
-		var _iw := _cfs * 0.62
-		var _ih := _cfs * 0.7
-		mark.position = Vector2(-(_iw + _cfs * 0.22), (lab.size.y - _ih) * 0.5 + _cfs * 0.06)
+		var _iw := px * 0.62
+		var _ih := px * 0.7
 		mark.size = Vector2(_iw, _ih)
 		lab.add_child(mark)
 	var off := _popup_stagger(wp)
-	lab.position = sp - lab.size * 0.5 + Vector2(off, 0.0)
 	_pop_root.add_child(lab)
+	lab.size = lab.get_combined_minimum_size()
+	if crit and lab.get_child_count() > 0:
+		var mark2: Control = lab.get_child(0)
+		mark2.position = Vector2(-(mark2.size.x + px * 0.22), (lab.size.y - mark2.size.y) * 0.5 + px * 0.06)
+	lab.position = sp - lab.size * 0.5 + off
+	# 弹入（先放大再回弹）+ 上浮淡出，和主机节奏一致
+	lab.pivot_offset = lab.size * 0.5
+	lab.scale = Vector2(1.45, 1.45)
+	var rise := (66.0 if crit else 54.0) * s
+	var t1 := lab.create_tween()
+	t1.tween_property(lab, "scale", Vector2.ONE, 0.20).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	var tw := lab.create_tween()
-	tw.tween_property(lab, "position:y", lab.position.y - 60.0, 1.0)
-	tw.parallel().tween_property(lab, "modulate:a", 0.0, 0.8)
+	tw.tween_property(lab, "position:y", lab.position.y - rise, 1.0).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(lab, "modulate:a", 0.0, 0.45).set_delay(0.55)
 	tw.tween_callback(lab.queue_free)
 
 
@@ -1218,28 +1422,41 @@ func _spawn_gold_label(wp: Vector3, amount: int, own: bool) -> void:
 	if sp.x < -320.0 or sp.x > vp.x + 320.0 or sp.y < -320.0 or sp.y > vp.y + 320.0:
 		return
 	var s := _hud_scale()
-	var fs := int(round(34.0 * s))
+	var fs := int(round((34.0 if own else 30.0) * s))
 	var lab := Label.new()
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lab.text = "+%dg" % amount
 	lab.add_theme_font_size_override("font_size", fs)
-	lab.add_theme_color_override("font_color", UiKit.C_GOLD)
-	lab.add_theme_color_override("font_outline_color", Color.BLACK)
-	lab.add_theme_constant_override("outline_size", 3)
+	lab.add_theme_color_override("font_color", Color(1.0, 0.87, 0.40))
+	lab.add_theme_color_override("font_outline_color", Color(0.16, 0.08, 0.01, 0.95))
+	lab.add_theme_constant_override("outline_size", maxi(2, int(round(fs * 0.20))))
+	lab.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.45))
+	lab.add_theme_constant_override("shadow_offset_x", maxi(1, int(round(fs * 0.05))))
+	lab.add_theme_constant_override("shadow_offset_y", maxi(1, int(round(fs * 0.07))))
+	lab.add_theme_constant_override("shadow_outline_size", 0)
 	var off := _popup_stagger(wp)
-	if own:
-		# 自己击杀：数字左侧补一把矢量小剑（复刻主机 KillGoldPopup 语义，随 label 上浮/淡出）
-		var bw := fs * 1.5
-		var blade := _BladeMark.new(fs)
-		blade.position = Vector2(-bw - fs * 0.45, fs * 0.1)
-		blade.size = Vector2(bw, fs * 1.3)
-		lab.add_child(blade)
-		lab.position = sp - lab.size * 0.5 + Vector2(off - bw * 0.5, 0.0)
-	else:
-		lab.position = sp - lab.size * 0.5 + Vector2(off, 0.0)
 	_pop_root.add_child(lab)
+	lab.size = lab.get_combined_minimum_size()
+	# 左侧矢量徽标：自己击杀=小剑，助攻/自然金币=金币（复刻主机 ValuePopup 语义，随 label 上浮/淡出）
+	var icon_w: float = fs * (1.6 if own else 1.3)
+	var mark: Control
+	if own:
+		var blade := _BladeMark.new(fs)
+		blade.size = Vector2(fs * 1.5, fs * 1.3)
+		mark = blade
+	else:
+		var coin := _CoinMark.new(fs)
+		coin.size = Vector2(fs * 1.3, fs * 1.3)
+		mark = coin
+	lab.add_child(mark)
+	mark.position = Vector2(-icon_w - fs * 0.30, (lab.size.y - mark.size.y) * 0.5)
+	lab.position = sp - lab.size * 0.5 + off + Vector2(-icon_w * 0.45, 0.0)
+	lab.pivot_offset = lab.size * 0.5
+	lab.scale = Vector2(1.3, 1.3)
+	var t1 := lab.create_tween()
+	t1.tween_property(lab, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	var tw := lab.create_tween()
-	tw.tween_property(lab, "position:y", lab.position.y - 55.0, 1.4)
+	tw.tween_property(lab, "position:y", lab.position.y - 55.0, 1.4).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.parallel().tween_property(lab, "modulate:a", 0.0, 0.6).set_delay(1.4)
 	tw.tween_callback(lab.queue_free)
 
@@ -1612,6 +1829,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	# 模型 + 头顶血条偏移（≈ 模型顶部）
 	var head_off := 1.6
 	var tower_ring: MeshInstance3D = null   # 防御塔攻击范围环（存回 view 供快照刷红/绿/黄）
+	var epic_ring_ref: MeshInstance3D = null   # 史诗野怪活动圈（默认隐藏，玩家攻击时显示）
 	var model_ref: Node3D = null            # 主模型实例（无骨骼动画的兵种做程序化后坐用）
 	match typ:
 		NET_HERO:
@@ -1637,10 +1855,9 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 			head_off = 4.6
 			if name == "crystal":
 				head_off = 5.8
-			# 塔攻击范围圈（同主机 Turret._create_range_preview：attack_range 890、body_radius 0.5，
-			# 内/外 = 8.9∓0.15+0.5 → 黄环平铺地面）。塔恒广播，环也一直可见，死亡整组移除。
-			tower_ring = _make_flat_ring(8.9 - 0.15 + 0.5, 8.9 + 0.15 + 0.5, Color(1.0, 1.0, 0.0, 0.3))
-			tower_ring.position = Vector3(0.0, 0.01, 0.0)
+			# 塔攻击范围圈（同主机 Turret._create_range_preview：贴地柔化环带，radius = 8.9 + 0.5）
+			tower_ring = MeshFactory.create_ground_ring(8.9 + 0.5, Color(1.0, 0.9, 0.35, 0.45))
+			tower_ring.name = "TowerRangeRing"
 			node.add_child(tower_ring)
 		NET_MINION:
 			var mm := NetModels.minion(name, team)
@@ -1667,10 +1884,15 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				head_off = 4.0
 				if NetModels.is_epic_jungle(name):
 					head_off = 8.0
-					# 史诗野怪范围圈：半径≈8 的黄环贴脚（同主机 _add_activity_ring），随怪移动
-					var er := _make_flat_ring(7.8, 8.2, Color(1.0, 0.85, 0.2, 0.25))
-					er.position = Vector3(0.0, 0.02, 0.0)
+					# 史诗野怪范围圈：半径≈8 的贴地柔化环（同主机 _add_activity_ring）
+					# 圈固定回巢穴圆心（不随怪移动）；怪在圈内=白色，走出圈外=红色
+					# 默认隐藏：只有本端玩家正在攻击这只野怪时才显示（同主机规则）
+					var er := MeshFactory.create_ground_ring(8.0, Color(1.0, 1.0, 1.0, 0.42), 0.0)
+					er.name = "EpicActivityRing"
+					er.top_level = true   # 世界坐标固定：圆心锁在巢穴，不随怪移动
+					er.visible = false
 					node.add_child(er)
+					epic_ring_ref = er
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 0.9
@@ -1720,7 +1942,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 		"hp": 0.0, "maxhp": 1.0, "bar_off": head_off, "target": null, "set": false,
 		"level": 1, "mana": 0.0, "maxmana": 1.0, "shield": 0.0,
 		"exp": 0.0, "exp_to_next": 1.0, "under_attack": 0,
-		"ring": tower_ring}   # 塔范围环（快照刷红/绿/黄；非塔为 null）
+		"ring": tower_ring, "epic_ring": epic_ring_ref,   # 塔范围环（快照刷红/绿/黄；非塔为 null）
+		"epic_center": Vector3.ZERO, "epic_center_set": false, "epic_red": false}
 	if model_ref != null:
 		view["model"] = model_ref
 	# #44 动画：英雄/小兵/野怪模型带 AnimationPlayer 就挂 idle/walk/attack/cast/die 驱动状态
@@ -1809,20 +2032,12 @@ func _set_tower_ring_color(v: Dictionary, st: int) -> void:
 	var r: MeshInstance3D = v.get("ring")
 	if r == null or not is_instance_valid(r):
 		return
-	var m: StandardMaterial3D = r.material_override as StandardMaterial3D
-	if m == null:
-		return
-	var col := Color.YELLOW
-	var al := 0.3
+	var col := Color(1.0, 0.9, 0.35, 0.45)
 	if st == 0:
-		col = Color.RED
-		al = 0.4
+		col = Color(1.0, 0.28, 0.24, 0.55)
 	elif st == 1:
-		col = Color.GREEN
-		al = 0.4
-	m.albedo_color = col
-	m.albedo_color.a = al
-	m.emission = col
+		col = Color(0.45, 1.0, 0.45, 0.5)
+	MeshFactory.set_ground_ring_color(r, col)
 
 # —— 施法预览（同主机 Hero 技能预览三件套：范围圈 / AoE填充圆 / 方向箭头）——
 func _build_cast_preview() -> void:
@@ -1832,6 +2047,9 @@ func _build_cast_preview() -> void:
 	_pv_aoe = MeshFactory.create_cast_area(Color(0.30, 0.72, 1.0), 0)
 	_pv_aoe.visible = false
 	add_child(_pv_aoe)
+	_pv_impact = MeshFactory.create_cast_area(Color(0.30, 0.72, 1.0), 0)
+	_pv_impact.visible = false
+	add_child(_pv_impact)
 	_pv_arrow = Node3D.new()
 	_pv_arrow.visible = false
 	_pv_shaft = MeshFactory.create_cast_line(Color(0.30, 0.72, 1.0))
@@ -1843,11 +2061,83 @@ func _build_cast_preview() -> void:
 	_pv_arrow.add_child(_pv_head)
 	add_child(_pv_arrow)
 
+## 召唤师技能施法预览（同主机 Hero._update_summoner_preview：范围圈/落点圈/位移箭头）
+func _update_summoner_preview() -> void:
+	var sname := str(_own.get("summoner_name", ""))
+	var sid := str(HeroPickData.SUMMONERS.get(sname, ""))
+	var sk = SkillDatabase.get_skill(sid) if sid != "" else null
+	if sk == null:
+		_hide_cast_preview()
+		return
+	var drag: Vector2 = _pad.get_summoner_drag()
+	var ry := float(_own.get("ry", 0.0))
+	var self_pos := _self_pos()
+	var aim_dir := Vector3(sin(ry), 0.0, cos(ry))
+	if drag.length() > 12.0:
+		aim_dir = Vector3(drag.x, 0.0, drag.y).normalized()
+	else:
+		var md := _ground_hit(_mouse_screen) - self_pos
+		md.y = 0.0
+		if md.length() > 0.2:
+			aim_dir = md.normalized()
+	var pv_hero := str(_manifest.get("hero_name", ""))
+	if _pv_color_key != pv_hero + "|sum":
+		_pv_color_key = pv_hero + "|sum"
+		var pv_col := Color(0.32, 0.72, 1.0)
+		if pv_hero != "":
+			pv_col = Vfx.color_for_hero(pv_hero)
+		for mi in [_pv_range, _pv_aoe, _pv_impact, _pv_shaft, _pv_head]:
+			MeshFactory.set_cast_preview_color(mi, pv_col)
+	var ground_y := Config.GROUND_FX_Y
+	var self_v := Vector3(self_pos.x, ground_y, self_pos.z)
+	_pv_range.visible = false
+	_pv_aoe.visible = false
+	_pv_impact.visible = false
+	_pv_arrow.visible = false
+	match sname:
+		"闪现":
+			var land := self_pos + aim_dir * 5.0
+			_pv_arrow.visible = true
+			_pv_shaft.position = Vector3(0, 0, 2.5)
+			_pv_shaft.scale = Vector3(0.9, 1.0, 5.0)
+			_pv_head.position = Vector3(0, 0, 5.0)
+			_pv_arrow.global_position = self_v + Vector3(0, 0.025, 0)
+			_pv_arrow.rotation.y = atan2(aim_dir.x, aim_dir.z)
+			_pv_impact.visible = true
+			_pv_impact.global_position = Vector3(land.x, ground_y + 0.01, land.z)
+			_pv_impact.scale = Vector3.ONE
+		"终结", "惩击":
+			var rng: float = 5.0 if sname == "终结" else 3.0
+			var aim := self_pos + aim_dir * rng
+			_pv_range.visible = true
+			_pv_range.global_position = Vector3(self_pos.x, ground_y + 0.02, self_pos.z)
+			_pv_range.scale = Vector3(rng, rng, rng)
+			_pv_aoe.visible = true
+			MeshFactory.set_cast_area_mode(_pv_aoe, 1)
+			_pv_aoe.global_position = Vector3(aim.x, ground_y, aim.z)
+			_pv_aoe.scale = Vector3(1.2, 1, 1.2)
+		"晕眩", "弱化", "治疗术":
+			var rad: float = 3.0 if sname == "治疗术" else 5.0
+			_pv_aoe.visible = true
+			MeshFactory.set_cast_area_mode(_pv_aoe, 0)
+			_pv_aoe.global_position = self_v
+			_pv_aoe.scale = Vector3(rad, 1, rad)
+			_pv_impact.visible = true
+			_pv_impact.global_position = self_v + Vector3(0, 0.01, 0)
+			_pv_impact.scale = Vector3(rad, 1, rad)
+		_:
+			pass   # 疾跑/狂暴/净化/传送：无地面指示
+
+
 func _hide_cast_preview() -> void:
+	if _mm != null:
+		_mm.aim_shot = {}
 	if _pv_range:
 		_pv_range.visible = false
 	if _pv_aoe:
 		_pv_aoe.visible = false
+	if _pv_impact:
+		_pv_impact.visible = false
 	if _pv_arrow:
 		_pv_arrow.visible = false
 
@@ -1877,6 +2167,12 @@ func _update_cast_preview() -> void:
 				aim = _cast_aim(i, _skills[i], drag, ry)
 				break
 	if slot < 0:
+		# 召唤师技能：按住召唤师按钮时给同样的施法预览
+		if _pad != null and _pad.touch_active and _pad.get_summoner_held() \
+				and str(_own.get("summoner_name", "")) != "" \
+				and float(_own.get("summoner_cd", 0.0)) <= 0.05:
+			_update_summoner_preview()
+			return
 		_hide_cast_preview()
 		return
 	var sk: Dictionary = _skills[slot]
@@ -1897,8 +2193,25 @@ func _update_cast_preview() -> void:
 		_hide_cast_preview()
 		return
 	var self_pos := _self_pos()
+	# 全图技能（鲁班2 / 后羿3）：给小地图喂瞄准方向 + 命中高亮（同主机 Minimap）
+	var gs_name := str(_own.get("name", ""))
+	if gs_name == "":
+		gs_name = str(_manifest.get("hero_name", ""))
+	var gs_prof: Dictionary = SkillDatabase.global_shot_profile(gs_name, slot)
+	if _mm != null:
+		if gs_prof.is_empty():
+			_mm.aim_shot = {}
+		else:
+			var a_dir: Vector3 = aim - self_pos
+			a_dir.y = 0.0
+			if a_dir.length() < 0.15:
+				a_dir = Vector3(sin(ry), 0.0, cos(ry))
+			_mm.aim_shot = {"from": self_pos, "dir": a_dir.normalized(),
+				"len": float(gs_prof["len"]), "hit_r": float(gs_prof["hit_r"]),
+				"only_hero": bool(gs_prof["only_hero"]), "col": gs_prof["color"]}
 	var typ := int(sk.get("type", 0))
 	var range := float(sk.get("range", 0.0))
+	var has_range := range > 0.0
 	if range <= 0.0:
 		range = 3.0
 	# 预览配色跟随本端英雄元素色（同主机）
@@ -1911,22 +2224,23 @@ func _update_cast_preview() -> void:
 			pv_col = Vfx.color_for_hero(pv_hero)
 			if slot > 0:
 				pv_col = pv_col.lerp(Vfx.color2_for_hero(pv_hero), 0.16 * slot)
-		for mi in [_pv_range, _pv_aoe, _pv_shaft, _pv_head]:
+		for mi in [_pv_range, _pv_aoe, _pv_impact, _pv_shaft, _pv_head]:
 			MeshFactory.set_cast_preview_color(mi, pv_col)
 	_pv_aim = aim
-	# 自身施法范围圈（type0/1 用；线性/位移用箭头示意长度，不复用范围圈）
-	if typ == 0 or typ == 1:
+	var rad := float(sk.get("rad", 0.0))
+	_pv_impact.visible = false
+	# 自身施法范围圈（有施法距离的瞄准技能；线性/位移用箭头示意长度，不复用范围圈）
+	if has_range and (typ == 0 or typ == 1 or typ == 2 or typ == 6):
 		_pv_range.visible = true
-		_pv_range.global_position = Vector3(self_pos.x, 0.07, self_pos.z)
+		_pv_range.global_position = Vector3(self_pos.x, Config.GROUND_FX_Y + 0.02, self_pos.z)
 		_pv_range.scale = Vector3(range, range, range)
 	else:
 		_pv_range.visible = false
 	if typ == 1:
 		# 范围技能：柔光落点 + 准星
-		var rad := float(sk.get("rad", 0.0))
 		_pv_aoe.visible = true
 		MeshFactory.set_cast_area_mode(_pv_aoe, 0)
-		_pv_aoe.global_position = Vector3(aim.x, 0.05, aim.z)
+		_pv_aoe.global_position = Vector3(aim.x, Config.GROUND_FX_Y, aim.z)
 		_pv_aoe.scale = Vector3(maxf(rad, 0.1), 1, maxf(rad, 0.1))
 	elif typ == 3 or typ == 4:
 		# 线性/位移：贴地能量带 + 终点准星（len：type3 优先子弹射程 br，type4 优先位移 dis）
@@ -1944,20 +2258,41 @@ func _update_cast_preview() -> void:
 		_pv_shaft.position = Vector3(0, 0, len * 0.5)
 		_pv_shaft.scale = Vector3(0.9, 1.0, len)
 		_pv_head.position = Vector3(0, 0, len)
-		_pv_arrow.global_position = Vector3(self_pos.x, 0.075, self_pos.z)
+		_pv_arrow.global_position = Vector3(self_pos.x, Config.GROUND_FX_Y + 0.025, self_pos.z)
 		_pv_arrow.rotation.y = angle_y
 		_pv_aoe.visible = false
-	elif typ == 0:
-		# 指向型：拖拽瞄准时在落点放四段括号准星
-		if touch_aiming:
-			_pv_aoe.visible = true
-			MeshFactory.set_cast_area_mode(_pv_aoe, 1)
-			_pv_aoe.global_position = Vector3(aim.x, 0.05, aim.z)
-			_pv_aoe.scale = Vector3(1.2, 1, 1.2)
-		else:
+		if rad > 0.0:
+			_pv_impact.visible = true
+			_pv_impact.global_position = Vector3(aim.x, Config.GROUND_FX_Y + 0.01, aim.z)
+			_pv_impact.scale = Vector3(rad, 1, rad)
+	elif typ == 2 or typ == 6:
+		# 增益/护盾：有半径的补落点范围，纯自身增益用脚下柔光
+		_pv_arrow.visible = false
+		if rad > 0.0:
+			_pv_impact.visible = true
+			_pv_impact.global_position = Vector3(aim.x, Config.GROUND_FX_Y + 0.01, aim.z)
+			_pv_impact.scale = Vector3(rad, 1, rad)
 			_pv_aoe.visible = false
+		else:
+			_pv_aoe.visible = true
+			MeshFactory.set_cast_area_mode(_pv_aoe, 0)
+			_pv_aoe.global_position = Vector3(self_pos.x, Config.GROUND_FX_Y, self_pos.z)
+			_pv_aoe.scale = Vector3(1.6, 1, 1.6)
+			_pv_impact.visible = false
+	elif typ == 0:
+		# 指向型：落点四段括号准星；有半径则叠加命中范围
+		_pv_aoe.visible = true
+		MeshFactory.set_cast_area_mode(_pv_aoe, 1)
+		_pv_aoe.global_position = Vector3(aim.x, Config.GROUND_FX_Y, aim.z)
+		_pv_aoe.scale = Vector3(1.2, 1, 1.2)
+		_pv_arrow.visible = false
+		if rad > 0.0:
+			_pv_impact.visible = true
+			_pv_impact.global_position = Vector3(aim.x, Config.GROUND_FX_Y + 0.01, aim.z)
+			_pv_impact.scale = Vector3(rad, 1, rad)
 	else:
 		_pv_aoe.visible = false
+		_pv_arrow.visible = false
 
 # —— 接管 ——
 func _on_takeover(manifest: Dictionary) -> void:
@@ -2043,6 +2378,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton:
 			var mb2 := event as InputEventMouseButton
 			if mb2.button_index == MOUSE_BUTTON_LEFT and mb2.pressed:
+				# 属性面板标题条：点击展开/收起（同 host 点标题条 toggle_attribute_panel）
+				if _hud != null and _hud._attr_head_rect.has_point(mb2.position):
+					_hud.attr_collapsed = not _hud.attr_collapsed
+					return
 				if _pending_skill >= 0:
 					_do_action(mb2.position)
 				else:
@@ -2240,16 +2579,18 @@ func _collect_world_bars() -> Array:
 			NET_HERO:
 				rows.append(_hero_bar_row(nid, v, sp))
 			NET_TURRET:
-				rows.append(_unit_bar_row(nid, v, sp, 300.0, 22.0, 92.0))
+				rows.append(_unit_bar_row(nid, v, sp, 300.0, 22.0, 92.0, false, true, true, 2000.0))
 			NET_MINION:
-				rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0))
+				var mn := str(v.get("name", ""))
+				var vanguard := mn.find("先锋") >= 0 or mn in ["dragon", "storm", "shadow_dragon"]
+				rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, vanguard, 1000.0))
 			NET_JUNGLE:
 				if NetModels.is_epic_jungle(str(v.get("name", ""))):
 					# 史诗怪大号分格紫条：宽随血量每格 1000 自适应（同主机 HUD）
 					var segs := maxi(1, int(ceil(float(v.maxhp) / 1000.0)))
 					rows.append(_unit_bar_row(nid, v, sp, clampf(segs * 22.0, 380.0, 880.0), 30.0, 84.0, true))
 				else:
-					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0))
+					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, true, 1000.0))
 	return rows
 
 func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
@@ -2258,18 +2599,21 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 	if int(v.team) != TEAM_ENEMY:
 		bar_col = Color(0.0, 0.886, 0.431) if nid == _self_net else Color(0.0, 0.886, 1.0)
 	return {"kind": "hero", "nid": nid, "cx": sp.x, "cy": sp.y,
-		"name": str(v.get("name", "")), "level": int(v.get("level", 1)),
+		"name": str(v.get("name", "")), "pname": str(v.get("pname", "")), "level": int(v.get("level", 1)),
 		"hp": float(v.hp), "maxhp": float(v.maxhp), "hp_col": bar_col,
 		"shield": float(v.get("shield", 0.0)),
 		"mana": float(v.get("mana", 0.0)), "maxmana": float(v.get("maxmana", 0.0)),
 		"exp": float(v.get("exp", 0.0)), "exp_to_next": float(v.get("exp_to_next", 0.0)),
+		"hidden": bool(v.get("hidden", false)) and int(v.team) != TEAM_ENEMY,
 		"lyf": v.get("lyf", [])}
 
-func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, label_off: float, epic := false) -> Dictionary:
+func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, label_off: float,
+		epic := false, turret := false, ticks := false, tick_step := 1000.0) -> Dictionary:
 	return {"kind": "unit", "nid": nid, "cx": sp.x, "cy": sp.y, "w": w, "h": h,
 		"team": int(v.team), "epic": epic, "shield": float(v.get("shield", 0.0)),
 		"name": str(v.get("name", "")), "hp": float(v.hp), "maxhp": float(v.maxhp),
-		"label_off": label_off, "lyf": v.get("lyf", [])}
+		"label_off": label_off, "lyf": v.get("lyf", []), "mk": v.get("mk", []),
+		"turret": turret, "ticks": ticks, "tick_step": tick_step}
 
 # —— 世界 / 相机 / HUD 搭建 ——
 func _make_mat(col: Color, rough := 0.9) -> StandardMaterial3D:
@@ -2279,6 +2623,8 @@ func _make_mat(col: Color, rough := 0.9) -> StandardMaterial3D:
 	m.albedo_color = col
 	return m
 
+var _net_lane_idx := 0
+
 func _add_lane_plane_net(center: Vector3, size: Vector2, diag: bool) -> void:
 	var plane := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
@@ -2286,33 +2632,53 @@ func _add_lane_plane_net(center: Vector3, size: Vector2, diag: bool) -> void:
 	plane.mesh = pm
 	if diag:
 		plane.rotation_degrees = Vector3(0.0, -45.0, 0.0)
-	plane.position = center + Vector3(0.0, 0.05, 0.0)
+	# host 同款：不同走向错开 1~2mm 防交叉口 z-fighting；路缘沿长边铺
+	plane.position = center + Vector3(0.0, 0.14 + 0.0012 * float(_net_lane_idx % 6), 0.0)
+	_net_lane_idx += 1
 	plane.material_override = MapVisuals.ground_material()
+	var curb_mat: Material = DecorMesh.rock_material()
+	var along_x: bool = size.x >= size.y
+	for s in [-1.0, 1.0]:
+		var curb := MeshInstance3D.new()
+		var cm := BoxMesh.new()
+		if along_x:
+			cm.size = Vector3(size.x, 0.22, 0.6)
+			curb.position = Vector3(0.0, -0.04, (size.y * 0.5 + 0.25) * s)
+		else:
+			cm.size = Vector3(0.6, 0.22, size.y)
+			curb.position = Vector3((size.x * 0.5 + 0.25) * s, -0.04, 0.0)
+		curb.mesh = cm
+		curb.material_override = curb_mat
+		plane.add_child(curb)
 	$World.add_child(plane)
 
 
 func _build_world() -> void:
 	# 视觉与 host BattleManager._create_map 同源：同一套 MapVisuals 着色器/材质/装饰
-	# 1. 野外基底（300×300 细分，给地面 shader 的野区微地形起伏提供顶点）
+	# 1. 浮空岛顶面（与 host 同源：岛外 discard，露出天空）
 	var wild := MeshInstance3D.new()
 	var wm := PlaneMesh.new()
-	wm.size = Vector2(300.0, 300.0)
-	wm.subdivide_width = 100
-	wm.subdivide_depth = 100
+	wm.size = Vector2(220.0, 220.0)
+	wm.subdivide_width = 120
+	wm.subdivide_depth = 120
 	wild.mesh = wm
 	wild.position = Vector3(0.0, -0.02, 0.0)
-	wild.material_override = MapVisuals.ground_material(0.28)
+	wild.material_override = MapVisuals.island_ground_material()
 	$World.add_child(wild)
 	# 2. 分路浅绿（土路由地面 shader 按世界坐标采样，平面只负责形状；同 host y=0.05）
-	_add_lane_plane_net(Vector3(-55.0, 0.0, 0.0), Vector2(16.0, 80.0), false)
-	_add_lane_plane_net(Vector3(-30.0, 0.0, 30.0), Vector2(16.0, 80.0), true)
-	_add_lane_plane_net(Vector3(0.0, 0.0, 55.0), Vector2(80.0, 16.0), false)
-	_add_lane_plane_net(Vector3(55.0, 0.0, 0.0), Vector2(16.0, 80.0), false)
-	_add_lane_plane_net(Vector3(30.0, 0.0, -30.0), Vector2(16.0, 80.0), true)
-	_add_lane_plane_net(Vector3(0.0, 0.0, -55.0), Vector2(80.0, 16.0), false)
+	_add_lane_plane_net(Vector3(-55.0, 0.0, 0.0), Vector2(15.4, 126.0), false)
+	_add_lane_plane_net(Vector3(-30.0, 0.0, 30.0), Vector2(16.0, 84.85), true)
+	_add_lane_plane_net(Vector3(0.0, 0.0, 55.0), Vector2(126.0, 15.4), false)
+	_add_lane_plane_net(Vector3(55.0, 0.0, 0.0), Vector2(15.4, 126.0), false)
+	_add_lane_plane_net(Vector3(30.0, 0.0, -30.0), Vector2(16.0, 84.85), true)
+	_add_lane_plane_net(Vector3(0.0, 0.0, -55.0), Vector2(126.0, 15.4), false)
 	# 3. 高地青砖扇形（蓝左下 / 红右上，host 同款石材着色器）
 	_add_high_ground_fan(Vector3(-60.0, 0.2, 60.0), -90.0, 0.0)
 	_add_high_ground_fan(Vector3(60.0, 0.2, -60.0), 90.0, 180.0)
+	_add_high_ground_aprons_net(Vector3(-60.0, 0.0, 60.0), Vector3(-1,0,0), Vector3(0,0,1))
+	_add_high_ground_aprons_net(Vector3(60.0, 0.0, -60.0), Vector3(1,0,0), Vector3(0,0,-1))
+	_add_high_ground_rim_net(Vector3(-60.0, 0.0, 60.0), -90.0, 0.0)
+	_add_high_ground_rim_net(Vector3(60.0, 0.0, -60.0), 90.0, 180.0)
 	# 3.5 泉水圆盘 + 光环
 	_add_fountain(Vector3(-58.0, 0.3, 58.0), Color(0.2, 0.55, 1.0, 0.35))
 	_add_fountain(Vector3(58.0, 0.3, -58.0), Color(1.0, 0.25, 0.2, 0.35))
@@ -2320,6 +2686,8 @@ func _build_world() -> void:
 	_add_river()
 	# 4.5 装饰物（草丛/河岸石墙/陶罐，host 同款 MultiMesh + 固定种子 → 位置一致）
 	MapVisuals.scatter_decorations($World)
+	# 4.6 浮空岛背景（岛缘/岛底/墙外树林，host 同源）
+	MapVisuals.spawn_floating_island($World)
 	# 5. 静态容器（墙/草丛/营地环，map payload 到达后由 _apply_map 填充）
 	_static_root = Node3D.new()
 	_static_root.name = "Statics"
@@ -2340,6 +2708,60 @@ func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float) -> 
 	csg.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 	csg.material_override = MapVisuals.high_ground_material()
 	$World.add_child(csg)
+
+
+func _add_high_ground_aprons_net(center: Vector3, out_a: Vector3, out_b: Vector3) -> void:
+	var mat := MapVisuals.high_ground_material()
+	var inward_a := -out_a
+	var inward_b := -out_b
+	_add_flat_quad_net(center + out_a * 1.5 + inward_b * 17.5, Vector2(3.0, 35.0), mat, 0.177)
+	_add_flat_quad_net(center + out_b * 1.5 + inward_a * 17.5, Vector2(35.0, 3.0), mat, 0.177)
+	_add_flat_quad_net(center + out_a * 1.5 + out_b * 1.5, Vector2(3.0, 3.0), mat, 0.177)
+
+
+func _add_flat_quad_net(pos: Vector3, size_v: Vector2, mat: Material, y: float) -> void:
+	var mi := MeshInstance3D.new()
+	var pm := PlaneMesh.new()
+	pm.size = size_v
+	mi.mesh = pm
+	# PlaneMesh 本身就是水平 XZ 面，不能再绕 X 转 90°，否则石台会竖起来
+	mi.position = Vector3(pos.x, y, pos.z)
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	$World.add_child(mi)
+
+
+func _add_high_ground_rim_net(center: Vector3, start_deg: float, end_deg: float) -> void:
+	var steps := 48
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in steps:
+		var a0 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
+		var a1 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i + 1) / float(steps))
+		var in0 := center + Vector3(cos(a0) * 34.7, 0.176, sin(a0) * 34.7)
+		var in1 := center + Vector3(cos(a1) * 34.7, 0.176, sin(a1) * 34.7)
+		var out0 := center + Vector3(cos(a0) * 36.4, 0.025, sin(a0) * 36.4)
+		var out1 := center + Vector3(cos(a1) * 36.4, 0.025, sin(a1) * 36.4)
+		st.add_vertex(in0); st.add_vertex(in1); st.add_vertex(out0)
+		st.add_vertex(in1); st.add_vertex(out1); st.add_vertex(out0)
+	st.generate_normals()
+	var mi := MeshInstance3D.new()
+	mi.name = "HighGroundRim"
+	mi.mesh = st.commit()
+	mi.material_override = _double_sided_rock_net()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	$World.add_child(mi)
+
+
+func _double_sided_rock_net() -> ShaderMaterial:
+	var base := DecorMesh.rock_material()
+	var sh := (base.shader as Shader).duplicate() as Shader
+	sh.code = sh.code.replace(
+		"render_mode diffuse_burley, specular_schlick_ggx;",
+		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	return mat
 
 
 func _add_fountain(center: Vector3, color: Color) -> void:
@@ -2466,14 +2888,24 @@ func _update_camera() -> void:
 			return
 		# 接管：固定俯视主机镜头 —— 视角锁定（fov70 / -60°，与 host BattleManager 完全一致），只随英雄平移。
 		# 这样摇杆/键盘的「世界方向移动」与主机屏幕方向 1:1。
-		_cam.fov = 70.0 - _fov_punch_cur
 		var zoom := 1.0
 		# 兰陵王隐身中：同主机把固定跟随镜头拉远/拉高 25%（看得更广）
 		if int(_own.get("hidden_self", 0)) == 1:
 			zoom = 1.25
 		# host：目标点 = 英雄 + 跟随偏移 + 拖动平移偏移；震屏在其后叠加
-		_cam.global_position = _cam_focus + CAM_FOLLOW_OFF * zoom + _cam_pan + _shake_offset()
+		var target := _cam_focus + CAM_FOLLOW_OFF * zoom + _cam_pan + _shake_offset()
+		if _cam_intro_t < 0.0:
+			_cam_intro_t = 0.0
+		if _cam_intro_t < CAM_INTRO_DUR:
+			_cam_intro_t += get_process_delta_time()
+			var e := 1.0 - pow(1.0 - clampf(_cam_intro_t / CAM_INTRO_DUR, 0.0, 1.0), 3.0)
+			_cam.global_position = target + Vector3(0.0, 70.0, 130.0) * (1.0 - e)
+			_cam.rotation_degrees = Vector3(lerpf(-72.0, -60.0, e), 0.0, 0.0)
+			_cam.fov = lerpf(52.0, 70.0, e) - _fov_punch_cur
+			return
+		_cam.global_position = target
 		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.fov = 70.0 - _fov_punch_cur
 		return
 	var pitch := deg_to_rad(_cam_pitch)
 	var yaw := deg_to_rad(_cam_yaw)
@@ -2820,7 +3252,7 @@ func _pred_dir(node: Node3D) -> Vector3:
 	var az := Input.get_axis("ui_down", "ui_up")
 	if absf(ax) < 0.1 and absf(az) < 0.1:
 		return Vector3.ZERO
-	var mm := _pad.get_move_mode() if _pad != null else TouchController.MOVE_MODE_TURN
+	var mm := _pad.get_move_mode() if _pad != null else TouchController.MOVE_MODE_DIR
 	if mm == TouchController.MOVE_MODE_TURN:
 		return Vector3(sin(node.rotation.y), 0.0, cos(node.rotation.y)) * az
 	return Vector3(ax, 0.0, -az)
@@ -3390,6 +3822,64 @@ func _pick_skill_target_net(aim: Vector3, range: float, allow_turret: bool = fal
 # —— 拾取 / 位置辅助 ——
 # 交互判定一律用"最新快照权威位 target"（同一帧坐标，自/敌相对准确），不用插值渲染位 node——
 # 渲染位滞后最新快照 ≤1 周期且各实体相位不同，直接参与射程/距离判定会互相错位。
+## 按住普攻键即显攻击范围圈（与主机 Hero._aa_ring_show_timer 同视觉；客户端无 Hero 节点故本地自绘）
+func _update_atk_ring() -> void:
+	var held: bool = _pad != null and _pad.is_attack_held() and _owned and _state == 1 \
+			and int(_own.get("alive", 1)) != 0
+	if not held:
+		if _atk_ring != null and is_instance_valid(_atk_ring):
+			_atk_ring.visible = false
+		return
+	if _atk_ring == null or not is_instance_valid(_atk_ring):
+		_atk_ring = MeshFactory.create_ground_ring(1.0, Color(1, 1, 1, 0.32), 96.0)
+		add_child(_atk_ring)
+	var reach := float(_manifest.get("reach", 3.25))
+	var pos := _self_pos()
+	_atk_ring.visible = true
+	_atk_ring.global_position = Vector3(pos.x, 0.02, pos.z)
+	_atk_ring.scale = Vector3(reach, 1.0, reach)
+
+
+## 史诗野怪活动圈：仅当本端玩家正在攻击这只野怪时显示（同主机 JungleMonster._update_activity_ring）
+## 圈固定回巢穴圆心；怪在圈内=白色，走出圈外=红色
+func _update_epic_rings() -> void:
+	var has_epic := false
+	for v in _views.values():
+		if v.get("epic_ring") != null:
+			has_epic = true
+			break
+	if not has_epic:
+		return
+	var held: bool = _pad != null and _pad.is_attack_held() and _owned and _state == 1 \
+			and int(_own.get("alive", 1)) != 0
+	var tgt := -1
+	if held:
+		tgt = _manual_alive()
+		if tgt < 0:
+			tgt = _pick_lowest_enemy(float(_manifest.get("reach", 3.25)) + 1.0)
+	for nid in _views:
+		var v: Dictionary = _views[nid]
+		var ring = v.get("epic_ring")
+		if ring == null or not is_instance_valid(ring):
+			continue
+		var show: bool = held and nid == tgt and float(v.get("hp", 0.0)) > 0.0
+		ring.visible = show
+		if not show:
+			continue
+		var nd = v.get("node")
+		if nd == null or not is_instance_valid(nd):
+			continue
+		if not bool(v.get("epic_center_set", false)):
+			v["epic_center_set"] = true
+			v["epic_center"] = nd.global_position
+		var ctr: Vector3 = v["epic_center"]
+		(ring as Node3D).global_position = Vector3(ctr.x, ctr.y + 0.17, ctr.z)
+		var out: bool = nd.global_position.distance_to(ctr) > 8.0
+		if out != bool(v.get("epic_red", false)):
+			v["epic_red"] = out
+			MeshFactory.set_ground_ring_color(ring,
+				Color(1.0, 0.22, 0.18, 0.55) if out else Color(1.0, 1.0, 1.0, 0.42))
+
 func _self_pos() -> Vector3:
 	if _self_net >= 0 and _views.has(_self_net):
 		var sv: Dictionary = _views[_self_net]
@@ -3422,6 +3912,7 @@ class Hud:
 	var _font: Font
 	var u := 1.0
 	var safe_top := 0.0   # 刘海/挖孔避让：顶部战况带与状态文字整体下移
+	var BAND_SHIFT := 564.0   # 顶部战况带右移量（对齐 host：面板左缘 1619，右缘 2029）
 	var name_text := ""
 	var level := 1
 	var hp := 0.0
@@ -3462,6 +3953,8 @@ class Hud:
 	const ATTR_BUFF_C := Color(1.0, 0.62, 0.25)
 	const ATTR_NAME_C := Color(0.8, 0.83, 0.87)
 	const ATTR_ROWS_PER_COL := 9
+	var attr_collapsed := true          # 默认折叠（同 host UiManager.attr_collapsed）
+	var _attr_head_rect := Rect2()      # 折叠标题条命中区（点击展开/收起）
 
 	func _init() -> void:
 		_font = UiKit.font()
@@ -3489,7 +3982,7 @@ class Hud:
 			var r2 := {"cx": cx2, "cy": size.y - 446.0 + 160.0, "level": level, "name": name_text,
 				"hp": hp, "maxhp": maxhp, "hp_col": Color(0.0, 0.886, 0.431),
 				"shield": 0.0, "mana": mana, "maxmana": maxmana,
-				"exp": 0.0, "exp_to_next": 0.0, "lyf": [], "nid": -1}
+				"exp": 0.0, "exp_to_next": 0.0, "hidden": false, "lyf": [], "mk": [], "nid": -1}
 			_draw_hero_bar(r2)
 		# —— 底部右侧：技能栏（触控模式 pad_active 时隐藏，让位触摸层技能钮；与主机同）——
 		if not pad_active:
@@ -3557,31 +4050,65 @@ class Hud:
 			_:
 				return Color(0.945, 0.925, 0.251)
 
+	# 经验等级圈（血条左端，几何/配色同主机 HeroInfoControl._draw_level_ring）
+	func _draw_level_ring(c: Vector2, r: float, level_text: String, exp_ratio: float) -> void:
+		draw_circle(c, r + 2.0, Color(0, 0, 0, 0.92))
+		draw_circle(c, r - 1.0, Color(0.07, 0.08, 0.12, 0.95))
+		draw_arc(c, r, 0.0, TAU, 32, Color.DIM_GRAY, 2.6)
+		draw_arc(c, r, -PI / 2.0, -PI / 2.0 + TAU * exp_ratio, 32, UiKit.C_GOLD, 3.2)
+		draw_arc(c, r - 2.6, PI * 1.12, PI * 1.84, 20, Color(1, 1, 1, 0.22), 1.2)
+		var fs := int(round(r * 0.82))
+		var tw := _font.get_string_size(level_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		draw_string(_font, c + Vector2(-tw * 0.5, fs * 0.36), level_text,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+
+	# 草丛隐藏图标（同主机 HeroInfoControl._draw_hidden_badge）
+	func _draw_hidden_badge(c: Vector2, s: float) -> void:
+		var t := Time.get_ticks_msec() * 0.001
+		var pulse := 0.5 + 0.5 * sin(t * 3.0)
+		draw_circle(c, s * (1.18 + 0.06 * pulse), Color(0.30, 0.86, 1.0, 0.10 + 0.06 * pulse))
+		draw_circle(c, s, Color(0.06, 0.09, 0.13, 0.90))
+		draw_arc(c, s - 0.8, 0.0, TAU, 28, Color(0.55, 0.86, 0.98, 0.90), 1.6)
+		var eye_col := Color(0.86, 0.96, 1.0, 0.95)
+		var ew := s * 0.62
+		var eh := s * 0.40
+		var pts := PackedVector2Array()
+		for i in range(13):
+			var a := PI + PI * float(i) / 12.0
+			pts.append(c + Vector2(cos(a) * ew, -sin(a) * eh))
+		for i in range(13):
+			var a2 := PI * float(i) / 12.0
+			pts.append(c + Vector2(cos(a2) * ew, sin(a2) * eh))
+		pts.append(pts[0])
+		draw_polyline(pts, eye_col, 1.8)
+		draw_circle(c, s * 0.20, eye_col)
+		draw_line(c + Vector2(-ew * 1.15, eh * 1.5), c + Vector2(ew * 1.15, -eh * 1.5), Color(1.0, 0.40, 0.34, 0.95), 2.2)
+
 	func _draw_hero_bar(r: Dictionary) -> void:
 		var cx := float(r.cx)
 		# 主机 HUD：position = 锚点屏幕位 - custom_minimum_size/2（HeroInfoControl 高 320 → /2=160）
 		var top := float(r.cy) - 160.0
-		# 等级圆环（黑底 + 灰环 + 金色经验弧 + 等级数字）
-		var ring_center := Vector2(cx, top + 17.0)
-		draw_circle(ring_center, 17.0, Color.BLACK)
-		draw_arc(ring_center, 15.0, 0.0, TAU, 16, Color.DIM_GRAY, 2.0)
-		var e2n := float(r.get("exp_to_next", 0.0))
-		var exp_ratio := 1.0
-		if e2n > 0.0:
-			exp_ratio = clampf(float(r.get("exp", 0.0)) / e2n, 0.0, 1.0)
-		draw_arc(ring_center, 15.0, -PI / 2.0, -PI / 2.0 + TAU * exp_ratio, 16, UiKit.C_GOLD, 2.5)
-		draw_string(_font, ring_center + Vector2(-6.0, 5.0), str(r.get("level", 1)),
-				HORIZONTAL_ALIGNMENT_CENTER, -1, 13.0, Color.WHITE)
+		# 等级圆环已改画到血条左端（见下方），此处保留原竖向占位，与主机 HeroInfoControl 版面一致
 		# 名称（含血量行；字号×2=34，几何同主机 HeroInfoControl：环底距名字基线 34，按实际多行高度推进）
 		var top2 := top + 66.0
-		var name_str := "%s\n%d/%d" % [str(r.get("name", "")), int(r.hp), int(r.maxhp)]
-		var _nw := 0
+		# 血条上方同时显示英雄名称与玩家/AI 昵称
+		var disp_name := str(r.get("name", ""))
+		var nick_name := str(r.get("pname", ""))
+		if nick_name != "" and nick_name != disp_name:
+			disp_name = (disp_name + " · " + nick_name) if disp_name != "" else nick_name
+		if disp_name == "":
+			disp_name = "?"
+		var name_fs := 34.0
+		if nick_name != "" and _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 34).x > 280.0:
+			name_fs = 26.0
+		var name_str := "%s\n%d/%d" % [disp_name, int(r.hp), int(r.maxhp)]
+		var _nw := 0.0
 		for _ln in name_str.split("\n"):
-			_nw = max(_nw, len(_ln))
-		draw_string(_font, Vector2(cx - float(_nw) * 8.0, top2), name_str,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 34.0, Color.WHITE)
+			_nw = maxf(_nw, _font.get_string_size(_ln, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).x)
+		draw_string(_font, Vector2(cx - _nw * 0.5, top2), name_str,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs, Color.WHITE)
 		# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
-		var by := top2 + _font.get_multiline_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 34).y + 10.0
+		var by := top2 + _font.get_multiline_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).y + 2.0
 		var bw := 280.0
 		var bh := 28.0
 		var mhp := maxf(float(r.maxhp), 1.0)
@@ -3591,6 +4118,15 @@ class Hud:
 		var bx := cx - bw / 2.0
 		var hpx := bw * ratio
 		var shield := clampf(float(r.get("shield", 0.0)), 0.0, mhp)
+		# 经验等级圈：血条左端（放大后与血条同高居中，同主机 HeroInfoControl）
+		var e2n := float(r.get("exp_to_next", 0.0))
+		var exp_ratio := 1.0
+		if e2n > 0.0:
+			exp_ratio = clampf(float(r.get("exp", 0.0)) / e2n, 0.0, 1.0)
+		_draw_level_ring(Vector2(bx - 10.0 - 24.0, by + bh * 0.5), 24.0, str(r.get("level", 1)), exp_ratio)
+		# 草丛隐藏标记：血条上方中央（主机 hidden_in_bush）
+		if bool(r.get("hidden", false)):
+			_draw_hidden_badge(Vector2(cx, by - 13.0), 11.0)
 		# 投影（两层）
 		draw_rect(Rect2(bx + 3.0, by + 5.0, bw, bh), Color(0, 0, 0, 0.22))
 		draw_rect(Rect2(bx + 1.5, by + 2.5, bw, bh), Color(0, 0, 0, 0.34))
@@ -3725,26 +4261,58 @@ class Hud:
 				var _fw_u := (_fhp_u / mhp) * bw * _fratio_u
 				if _fw_u > 0.5:
 					draw_rect(Rect2(left + fw, top2, _fw_u, bh), Color.ORANGE)
+			# 野怪 / 主宰先锋：每 1000 血一条分隔线（复刻主机 WorldBarPainter）
+			if bool(r.get("ticks", false)):
+				var tick_step: float = maxf(100.0, float(r.get("tick_step", 1000.0))) / mhp * bw
+				if tick_step > 5.0:
+					var tx := tick_step
+					while tx < bw - 1.0:
+						draw_line(Vector2(left + tx, top2), Vector2(left + tx, top2 + bh),
+							Color(0, 0, 0, 0.55), 1.5)
+						draw_line(Vector2(left + tx + 1.5, top2), Vector2(left + tx + 1.5, top2 + bh),
+							Color(1, 1, 1, 0.14), 1.0)
+						tx += tick_step
 			draw_rect(Rect2(left, top2, bw, bh), Color(tc.r, tc.g, tc.b, 0.5), false, 1.0)
-		# 名称标签（字号×2=32：文本块底距血条顶 6px；黑描边近似主机 Label outline）
+		# 防御塔：不画名称标签，改为血条下方一个指向塔身的小三角箭头
 		var label := str(r.get("name", ""))   # 默认不显示具体血量数值
 		var fs := 32.0
-		var _lh := _font.get_multiline_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).y
-		var _asc := _font.get_ascent(fs)
-		var lp := Vector2(left, (top2 - 6.0 - _lh) + _asc)
-		var blk := Color(0, 0, 0)
-		draw_string(_font, lp + Vector2(-1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-		draw_string(_font, lp + Vector2(1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-		draw_string(_font, lp + Vector2(-1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-		draw_string(_font, lp + Vector2(1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-		draw_string(_font, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+		var _lh := 0.0
+		if bool(r.get("turret", false)):
+			var tc_ar := _team_color(int(r.get("team", 9)))
+			var ax2: float = left + bw * 0.5
+			var ay2: float = top2 + bh + 3.0
+			var aw2: float = maxf(8.0, bh * 0.5)
+			var ah2: float = aw2 * 1.2
+			draw_colored_polygon(PackedVector2Array([
+				Vector2(ax2 - aw2, ay2), Vector2(ax2 + aw2, ay2), Vector2(ax2, ay2 + ah2),
+			]), Color(tc_ar.r, tc_ar.g, tc_ar.b, 0.95))
+			draw_polyline(PackedVector2Array([
+				Vector2(ax2 - aw2, ay2), Vector2(ax2 + aw2, ay2), Vector2(ax2, ay2 + ah2),
+				Vector2(ax2 - aw2, ay2),
+			]), Color(0, 0, 0, 0.65), 1.2)
+		else:
+			# 名称标签（字号×2=32：文本块底距血条顶 6px；黑描边近似主机 Label outline）
+			_lh = _font.get_multiline_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).y
+			var _asc := _font.get_ascent(fs)
+			var lp := Vector2(left, (top2 - 6.0 - _lh) + _asc)
+			var blk := Color(0, 0, 0)
+			draw_string(_font, lp + Vector2(-1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
+			draw_string(_font, lp + Vector2(1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
+			draw_string(_font, lp + Vector2(-1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
+			draw_string(_font, lp + Vector2(1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
+			draw_string(_font, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
 		# 标记图标（血条上方一行；专属图标 + 右上角层数）
 		var _mk_rows: Array = []
 		for m in lyf_rows2:
 			if m.size() >= 3 and int(m[1]) > 0:
 				_mk_rows.append({"name": str(m[0]), "count": int(m[1]), "type": "lyf"})
+		for m in r.get("mk", []):
+			if m.size() >= 2 and int(m[1]) > 0:
+				_mk_rows.append({"name": str(m[0]), "count": int(m[1]), "type": ""})
 		if not _mk_rows.is_empty():
-			MarkerIconScript.draw_row(self, left + bw * 0.5, top2 - 52.0, _mk_rows, 11.0)
+			var mr := 16.0
+			var my := top2 - 8.0 - _lh - mr * 2.0 - 4.0
+			MarkerIconScript.draw_row(self, left + bw * 0.5, my, _mk_rows, mr)
 
 	# 史诗怪大号分格紫条（复刻 HealthBarControl._draw_epic_bar，静态分格填充）
 	func _draw_epic_bar(left: float, top2: float, bw: float, bh: float, hp_now: float, mhp: float, lyf_pred2: float = 0.0, shield: float = 0.0, flash_hp: float = 0.0, flash_ratio: float = 0.0) -> void:
@@ -3837,7 +4405,7 @@ class Hud:
 
 	# —— 小地图右侧英雄环形头像带（同 host respawn_container：小地图右侧 (340,28)，单元 130×150、行距 6、环 r=56.25）——
 	func _draw_respawn_widget_rows() -> void:
-		var x0 := 340.0 + UiKit.safe_left()
+		var x0 := 500.0 + UiKit.safe_left()   # 小地图 450 宽 + 内距
 		var y0 := 28.0 + safe_top
 		var cell_w := 130.0
 		var cell_h := 150.0
@@ -3891,16 +4459,6 @@ class Hud:
 			var hratio := clampf(float(r[4]) / maxhp, 0.0, 1.0)
 			var hcol := Color(0.25, 1.0, 0.3) if hratio > 0.5 else (Color(1.0, 0.9, 0.2) if hratio > 0.25 else Color(1.0, 0.3, 0.2))
 			draw_arc(center, ring_r + 3.75, -PI / 2.0, -PI / 2.0 + TAU * hratio, 48, hcol, 5.0)
-		# 名字+Lv 移到头像圆圈正上方（同 host RespawnWidget；超宽按单元宽度自动缩字）
-		var name_lv := "%s Lv.%d" % [str(r[2]), int(r[3])]
-		var ncol := Color(1.0, 0.6, 0.5) if team == 1 else Color.WHITE
-		var nfs := 18
-		var ns := _font.get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs).x
-		if ns > 126.0:   # host: size.x - 4 = 126
-			nfs = maxi(11, int(nfs * 126.0 / ns))
-			ns = _font.get_string_size(name_lv, HORIZONTAL_ALIGNMENT_LEFT, -1, nfs).x
-		draw_string(_font, Vector2(center.x - ns * 0.5, center.y - ring_r - 5.0), name_lv,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, nfs, ncol)
 
 	func _draw_widget_mid(center: Vector2, txt: String) -> void:
 		var sz := _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 24).x
@@ -3916,25 +4474,25 @@ class Hud:
 		var cx := size.x * 0.5
 		var st := safe_top
 		var bg_style := UiKit.flat(0.62, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0), 10.0, 6.0)
-		draw_style_box(bg_style, Rect2(cx - 145.0, 6.0 + st, 460.0, 144.0))
-		draw_style_box(bg_style, Rect2(cx - 140.0, 8.0 + st, 250.0, 44.0))
+		draw_style_box(bg_style, Rect2(cx - 145.0 + BAND_SHIFT, 6.0 + st, 410.0, 144.0))
+		draw_style_box(bg_style, Rect2(cx - 140.0 + BAND_SHIFT, 8.0 + st, 250.0, 44.0))
 		var gs := 24.0 * s
 		var gd := _font.get_ascent(gs) + _font.get_descent(gs)
 		var gy := 8.0 + st + (44.0 - gd) * 0.5 + _font.get_ascent(gs)
-		draw_string(_font, Vector2(cx - 140.0, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
+		draw_string(_font, Vector2(cx - 140.0 + BAND_SHIFT, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
 				HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
 		# FPS：bg 内 (5,50) 120×24 居中，固定绿色（同 host fps_label，不按帧率变色）
 		var fs := 14.0 * s
 		var fd := _font.get_ascent(fs) + _font.get_descent(fs)
 		var fy := 6.0 + st + 50.0 + (24.0 - fd) * 0.5 + _font.get_ascent(fs)
-		draw_string(_font, Vector2(cx - 140.0, fy), "FPS %d" % Engine.get_frames_per_second(),
+		draw_string(_font, Vector2(cx - 140.0 + BAND_SHIFT, fy), "FPS %d" % Engine.get_frames_per_second(),
 				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, Color(0.55, 0.95, 0.65))
 		if kda.size() >= 3:
 			var ks := 20.0 * s
 			var kd := _font.get_ascent(ks) + _font.get_descent(ks)
 			var ky := 12.0 + st + (36.0 - kd) * 0.5 + _font.get_ascent(ks)
-			draw_string(_font, Vector2(cx - 120.0, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
-					HORIZONTAL_ALIGNMENT_RIGHT, 420.0, ks, Color.WHITE)
+			draw_string(_font, Vector2(cx - 120.0 + BAND_SHIFT, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
+					HORIZONTAL_ALIGNMENT_RIGHT, 380.0, ks, Color.WHITE)
 		var sz := 24.0 * s
 		var base := 82.0 + st + _font.get_ascent(sz)
 		var segs: Array = [
@@ -3944,11 +4502,11 @@ class Hud:
 			[" %d " % int(sc.get("ek", 0)), Color.WHITE],
 			[_format_gold(int(sc.get("eg", 0))), Color(1.0, 0.33, 0.264)],
 		]
-		# 第二行在比分面板内居中（面板中心相对屏幕中心 +85，同 host）
+		# 第二行在比分面板内居中（面板中心相对屏幕中心 +519，同 host 右锚定版式）
 		var total := 0.0
 		for g in segs:
 			total += _font.get_string_size(str(g[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
-		var bx := cx + 85.0 - total * 0.5
+		var bx := cx + 60.0 + BAND_SHIFT - total * 0.5
 		for g in segs:
 			var txt: String = str(g[0])
 			_text(Vector2(bx, base), txt, sz, g[1])
@@ -3975,14 +4533,22 @@ class Hud:
 		var ncol := 2
 		var panel_w := pad * 2.0 + col_w * float(ncol) + col_gap * float(ncol - 1)
 		var panel_h := pad * 2.0 + head_h + legend_h + row_h * ATTR_ROWS_PER_COL
-		# 紧贴小地图下方（小地图 inset 40 + 300，再留 10），顶边固定、向下展开（同 host）
+		# 默认折叠（同 host UiManager.attr_collapsed）：只留一条标题条，点一下展开
+		if attr_collapsed:
+			# 收起态底板宽度跟小地图同宽（450），否则比小地图窄/宽都会看着像底板错位
+			panel_w = minf(panel_w, 450.0)
+			panel_h = pad * 2.0 + head_h
+		# 紧贴小地图下方（小地图 inset 40 + 450，再留 10），顶边固定、向下展开（同 host）
 		var left := 40.0 + UiKit.safe_left()
-		var top := 40.0 + safe_top + 310.0
+		var top := 40.0 + safe_top + 460.0
 		draw_style_box(UiKit.flat(0.5, 12, 1), Rect2(left, top, panel_w, panel_h))
-		# 折叠标题条（同 host attr_header："属性  ▴"，16px）
+		_attr_head_rect = Rect2(left, top, panel_w, maxf(panel_h, head_h + pad * 2.0))
+		# 折叠标题条（同 host attr_header："属性  ▼"，16px）
 		var hs := 16.0 * s
 		draw_string(_font, Vector2(left + pad, top + 2.0 * s + (head_h - (_font.get_ascent(hs) + _font.get_descent(hs))) * 0.5 + _font.get_ascent(hs)),
-				"属性  ▴", HORIZONTAL_ALIGNMENT_LEFT, -1, hs, Color(0.85, 0.9, 1.0, 0.95))
+				"属性  ▼" if attr_collapsed else "属性  ▲", HORIZONTAL_ALIGNMENT_LEFT, -1, hs, Color(0.85, 0.9, 1.0, 0.95))
+		if attr_collapsed:
+			return
 		# 图例：基础（白） +装备（绿） +增益（橙），同 host legend 文案/配色
 		var lys := 13.0 * s
 		var ly := top + pad + head_h + (_font.get_ascent(lys) + _font.get_descent(lys)) * 0.5 + _font.get_ascent(lys)

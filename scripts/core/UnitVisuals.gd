@@ -9,7 +9,7 @@ const BLOB_SHADER := preload("res://scripts/core/blob_shadow.gdshader")
 
 const RIM_TEAM0 := Color(0.25, 0.85, 1.0)   # team 0：青
 const RIM_TEAM1 := Color(1.0, 0.4, 0.32)    # team 1：红
-const RIM_STRENGTH := 0.8
+const RIM_STRENGTH := 0.0   # 0 = 英雄表面不再叠队伍色边缘光；受击闪白由 hit 参数独立生效
 const HIT_TIME := 0.18
 # 接地阴影贴地高度（需高于地图所有地面装饰层，见 attach_hero 内注释）
 const BLOB_Y := 0.36

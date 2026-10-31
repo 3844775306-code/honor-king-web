@@ -6,11 +6,13 @@ extends Control
 ## 数据源=host own 块 tgt 摘要（NetSession._pack_target：[] 或 [nid,team,name,lvl,hp,maxhp,atk,ap,armor,mr]）。
 ## 只读复刻：本控件不含任何模拟，绝不回写 host。
 
+const EntityIconArtScript = preload("res://scripts/ui/EntityIconArt.gd")
 
 var _panel: Panel
 var _accent: ColorRect
 var _team_dot: ColorRect
 var _hp_fill: StyleBoxFlat
+var _entity_icon: Control
 var _labels: Dictionary = {}
 var _attrs := ["攻击", "法强", "护甲", "魔抗"]
 var _tints := {
@@ -36,8 +38,9 @@ func _build() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	_panel = Panel.new()
-	# 同主机：属性标题条占住小地图正下方后，目标框下移到 属性顶边 + 标题条高 + 12；刘海/挖孔避让
-	_panel.position = Vector2(40 + UiKit.safe_left(), 350 + UiKit.safe_top() + 30.0 * rs + 12.0)
+	# 同主机：目标框插在英雄头像（右缘≈1190）与顶部战况面板（左缘≈1514）之间
+	_panel.position = Vector2(1200 + UiKit.safe_left(), 8 + UiKit.safe_top())
+	_panel.scale = Vector2(0.89, 0.97)
 	_panel.size = Vector2(330 * rs, 170 * rs)
 	# 同主机：深色玻璃 + 2px 冷光描边 + 16px 柔和投影 + 大圆角
 	var frame := UiKit.flat(0.94, 12, 2, Color(0.62, 0.74, 0.96, 0.22), Color(0.025, 0.045, 0.095, 0.92), 0.0, 16.0)
@@ -65,14 +68,20 @@ func _build() -> void:
 	accent_shine.size = Vector2(330, 5) * rs
 	accent_shine.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.add_child(accent_shine)
+	_entity_icon = UI_Manager.EntityIconControl.new()
+	_entity_icon.position = Vector2(12, 7) * rs
+	_entity_icon.size = Vector2(30, 30) * rs
+	_entity_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.add_child(_entity_icon)
+
 	_team_dot = ColorRect.new()
-	_team_dot.position = Vector2(16, 13) * rs
-	_team_dot.size = Vector2(10, 10) * rs
+	_team_dot.position = Vector2(47, 13) * rs
+	_team_dot.size = Vector2(8, 8) * rs
 	_panel.add_child(_team_dot)
 
 	var name_label := Label.new()
-	name_label.position = Vector2(32, 8) * rs
-	name_label.size = Vector2(180, 26) * rs
+	name_label.position = Vector2(60, 8) * rs
+	name_label.size = Vector2(146, 26) * rs
 	_styl(name_label, 17, Color.WHITE)
 	name_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
 	name_label.add_theme_constant_override("shadow_offset_x", 1)
@@ -187,8 +196,10 @@ func refresh(a: Array) -> void:
 		_panel.visible = true
 
 	var name_lab: Label = _labels["name"]
-	name_lab.text = str(a[2])
+	name_lab.text = EntityIconArtScript.display_name(str(a[2]))
 	name_lab.add_theme_color_override("font_color", tcol.lightened(0.3))
+	if _entity_icon != null:
+		_entity_icon.setup(EntityIconArtScript.spec_for(str(a[2])), tcol)
 	var lv_lab: Label = _labels["level"]
 	var lvl := int(a[3])
 	lv_lab.text = "Lv.%d" % lvl if lvl > 0 else ""
