@@ -619,6 +619,7 @@ func _build_recall_loop() -> AudioStreamWAV:
 	st.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	st.loop_begin = 0
 	st.loop_end = n
+	_pad_loop_tail(st, n)
 	return st
 
 # —— 大厅/备战界面环境音乐：16s 无缝循环（所有分音频率都是 1/16Hz 整数倍，首尾相位连续）——
@@ -678,7 +679,20 @@ func _build_menu_music() -> AudioStreamWAV:
 	st.loop_mode = AudioStreamWAV.LOOP_FORWARD
 	st.loop_begin = 0
 	st.loop_end = n
+	_pad_loop_tail(st, n)
 	return st
+
+# 循环点处混音器插值会多读 1~2 个采样，若 buffer 正好止于 loop_end，真机（Android）会越界读取直接闪退。
+# 这里在尾部补 64 个静音采样作垫片（不参与循环），并确保 loop_end ≤ 采样数，彻底消除越界。
+func _pad_loop_tail(st: AudioStreamWAV, samples: int) -> void:
+	if st == null or samples <= 0:
+		return
+	var pad := 64
+	var data: PackedByteArray = st.data
+	if data.size() < (samples + pad) * 2:
+		data.resize((samples + pad) * 2)   # 多出来的字节=0，即静音
+		st.data = data
+	st.loop_end = samples
 
 # 程序化合成 16bit/22.05kHz 单声道短音（首次播放时生成并缓存）
 func _build_synth(key: String) -> AudioStreamWAV:
