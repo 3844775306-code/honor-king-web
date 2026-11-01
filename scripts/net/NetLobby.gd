@@ -672,7 +672,7 @@ func _select_lane(lane: String) -> void:
 		_tac_map.set_lane(lane)
 	# 房间内改分路 = 重新进入待确认状态，必须重新点确认
 	if _ui == UIState.ROOM and NetSession.mode != NetSession.Mode.NONE:
-		NetSession.set_lobby_ready(0, lane, false)
+		NetSession.set_lobby_ready(_room_camp, lane, false)
 		_refresh_lane_info()
 		_refresh_room_ready_ui()
 
@@ -1439,11 +1439,7 @@ func _draft_is_my_turn() -> bool:
 
 # 我方第 seat 席（0-based）对应的 peer；超过真人数 = AI 席位（与 _seat_rows 同序、去重）
 func _seat_peer(seat: int) -> int:
-	var ids: Array = [1]
-	for p in NetSession.players:
-		if not ids.has(int(p)):
-			ids.append(int(p))
-	ids.sort()
+	var ids: Array = NetSession.get_seat_order()
 	if seat < 0 or seat >= ids.size():
 		return -1
 	return int(ids[seat])
@@ -1677,14 +1673,15 @@ func _leave_room() -> void:
 # ---------- SELECT：大厅选人（host 与每个 client 各自窗口同屏） ----------
 
 func _seat_rows(state: Dictionary) -> Dictionary:
-	# 场上席 = 房主(1) + 在线客户端，按 peer 排序取前 5；其余列为旁观
-	var ids: Array = [1]
-	var pl: Dictionary = state.get("players", {})
-	for p in pl:
-		# players 里已含房主(1)：去重，避免同一席位在 5v5 里重复占位
-		if not ids.has(int(p)):
-			ids.append(int(p))
-	ids.sort()
+	# 场上席顺序 = host 随机席位顺序（不固定房主 1 号）；前 5 在场，其余旁观
+	var ids: Array = NetSession.get_seat_order()
+	if ids.is_empty():
+		ids = [1]
+		var pl0: Dictionary = state.get("players", {})
+		for p in pl0:
+			if not ids.has(int(p)):
+				ids.append(int(p))
+		ids.sort()
 	var picks: Dictionary = state.get("picks", {})
 	var seats: Array = []
 	var spect: Array = []
@@ -1860,6 +1857,14 @@ func _show_select(state: Dictionary) -> void:
 			_draft_taken[dh] = true
 			if str(k).begins_with("0-"):
 				_blocked_roles[str(HeroPickData.HERO_ROLE[dh])] = true
+	# 分路以房间确认的 lobby_ready.lane 为准（同步到本地 PlayerPrefs，选人页与房间不再不一致）
+	var _room_r = _room_ready_entry()
+	if _room_r is Dictionary:
+		var _rl := str((_room_r as Dictionary).get("lane", "")).strip_edges()
+		if _rl != "" and PlayerPrefs.get_lane() != _rl:
+			PlayerPrefs.set_lane(_rl)
+			_style_lane_btns()
+			_style_room_lane_btns()
 	# 分路 → 职责：未被队友占用则锁死本局职责，否则放开并提示
 	_lane_role = HeroPickData.lane_role(PlayerPrefs.get_lane())
 	_lane_locked = _lane_role != "" and not _blocked_roles.has(_lane_role)
@@ -3300,4 +3305,3 @@ func _route_battle() -> void:
 
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
-

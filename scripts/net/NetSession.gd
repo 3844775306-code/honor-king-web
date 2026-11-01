@@ -2387,12 +2387,18 @@ func _build_result_payload(bm: Node) -> Dictionary:
 				"nick": str(h.player_name),          # 英雄卡显示「英雄名 · 昵称」
 				"tgold": int(h.total_gold_earned),   # 总经济（团队经济/评分口径）
 			})
+	var gold_hist: Array = []
+	var gh = bm.get("team_gold_diff_history")
+	if gh is Array:
+		gold_hist = (gh as Array).duplicate()
 	return {
 		"winner": int(bm.get("winner")),
 		"dur": float(bm.get("game_time")),
 		"turrets": turrets,
 		"player_team": int(Config.player_team),
 		"rows": rows,
+		# 复盘页经济曲线：host 每分钟记录一次双方总经济差，客户端/回放共用
+		"gold_hist": gold_hist,
 	}
 
 @rpc("any_peer", "reliable", "call_remote")
