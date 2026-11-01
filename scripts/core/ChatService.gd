@@ -70,6 +70,14 @@ func send_player(text: String) -> void:
 	var t := text.strip_edges()
 	if t == "":
 		return
+	# 调试命令：/voice 查看语音诊断；/voice test 触发一次播报
+	if t == "/voice" or t == "/voice test":
+		var vs = get_node_or_null("/root/VoiceService")
+		if vs != null:
+			system_note("语音诊断：" + JSON.stringify(vs.call("diagnose")))
+			if t == "/voice test":
+				vs.call("speak", "语音测试，一二三四五", "灵宝")
+		return
 	if t.length() > MAX_TEXT:
 		t = t.substr(0, MAX_TEXT)
 	var nm := NameStore.player_name()

@@ -25,6 +25,7 @@ var _elapsed := 0.0
 var _sent := false
 var _retried_unsafe := false
 var _ignored_pkts := 0
+var _diag_buf: Array = []
 const DIAG_PATH := "user://voice_diag.log"
 const DIAG_FALLBACK := "res://voice_diag.log"
 
@@ -32,6 +33,9 @@ const DIAG_FALLBACK := "res://voice_diag.log"
 func diag(msg: String) -> void:
 	# 同时打到控制台和文件（导出包没有控制台时看 user://voice_diag.log）
 	print("[EDGE] ", msg)
+	_diag_buf.append(msg)
+	if _diag_buf.size() > 20:
+		_diag_buf.pop_front()
 	var line := "%s %s\n" % [Time.get_datetime_string_from_system(false), msg]
 	# 导出包没有控制台：再往 exe 同目录写一份，用户容易找到
 	var exe_log := OS.get_executable_path().get_base_dir().path_join("voice_diag.log")
@@ -63,6 +67,10 @@ func diag(msg: String) -> void:
 			return
 	f.store_string(line)
 	f.close()
+
+
+func diag_tail() -> Array:
+	return _diag_buf.duplicate()
 
 
 func _ready() -> void:

@@ -27,6 +27,10 @@ var _edge_fail_streak := 0
 var _edge_notice_shown := false
 const EdgeScript = preload("res://scripts/core/EdgeTTS.gd")
 const HttpTtsScript = preload("res://scripts/core/HttpTTS.gd")
+const SapiScript = preload("res://scripts/core/SapiTTS.gd")
+var _sapi: Node = null
+var _sapi_enabled := true
+var _diag_tail: Array = []
 var _http_tts: Node = null
 var _http_busy := false
 var _http_queue: Array = []
@@ -49,6 +53,9 @@ func _ready() -> void:
 	_edge = EdgeScript.new()
 	_edge.name = "EdgeTTS"
 	add_child(_edge)
+	_sapi = SapiScript.new()
+	_sapi.name = "SapiTTS"
+	add_child(_sapi)
 	_http_tts = HttpTtsScript.new()
 	_http_tts.name = "HttpTTS"
 	add_child(_http_tts)
@@ -138,6 +145,12 @@ func speak(text: String, speaker: String = "") -> void:
 
 ## 本地 TTS / 拟声（Edge 不可用时的兜底）
 func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
+	# Windows 本地 SAPI 兜底：网络音频不可用时至少能正确读出文字
+	if _sapi_enabled and _sapi != null and _sapi.call("available"):
+		var rate_i: int = clampi(int(round((float(emo.get("rate", 1.0)) - 1.0) * 10.0)), -5, 6)
+		if _sapi.call("speak", clean, rate_i):
+			diag("local sapi speak rate=%d text=%s" % [rate_i, clean.substr(0, 20)])
+			return
 	var clauses := _split_clauses(clean)
 	if clauses.is_empty():
 		return
@@ -417,7 +430,17 @@ func _verify_tts(my_utt: int, clean: String, speaker: String) -> void:
 	_blip_speak(clean, speaker, _emotion_params(clean, speaker))
 
 
+func diag(msg: String) -> void:
+	print("[VOICE] ", msg)
+	_diag_tail.append(msg)
+	if _diag_tail.size() > 20:
+		_diag_tail.pop_front()
+
+
 func diagnose() -> Dictionary:
+	var edge_log: Array = []
+	if _edge != null and _edge.has_method("diag_tail"):
+		edge_log = _edge.call("diag_tail")
 	var speaking := false
 	if DisplayServer.has_method("tts_is_speaking"):
 		speaking = DisplayServer.tts_is_speaking()
@@ -427,6 +450,7 @@ func diagnose() -> Dictionary:
 		"edge_enabled": edge_enabled, "edge_busy": _edge_busy, "edge_fail": _edge_fail_streak,
 		"edge_cache": _edge_cache.size(), "online_mode": _online_mode,
 		"http_busy": _http_busy, "http_cache": _http_cache.size(),
+		"sapi": _sapi != null, "voice_log": _diag_tail, "edge_log": edge_log,
 		"master_db": AudioServer.get_bus_volume_db(0), "master_mute": AudioServer.is_bus_mute(0),
 	}
 
