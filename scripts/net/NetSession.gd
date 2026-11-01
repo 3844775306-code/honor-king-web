@@ -208,6 +208,7 @@ const C_SELL := 13         # [13, slot]
 const C_INSPECT := 14      # [14, target_net_id]
 const C_ROSTER := 15       # [15] 打开属性(C)/队伍(T)面板时请求队伍行（host 立即回 _rpc_roster；0.5s 节流在客户端）
 const C_YUANLIU_PICK := 16 # [16, pick名] 元流之子·万物为流切流派（host 校验身处自家泉水后 apply；仅限 元流之子）
+const C_SURRENDER := 17     # [17] 发起投降（host 调 UiManager._start_surrender_vote，同单机流程）
 
 
 func _ready() -> void:
@@ -972,6 +973,10 @@ func _apply_command(h: Hero, cmd: Array, pid: int) -> void:
 				# 客户端已按自己的镜头把拖拽换算成世界方向，主机按世界方向施放（不能再按主机阵营翻转）
 				h._use_summoner(Vector2(float(cmd[2]), float(cmd[3])), true)
 			print("[Net] 指令 summoner from ", pid)
+		C_SURRENDER:
+			# 投降：交给 host UI_Manager 的同一套投票流程（6:00 后才能发起）
+			UiManager._start_surrender_vote()
+			print("[Net] 指令 surrender from ", pid)
 		C_RECOVER:
 			# 恢复槽固定 index 4（Hero.setup_skills_from_database 追加）；与主机键盘/触控同式
 			if h.skill_cooldowns.size() > 4 and h.skill_cooldowns[4] <= 0.0:
@@ -1111,7 +1116,8 @@ func _build_snapshot(bm: Node) -> Array:
 		"obj": _pack_obj_timers(),   # 小地图目标计时：[暴君剩余秒, 暴君存活, 主宰剩余秒, 主宰存活]
 		"jg": _pack_jg_dead(),       # 小地图野怪记忆：我方已确认在复活中的野怪点位 [[x,z],…]   # 小地图目标计时：[暴君剩余秒, 暴君存活, 主宰剩余秒, 主宰存活]
 			"rec": UiManager._get_best_recommended_item(h),   # P3d host 同款 B 键推荐购买决策（合成/槽满逻辑一致），客户端 B 键直接 C_BUY 此 id
-			"rb": UiManager._compute_recommended_bundle(h, false),   # 主界面右上推荐带：host 烘焙 {id,text,cost,show}（客户端无 ItemDatabase 合成链，只画）
+			"rb": UiManager._compute_recommended_bundle(h, true),   # 主界面右上推荐带：host 烘焙（含 options 双卡数据，客户端只画）
+			"vg": _pack_vanguard(),   # 顶部对局信息带第三行：主宰/暗影/风暴先锋剩余波次
 			"sa": _pack_stat_triples(h),   # 属性面板：18 行 [基础,装备,Buff] 三元组（顺序同 UiManager.ATTRIBUTE_ROWS）
 			"bs": _pack_equip_bonus(h),    # 商店「总装备加成」：host 同款文本+配色（bonus_* 含装备被动换算，客户端只画）
 			"sx": _pack_skill_icons(h),   # 触控技能键图标读数（4槽×编码数组，同 TouchController._update_skill_button_ui）
@@ -2383,6 +2389,18 @@ func _pack_roster_skill_info(h: Node) -> Array:
 	return out
 
 # 小地图目标计时（客户端 MinimapDraw.draw_objectives 用）
+# 先锋波次（顶部信息带第三行，与 host UI_Manager._vanguard_info 同口径）
+func _pack_vanguard() -> Array:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return []
+	var my_team: int = TEAM_PLAYER
+	var en_team: int = 1 - TEAM_PLAYER
+	return [str(bm.vanguard_wave_name()),
+		int(bm.vanguard_waves_left(my_team)), int(bm.vanguard_waves_left(en_team)),
+		1 if bool(bm.vanguard_ever) else 0]
+
+
 func _pack_obj_timers() -> Array:
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm == null:

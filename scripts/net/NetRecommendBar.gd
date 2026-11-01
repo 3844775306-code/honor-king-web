@@ -17,6 +17,9 @@ var _rec_show := false
 var _plus: TouchActionButtonScript
 var _chip: GoldChip
 var _card: RecCard
+var _opt_cards: Array = []
+var _opt_plus: Array = []
+var _opt_sig := ""
 
 
 # 同主机 UI_Manager.ui_scale()：以虚拟宽 2400 为 1.0 再乘固定放大系数。
@@ -90,12 +93,87 @@ func feed(o: Dictionary) -> void:
 	_card.slot_full = bool(rb.get("slot_full", false)) if rb is Dictionary else false
 	_card.gold = _gold
 	_card.desc = str(rb.get("desc", "")) if rb is Dictionary else ""
+	var opts: Array = rb.get("options", []) if rb is Dictionary else []
+	_sync_options(opts)
 	# 金币不足自动收起成图标；买得起后自动展开（以卡片自身可买判定兜底）
 	var can_show: bool = _rec_show or _card.affordable()
 	_card.set_collapsed_for_gold(false)
 	_card.queue_redraw()
-	_plus.visible = can_show and _rec_id != "" and not _card.collapsed
+	var has_opts: bool = not opts.is_empty()
+	_card.visible = not has_opts
+	_plus.visible = (not has_opts) and can_show and _rec_id != "" and not _card.collapsed
 	_chip.set_gold(_gold)
+
+# 双推荐卡：与 host 同版式（右锚 246×120，竖排 y=70/198，各带黄色“+”）
+func _sync_options(opts: Array) -> void:
+	var sig := ""
+	for o in opts:
+		sig += str(o.get("id", "")) + "|"
+	if sig == _opt_sig:
+		for i in range(_opt_cards.size()):
+			var c2: RecCard = _opt_cards[i]
+			c2.gold = _gold
+			c2.queue_redraw()
+		for i in range(_opt_plus.size()):
+			var p2 = _opt_plus[i]
+			if is_instance_valid(p2) and i < opts.size():
+				p2.visible = _gold >= int(opts[i].get("cost", 0))
+		return
+	_opt_sig = sig
+	for c in _opt_cards:
+		if is_instance_valid(c):
+			c.queue_free()
+	for p3 in _opt_plus:
+		if is_instance_valid(p3):
+			p3.queue_free()
+	_opt_cards.clear()
+	_opt_plus.clear()
+	var pi := 0
+	for o in opts:
+		if pi >= 2:
+			break
+		var card := RecCard.new()
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		card.anchor_left = 1.0
+		card.anchor_right = 1.0
+		card.offset_left = -246.0
+		card.offset_right = 0.0
+		card.offset_top = 70.0 + float(pi) * 128.0
+		card.offset_bottom = card.offset_top + 120.0
+		card.item_name = str(o.get("name", ""))
+		card.tier = int(o.get("tier", 1))
+		card.cost = int(o.get("cost", 0))
+		card.gold = _gold
+		card.desc = str(o.get("desc", ""))
+		card.tap_buy = true
+		var buy_id := str(o.get("id", ""))
+		card.buy_requested.connect(func(): _buy_id(buy_id))
+		add_child(card)
+		_opt_cards.append(card)
+		var plus := TouchActionButtonScript.new()
+		plus.label_text = "+"
+		plus.label_font_size = 76.0
+		plus.color = Color(0.98, 0.84, 0.25, 0.95)
+		plus.hold_to_act = false
+		plus.emit_activated_on_press = true
+		plus.anchor_left = 1.0
+		plus.anchor_top = 0.0
+		plus.anchor_right = 1.0
+		plus.offset_left = -108.0
+		plus.offset_right = -12.0
+		plus.offset_top = 70.0 + float(pi) * 128.0 + 9.0
+		plus.offset_bottom = plus.offset_top + 102.0
+		plus.activated.connect(func(): _buy_id(buy_id))
+		plus.visible = _gold >= int(o.get("cost", 0))
+		add_child(plus)
+		_opt_plus.append(plus)
+		pi += 1
+
+
+func _buy_id(buy_id: String) -> void:
+	if buy_id != "":
+		NetSession.send_command([NetSession.C_BUY, buy_id])
+
 
 func hide_panel() -> void:
 	visible = false
@@ -115,6 +193,7 @@ class RecCard extends Control:
 	var slot_full := false
 	var desc := ""                  # 装备效果一行简介（host 烘焙进 rb.desc）
 	var collapsed := false          # 点按收起：只留右侧装备图标（灰=暂不可买）
+	var tap_buy := false            # true=点一下直接买（双推荐卡）
 	var _last_should_collapse := false
 	var _glow_t := 0.0              # 可购买发光拖尾相位
 	func _process(delta: float) -> void:
@@ -145,6 +224,10 @@ class RecCard extends Control:
 		elif ev is InputEventScreenTouch:
 			is_tap = (ev as InputEventScreenTouch).pressed
 		if is_tap:
+			if tap_buy:
+				buy_requested.emit()
+				accept_event()
+				return
 			# 收起态点击 = 展开；展开且买不起时才允许点回收起。买得起时保持展开，购买走右侧“+”
 			if collapsed:
 				collapsed = false

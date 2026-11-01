@@ -5,6 +5,7 @@ const NetModels = preload("res://scripts/net/NetModels.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetMiniMapScript = preload("res://scripts/net/NetMiniMap.gd")
+const TouchActionButtonScript = preload("res://scripts/mobile/TouchActionButton.gd")
 const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const NetRosterPanelScript = preload("res://scripts/net/NetRosterPanel.gd")
@@ -278,6 +279,11 @@ var _tp: NetTargetPanelScript
 var _br: NetBuffRowScript
 # —— 元流之子·泉水流派切换（复刻主机「流派·切换」钮；CanvasLayer 104，读 own.yl_pick/x/z）——
 var _ys: NetYuanliuScript
+# 设置面板（音量 / 投降，复刻 host UI_Manager 设置按钮；CanvasLayer overlay）
+var _set_layer: CanvasLayer = null
+var _set_panel: PanelContainer = null
+var _vol_slider: HSlider = null
+var _surrender_lab: Label = null
 # —— P3c：属性 C / 队伍 T 面板（host _rpc_roster；CanvasLayer 101 盖过触摸层，模态）——
 var _rp: NetRosterPanelScript
 # —— P3d：商店（host own.gold/equip/rec 喂入；CanvasLayer 102 盖过 C/T 面板）——
@@ -328,6 +334,7 @@ func _ready() -> void:
 	_build_target_panel()
 	_build_buff_row()
 	_build_yuanliu_switch()
+	_build_settings()
 	_build_roster_panel()
 	_build_shop_panel()
 	_build_rec_bar()
@@ -375,6 +382,7 @@ func _process(delta: float) -> void:
 	_update_cam_pan(delta)
 	_hud.fp = _first_person
 	_hud.game_time = _last_snap_time
+	_hud.vg = _own.get("vg", [])
 	_hud.u = _hud_scale()
 	if _owned:
 		if _pending_skill >= 0:
@@ -3102,6 +3110,104 @@ func _build_buff_row() -> void:
 	cl.add_child(_br)
 
 # —— 元流之子·泉水流派切换：读 own.x/z/name/yl_pick，右上角钮 + 四选一面板（发送 C_YUANLIU_PICK 由 host 校验）——
+func _build_settings() -> void:
+	var cl := CanvasLayer.new()
+	cl.layer = UiKit.LAYER_OVERLAY
+	add_child(cl)
+	_set_layer = cl
+	# 齿轮按钮：位置与 host settings_btn 一致（右锚 -108..-12，top 308）
+	var gear := TouchActionButtonScript.new()
+	gear.name = "NetSettingsBtn"
+	gear.label_text = "⚙"
+	gear.label_font_size = 54.0
+	gear.color = Color(1.0, 1.0, 1.0, 0.9)
+	gear.hold_to_act = false
+	gear.emit_activated_on_press = true
+	gear.anchor_left = 1.0
+	gear.anchor_top = 0.0
+	gear.anchor_right = 1.0
+	gear.offset_left = -108.0
+	gear.offset_right = -12.0
+	gear.offset_top = 308.0
+	gear.offset_bottom = 344.0
+	gear.activated.connect(_toggle_settings)
+	cl.add_child(gear)
+
+	var panel := PanelContainer.new()
+	panel.visible = false
+	panel.anchor_left = 1.0
+	panel.anchor_top = 0.0
+	panel.anchor_right = 1.0
+	panel.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD, true, 0.96))
+	panel.offset_left = -520.0
+	panel.offset_right = -40.0
+	panel.offset_top = 352.0
+	panel.offset_bottom = 640.0
+	cl.add_child(panel)
+	_set_panel = panel
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	panel.add_child(v)
+	var t := Label.new()
+	t.text = "设置"
+	t.add_theme_font_size_override("font_size", 26)
+	t.add_theme_color_override("font_color", UiKit.C_GOLD)
+	v.add_child(t)
+	var vrow := HBoxContainer.new()
+	vrow.add_theme_constant_override("separation", 10)
+	v.add_child(vrow)
+	var vl := Label.new()
+	vl.text = "音量"
+	vl.add_theme_font_size_override("font_size", 22)
+	vl.add_theme_color_override("font_color", UiKit.C_TEXT)
+	vrow.add_child(vl)
+	_vol_slider = HSlider.new()
+	_vol_slider.min_value = 0.0
+	_vol_slider.max_value = 100.0
+	_vol_slider.step = 1.0
+	_vol_slider.value = _master_volume_pct()
+	_vol_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vol_slider.custom_minimum_size = Vector2(0, 34)
+	_vol_slider.value_changed.connect(_on_volume_changed)
+	vrow.add_child(_vol_slider)
+	var sur := Button.new()
+	sur.text = "发起投降"
+	sur.custom_minimum_size = Vector2(0, 52)
+	for st in ["normal", "hover", "pressed"]:
+		sur.add_theme_stylebox_override(st, UiKit.skin_button(st, UiKit.C_DANGER, false))
+	sur.add_theme_font_size_override("font_size", 22)
+	sur.pressed.connect(func():
+		NetSession.send_command([NetSession.C_SURRENDER])
+		if _surrender_lab != null:
+			_surrender_lab.text = "已请求主机发起投降投票（需 6:00 后）"
+	)
+	v.add_child(sur)
+	_surrender_lab = Label.new()
+	_surrender_lab.text = "联机投降由主机按同一套投票规则裁决"
+	_surrender_lab.add_theme_font_size_override("font_size", 18)
+	_surrender_lab.add_theme_color_override("font_color", UiKit.C_TEXT_DIM)
+	v.add_child(_surrender_lab)
+
+
+func _toggle_settings() -> void:
+	if _set_panel != null:
+		_set_panel.visible = not _set_panel.visible
+
+
+func _master_volume_pct() -> float:
+	var idx := AudioServer.get_bus_index("Master")
+	if idx < 0:
+		return 100.0
+	return clampf(db_to_linear(AudioServer.get_bus_volume_db(idx)) * 100.0, 0.0, 100.0)
+
+
+func _on_volume_changed(v: float) -> void:
+	var idx := AudioServer.get_bus_index("Master")
+	if idx < 0:
+		return
+	AudioServer.set_bus_volume_db(idx, linear_to_db(clampf(v / 100.0, 0.0, 1.0)))
+
+
 func _build_yuanliu_switch() -> void:
 	var cl := CanvasLayer.new()
 	cl.layer = UiKit.LAYER_OVERLAY  # 高于触摸层(100)/C·T(101)/商店(102)/数值弹出(103)，低于结算(110)
@@ -3949,7 +4055,8 @@ class Hud:
 	var reticle := Vector2(-9999.0, -9999.0)
 	var pad_active := false   # 触控模式：底部右侧旧 1/2/3 预选技能栏让位触摸层技能钮
 	var sa: Array = []        # 自身属性面板：18 行 [基础,装备,Buff] 三元组（host own.sa，顺序同 UiManager.ATTRIBUTE_ROWS）
-	var sc: Dictionary = {}   # 顶部实时战况：{pk,ek,pg,eg}（host SNAP_SCORE 全量统计）
+	var sc: Dictionary = {}
+	var vg: Array = []   # 顶部信息带第三行：[先锋名, 我方波数, 敌方波数, 是否已出动]   # 顶部实时战况：{pk,ek,pg,eg}（host SNAP_SCORE 全量统计）
 	var kda: Array = []       # 主界面个人 K/D/A：[kills,deaths,assists]（host own.kills/…，同 host kda_label）
 	var widget_rows: Array = []   # 小地图右侧英雄环形头像带行（host SNAP_RESPAWN，见 NetSession._build_respawn_rows）
 	var show_widget := false      # 头像带显隐：对局中且有接管英雄时展示
@@ -4519,6 +4626,23 @@ class Hud:
 			[" %d " % int(sc.get("ek", 0)), Color.WHITE],
 			[_format_gold(int(sc.get("eg", 0))), Color(1.0, 0.33, 0.264)],
 		]
+		# 第三行：主宰/暗影/风暴先锋剩余波次（同 host 顶部信息带第三行）
+		if vg.size() >= 4 and (int(vg[3]) == 1 or int(vg[1]) > 0 or int(vg[2]) > 0):
+			var vs := 20.0 * s
+			var vd := _font.get_ascent(vs) + _font.get_descent(vs)
+			var vy := 148.0 + st + (38.0 - vd) * 0.5 + _font.get_ascent(vs)
+			var vtxt := ""
+			var vcol: Color = Color(0.72, 0.76, 0.85)
+			if int(vg[1]) > 0:
+				vtxt = "%s 我方 %d 波 · 敌方 %d 波" % [str(vg[0]), int(vg[1]), int(vg[2])]
+				vcol = UiKit.C_GOLD
+			elif int(vg[2]) > 0:
+				vtxt = "%s 我方 %d 波 · 敌方 %d 波" % [str(vg[0]), int(vg[1]), int(vg[2])]
+				vcol = Color(1.0, 0.33, 0.264)
+			else:
+				vtxt = "%s 已出完" % str(vg[0])
+			draw_string(_font, Vector2(cx - 300.0 + BAND_SHIFT, vy), vtxt,
+				HORIZONTAL_ALIGNMENT_CENTER, 600.0, vs, vcol)
 		# 第二行在比分面板内居中（面板中心相对屏幕中心 +519，同 host 右锚定版式）
 		var total := 0.0
 		for g in segs:
