@@ -88,6 +88,7 @@ var _rview = null
 var _rview_layer: CanvasLayer = null
 var _last_hero_rows: Array = []
 var _flash_cache := {}   # 单位血条受伤闪橙：key -> {hp,t,amt}
+var _lag_cache := {}     # 单位血条残血拖尾：key -> lag
 var _rb_cache := {}
 var _det_cache := {}      # hero idx -> 操作盘/HUD 细节（aa/sx/sa/summoner/recall）
 var _tt_cache: Array = []
@@ -564,7 +565,8 @@ func _update_world_hud(t: float) -> void:
 		var step := 1000.0
 		var is_turret := false
 		if kind == "turret":
-			anchor = 5.2 if sub == "crystal" else 4.6
+			# 与单机 HUD._update_unit_row 同锚点：Turret body_radius=1.5 → 1.5*2+1 = 4.0
+			anchor = 4.0
 			w = 300.0
 			hh = 22.0
 			ticks = true
@@ -594,14 +596,23 @@ func _update_world_hud(t: float) -> void:
 		var team_col: Color = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(team_v) else Color(1.0, 0.33, 0.264, 1.0)
 		if team_v == 2:
 			team_col = Color(0.0, 0.886, 0.431, 1.0)
+		# 残血拖尾（同单机 HUD：hp 下降后 lag 以 7×delta 追平）
+		var _uk := str(u.get("kind", "")) + "_" + str(int(pos.x * 10.0)) + "_" + str(int(pos.z * 10.0))
+		var _lag_prev: float = float(_lag_cache.get(_uk, hp))
+		var _lag: float = hp if _lag_prev <= hp else lerpf(_lag_prev, hp, clampf(get_process_delta_time() * 7.0, 0.0, 1.0))
+		if _lag - hp < 1.0:
+			_lag = hp
+		_lag_cache[_uk] = _lag
+		var _fl: Array = _unit_flash(_uk, hp, maxf(0.001, get_process_delta_time()))
 		rows.append({
 			"hp": hp, "max_hp": mx, "team": team_v, "team_color": team_col,
 			"pos": sp2 - Vector2(w, hh) * 0.5, "w": w, "h": hh,
 			"epic": epic, "ticks": ticks, "tick_step": step,
 			"name_text": sub, "show_name": kind == "jungle",
-			"turret": is_turret, "turret_arrow": false,
-			"shield": 0.0, "interfere": 0.0, "doom": 0.0,
-			"flash_t": 0.0, "flash_amt": 0.0, "heal_t": 0.0, "heal_amt": 0.0,
+			"turret": is_turret, "turret_arrow": is_turret,
+			"shield": float(u.get("shield", 0.0)), "shield_icon": bool(u.get("shield_icon", false)),
+			"interfere": 0.0, "doom": 0.0, "lag": _lag,
+			"flash_t": _fl[0], "flash_amt": _fl[1], "heal_t": 0.0, "heal_amt": 0.0,
 			"marker_list": [], "last_hit": false, "show_numbers": false, "num_text": "",
 		})
 	_bars.rows = rows
