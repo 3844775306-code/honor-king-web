@@ -3100,8 +3100,8 @@ func _build_world() -> void:
 	# 3. 高地青砖扇形（蓝左下 / 红右上，host 同款石材着色器）
 	_add_high_ground_fan(Vector3(-60.0, 0.2, 60.0), -90.0, 0.0, Vector3(-53.0, 0.0, 53.0))
 	_add_high_ground_fan(Vector3(60.0, 0.2, -60.0), 90.0, 180.0, Vector3(53.0, 0.0, -53.0))
-	_add_high_ground_aprons_net(Vector3(-60.0, 0.0, 60.0), Vector3(-1,0,0), Vector3(0,0,1))
-	_add_high_ground_aprons_net(Vector3(60.0, 0.0, -60.0), Vector3(1,0,0), Vector3(0,0,-1))
+	_add_high_ground_aprons_net(Vector3(-60.0, 0.0, 60.0), Vector3(-1,0,0), Vector3(0,0,1), Vector3(-53.0, 0.0, 53.0))
+	_add_high_ground_aprons_net(Vector3(60.0, 0.0, -60.0), Vector3(1,0,0), Vector3(0,0,-1), Vector3(53.0, 0.0, -53.0))
 	_add_high_ground_rim_net(Vector3(-60.0, 0.0, 60.0), -90.0, 0.0)
 	_add_high_ground_rim_net(Vector3(60.0, 0.0, -60.0), 90.0, 180.0)
 	# 3.5 泉水圆盘 + 光环
@@ -3155,8 +3155,10 @@ func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float, bri
 	$World.add_child(csg)
 
 
-func _add_high_ground_aprons_net(center: Vector3, out_a: Vector3, out_b: Vector3) -> void:
-	var mat := MapVisuals.high_ground_material()
+func _add_high_ground_aprons_net(center: Vector3, out_a: Vector3, out_b: Vector3, brick_center: Vector3) -> void:
+	# 必须使用与高地扇形完全相同的同心环青砖材质；之前用 high_ground_material 会在直边处
+	# 露出材质/UV 接缝，看起来像砖面和墙体之间少了一块。
+	var mat := DecorMesh.hq_ring_brick_material(brick_center)
 	var inward_a := -out_a
 	var inward_b := -out_b
 	_add_flat_quad_net(center + out_a * 1.5 + inward_b * 17.5, Vector2(3.0, 35.0), mat, 0.177)
@@ -3177,16 +3179,32 @@ func _add_flat_quad_net(pos: Vector3, size_v: Vector2, mat: Material, y: float) 
 
 
 func _add_high_ground_rim_net(center: Vector3, start_deg: float, end_deg: float) -> void:
-	var steps := 48
+	# 与 host BattleManager._add_high_ground_rim 完全同参数：96 段，内沿贴砖面 34.5/0.176；
+	# 外沿压在分路上时抬到 0.146（否则斜裙落到路面以下，低机位会看到缝）。
+	var steps := 96
+	var raw: Array = []
+	for i in steps + 1:
+		var a := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
+		var wx: float = center.x + cos(a) * 36.0
+		var wz: float = center.z + sin(a) * 36.0
+		raw.append(0.146 if MapVisuals._lane_mask(wx, wz) > 0.05 else 0.025)
+	var out_ys: Array = []
+	for i in raw.size():
+		var v: float = float(raw[i])
+		v = maxf(v, float(raw[clampi(i - 1, 0, raw.size() - 1)]))
+		v = maxf(v, float(raw[clampi(i + 1, 0, raw.size() - 1)]))
+		out_ys.append(v)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in steps:
 		var a0 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
 		var a1 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i + 1) / float(steps))
-		var in0 := center + Vector3(cos(a0) * 34.7, 0.176, sin(a0) * 34.7)
-		var in1 := center + Vector3(cos(a1) * 34.7, 0.176, sin(a1) * 34.7)
-		var out0 := center + Vector3(cos(a0) * 36.4, 0.025, sin(a0) * 36.4)
-		var out1 := center + Vector3(cos(a1) * 36.4, 0.025, sin(a1) * 36.4)
+		var y0: float = float(out_ys[i])
+		var y1: float = float(out_ys[i + 1])
+		var in0 := center + Vector3(cos(a0) * 34.5, 0.176, sin(a0) * 34.5)
+		var in1 := center + Vector3(cos(a1) * 34.5, 0.176, sin(a1) * 34.5)
+		var out0 := center + Vector3(cos(a0) * 36.4, y0, sin(a0) * 36.4)
+		var out1 := center + Vector3(cos(a1) * 36.4, y1, sin(a1) * 36.4)
 		st.add_vertex(in0); st.add_vertex(in1); st.add_vertex(out0)
 		st.add_vertex(in1); st.add_vertex(out1); st.add_vertex(out0)
 	st.generate_normals()

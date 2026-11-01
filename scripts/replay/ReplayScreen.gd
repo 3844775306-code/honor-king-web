@@ -8,7 +8,8 @@ const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
-const AnimMap = preload("res://scripts/presentation/AnimMap.gd")   # 三端共享动画 clip 映射
+const AnimMap = preload("res://scripts/presentation/AnimMap.gd")
+const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")   # 三端共享动画 clip 映射
 const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
 const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")   # 三端共享技能特效
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
@@ -2134,8 +2135,19 @@ func _play_cast_anim(idx: int) -> void:
 	if clip == "" or not ap.has_animation(clip):
 		return
 	ap.play(clip)
+	var _wm2 := _hero_model_of(nd)
+	if _wm2 != null:
+		HeroWeapons.play(_wm2, "cast")
 	nd["anim"] = "attack"
 	nd["atk_until"] = _t + 0.55
+
+
+func _hero_model_of(nd: Dictionary) -> Node3D:
+	var rt = nd.get("root")
+	if rt == null or not is_instance_valid(rt):
+		return null
+	var hm = rt.get_node_or_null("HeroModel")
+	return hm as Node3D
 
 
 func _hero_index_by_name(nm: String) -> int:
@@ -2149,6 +2161,10 @@ func _play_attack_anim(idx: int) -> void:
 	if idx < 0 or idx >= _hero_nodes.size():
 		return
 	var nd: Dictionary = _hero_nodes[idx]
+	# 武器挥砍/后坐动作与单机 Hero._perform_attack 同源（WeaponRig 程序化动作）
+	var _wm := _hero_model_of(nd)
+	if _wm != null:
+		HeroWeapons.play(_wm, "attack")
 	var ap: AnimationPlayer = nd.get("ap")
 	var clip := str(nd.get("attack", ""))
 	if ap == null or clip == "":

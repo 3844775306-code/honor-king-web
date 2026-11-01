@@ -108,21 +108,23 @@ static func hero(name: String, reach: float = -1.0) -> Node3D:
 	var path: String = HERO_MODEL_MAP.get(name, "")
 	if path == "":
 		return null
-	var inst = _spawn(path, Vector3.ONE * HERO_SCALE)
-	# 与主机同源：英雄专属武器；reach>0 用录像/快照里的真实攻击距离（米），武器挂点与朝向和单机一致
+	# 与单机 Hero._load_hero_model 同结构：HeroModel 根 + 模型实例，模型总放大 3.0。
+	# 必须先有 HeroModel 父节点，HeroWeapons.attach 才会把武器绑到 arm-right 骨骼（握在手中）。
+	var root := Node3D.new()
+	root.name = "HeroModel"
+	var inst = _spawn(path, Vector3.ONE * 3.0)
+	if inst == null:
+		root.queue_free()
+		return null
+	root.add_child(inst)
 	var r := reach if reach > 0.0 else float(HeroWeapons.HERO_REACH.get(name, -1.0))
 	HeroWeapons.attach(inst, name, r)
-	# 英睿签名道具：父节点是已放大 HERO_SCALE 的模型，道具容器按 1/HERO_SCALE 换算回米制
 	if name == "英睿":
-		HeroYingrui.attach_props(inst, 1.0 / HERO_SCALE)
+		HeroYingrui.attach_props(root)
 	# 轮椅英雄：与主机同源合成（角色本体坐姿 + 座椅道具），不再只显示一把椅子
 	if HeroWeapons.is_wheelchair_hero(name):
-		var root := Node3D.new()
-		root.name = name
-		root.add_child(inst)
-		HeroWeapons.mount_wheelchair(root, inst, name, HERO_SCALE)
-		return root
-	return inst
+		HeroWeapons.mount_wheelchair(root, inst, name, 3.0)
+	return root
 
 
 # 兵线体型归一化（主机 Minion.gd 与本文件共用同一套目标高度）：
