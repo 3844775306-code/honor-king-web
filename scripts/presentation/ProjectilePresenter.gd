@@ -74,11 +74,23 @@ static func attach_hero_trail(host: Node3D, hero_name: String) -> void:
 
 
 ## 联机/回放：kind（0..5 / 1000+vkind）→ 与 host 同形的弹体节点
-static func make(kind: int, team: int = 0, vkind: int = 0, radius: float = 0.15) -> Node3D:
+static func make(kind: int, team: int = 0, vkind: int = 0, radius: float = 0.15, flags: int = 0) -> Node3D:
+	var node := _make_raw(kind, team, vkind, radius)
+	# kind>=1000 时原始 vkind = kind-1000（联机快照只传合成档位）；回放两者都传
+	var vk := vkind
+	if vk <= 0 and kind >= 1000:
+		vk = kind - 1000
+	_apply_flags(node, vk, flags)
+	return node
+
+
+static func _make_raw(kind: int, team: int, vkind: int, radius: float) -> Node3D:
 	if kind >= 1000:
 		return make_bespoke(kind - 1000)
 	if vkind >= BulletVisualScript.VKIND_BASE and vkind < 1000:
 		return BulletVisualScript.build_from_vkind(vkind)
+	if kind >= 1000:
+		return make_bespoke(kind - 1000)
 	if kind == 4:
 		return houyi_ult_arrow()
 	if kind == 5:
@@ -92,6 +104,24 @@ static func make(kind: int, team: int = 0, vkind: int = 0, radius: float = 0.15)
 				m.scale = Vector3.ONE * HERO_VISUAL_SCALE
 			return m
 	return fallback_cylinder(kind, team)
+
+
+## 与 host Bullet._build_unified_visual 同步：线性技能弹 ×1.7、英雄元素拖尾、箭矢俯仰标记
+static func _apply_flags(node: Node3D, vkind: int, flags: int) -> void:
+	if node == null:
+		return
+	if (flags & 1) != 0:
+		node.scale *= 1.7
+	if vkind >= BulletVisualScript.VKIND_BASE and vkind < 1000:
+		var d := BulletVisualScript.decode_vkind(vkind)
+		if (flags & 2) != 0:
+			var cols := BulletVisualScript.colors_for(int(d.get("palette", 0)))
+			Vfx.attach_trail(node, cols[0], float(d.get("trail_size", 0.2)),
+				float(d.get("trail_life", 0.3)), 8, cols[1])
+		# 箭矢类需要随弹道俯仰（host _pitch_visual）
+		var sh := int(d.get("shape", 0))
+		if sh == BulletVisualScript.SHAPE_BOLT or sh == BulletVisualScript.SHAPE_ARROW:
+			node.set_meta("pitch", true)
 
 
 ## 定制档（小乔Q 扇盘等，与 host 视觉一致）

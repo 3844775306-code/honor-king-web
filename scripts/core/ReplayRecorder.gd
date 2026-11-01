@@ -356,13 +356,16 @@ func _sample(delta: float, finishing: bool) -> void:
 		# 弹体视觉档：kind/vkind（与 host NetSession 快照同编码）→ 回放用同一 ProjectilePresenter 还原
 		var bk := 0
 		var vk := 0
+		var bfl := 0
 		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_kind"):
 			bk = int(NetSession.call("_bullet_kind", b))
 		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_vkind"):
 			vk = int(NetSession.call("_bullet_vkind", b))
+		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_flags"):
+			bfl = int(NetSession.call("_bullet_flags", b))
 		brows.append([int(bid), int(round(bp2.x * 100.0)), int(round(bp2.z * 100.0)), int(b.team),
 			snappedf(cr, 0.01), snappedf(cg, 0.01), snappedf(cb, 0.01), snappedf(float(b.get("radius")), 0.01),
-			bk, vk])
+			bk, vk, int(round(bp2.y * 100.0)), bfl])
 	_bullet_frames.append({"t": t_ms, "b": brows})
 	# 塔血量（顺序与 meta 一致）
 	var trow: Array = []

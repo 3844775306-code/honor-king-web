@@ -22,6 +22,7 @@ const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
 const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
+const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
@@ -317,6 +318,7 @@ var _go: NetResultPanelScript
 # —— P3f：终局演出（与单机同款：聚光灯 V 字舞台 + PostMatchView 铭牌 + 镜头推近 + 个人表现面板）——
 var _pm_view: Control = null
 var _pm_layer: CanvasLayer = null
+var _pm_stage_node: PostMatchStage = null
 var _pm_stage_root: Node3D = null
 var _pm_hidden_layers: Array = []
 var _pm_payload := {}
@@ -870,8 +872,9 @@ func _apply_bullets(snap: Array) -> void:
 			# idx7 定制视觉 vkind（v7）：>0 的 host 技能弹换过默认弹体 → 1000+vkind 定制档复刻原形。
 			var bkind := int(row[6]) if row.size() > 6 else (4 if int(row[5]) >= 2 else int(row[5]))
 			var vkind := int(row[7]) if row.size() > 7 else 0
+			var bflags := int(row[9]) if row.size() > 9 else 0
 			var vis_id := (1000 + vkind) if vkind > 0 else bkind
-			b = _obtain_bullet(team, vis_id)
+			b = _obtain_bullet(team, vis_id, bflags)
 			b.x = bx; b.y = by; b.z = bz
 			b.px = bx; b.py = by; b.pz = bz
 			b.arr_ms = now
@@ -892,6 +895,8 @@ func _apply_bullets(snap: Array) -> void:
 		b.team = team
 		b.arr_ms = now
 		b.gs = gsf
+		if row.size() > 9:
+			b["flags"] = int(row[9])
 		_bullets[bid] = b
 	# 消失剔除（Mesh 回池复用，避免每帧 new/free）
 	for bid in _bullets.keys():
@@ -930,14 +935,14 @@ func _mm_global_bullet_rows() -> Array:
 	return out
 
 
-func _obtain_bullet(team: int, kind: int) -> Dictionary:
+func _obtain_bullet(team: int, kind: int, flags: int = 0) -> Dictionary:
 	var m: Node3D = null
 	var pool: Array = _b_pool.get(kind, [])
 	if not pool.is_empty():
 		m = pool.pop_back()
 		m.visible = true
 	else:
-		m = _make_bullet_visual(kind, team)
+		m = _make_bullet_visual(kind, team, flags)
 		_vis_root.add_child(m)
 	return {"m": m, "x": 0.0, "y": 0.0, "z": 0.0,
 		"px": 0.0, "py": 0.0, "pz": 0.0,
@@ -948,9 +953,9 @@ func _obtain_bullet(team: int, kind: int) -> Dictionary:
 # 按 kind 还原 host 真模型（kind 0→弹石 / 1→弹丸×3 / 2→弓箭 / 3→炮弹 / 4→后羿R 太阳火箭自组）。
 # kind>=1000 为定制视觉（v7 idx7 vkind，host 换过默认弹体的技能弹），派发到 _make_bullet_bespoke。
 # 路径缺失时回退旧圆柱（保留队伍色近似），与 host Bullet.gd 的回退球体同一思路。
-func _make_bullet_visual(kind: int, team: int = 0) -> Node3D:
+func _make_bullet_visual(kind: int, team: int = 0, flags: int = 0) -> Node3D:
 	# 三端共享：kind 0..3 模型档 / 4 后羿R / 5 塔能量球 / 1000+vkind 定制档，全部走 ProjectilePresenter
-	return ProjectilePresenter.make(kind, team)
+	return ProjectilePresenter.make(kind, team, 0, 0.15, flags)
 
 
 
@@ -1266,6 +1271,11 @@ func _tick_visuals(delta: float) -> void:
 			else:
 				# glb / 程序化：真模型自带朝向（已放平），仅绕 Y 追向速度
 				m.rotation.y = atan2(vx, vz)
+				# 箭矢类（BOLT/ARROW）随弹道俯仰，同 host Bullet._aim_visual
+				if m.has_meta("pitch"):
+					var vlen := sqrt(vx * vx + float(b.vy) * float(b.vy) + vz * vz)
+					if vlen > 0.001:
+						m.rotation.x = -asin(clampf(float(b.vy) / vlen, -1.0, 1.0))
 			# 扇面自转件（小乔）：只转视觉子节点
 			var spn := m.get_node_or_null("Spin")
 			if spn is Node3D and is_instance_valid(spn):
@@ -1755,10 +1765,11 @@ func _on_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void
 		var col: Color = Vfx.team_color(team)
 		var mi: Node3D = Vfx.make_lock_beam(col)
 		_static_root.add_child(mi)
-		rec = {"mesh": mi, "from": from, "to": to, "cur": to}
+		rec = {"mesh": mi, "from": from, "to": to, "cur": to, "t": Time.get_ticks_msec()}
 		_tower_locks[key] = rec
 	rec["from"] = from
 	rec["to"] = to
+	rec["t"] = Time.get_ticks_msec()
 	rec["t"] = Time.get_ticks_msec()
 
 
@@ -3974,19 +3985,10 @@ func _start_post_match(p: Dictionary) -> void:
 	_pm_stage_root = Node3D.new()
 	_pm_stage_root.name = "PmStage"
 	add_child(_pm_stage_root)
-	var base := Vector3(-53.0, 0.0, 53.0) if own_team == 0 else Vector3(53.0, 0.0, -53.0)
-	_pm_inward = Vector3(-base.x, 0.0, -base.z).normalized()
-	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
-	_pm_stage = base + _pm_inward * 22.0
-	_pm_stage.y = 0.0
-	var slots: Array = [
-		Vector3.ZERO,
-		_pm_right * 4.6 - _pm_inward * 2.6,
-		_pm_right * -4.6 - _pm_inward * 2.6,
-		_pm_right * 9.2 - _pm_inward * 5.2,
-		_pm_right * -9.2 - _pm_inward * 5.2,
-	]
-	# 己方英雄：本机英雄排第一（居中垫前）
+	# 舞台容器：把己方 5 人模型从 Entities 搬进来（Entities 已隐藏，模型要留在可见容器）
+	_pm_stage_root = Node3D.new()
+	_pm_stage_root.name = "PmStage"
+	add_child(_pm_stage_root)
 	var allies: Array = []
 	for nid in _views:
 		var v: Dictionary = _views[nid]
@@ -4002,24 +4004,18 @@ func _start_post_match(p: Dictionary) -> void:
 		return sa < sb)
 	var entries: Array = []
 	var rows := _rows_of(p)
+	var units: Array = []
 	for i in range(mini(allies.size(), 5)):
 		var v: Dictionary = allies[i]
 		var nd: Node3D = v.node
 		if nd.get_parent() != null:
 			nd.get_parent().remove_child(nd)
 		_pm_stage_root.add_child(nd)
+		units.append(nd)
 		if i == 0:
 			_pm_player_node = nd
-		var slot: Vector3 = _pm_stage + slots[i]
-		nd.global_position = slot
-		nd.scale = Vector3.ONE
-		nd.visible = true
-		# 面向镜头：相机在 stage + inward*d，英雄朝 +inward 才是正脸（同 host）
-		nd.rotation.y = atan2(_pm_inward.x, _pm_inward.z)
-		nd.visible = true
 		if v.get("ap") != null and v.ap is AnimationPlayer and str(v.get("idle_clip", "")) != "":
 			(v.ap as AnimationPlayer).play(str(v.idle_clip))
-		# 铭牌数据（头像/昵称/分路/MVP/奖牌）
 		var hname := str(v.get("name", ""))
 		var row := {}
 		for r in rows:
@@ -4027,7 +4023,7 @@ func _start_post_match(p: Dictionary) -> void:
 				row = r
 				break
 		entries.append({
-			"world": slot,
+			"world": nd.global_position,
 			"hero": hname,
 			"nick": str(v.get("pname", "")),
 			"lane": HeroPickData.role_lane(str(row.get("role", ""))),
@@ -4038,119 +4034,33 @@ func _start_post_match(p: Dictionary) -> void:
 	if entries.is_empty():
 		_pm_finish_and_show()
 		return
-	# MVP：队内对战评分最高者；奖牌按评分门槛（同 host _enter_post_match）
+	# MVP / 奖牌：统一 MatchResult 口径（三端一致）
 	var _best_i := 0
 	var _best_r := -1.0
 	for i in range(entries.size()):
 		var _rr := _pm_rating(_row_by_name(str(entries[i]["hero"])))
 		entries[i]["rating"] = _rr
-		entries[i]["medal"] = _pm_medal_by_rating(_rr)
+		entries[i]["medal"] = MatchResultScript.medal_by_rating(_rr)
 		if _rr > _best_r:
 			_best_r = _rr
 			_best_i = i
 	for i in range(entries.size()):
 		entries[i]["mvp"] = (i == _best_i)
-	# 3) 背景压黑 + 主光（与 host 同色温），聚光灯
-	_pm_env = WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0, 0, 0)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.24, 0.27, 0.34)
-	env.ambient_light_energy = 1.05
-	env.glow_enabled = true
-	env.glow_intensity = 0.55
-	_pm_env.environment = env
-	add_child(_pm_env)
-	_pm_key = DirectionalLight3D.new()
-	_pm_key.light_color = Color(0.98, 0.95, 0.90)
-	_pm_key.light_energy = 1.35
-	_pm_key.shadow_enabled = false
-	add_child(_pm_key)
-	for i in range(entries.size()):
-		_pm_add_spotlight(Vector3(entries[i]["world"]), i == 0)
-	# 4) 镜头：从大厅上方推到舞台正面（与 host 同机位公式）
-	if _cam != null and is_instance_valid(_cam):
-		var look: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
-		var cam_end: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		# 主光：与镜头同侧、略俯视，正面照亮 5 人（同 host）
-		if _pm_key != null and is_instance_valid(_pm_key):
-			var light_dir: Vector3 = (-_pm_inward + Vector3(0.0, -0.85, 0.0)).normalized()
-			_pm_key.global_rotation = Basis.looking_at(light_dir, Vector3.UP).get_euler()
-		_cam.global_position = cam_end + Vector3(0.0, 26.0, 0.0)
-		_cam.rotation = rot
-	# 5) 演出层 + 铭牌（PostMatchView：与单机同一份实现）
-	_pm_layer = CanvasLayer.new()
-	_pm_layer.layer = 90
-	add_child(_pm_layer)
-	_pm_view = PostMatchViewScript.new()
-	_pm_layer.add_child(_pm_view)
-	_pm_view.set_camera(_cam)
-	_pm_view.set_stage(won, entries)
-	_pm_view.advance.connect(_on_pm_advance)
-	_pm_view.finished.connect(_on_pm_finished)
-	# 镜头推进（host：1.1s SINE 到 stage + inward*6.2 + (0,3.9,0)）
-	if _cam != null and is_instance_valid(_cam):
-		var look2: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
-		var cam_end2: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
-		var rot2: Vector3 = Basis.looking_at((look2 - cam_end2).normalized(), Vector3.UP).get_euler()
-		var tw := _pm_view.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(_cam, "global_position", cam_end2, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(_cam, "rotation", rot2, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.finished.connect(func():
-			if _cam != null and is_instance_valid(_cam):
-				_cam.global_position = cam_end2
-				_cam.rotation = rot2)
+	# 舞台本体（站位/聚光灯/黑背景+主光/铭牌/镜头）全部交给共享 PostMatchStage
+	_pm_stage_node = PostMatchStageScript.new()
+	_pm_stage_node.name = "PostMatchStage"
+	add_child(_pm_stage_node)
+	_pm_stage_node.detail_provider = func() -> Dictionary: return _pm_detail_dict()
+	_pm_stage_node.finished.connect(_pm_finish_and_show)
+	_pm_stage_node.setup(self, _cam, units, entries, won, 0, {"own_team": own_team})
+	_pm_view = _pm_stage_node.view
 
 
-func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
-	var root := Node3D.new()
-	root.position = pos
-	_pm_stage_root.add_child(root)
-	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
-	var sl := SpotLight3D.new()
-	sl.position = Vector3(0.0, 7.5, 0.0)
-	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-	sl.spot_range = 18.0
-	sl.spot_angle = 32.0
-	sl.light_energy = 4.5 if is_player else 3.2
-	sl.light_color = col
-	root.add_child(sl)
-	# 地面光圈（unshaded 薄圆盘；同 host，不放体积光柱）
-	var disc := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 1.25
-	cm.bottom_radius = 1.25
-	cm.height = 0.02
-	cm.radial_segments = 40
-	disc.mesh = cm
-	disc.position = Vector3(0.0, 0.02, 0.0)
-	var dm := StandardMaterial3D.new()
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	dm.albedo_color = Color(col.r, col.g, col.b, 0.34 if is_player else 0.22)
-	disc.material_override = dm
-	root.add_child(disc)
-
-
-# 奖牌：与 host/结算页同口径（评分 ≥78 金 / ≥64 银 / ≥52 铜）
+# 评分 / 奖牌 / 行查找（全部委托 MatchResult，三端同一口径）
 func _pm_medal(row: Dictionary) -> int:
-	if row.is_empty():
-		return -1
-	var score := _pm_rating(row)
-	if score >= 78.0:
-		return 0
-	if score >= 64.0:
-		return 1
-	if score >= 52.0:
-		return 2
-	return -1
+	return MatchResultScript.medal_by_rating(_pm_rating(row))
 
 
-# 三端统一口径：评分/奖牌都委托 MatchResult（不要在这里再写第二份公式）
 func _pm_rating(r: Dictionary) -> float:
 	if r.is_empty():
 		return 0.0
@@ -4161,34 +4071,19 @@ func _pm_rating(r: Dictionary) -> float:
 			team_rows.append(o)
 	return MatchResultScript.rating(r, team_rows)
 
+
+func _pm_medal_by_rating(rr: float) -> int:
+	return MatchResultScript.medal_by_rating(rr)
+
+
 func _row_by_name(nm: String) -> Dictionary:
 	for o in _rows_of(_pm_payload):
 		if str((o as Dictionary).get("name", "")) == nm:
 			return o
 	return {}
 
-
-func _pm_medal_by_rating(rr: float) -> int:
-	return MatchResultScript.medal_by_rating(rr)
-
-
-func _on_pm_advance() -> void:
-	if _pm_view == null:
-		return
-	# 镜头后撤到玩家左侧三分之一、队友仍在画面（同 host 机位公式）
-	if _cam != null and is_instance_valid(_cam) and _pm_player_node != null and is_instance_valid(_pm_player_node):
-		var pp: Vector3 = _pm_player_node.global_position
-		var look: Vector3 = pp - _pm_right * 5.8 + Vector3(0.0, 1.45, 0.0)
-		var cam_end: Vector3 = pp + _pm_inward * 9.6 - _pm_right * 5.8 + Vector3(0.0, 5.6, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		var tw2 := _pm_view.create_tween()
-		tw2.set_parallel(true)
-		tw2.tween_property(_cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw2.tween_property(_cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw2.finished.connect(func():
-			if _cam != null and is_instance_valid(_cam):
-				_cam.global_position = cam_end
-				_cam.rotation = rot)
+## 阶段 B 的个人详情（供共享舞台调用）
+func _pm_detail_dict() -> Dictionary:
 	var row := _my_result_row(_pm_payload)
 	var hero_name := str(row.get("name", _manifest.get("hero_name", "")))
 	var nick := str(row.get("nick", ""))
@@ -4201,7 +4096,7 @@ func _on_pm_advance() -> void:
 		rank_lines.append("本局不计排位星")
 	var dur_f := float(_pm_payload.get("dur", 0.0))
 	rank_lines.append("对局时长 %02d:%02d" % [int(dur_f) / 60, int(dur_f) % 60])
-	_pm_view.show_player_detail({
+	return {
 		"hero": hero_name,
 		"nick": nick,
 		"lane": HeroPickData.role_lane(str(row.get("role", ""))),
@@ -4220,12 +4115,7 @@ func _on_pm_advance() -> void:
 			["野区经济", "%d" % int(row.get("jungle", 0))],
 		],
 		"rank_lines": rank_lines,
-	})
-
-
-func _on_pm_finished() -> void:
-	_pm_finish_and_show()
-
+	}
 
 func _pm_finish_and_show() -> void:
 	if _pm_view != null and is_instance_valid(_pm_view):
@@ -4253,12 +4143,6 @@ func _pm_finish_and_show() -> void:
 	var ents2 := get_node_or_null("Entities")
 	if ents2 != null:
 		ents2.visible = true
-	if _pm_key != null and is_instance_valid(_pm_key):
-		_pm_key.queue_free()
-	_pm_key = null
-	if _pm_env != null and is_instance_valid(_pm_env):
-		_pm_env.queue_free()
-	_pm_env = null
 	get_tree().paused = false
 	if _go != null:
 		_go.show_deferred()
@@ -5799,5 +5683,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
+
 
 

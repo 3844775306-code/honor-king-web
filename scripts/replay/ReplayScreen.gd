@@ -22,6 +22,7 @@ const ChatBoxScript = preload("res://scripts/ui/ChatBox.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
 const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
+const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
@@ -60,7 +61,8 @@ var _pops: Array = []
 var _shake_t := 0.0
 var _shake_amp := 0.0
 var _shake_dur := 0.1
-var _bullet_nodes: Dictionary = {}   # id -> Node3D
+var _bullet_nodes: Dictionary = {}
+var _bullet_last_pos: Dictionary = {}   # bullet id -> 上一帧小地图坐标（弹体朝向）   # id -> Node3D
 var _jungle: Array = []
 var _jungle_nodes: Array = []
 var _map: Dictionary = {}
@@ -102,6 +104,7 @@ var _banner_layer: CanvasLayer = null
 var _banner = null
 var _pm_view = null
 var _pm_layer: CanvasLayer = null
+var _pm_stage_node: PostMatchStage = null
 var _pm_stage_root: Node3D = null
 var _pm_env: WorldEnvironment = null
 var _pm_key: DirectionalLight3D = null
@@ -1184,12 +1187,14 @@ func _apply_frame(t: float) -> void:
 		for rbb in bb.get("b", []):
 			bmap_b[int(rbb[0])] = rbb
 		var seen_b := {}
+		var last_pos: Dictionary = _bullet_last_pos
 		for bid in bmap.keys():
 			var bid2: int = int(bid)
 			var ra2: Array = bmap[bid2]
 			var rb2: Array = bmap_b.get(bid2, ra2)
 			var bx: float = lerpf(float(ra2[1]), float(rb2[1]) if rb2.size() > 1 else float(ra2[1]), bk) / 100.0
 			var bz: float = lerpf(float(ra2[2]), float(rb2[2]) if rb2.size() > 2 else float(ra2[2]), bk) / 100.0
+			var by: float = float(ra2[10]) / 100.0 if ra2.size() > 10 else 1.15
 			seen_b[bid2] = true
 			var node_b = _bullet_nodes.get(bid2)
 			if node_b == null:
@@ -1197,7 +1202,18 @@ func _apply_frame(t: float) -> void:
 				node_b = _make_bullet(ra2, col_b, maxf(0.08, float(ra2[7])))
 				_bullet_nodes[bid2] = node_b
 			node_b.visible = true
-			node_b.position = Vector3(bx, 1.15, bz)
+			node_b.position = Vector3(bx, by, bz)
+			# 朝向：用广播帧的位移方向（箭矢/炮弹模型需要，host 同款）
+			var pdx: float = bx - float(last_pos.get(bid2, Vector2(bx, bz)).x) if last_pos.has(bid2) else 0.0
+			var pdz: float = bz - float(last_pos.get(bid2, Vector2(bx, bz)).y) if last_pos.has(bid2) else 0.0
+			last_pos[bid2] = Vector2(bx, bz)
+			if absf(pdx) + absf(pdz) > 0.001:
+				node_b.rotation.y = atan2(pdx, pdz)
+				if node_b.has_meta("pitch") and ra2.size() > 10:
+					var py: float = (float(rb2[10]) - float(ra2[10])) / 100.0 if rb2.size() > 10 else 0.0
+					var hl := sqrt(pdx * pdx + pdz * pdz)
+					if hl > 0.001:
+						node_b.rotation.x = -atan2(py, hl)
 		for bid3 in _bullet_nodes.keys():
 			if not seen_b.has(bid3):
 				_bullet_nodes[bid3].visible = false
@@ -1693,11 +1709,7 @@ func _start_postmatch() -> void:
 		var root3 = _hero_nodes[i].get("root")
 		if root3 != null and is_instance_valid(root3):
 			root3.visible = false
-	# 舞台：己方泉水后方（同单机 _enter_post_match 几何）
-	var base := Vector3(-53.0, 0.0, 53.0) if _me_team == 0 else Vector3(53.0, 0.0, -53.0)
-	_pm_inward = (Vector3(0.0, 0.0, 0.0) - base).normalized()
-	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
-	_pm_stage = base - _pm_inward * 22.0
+	# 舞台容器：把己方 5 名英雄模型搬进来（对局层已隐藏，模型要留在可见容器）
 	_pm_stage_root = Node3D.new()
 	_pm_stage_root.name = "PMStage"
 	add_child(_pm_stage_root)
@@ -1712,151 +1724,67 @@ func _start_postmatch() -> void:
 		var m: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
 		if int(m.get("team", -1)) == _me_team:
 			ally_ids.append(i)
-	var lat: Array = [-4.8, -2.4, 0.0, 2.4, 4.8]
+	var units: Array = []
 	for k in range(ally_ids.size()):
 		var idx := int(ally_ids[k])
 		var m: Dictionary = _heroes[idx] if _heroes[idx] is Dictionary else {}
 		var nd: Node3D = _hero_nodes[idx].get("root")
 		if nd == null or not is_instance_valid(nd):
 			continue
-		var slot: Vector3 = _pm_stage + _pm_right * float(lat[mini(k, lat.size() - 1)]) 			+ _pm_inward * (absf(float(lat[mini(k, lat.size() - 1)])) * 0.28)
+		var old_parent := nd.get_parent()
+		if old_parent != null:
+			old_parent.remove_child(nd)
 		_pm_stage_root.add_child(nd)
-		nd.position = slot
-		nd.rotation = Vector3.ZERO
-		nd.scale = Vector3.ONE
+		units.append(nd)
 		nd.visible = true
-		nd.rotation.y = atan2(_pm_inward.x, _pm_inward.z)
 		var ap = _hero_nodes[idx].get("ap")
 		var idle := str(_hero_nodes[idx].get("idle", ""))
 		if ap is AnimationPlayer and idle != "":
 			(ap as AnimationPlayer).play(idle)
 		var row := _row_by_name(str(m.get("name", "")))
-		entries.append({"world": slot, "hero": str(m.get("name", "")),
+		entries.append({"world": nd.global_position, "hero": str(m.get("name", "")),
 			"nick": str(m.get("nick", "")),
 			"lane": HeroPickData.role_lane(str(row.get("role", ""))),
 			"mvp": false, "medal": -1, "node": nd})
 	if entries.is_empty():
 		_finish_and_show_result()
 		return
+	# MVP / 奖牌：统一 MatchResult 口径
 	var best_i := 0
 	var best_r := -1.0
 	for i in range(entries.size()):
 		var rr := _pm_rating(_row_by_name(str(entries[i]["hero"])))
 		entries[i]["rating"] = rr
-		entries[i]["medal"] = _pm_medal_by_rating(rr)
+		entries[i]["medal"] = MatchResultScript.medal_by_rating(rr)
 		if rr > best_r:
 			best_r = rr
 			best_i = i
 	for i in range(entries.size()):
 		entries[i]["mvp"] = (i == best_i)
-	# 背景压黑 + 主光 + 聚光灯
-	_pm_env = WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0, 0, 0)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.24, 0.27, 0.34)
-	env.ambient_light_energy = 1.05
-	env.glow_enabled = true
-	env.glow_intensity = 0.55
-	_pm_env.environment = env
-	add_child(_pm_env)
-	_pm_key = DirectionalLight3D.new()
-	_pm_key.light_color = Color(0.98, 0.95, 0.90)
-	_pm_key.light_energy = 1.35
-	_pm_key.shadow_enabled = false
-	add_child(_pm_key)
-	for i in range(entries.size()):
-		_pm_add_spotlight(Vector3(entries[i]["world"]), i == 0)
-	_pm_layer = CanvasLayer.new()
-	_pm_layer.layer = 90
-	add_child(_pm_layer)
-	_pm_view = PostMatchViewScript.new()
-	_pm_layer.add_child(_pm_view)
-	_pm_view.set_camera(_cam)
-	_pm_view.set_stage(int(_doc.get("meta", {}).get("winner", -1)) == _me_team, entries)
-	_pm_view.advance.connect(_on_pm_advance)
-	_pm_view.finished.connect(_finish_and_show_result)
-	# 镜头推进（同 host/联机机位公式）
-	if _cam != null and is_instance_valid(_cam):
-		var look: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
-		var cam_end: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		if _pm_key != null:
-			_pm_key.global_rotation = Basis.looking_at((-_pm_inward + Vector3(0.0, -0.85, 0.0)).normalized(), Vector3.UP).get_euler()
-		_cam.global_position = cam_end + Vector3(0.0, 26.0, 0.0)
-		_cam.rotation = rot
-		var tw: Tween = _pm_view.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(_cam, "global_position", cam_end, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(_cam, "rotation", rot, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.finished.connect(func():
-			if _cam != null and is_instance_valid(_cam):
-				_cam.global_position = cam_end
-				_cam.rotation = rot)
+	# 舞台本体（站位/聚光灯/黑背景+主光/铭牌/镜头）交给共享 PostMatchStage
+	_pm_stage_node = PostMatchStageScript.new()
+	_pm_stage_node.name = "PostMatchStage"
+	add_child(_pm_stage_node)
+	_pm_stage_node.detail_provider = func() -> Dictionary: return _pm_detail_dict()
+	_pm_stage_node.finished.connect(_finish_and_show_result)
+	_pm_stage_node.setup(self, _cam, units, entries, int(_doc.get("meta", {}).get("winner", -1)) == _me_team,
+		0, {"own_team": _me_team})
+	_pm_view = _pm_stage_node.view
 
-
-func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
-	var root := Node3D.new()
-	root.position = pos
-	_pm_stage_root.add_child(root)
-	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
-	var sl := SpotLight3D.new()
-	sl.position = Vector3(0.0, 7.5, 0.0)
-	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-	sl.spot_range = 18.0
-	sl.spot_angle = 32.0
-	sl.light_energy = 4.5 if is_player else 3.2
-	sl.light_color = col
-	root.add_child(sl)
-	var disc := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 1.25
-	cm.bottom_radius = 1.25
-	cm.height = 0.02
-	cm.radial_segments = 40
-	disc.mesh = cm
-	disc.position = Vector3(0.0, 0.02, 0.0)
-	var dm := StandardMaterial3D.new()
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	dm.albedo_color = Color(col.r, col.g, col.b, 0.34 if is_player else 0.22)
-	disc.material_override = dm
-	root.add_child(disc)
-
-
-func _on_pm_advance() -> void:
-	if _pm_view == null:
-		return
+func _pm_detail_dict() -> Dictionary:
 	var row := _row_by_name(str((_pm_payload.get("rows", []) as Array)[0].get("name", ""))) if _pm_payload.has("rows") else {}
 	# 找到玩家自己的数据行
 	for o in (_pm_payload.get("rows", []) as Array):
 		if bool((o as Dictionary).get("mine", false)):
 			row = o
 			break
-	_pm_player_node = null
-	for i in range(_hero_nodes.size()):
-		var m: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
-		if str(m.get("name", "")) == str(row.get("name", "")):
-			_pm_player_node = _hero_nodes[i].get("root")
-			break
-	if _cam != null and is_instance_valid(_cam) and _pm_player_node != null and is_instance_valid(_pm_player_node):
-		var pp: Vector3 = _pm_player_node.global_position
-		var look: Vector3 = pp - _pm_right * 5.8 + Vector3(0.0, 1.45, 0.0)
-		var cam_end: Vector3 = pp + _pm_inward * 9.6 - _pm_right * 5.8 + Vector3(0.0, 5.6, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		var tw: Tween = _pm_view.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(_cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(_cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	var rank_lines: Array = ["本局不计排位星"]
 	rank_lines.append("对局时长 %02d:%02d" % [int(_duration) / 60, int(_duration) % 60])
-	_pm_view.show_player_detail({
+	return {
 		"hero": str(row.get("name", "")), "nick": str(row.get("nick", "")),
 		"lane": HeroPickData.role_lane(str(row.get("role", ""))),
 		"mvp": bool(row.get("mvp", false)), "rating": _pm_rating(row),
-		"medal": _pm_medal_by_rating(_pm_rating(row)),
+		"medal": MatchResultScript.medal_by_rating(_pm_rating(row)),
 		"rows": [
 			["K / D / A", "%d / %d / %d" % [int(row.get("k", 0)), int(row.get("d", 0)), int(row.get("a", 0))]],
 			["总经济", "%d" % int(row.get("gold", 0))],
@@ -1869,34 +1797,15 @@ func _on_pm_advance() -> void:
 			["野区经济", "%d" % int(row.get("jungle", 0))],
 		],
 		"rank_lines": rank_lines,
-	})
-
+	}
 
 func _finish_and_show_result() -> void:
-	if _pm_view != null and is_instance_valid(_pm_view):
-		_pm_view.queue_free()
+	# 舞台层/灯光/黑环境由共享 PostMatchStage 自行清理
 	_pm_view = null
-	if _pm_layer != null and is_instance_valid(_pm_layer):
-		_pm_layer.queue_free()
-	_pm_layer = null
+	_pm_stage_node = null
 	if _pm_stage_root != null and is_instance_valid(_pm_stage_root):
 		_pm_stage_root.queue_free()
-	_pm_stage_root = null
-	if _pm_env != null and is_instance_valid(_pm_env):
-		_pm_env.queue_free()
-	_pm_env = null
-	if _pm_key != null and is_instance_valid(_pm_key):
-		_pm_key.queue_free()
-	_pm_key = null
-	# 结算页（与联机同一份 NetResultPanel）
-	_result_layer = CanvasLayer.new()
-	_result_layer.layer = 110
-	add_child(_result_layer)
-	_result_panel = NetResultPanelScript.new()
-	_result_panel.defer = false
-	_result_layer.add_child(_result_panel)
-	_result_panel._on_result(_pm_payload)
-
+		_pm_stage_root = null
 
 func _toggle_global_panel() -> void:
 	if _rview == null:
@@ -2241,7 +2150,8 @@ func _make_bullet(row: Array, col: Color, radius: float) -> Node3D:
 	if kind >= 0:
 		var team := int(row[3]) if row.size() > 3 else 0
 		var vk := int(row[9]) if row.size() > 9 else 0
-		var node := ProjectilePresenter.make(kind, team, vk, radius)
+		var flags := int(row[11]) if row.size() > 11 else 0
+		var node := ProjectilePresenter.make(kind, team, vk, radius, flags)
 		if node != null:
 			return node
 	var mi := MeshInstance3D.new()
@@ -2880,6 +2790,9 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
+
+
 
 
 

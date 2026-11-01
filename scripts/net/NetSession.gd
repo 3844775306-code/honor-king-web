@@ -1307,7 +1307,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("jungle_monsters"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
 			jungles.append(_pack_unit(e, 3))
 	out.append(jungles)
 
@@ -1320,7 +1320,8 @@ func _build_snapshot(bm: Node) -> Array:
 		var bl: Bullet = pr as Bullet
 		if bl == null:
 			continue
-		if bl.team != TEAM_PLAYER and not _pos_in_vision(Vector3(bl.global_position.x, 0.0, bl.global_position.z), sources):
+		if not is_pvp() and bl.team != TEAM_PLAYER \
+				and not _pos_in_vision(Vector3(bl.global_position.x, 0.0, bl.global_position.z), sources):
 			continue
 		var bsz := 0
 		if bl.is_houyi_ult:
@@ -1335,9 +1336,10 @@ func _build_snapshot(bm: Node) -> Array:
 			gsf = 1
 		elif bl.luban_w_knockback:
 			gsf = 2
+		var bflags := _bullet_flags(bl)
 		bullets.append([int(bl.get_instance_id()),
 			bl.global_position.x, bl.global_position.y, bl.global_position.z,
-			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl), gsf])
+			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl), gsf, bflags])
 	out.append(bullets)
 
 	# #43 FX 段：[seq, [fid,kind,x,y,z,team,r,life], …]——事件保留 ~0.35s（约5帧快照）防 unreliable 丢包；
@@ -1435,6 +1437,22 @@ func _bullet_kind(bl: Bullet) -> int:
 
 # 弹体「定制视觉」vkind（v7 起 idx7，0=无定制）。仅收录 host 侧把默认弹体 visual_mesh
 # 换掉的技能弹——客户端 1000+vkind 走定制档复刻原形（vkind 1 = 小乔Q 绽放之舞回旋扇）。
+## 弹体视觉附加标记（与 host Bullet._build_unified_visual 同判据）
+## bit1：线性技能弹（host 在 build 前把 base ×1.7）
+## bit2：英雄弹体元素拖尾（host: 非技能弹，或直线技能弹且有伤害）
+func _bullet_flags(bl: Bullet) -> int:
+	var f := 0
+	var is_skill := int(bl.skill_id) != 0
+	var linear: bool = bl.linear_dir != Vector3.ZERO
+	if is_skill and linear:
+		f |= 1
+	var bsrc = bl.source
+	if is_instance_valid(bsrc) and bsrc is Hero:
+		if not is_skill or (linear and float(bl.damage) > 0.0):
+			f |= 2
+	return f
+
+
 func _bullet_vkind(bl: Bullet) -> int:
 	# 普攻/塔/兵弹道：统一程序化视觉，100+shape*16+palette 编码，客户端按同一构建器复刻
 	var vk := BulletVisual.vkind_for(bl)
@@ -1498,7 +1516,7 @@ func _rpc_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void
 func push_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void:
 	if mode != Mode.HOST:
 		return
-	if active and not _fx_ally_near(Vector3(to.x, 0.0, to.z)):
+	if active and not is_pvp() and not _fx_ally_near(Vector3(to.x, 0.0, to.z)):
 		return
 	rpc("_rpc_tower_lock", from, to, team, active)
 
