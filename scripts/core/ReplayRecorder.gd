@@ -40,6 +40,8 @@ var _atk_last := {}          # hero_name -> 上次记录普攻的游戏时间（
 var _bullet_ids := {}        # 子弹 instance_id -> 录像内 id
 var _bullet_next_id := 0
 var _bullet_frames: Array = []  # [{t, b:[[id,x,z,team,r,g,bl,radius]...]}]
+var _popup_events: Array = []   # [{t,k:"pop",p:kind,x,y,z,d:{...}}]
+const POPUP_MAX := 30000
 var _last_kills: Array = []
 var _last_levels: Array = []
 var _last_deaths: Array = []
@@ -300,6 +302,20 @@ func _sample(delta: float, finishing: bool) -> void:
 
 
 ## 技能出手（Hero._finish_cast 里调用）：记下英雄/槽位/落点/朝向 + 表现所需技能字段
+## 飘字（伤害/治疗/金币）：由 UI_Manager 的三个飘字函数在真实对局中回调
+func note_popup(kind: String, pos: Vector3, data: Dictionary) -> void:
+	if _saved or not _started:
+		return
+	if _popup_events.size() >= POPUP_MAX:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_popup_events.append({
+		"t": int(round(gt * 1000.0)), "k": "pop", "p": str(kind),
+		"x": int(round(pos.x * 100.0)), "y": int(round(pos.y * 100.0)), "z": int(round(pos.z * 100.0)),
+		"d": data,
+	})
+
+
 func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,
 		facing: Vector3, skill) -> void:
 	if _saved or not _started:
@@ -455,6 +471,7 @@ func _save() -> void:
 		"minions": _mini_frames,
 		"jungle": _jungle_frames,
 		"bullets": _bullet_frames,
+		"popups": _popup_events,
 		"jungle_meta": _jungle_meta,
 		"map": _map_meta,
 		"events": _events,

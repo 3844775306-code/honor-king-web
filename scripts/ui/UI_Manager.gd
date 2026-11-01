@@ -1117,6 +1117,11 @@ func _get_stagger_offset(world_pos: Vector3) -> Vector2:
 	return Vector2(cos(ang) * r, sin(ang) * r)
 
 func show_damage_number(world_pos: Vector3, damage: float, is_crit: bool, is_magic: bool, shielded: bool = false, true_dmg: bool = false):
+	# 录像：把对局真实飘字数据记进录像（回放端用同一套数值/颜色规则重绘）
+	if damage >= 1.0:
+		var _rrec_pop = get_tree().get_first_node_in_group("replay_recorder")
+		if _rrec_pop != null:
+			_rrec_pop.call("note_popup", "dmg", world_pos, {"am": damage, "crit": is_crit, "mag": is_magic, "shield": shielded})
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
 	var dmg := int(damage)
@@ -1169,6 +1174,9 @@ func show_damage_number(world_pos: Vector3, damage: float, is_crit: bool, is_mag
 	tween2.tween_callback(label.queue_free)
 
 func show_gold_popup(world_pos: Vector3, amount: int, own_kill := false, last_hit := false):
+	var _rrec_gold = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_gold != null and amount > 0:
+		_rrec_gold.call("note_popup", "gold", world_pos, {"am": amount, "own": own_kill, "lh": last_hit})
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
 	var stagger_off: Vector2 = _get_stagger_offset(world_pos)
@@ -1194,6 +1202,9 @@ func show_gold_popup(world_pos: Vector3, amount: int, own_kill := false, last_hi
 	tween2.tween_callback(pop.queue_free)
 
 func show_heal_number(world_pos: Vector3, amount: int):
+	var _rrec_heal = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_heal != null and amount > 0:
+		_rrec_heal.call("note_popup", "heal", world_pos, {"am": amount})
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
 	var stagger_off: Vector2 = _get_stagger_offset(world_pos)

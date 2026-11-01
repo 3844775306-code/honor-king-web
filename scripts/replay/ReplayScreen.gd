@@ -26,6 +26,11 @@ var _turret_nodes: Array = []
 var _mini_nodes: Dictionary = {}     # id -> Node3D
 var _jungle_meta: Array = []
 var _bullets: Array = []
+var _popups_data: Array = []
+var _pops: Array = []
+var _shake_t := 0.0
+var _shake_amp := 0.0
+var _shake_dur := 0.1
 var _bullet_nodes: Dictionary = {}   # id -> Node3D
 var _jungle: Array = []
 var _jungle_nodes: Array = []
@@ -97,8 +102,14 @@ func _ready() -> void:
 	_jungle = _doc.get("jungle", [])
 	_jungle_meta = _doc.get("jungle_meta", [])
 	_bullets = _doc.get("bullets", [])
+	_popups_data = _doc.get("popups", [])
+	# 飘字并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
+	var _combined: Array = (_doc.get("events", []) as Array).duplicate()
+	_combined.append_array(_popups_data)
+	_combined.sort_custom(func(a, b) -> bool: return int(a.get("t", 0)) < int(b.get("t", 0)))
+	_events = _combined
 	_map = _doc.get("map", {})
-	_events = _doc.get("events", [])
+	_events = []
 	var meta: Dictionary = _doc.get("meta", {})
 	_duration = maxf(float(meta.get("duration", 0.0)), 1.0)
 	for ev in _events:
@@ -607,6 +618,7 @@ func _process(delta: float) -> void:
 			_hint_label.text = "集锦播放完毕（点 ◆ 集锦 重看，或拖时间轴回到完整回放）"
 			_t = _duration
 	_apply_frame(_t)
+	_update_popups(delta)
 	_update_ui()
 	_update_camera()
 
@@ -955,6 +967,112 @@ func _find_jungle_frame(t: float) -> int:
 	return clampi(lo, 0, _jungle.size() - 1)
 
 
+## 飘字：用与对局一致的数值/配色规则（伤害：物伤黄白/法伤紫/暴击更大；金币金色；治疗绿色）
+func _spawn_popup(ev: Dictionary) -> void:
+	var kind := str(ev.get("p", ""))
+	var d: Dictionary = ev.get("d", {})
+	var wp := Vector3(float(ev.get("x", 0)) / 100.0, float(ev.get("y", 0)) / 100.0, float(ev.get("z", 0)) / 100.0)
+	var txt := ""
+	var col := Color(1, 1, 1)
+	var fs := int(round(22.0 * UiKit.scale()))
+	var rise := 48.0
+	var crit := false
+	match kind:
+		"dmg":
+			var am := int(round(float(d.get("am", 0.0))))
+			txt = "%d" % am
+			crit = bool(d.get("crit", false))
+			if crit:
+				fs = int(round(34.0 * UiKit.scale()))
+				col = Color(1.0, 0.55, 0.18)
+				rise = 62.0
+			elif bool(d.get("mag", false)):
+				col = Color(0.86, 0.55, 1.0)
+			else:
+				col = Color(1.0, 0.93, 0.72)
+			if bool(d.get("shield", false)):
+				col = Color(0.55, 0.85, 1.0)
+			if float(d.get("am", 0.0)) >= 40.0:
+				Vfx.hit_spark(wp + Vector3.UP * 0.8, col, Vector3.UP, 0.55)
+				if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
+					if wp.distance_to(_hero_pos[_follow_hero]) < 18.0 and float(d.get("am", 0.0)) >= 60.0:
+						_shake(0.16, 0.16)
+		"gold":
+			txt = "+%d" % int(d.get("am", 0))
+			col = Color(1.0, 0.86, 0.35)
+			fs = int(round(20.0 * UiKit.scale()))
+		"heal":
+			txt = "+%d" % int(d.get("am", 0))
+			col = Color(0.45, 1.0, 0.55)
+			fs = int(round(20.0 * UiKit.scale()))
+		_:
+			return
+	if txt == "" or not (_hud_layer != null):
+		return
+	var lab := Label.new()
+	lab.text = txt
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lab.add_theme_font_size_override("font_size", fs)
+	lab.add_theme_color_override("font_color", col)
+	lab.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	lab.add_theme_constant_override("outline_size", 4 if crit else 3)
+	_hud_root.add_child(lab)
+	_pops.append({"node": lab, "world": wp, "age": 0.0, "rise": rise})
+
+
+func _update_popups(delta: float) -> void:
+	if _pops.is_empty():
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var alive: Array = []
+	for p in _pops:
+		var lab: Label = p["node"]
+		if not is_instance_valid(lab):
+			continue
+		p["age"] = float(p["age"]) + delta
+		var age: float = float(p["age"])
+		if age > 0.95:
+			lab.queue_free()
+			continue
+		var wp: Vector3 = p["world"]
+		if _cam != null and not _cam.is_position_behind(wp):
+			var sp: Vector2 = _cam.unproject_position(wp)
+			lab.position = sp + Vector2(-lab.size.x * 0.5, -float(p["rise"]) * age)
+			lab.visible = sp.x > -200 and sp.x < vp.x + 200 and sp.y > -200 and sp.y < vp.y + 200
+		else:
+			lab.visible = false
+		var a: float = clampf(1.0 - (age - 0.5) / 0.45, 0.0, 1.0)
+		lab.modulate.a = a
+		alive.append(p)
+	_pops = alive
+
+
+func _clear_popups() -> void:
+	for p in _pops:
+		var lab: Label = p["node"]
+		if is_instance_valid(lab):
+			lab.queue_free()
+	_pops.clear()
+
+
+func _shake(amp: float, dur: float) -> void:
+	_shake_amp = maxf(_shake_amp, amp)
+	_shake_dur = maxf(_shake_dur, dur)
+	_shake_t = maxf(_shake_t, dur)
+
+
+func _shake_vec(delta: float) -> Vector3:
+	if _shake_t <= 0.0:
+		return Vector3.ZERO
+	_shake_t = maxf(0.0, _shake_t - delta)
+	var k: float = _shake_t / maxf(0.001, _shake_dur)
+	var a: float = _shake_amp * k * k
+	var now: float = Time.get_ticks_msec() * 0.001
+	if _shake_t <= 0.0:
+		_shake_amp = 0.0
+	return Vector3(sin(now * 61.0), sin(now * 47.0) * 0.6, cos(now * 53.0)) * a
+
+
 func _hero_index_by_name(nm: String) -> int:
 	for i in range(_heroes.size()):
 		if str((_heroes[i] as Dictionary).get("name", "")) == nm:
@@ -1124,6 +1242,11 @@ func _fmt(sec: float) -> String:
 
 func _push_event(ev: Dictionary) -> void:
 	var kind0 := str(ev.get("k", ""))
+	if kind0 == "pop":
+		var evt2: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt2 - _t) < 0.9:
+			_spawn_popup(ev)
+		return
 	if kind0 == "lvl":
 		var evt1: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt1 - _t) < 0.9:
@@ -1226,6 +1349,7 @@ func _purge_feed() -> void:
 
 
 func _rebuild_feed(t: float) -> void:
+	_clear_popups()
 	for it in _feed_items:
 		if is_instance_valid(it["label"]):
 			it["label"].queue_free()
@@ -1428,9 +1552,10 @@ func _unhandled_input(event: InputEvent) -> void:
 func _update_camera() -> void:
 	if _cam == null:
 		return
+	var sh := _shake_vec(get_process_delta_time())
 	# 小地图拖动：相机只平移，高度/俯角保持单机跟随镜头的固定偏移（不会自动变高）
 	if _mm_drag:
-		_cam.global_position = _mm_target + Vector3(0.0, 12.0, 8.0)
+		_cam.global_position = _mm_target + Vector3(0.0, 12.0, 8.0) + sh
 		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
 		_cam.fov = 70.0
 		return
@@ -1441,7 +1566,7 @@ func _update_camera() -> void:
 		if _cam.global_position.distance_to(tgt) > 25.0:
 			_cam.global_position = tgt
 		else:
-			_cam.global_position = _cam.global_position.lerp(tgt, 1.0 - exp(-12.0 * dlt))
+			_cam.global_position = _cam.global_position.lerp(tgt, 1.0 - exp(-12.0 * dlt)) + sh
 		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
 		_cam.fov = 70.0
 		return
@@ -1457,5 +1582,5 @@ func _update_camera() -> void:
 	var pitch := deg_to_rad(_cam_pitch)
 	var yaw := deg_to_rad(_cam_yaw)
 	var offset := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * _cam_dist
-	_cam.position = _cam_target + offset
+	_cam.position = _cam_target + offset + sh
 	_cam.look_at(_cam_target, Vector3.UP)
