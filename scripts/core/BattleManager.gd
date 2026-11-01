@@ -1887,10 +1887,12 @@ func _find_epic_monster(display_name: String) -> JungleMonster:
 
 
 # 生成史诗龙（DOC 数值：HP 24700/×3/×7，AD 470/820/1460，双抗 183/360）
+# 主宰/暴君/风暴龙王全部伤害统一降为原来的 0.4 倍（普攻与技能都按 attack 派生）
+const EPIC_DAMAGE_MULT := 0.4
 func _spawn_epic(display_name: String, phase: int, pos: Vector3):
 	var stats := {
 		"max_health": int(24700 * [1.0, 2.0, 4.0][phase]),
-		"attack": [470, 820, 1460][phase],
+		"attack": int(round([470, 820, 1460][phase] * EPIC_DAMAGE_MULT)),
 		"attack_speed": 0.2,   # DOC：爪击普攻CD1.5秒
 		"attack_range": 650,    # 攻击距离6.5单位（修复：默认1.0×0.01≈0.01导致龙永远够不到目标）
 		"armor": 360 if phase == 2 else 183,

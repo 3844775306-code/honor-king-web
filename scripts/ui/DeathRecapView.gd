@@ -10,6 +10,7 @@ signal closed_by_user
 
 const CARD_W := 520.0
 const CARD_H_MIN := 560.0
+const MOBILE_FONT_BOOST := 1.35   # 手机端死亡回放：正文/来源/逐次伤害字体再放大
 const HIT_ROWS := 6
 const HIT_ROW_H := 22.0
 const PAGE_BTN_W := 30.0
@@ -61,6 +62,10 @@ func _process(delta: float) -> void:
 
 ## 统一缩放：内部坐标一律用未缩放单位，绘制时整体缩放（字号/描边随之等比）
 ## 手机端面板太小看不清：整体再放大 1.5 倍，并夹到屏幕高度以内（底部不越界）
+func _font(base: int) -> int:
+	return int(round(float(base) * (MOBILE_FONT_BOOST if Config.on_mobile() else 1.0)))
+
+
 func _s() -> float:
 	var s := clampf(UiKit.scale(), 0.90, 1.35) * 1.5
 	var vp := Vector2(2400.0, 1400.0)
@@ -184,9 +189,9 @@ func _draw() -> void:
 	# 关闭按钮 + 底部提示
 	var cr := _close_rect()
 	draw_style_box(UiKit.flat(0.7, 8, 1, Color(0.45, 0.55, 0.72, 0.6), Color(0.10, 0.12, 0.18, 0.9), 0.0, 4.0), cr)
-	UiKit.text(self, Vector2(cr.position.x, cr.position.y + cr.size.y * 0.72), "×", 22,
+	UiKit.text(self, Vector2(cr.position.x, cr.position.y + cr.size.y * 0.72), "×", _font(22),
 		Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, cr.size.x)
-	UiKit.text(self, Vector2(0.0, card_h - 16.0), "复活后自动关闭", 11, Color(0.5, 0.57, 0.68, 0.75),
+	UiKit.text(self, Vector2(0.0, card_h - 16.0), "复活后自动关闭", _font(11), Color(0.5, 0.57, 0.68, 0.75),
 		HORIZONTAL_ALIGNMENT_CENTER, CARD_W)
 
 # ---------- 各区块 ----------
@@ -200,15 +205,15 @@ func _header() -> void:
 	HeroArt.draw_portrait(self, Vector2(66.0, 62.0), 34.0, khero, tint, false)
 	# 标题
 	var title := "你被 %s 击杀" % killer if killer != "" else "你已阵亡"
-	UiKit.text(self, Vector2(116.0, 60.0), title, 23, Color.WHITE)
+	UiKit.text(self, Vector2(116.0, 60.0), title, _font(23), Color.WHITE)
 	var total := float(data.get("total", 0.0))
-	UiKit.text(self, Vector2(116.0, 86.0), "近 7 秒承伤 %d" % int(total), 14, C_DIM)
+	UiKit.text(self, Vector2(116.0, 86.0), "近 7 秒承伤 %d" % int(total), _font(14), C_DIM)
 	# 复活读秒（右侧大数字 + 进度条）
 	var rem := float(data.get("respawn", 0.0))
 	var tot := maxf(float(data.get("respawn_total", rem)), 0.001)
-	UiKit.text(self, Vector2(CARD_W - 190.0, 62.0), "%.0f" % ceil(rem), 38, Color(0.98, 0.84, 0.38),
+	UiKit.text(self, Vector2(CARD_W - 190.0, 62.0), "%.0f" % ceil(rem), _font(38), Color(0.98, 0.84, 0.38),
 		HORIZONTAL_ALIGNMENT_RIGHT, 154.0)
-	UiKit.text(self, Vector2(CARD_W - 190.0, 90.0), "秒后复活", 13, C_DIM, HORIZONTAL_ALIGNMENT_RIGHT, 154.0)
+	UiKit.text(self, Vector2(CARD_W - 190.0, 90.0), "秒后复活", _font(13), C_DIM, HORIZONTAL_ALIGNMENT_RIGHT, 154.0)
 	var br := Rect2(CARD_W - 190.0, 104.0, 154.0, 6.0)
 	draw_style_box(UiKit.flat(0.9, 3, 0, Color(0, 0, 0, 0), Color(0.10, 0.12, 0.17, 0.95), 0.0, 0.0), br)
 	var ratio := clampf(rem / tot, 0.0, 1.0)
@@ -222,7 +227,7 @@ func _cc_section(y_title: float, y_line: float) -> void:
 		Color(1.0, 0.62, 0.32))
 	_label(52.0, y_title, "受控统计 · 近 7 秒", 14, C_DIM)
 	var cc_col := Color(1.0, 0.62, 0.32) if cc > 0.05 else C_DIM
-	UiKit.text(self, Vector2(CARD_W - 220.0, y_title), "受控 %.1f 秒" % cc, 16,
+	UiKit.text(self, Vector2(CARD_W - 220.0, y_title), "受控 %.1f 秒" % cc, _font(16),
 		cc_col, HORIZONTAL_ALIGNMENT_RIGHT, 192.0)
 	if cc <= 0.05:
 		_label(28.0, y_line, "本段未受到控制", 13, C_DIM)
@@ -270,14 +275,14 @@ func _compose_legend(y: float) -> void:
 			continue
 		draw_circle(Vector2(x + 4.0, y - 4.0), 4.0, seg[2])
 		var txt := "%s %d (%.0f%%)" % [str(seg[0]), int(v), v / total * 100.0]
-		UiKit.text(self, Vector2(x + 13.0, y), txt, 13, Color(0.86, 0.9, 0.96))
-		x += 22.0 + UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		UiKit.text(self, Vector2(x + 13.0, y), txt, _font(12), Color(0.86, 0.9, 0.96))
+		x += 22.0 + UiKit.font().get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, _font(12)).x
 
 func _sources(y: float) -> void:
 	var sources: Array = data.get("sources", [])
 	var total := maxf(float(data.get("total", 0.0)), 1.0)
 	if sources.is_empty():
-		UiKit.text(self, Vector2(28.0, y + 20.0), "（近 7 秒未被直接攻击）", 14, C_DIM)
+		UiKit.text(self, Vector2(28.0, y + 20.0), "（近 7 秒未被直接攻击）", _font(14), C_DIM)
 		return
 	for i in range(mini(sources.size(), 4)):
 		var row: Dictionary = sources[i]
@@ -289,16 +294,16 @@ func _sources(y: float) -> void:
 		HeroArt.draw_portrait(self, Vector2(46.0, ry + 16.0), 13.0,
 			str(row.get("hero", row.get("name", ""))),
 			Color(0.0, 0.886, 1.0) if Config.is_ally(int(row.get("team", 1))) else Color(1.0, 0.36, 0.30), false)
-		UiKit.text(self, Vector2(68.0, ry + 14.0), str(row.get("name", "?")), 17, Color.WHITE)
+		UiKit.text(self, Vector2(68.0, ry + 14.0), str(row.get("name", "?")), _font(17), Color.WHITE)
 		var skills := str(row.get("skills", ""))
 		if skills != "":
-			UiKit.text(self, Vector2(68.0, ry + 32.0), skills, 12, Color(0.6, 0.68, 0.8))
+			UiKit.text(self, Vector2(68.0, ry + 32.0), skills, _font(12), Color(0.6, 0.68, 0.8))
 		var v := float(row.get("total", 0.0))
-		UiKit.text(self, Vector2(CARD_W - 220.0, ry + 14.0), "%d" % int(v), 17, Color(0.98, 0.86, 0.55),
+		UiKit.text(self, Vector2(CARD_W - 220.0, ry + 14.0), "%d" % int(v), _font(17), Color(0.98, 0.86, 0.55),
 			HORIZONTAL_ALIGNMENT_RIGHT, 120.0)
-		UiKit.text(self, Vector2(CARD_W - 92.0, ry + 14.0), "%.0f%%" % (v / total * 100.0), 14, C_DIM,
+		UiKit.text(self, Vector2(CARD_W - 92.0, ry + 14.0), "%.0f%%" % (v / total * 100.0), _font(14), C_DIM,
 			HORIZONTAL_ALIGNMENT_RIGHT, 64.0)
-		UiKit.text(self, Vector2(CARD_W - 24.0, ry + 16.0), "▲" if sel else "▼", 14,
+		UiKit.text(self, Vector2(CARD_W - 24.0, ry + 16.0), "▲" if sel else "▼", _font(14),
 			Color(0.82, 0.88, 1.0) if sel else C_DIM)
 
 func _hits(title_y: float, rows_y: float, pager_y: float) -> void:
@@ -314,9 +319,9 @@ func _hits(title_y: float, rows_y: float, pager_y: float) -> void:
 		Color(0.065, 0.080, 0.12, 0.92), 0.0, 0.0), Rect2(24.0, top, CARD_W - 48.0, bottom - top))
 	UiKit.text(self, Vector2(34.0, title_y),
 		"「%s」每次伤害 · 共 %d 次（最近优先）" % [str(src.get("name", "?")), hits.size()],
-		13, Color(0.78, 0.84, 0.94))
+		_font(13), Color(0.78, 0.84, 0.94))
 	if hits.is_empty():
-		UiKit.text(self, Vector2(34.0, rows_y + 16.0), "没有逐次记录", 13, C_DIM)
+		UiKit.text(self, Vector2(34.0, rows_y + 16.0), "没有逐次记录", _font(13), C_DIM)
 		return
 	for j in range(HIT_ROWS):
 		var idx := hits.size() - 1 - (_hit_page * HIT_ROWS + j)
@@ -330,14 +335,14 @@ func _hits(title_y: float, rows_y: float, pager_y: float) -> void:
 		var is_mag := bool(h.get("is_magic", false))
 		var type_txt := "法术" if is_mag else "物理"
 		var type_col := C_MAG if is_mag else C_PHYS
-		UiKit.text(self, Vector2(34.0, ry + 15.0), "%.1fs前" % absf(t), 12, C_DIM)
-		UiKit.text(self, Vector2(100.0, ry + 15.0), str(h.get("skill", "?")), 13,
+		UiKit.text(self, Vector2(34.0, ry + 15.0), "%.1fs前" % absf(t), _font(12), C_DIM)
+		UiKit.text(self, Vector2(100.0, ry + 15.0), str(h.get("skill", "?")), _font(13),
 			Color(0.88, 0.92, 0.98))
 		UiKit.text(self, Vector2(210.0, ry + 15.0), "%d" % int(roundf(float(h.get("amount", 0.0)))),
-			13, Color(0.98, 0.86, 0.55), HORIZONTAL_ALIGNMENT_RIGHT, 72.0)
-		UiKit.text(self, Vector2(290.0, ry + 15.0), type_txt, 12, type_col)
+			_font(13), Color(0.98, 0.86, 0.55), HORIZONTAL_ALIGNMENT_RIGHT, 72.0)
+		UiKit.text(self, Vector2(290.0, ry + 15.0), type_txt, _font(12), type_col)
 		if bool(h.get("crit", false)):
-			UiKit.text(self, Vector2(344.0, ry + 15.0), "暴击", 12, Color(1.0, 0.42, 0.32))
+			UiKit.text(self, Vector2(344.0, ry + 15.0), "暴击", _font(12), Color(1.0, 0.42, 0.32))
 	if pages > 1:
 		var prs := _page_rects()
 		for k in range(2):
@@ -345,25 +350,25 @@ func _hits(title_y: float, rows_y: float, pager_y: float) -> void:
 			draw_style_box(UiKit.flat(0.75, 6, 1, Color(0.48, 0.60, 0.80, 0.5),
 				Color(0.10, 0.13, 0.20, 0.95), 0.0, 3.0), r)
 			UiKit.text(self, Vector2(r.position.x, r.position.y + r.size.y * 0.76),
-				"<" if k == 0 else ">", 16, Color(0.9, 0.94, 1.0),
+				"<" if k == 0 else ">", _font(16), Color(0.9, 0.94, 1.0),
 				HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 		UiKit.text(self, Vector2(68.0, pager_y + 16.0),
-			"第 %d/%d 页 · 点击箭头翻页" % [_hit_page + 1, pages], 12, C_DIM,
+			"第 %d/%d 页 · 点击箭头翻页" % [_hit_page + 1, pages], _font(12), C_DIM,
 			HORIZONTAL_ALIGNMENT_CENTER, CARD_W - 136.0)
 	else:
-		UiKit.text(self, Vector2(34.0, pager_y + 16.0), "完整记录", 12, C_DIM)
+		UiKit.text(self, Vector2(34.0, pager_y + 16.0), "完整记录", _font(12), C_DIM)
 
 func _attrib(y: float) -> void:
 	var attrib: Array = data.get("attrib", [])
 	if attrib.is_empty():
-		UiKit.text(self, Vector2(28.0, y + 18.0), "无特殊归因（对拼落败）", 14, C_DIM)
+		UiKit.text(self, Vector2(28.0, y + 18.0), "无特殊归因（对拼落败）", _font(14), C_DIM)
 		return
 	for i in range(attrib.size()):
 		var a: Dictionary = attrib[i]
 		var ay := y + float(i) * 26.0
 		BuffArt.draw_buff(self, Vector2(38.0, ay + 10.0), 11.0, str(a.get("key", "")),
 			a.get("color", Color(1.0, 0.62, 0.3)))
-		UiKit.text(self, Vector2(56.0, ay + 16.0), str(a.get("text", "")), 15, Color(0.88, 0.92, 0.98))
+		UiKit.text(self, Vector2(56.0, ay + 16.0), str(a.get("text", "")), _font(15), Color(0.88, 0.92, 0.98))
 
 func _advice(y: float) -> void:
 	var txt := str(data.get("advice", ""))
@@ -371,13 +376,13 @@ func _advice(y: float) -> void:
 		return
 	draw_style_box(UiKit.flat(0.6, 8, 1, Color(0.98, 0.82, 0.32, 0.55), Color(0.10, 0.10, 0.10, 0.55), 0.0, 0.0),
 		Rect2(24.0, y - 6.0, CARD_W - 48.0, 28.0))
-	UiKit.text(self, Vector2(34.0, y + 14.0), txt, 14, Color(0.98, 0.86, 0.45))
+	UiKit.text(self, Vector2(34.0, y + 14.0), txt, _font(14), Color(0.98, 0.86, 0.45))
 
 func _divider(y: float) -> void:
 	draw_rect(Rect2(28.0, y, CARD_W - 56.0, 1.0), Color(0.40, 0.50, 0.66, 0.28))
 
 func _label(x: float, baseline: float, txt: String, fs: int, col: Color) -> void:
-	UiKit.text(self, Vector2(x, baseline), txt, fs, col)
+	UiKit.text(self, Vector2(x, baseline), txt, _font(fs), col)
 
 func _close_rect() -> Rect2:
 	return Rect2(CARD_W - 44.0, 10.0, 30.0, 26.0)
