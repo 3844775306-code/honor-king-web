@@ -5,6 +5,8 @@ const NetModels = preload("res://scripts/net/NetModels.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetMiniMapScript = preload("res://scripts/net/NetMiniMap.gd")
+const ARENA_SPOTS: Array = [Vector3(43, 0, 43), Vector3(0, 0, 0), Vector3(-43, 0, -43)]
+const ARENA_RADIUS: float = 7.2
 const TouchActionButtonScript = preload("res://scripts/mobile/TouchActionButton.gd")
 const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
@@ -654,6 +656,8 @@ func _on_snapshot(snap: Array) -> void:
 			if v == null:
 				v = _make_view(nid, typ, team, name)
 				_views[nid] = v
+				if typ == NET_TURRET:
+					_add_turret_pave(pos, name, team)
 			v.type = typ
 			v.team = team
 			if typ == NET_HERO:
@@ -1827,6 +1831,23 @@ func _tick_turret_visuals(delta: float) -> void:
 			v.erase("shield_node")
 
 
+# 塔基环形铺装（host BattleManager._add_turret_ring_pave 同款：高地 0.177 / 分路 0.152，内圈留塔基洞）
+func _add_turret_pave(pos: Vector3, tier: String, team: int) -> void:
+	var outer: float = 5.8 if tier == "crystal" else 4.7
+	var inner: float = 1.45 if tier == "crystal" else 1.15
+	var hq_center := Vector3(-60.0, 0.0, 60.0) if team == TEAM_PLAYER else Vector3(60.0, 0.0, -60.0)
+	var on_high: bool = Vector2(pos.x - hq_center.x, pos.z - hq_center.z).length() < 35.0
+	var top_y: float = 0.177 if on_high else 0.152
+	var pave: Node3D = DecorMesh.turret_ring_pave(pos, inner, outer, top_y)
+	pave.name = "TurretRingPave_%d_%d" % [int(round(pos.x)), int(round(pos.z))]
+	pave.add_to_group("turret_paves")
+	var w := get_node_or_null("World")
+	if w != null:
+		w.add_child(pave)
+	else:
+		add_child(pave)
+
+
 func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	var node := Node3D.new()
 	var team_col := COL_ALLY_DIM
@@ -2652,19 +2673,65 @@ func _add_lane_plane_net(center: Vector3, size: Vector2, diag: bool) -> void:
 	plane.material_override = MapVisuals.ground_material()
 	var curb_mat: Material = DecorMesh.rock_material()
 	var along_x: bool = size.x >= size.y
-	for s in [-1.0, 1.0]:
-		var curb := MeshInstance3D.new()
-		var cm := BoxMesh.new()
-		if along_x:
-			cm.size = Vector3(size.x, 0.22, 0.6)
-			curb.position = Vector3(0.0, -0.04, (size.y * 0.5 + 0.25) * s)
-		else:
-			cm.size = Vector3(0.6, 0.22, size.y)
-			curb.position = Vector3((size.x * 0.5 + 0.25) * s, -0.04, 0.0)
-		curb.mesh = cm
-		curb.material_override = curb_mat
-		plane.add_child(curb)
+	var curb_len: float = size.x if along_x else size.y
+	for sd in [-1.0, 1.0]:
+		var offset: float = (size.y * 0.5 + 0.25) * sd if along_x else (size.x * 0.5 + 0.25) * sd
+		for seg in _curb_segments_net(plane.position, plane.rotation.y, along_x, offset, curb_len):
+			var span: float = seg.y - seg.x
+			if span < 0.3:
+				continue
+			var cm := BoxMesh.new()
+			var curb := MeshInstance3D.new()
+			if along_x:
+				cm.size = Vector3(span, 0.22, 0.6)
+				curb.position = Vector3((seg.x + seg.y) * 0.5, -0.04, offset)
+			else:
+				cm.size = Vector3(0.6, 0.22, span)
+				curb.position = Vector3(offset, -0.04, (seg.x + seg.y) * 0.5)
+			curb.mesh = cm
+			curb.material_override = curb_mat
+			plane.add_child(curb)
 	$World.add_child(plane)
+
+
+# 路缘被擂台挖断后的剩余区间（与 host BattleManager._curb_segments 完全同款）
+func _curb_segments_net(plane_pos: Vector3, yaw: float, along_x: bool, offset: float, length: float) -> Array:
+	var half: float = length * 0.5
+	var inv := Basis(Vector3.UP, yaw).inverse()
+	var r: float = ARENA_RADIUS + 0.35
+	var gaps: Array = []
+	for spot in ARENA_SPOTS:
+		var lp: Vector3 = inv * (spot - plane_pos)
+		var across: float = lp.z if along_x else lp.x
+		var along: float = lp.x if along_x else lp.z
+		var d: float = absf(across - offset)
+		if d >= r:
+			continue
+		var dx: float = sqrt(r * r - d * d)
+		gaps.append(Vector2(along - dx, along + dx))
+	var segs: Array = []
+	if gaps.is_empty():
+		segs.append(Vector2(-half, half))
+		return segs
+	gaps.sort_custom(func(a, b): return a.x < b.x)
+	var cursor: float = -half
+	for g in gaps:
+		var a: float = maxf(g.x, -half)
+		var b: float = minf(g.y, half)
+		if b <= a:
+			continue
+		if a > cursor + 0.3:
+			segs.append(Vector2(cursor, a))
+		cursor = maxf(cursor, b)
+	if half > cursor + 0.3:
+		segs.append(Vector2(cursor, half))
+	if segs.size() > 1:
+		var longest: Vector2 = segs[0]
+		for sgm in segs:
+			if (sgm.y - sgm.x) > (longest.y - longest.x):
+				longest = sgm
+		return [longest]
+	return segs
 
 
 func _build_world() -> void:
@@ -2687,15 +2754,31 @@ func _build_world() -> void:
 	_add_lane_plane_net(Vector3(30.0, 0.0, -30.0), Vector2(16.0, 84.85), true)
 	_add_lane_plane_net(Vector3(0.0, 0.0, -55.0), Vector2(126.0, 15.4), false)
 	# 3. 高地青砖扇形（蓝左下 / 红右上，host 同款石材着色器）
-	_add_high_ground_fan(Vector3(-60.0, 0.2, 60.0), -90.0, 0.0)
-	_add_high_ground_fan(Vector3(60.0, 0.2, -60.0), 90.0, 180.0)
+	_add_high_ground_fan(Vector3(-60.0, 0.2, 60.0), -90.0, 0.0, Vector3(-53.0, 0.0, 53.0))
+	_add_high_ground_fan(Vector3(60.0, 0.2, -60.0), 90.0, 180.0, Vector3(53.0, 0.0, -53.0))
 	_add_high_ground_aprons_net(Vector3(-60.0, 0.0, 60.0), Vector3(-1,0,0), Vector3(0,0,1))
 	_add_high_ground_aprons_net(Vector3(60.0, 0.0, -60.0), Vector3(1,0,0), Vector3(0,0,-1))
 	_add_high_ground_rim_net(Vector3(-60.0, 0.0, 60.0), -90.0, 0.0)
 	_add_high_ground_rim_net(Vector3(60.0, 0.0, -60.0), 90.0, 180.0)
 	# 3.5 泉水圆盘 + 光环
-	_add_fountain(Vector3(-58.0, 0.3, 58.0), Color(0.2, 0.55, 1.0, 0.35))
-	_add_fountain(Vector3(58.0, 0.3, -58.0), Color(1.0, 0.25, 0.2, 0.35))
+	_add_fountain(Vector3(-62.0, 0.0, 62.0), Color(0.2, 0.55, 1.0, 0.35))
+	_add_fountain(Vector3(62.0, 0.0, -62.0), Color(1.0, 0.25, 0.2, 0.35))
+	# 三条兵线交汇处的青砖擂台（host ARENA_SPOTS / ARENA_RADIUS 同款）
+	for _ai in range(ARENA_SPOTS.size()):
+		var _arena: Node3D = DecorMesh.arena_visual(ARENA_SPOTS[_ai], ARENA_RADIUS)
+		_arena.name = "LaneArena%d" % _ai
+		_arena.position = ARENA_SPOTS[_ai]
+		$World.add_child(_arena)
+	# 地面碰撞（与 host 同层同尺寸；客户端技能瞄准/点击走数学投影，但保持一致）
+	var _gb := StaticBody3D.new()
+	_gb.collision_layer = 2
+	var _col := CollisionShape3D.new()
+	var _box := BoxShape3D.new()
+	_box.size = Vector3(Config.MAP_SIZE, 0.1, Config.MAP_SIZE)
+	_col.shape = _box
+	_gb.add_child(_col)
+	_gb.position = Vector3(0.0, -0.1, 0.0)
+	$World.add_child(_gb)
 	# 4. 河道（水面 shader，y=0.02 同 host；不透明避免破坏贴地特效排序）
 	_add_river()
 	# 4.5 装饰物（草丛/河岸石墙/陶罐，host 同款 MultiMesh + 固定种子 → 位置一致）
@@ -2708,7 +2791,7 @@ func _build_world() -> void:
 	$World.add_child(_static_root)
 
 
-func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float) -> void:
+func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float, brick_center: Vector3) -> void:
 	var csg := CSGPolygon3D.new()
 	var poly := PackedVector2Array()
 	poly.append(Vector2.ZERO)
@@ -2720,7 +2803,11 @@ func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float) -> 
 	csg.depth = 0.05
 	csg.position = center + Vector3(0.0, -0.025, 0.0)
 	csg.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	csg.material_override = MapVisuals.high_ground_material()
+	# 与 host 一致：高地是以水晶为圆心的同心青砖环（无水晶圆心时退回旧材质）
+	if brick_center != Vector3.ZERO:
+		csg.material_override = DecorMesh.hq_ring_brick_material(brick_center)
+	else:
+		csg.material_override = MapVisuals.high_ground_material()
 	$World.add_child(csg)
 
 
@@ -2779,38 +2866,208 @@ func _double_sided_rock_net() -> ShaderMaterial:
 
 
 func _add_fountain(center: Vector3, color: Color) -> void:
-	var disc := CSGPolygon3D.new()
-	var poly := PackedVector2Array()
-	poly.append(Vector2.ZERO)
-	for i in range(49):
-		var a := deg_to_rad(360.0 * float(i) / 48.0)
-		poly.append(Vector2(cos(a) * 5.0, sin(a) * 5.0))
-	disc.polygon = poly
-	disc.depth = 0.05
-	disc.position = center + Vector3(0.0, -0.025, 0.0)
-	disc.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	var dm := StandardMaterial3D.new()
-	dm.albedo_color = color
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	disc.material_override = dm
-	$World.add_child(disc)
-	# 边界光环（与 host 相同的竖直圆环观感）
-	var ring := MeshInstance3D.new()
-	var tor := TorusMesh.new()
-	tor.inner_radius = 4.95
-	tor.outer_radius = 5.2
-	ring.mesh = tor
-	ring.position = center + Vector3(0.0, 0.1, 0.0)
-	var rm := StandardMaterial3D.new()
-	rm.albedo_color = color
-	rm.emission_enabled = true
-	rm.emission = Color(color.r, color.g, color.b)
-	rm.emission_energy_multiplier = 0.8
-	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring.material_override = rm
-	$World.add_child(ring)
+	# 与 host BattleManager._add_fountain 完全同款：石砌池沿 + 波纹水面 + 中央喷泉柱 + 溅水粒子 + 旋转符文环 + 顶光
+	var root := Node3D.new()
+	root.name = "Fountain"
+	root.position = Vector3(center.x, 0.0, center.z)
+	$World.add_child(root)
+	var stone := DecorMesh.rock_material()
+	var basin := MeshInstance3D.new()
+	var bcyl := CylinderMesh.new()
+	bcyl.top_radius = 3.30
+	bcyl.bottom_radius = 3.50
+	bcyl.height = 0.28
+	bcyl.radial_segments = 40
+	basin.mesh = bcyl
+	basin.position = Vector3(0, 0.14, 0)
+	basin.material_override = stone
+	root.add_child(basin)
+	var rim := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 2.87
+	torus.outer_radius = 3.37
+	torus.rings = 40
+	torus.ring_segments = 10
+	rim.mesh = torus
+	rim.position = Vector3(0, 0.30, 0)
+	rim.material_override = stone
+	root.add_child(rim)
+	var water := MeshInstance3D.new()
+	var wcyl := CylinderMesh.new()
+	wcyl.top_radius = 2.95
+	wcyl.bottom_radius = 2.95
+	wcyl.height = 0.05
+	wcyl.radial_segments = 48
+	water.mesh = wcyl
+	water.position = Vector3(0, 0.295, 0)
+	water.material_override = _fountain_water_material(color)
+	root.add_child(water)
+	var ped := MeshInstance3D.new()
+	var pcyl := CylinderMesh.new()
+	pcyl.top_radius = 0.42
+	pcyl.bottom_radius = 0.72
+	pcyl.height = 0.95
+	pcyl.radial_segments = 16
+	ped.mesh = pcyl
+	ped.position = Vector3(0, 0.75, 0)
+	ped.material_override = stone
+	root.add_child(ped)
+	var jet := MeshInstance3D.new()
+	var jcyl := CylinderMesh.new()
+	jcyl.top_radius = 0.20
+	jcyl.bottom_radius = 0.34
+	jcyl.height = 2.10
+	jcyl.radial_segments = 14
+	jet.mesh = jcyl
+	jet.position = Vector3(0, 2.30, 0)
+	jet.material_override = _fountain_jet_material(color)
+	root.add_child(jet)
+	var splash := CPUParticles3D.new()
+	splash.amount = 44
+	splash.lifetime = 1.15
+	var drop := SphereMesh.new()
+	drop.radius = 0.065
+	drop.height = 0.13
+	drop.radial_segments = 6
+	drop.rings = 3
+	splash.mesh = drop
+	splash.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	splash.emission_sphere_radius = 0.42
+	splash.position = Vector3(0, 3.30, 0)
+	splash.direction = Vector3.UP
+	splash.spread = 42.0
+	splash.initial_velocity_min = 0.6
+	splash.initial_velocity_max = 1.9
+	splash.gravity = Vector3(0, -5.2, 0)
+	splash.scale_amount_min = 0.7
+	splash.scale_amount_max = 1.6
+	splash.color = Color(color.r * 0.5 + 0.5, color.g * 0.55 + 0.55, 1.0, 0.75)
+	var splash_mat := StandardMaterial3D.new()
+	splash_mat.albedo_color = Color(0.82, 0.93, 1.0, 1.0)
+	splash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	splash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	splash_mat.vertex_color_use_as_albedo = true
+	splash.material_override = splash_mat
+	root.add_child(splash)
+	var rune := Node3D.new()
+	rune.name = "RuneRing"
+	root.add_child(rune)
+	var rune_mesh := BoxMesh.new()
+	rune_mesh.size = Vector3(0.14, 0.035, 0.40)
+	var rune_mat := StandardMaterial3D.new()
+	rune_mat.albedo_color = color
+	rune_mat.emission_enabled = true
+	rune_mat.emission = Color(color.r, color.g, color.b)
+	rune_mat.emission_energy_multiplier = 2.4
+	rune_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rune_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	for i in range(12):
+		var a: float = TAU * float(i) / 12.0
+		var rmi := MeshInstance3D.new()
+		rmi.mesh = rune_mesh
+		rmi.material_override = rune_mat
+		rmi.position = Vector3(cos(a) * 3.72, 0.09, sin(a) * 3.72)
+		rmi.rotation.y = -a
+		rune.add_child(rmi)
+	var glow := MeshInstance3D.new()
+	var gcyl := CylinderMesh.new()
+	gcyl.top_radius = 3.60
+	gcyl.bottom_radius = 3.60
+	gcyl.height = 0.02
+	gcyl.radial_segments = 40
+	glow.mesh = gcyl
+	glow.position = Vector3(0, 0.05, 0)
+	glow.material_override = _fountain_glow_material(color)
+	root.add_child(glow)
+	var lt := OmniLight3D.new()
+	lt.light_color = color
+	lt.light_energy = 2.0
+	lt.omni_range = 11.0
+	lt.position = Vector3(0, 2.9, 0)
+	root.add_child(lt)
+	if not is_inside_tree():
+		return
+	var tw := create_tween().set_loops()
+	tw.tween_property(rune, "rotation:y", TAU, 16.0).from(0.0)
+
+
+# 泉水水面/水柱/地光材质（与 host BattleManager 完全同款着色器）
+func _fountain_water_material(color: Color) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_mix, depth_draw_never, cull_back, diffuse_burley;
+
+uniform vec4 tint : source_color = vec4(0.25, 0.55, 1.0, 1.0);
+uniform vec4 glow : source_color = vec4(0.4, 0.8, 1.0, 1.0);
+
+void fragment() {
+	vec2 uv = UV * 2.0 - 1.0;
+	float r = clamp(length(uv), 0.0, 1.0);
+	float t = TIME;
+	float w = sin(r * 26.0 - t * 3.0) * 0.5 + 0.5;
+	float w2 = sin(r * 10.0 + t * 1.5) * 0.5 + 0.5;
+	float rings = smoothstep(0.45, 0.95, w * 0.55 + w2 * 0.55);
+	ALBEDO = tint.rgb * (0.70 + 0.40 * rings);
+	EMISSION = glow.rgb * (0.16 + 0.95 * rings * (1.0 - r * 0.55));
+	ALPHA = clamp(0.55 + 0.42 * rings * (1.0 - r), 0.0, 1.0);
+	ROUGHNESS = 0.10;
+	SPECULAR = 0.85;
+	METALLIC = 0.0;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("tint", color)
+	mat.set_shader_parameter("glow", Color(color.r * 0.45 + 0.45, color.g * 0.55 + 0.55, 1.0))
+	return mat
+
+
+func _fountain_jet_material(color: Color) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_add, depth_draw_never, cull_disabled, unshaded;
+
+uniform vec4 tint : source_color = vec4(0.6, 0.85, 1.0, 1.0);
+
+void fragment() {
+	float flow = fract(UV.y * 2.4 - TIME * 1.5);
+	float stripe = smoothstep(0.0, 0.30, flow) * smoothstep(1.0, 0.55, flow);
+	float wob = 0.5 + 0.5 * sin(TIME * 3.0 + UV.y * 9.0 + UV.x * 6.2831);
+	ALBEDO = tint.rgb;
+	EMISSION = tint.rgb * (0.85 + 1.6 * stripe);
+	ALPHA = clamp(0.14 + 0.42 * stripe * wob, 0.0, 1.0);
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("tint", Color(color.r * 0.45 + 0.45, color.g * 0.55 + 0.55, 1.0))
+	return mat
+
+
+func _fountain_glow_material(color: Color) -> ShaderMaterial:
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode blend_add, depth_draw_never, cull_disabled, unshaded;
+
+uniform vec4 tint : source_color = vec4(1.0);
+
+void fragment() {
+	vec2 uv = UV * 2.0 - 1.0;
+	float r = clamp(length(uv), 0.0, 1.0);
+	float pulse = 0.72 + 0.28 * sin(TIME * 1.6);
+	float a = (1.0 - smoothstep(0.0, 1.0, r)) * 0.45 + smoothstep(0.62, 1.0, r) * 0.60;
+	ALBEDO = tint.rgb;
+	EMISSION = tint.rgb * 1.5 * pulse;
+	ALPHA = clamp(a * pulse, 0.0, 1.0);
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = sh
+	mat.set_shader_parameter("tint", color)
+	return mat
 
 
 func _add_river() -> void:
