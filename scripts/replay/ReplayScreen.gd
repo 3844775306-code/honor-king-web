@@ -332,6 +332,15 @@ func _build_actors() -> void:
 			bm.roughness = 0.45
 			body.material_override = bm
 			root.add_child(body)
+		# 红/蓝 buff 地面光环（与单机 Hero.buff_ring_red/blue、联机 NetClientBattle 同款）
+		var _br := MeshFactory.create_buff_aura(0)
+		_br.position = Vector3(0.0, Config.GROUND_FX_Y, 0.0)
+		_br.visible = false
+		root.add_child(_br)
+		var _bb := MeshFactory.create_buff_aura(1)
+		_bb.position = Vector3(0.0, Config.GROUND_FX_Y + 0.01, 0.0)
+		_bb.visible = false
+		root.add_child(_bb)
 		var ap := _find_ap(root)
 		_setup_idle_walk(ap)
 		var idle_c := _clip_hint(ap, ["idle"])
@@ -341,7 +350,8 @@ func _build_actors() -> void:
 			ap.play(idle_c)
 		# 名字/血条交给真实战场的 HeroInfoControl（下一段 _build_hud 创建），这里只留模型
 		_hero_nodes.append({"root": root, "ap": ap, "idle": idle_c, "walk": walk_c, "attack": atk_c,
-			"last": Vector3.ZERO, "anim": "idle", "atk_until": -1.0})
+			"last": Vector3.ZERO, "anim": "idle", "atk_until": -1.0,
+			"buff_red": _br, "buff_blue": _bb})
 	# 防御塔 / 水晶
 	for i in range(_turrets.size()):
 		var t: Dictionary = _turrets[i]
@@ -1428,12 +1438,46 @@ func _json_unsafe(v):
 	return v
 
 
+## 回放：按 buff 帧里各英雄的 red/blue 键开关地面光环（与单机/联机一致）
+func _apply_buff_rings(fr: Dictionary) -> void:
+	var act_r := {}
+	var act_b := {}
+	for ent in (fr.get("b", []) as Array):
+		var hidx := int((ent as Array)[0])
+		for tier in [1, 2]:
+			for row in ((ent as Array)[tier] as Array):
+				var key := str((row as Array)[0])
+				if key == "red":
+					act_r[hidx] = true
+				elif key == "blue":
+					act_b[hidx] = true
+	for i in range(_hero_nodes.size()):
+		var nd: Dictionary = _hero_nodes[i]
+		var rr = nd.get("buff_red")
+		if rr != null and is_instance_valid(rr):
+			rr.visible = act_r.has(i)
+		var bb = nd.get("buff_blue")
+		if bb != null and is_instance_valid(bb):
+			bb.visible = act_b.has(i)
+
+
+func _hide_all_buff_rings() -> void:
+	for nd in _hero_nodes:
+		var rr = (nd as Dictionary).get("buff_red")
+		if rr != null and is_instance_valid(rr):
+			rr.visible = false
+		var bb = (nd as Dictionary).get("buff_blue")
+		if bb != null and is_instance_valid(bb):
+			bb.visible = false
+
 ## 回放 BUFF 图标行：找最近一次 ≤t 的采样，按剩余时间回推，喂给 NetBuffRow（与联机同一份绘制）
 func _update_buff_row() -> void:
 	if _buff_view == null or _buff_frames.is_empty():
+		_hide_all_buff_rings()
 		return
 	var fi: int = int(_follow_hero)
 	if fi < 0:
+		_hide_all_buff_rings()
 		if _buff_sig != "":
 			_buff_view.refresh({})
 			_buff_sig = ""
@@ -1444,6 +1488,7 @@ func _update_buff_row() -> void:
 	if int(_buff_frames[_buff_ptr].get("t", 0)) > t_ms and _buff_ptr > 0:
 		_buff_ptr -= 1
 	var fr: Dictionary = _buff_frames[_buff_ptr]
+	_apply_buff_rings(fr)
 	var elapsed: float = maxf(0.0, (t_ms - int(fr.get("t", 0))) / 1000.0)
 	var top: Array = []
 	var bot: Array = []
@@ -3067,6 +3112,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 

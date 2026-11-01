@@ -1244,13 +1244,13 @@ func _create_visual():
 		# 红Buff圆环
 	
 	buff_ring_red = MeshFactory.create_buff_aura(0)
-	buff_ring_red.position = Vector3(0, 0.045, 0)
+	buff_ring_red.position = Vector3(0, Config.GROUND_FX_Y, 0)
 	buff_ring_red.visible = false
 	add_child(buff_ring_red)
 
 	# 蓝Buff光环（内圈霜雾；与红环同心，可同时显示）
 	buff_ring_blue = MeshFactory.create_buff_aura(1)
-	buff_ring_blue.position = Vector3(0, 0.055, 0)
+	buff_ring_blue.position = Vector3(0, Config.GROUND_FX_Y + 0.01, 0)
 	buff_ring_blue.visible = false
 	add_child(buff_ring_blue)
 	
@@ -5806,3 +5806,4 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
 			await get_tree().create_timer(0.15).timeout
+

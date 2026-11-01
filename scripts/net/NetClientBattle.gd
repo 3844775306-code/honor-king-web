@@ -2245,11 +2245,11 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				model_ref = hm
 				# 红/蓝 buff 脚下光环（与单机 Hero.buff_ring_red/blue 同款）→ 放到 view 里按快照开关
 				var br_r: MeshInstance3D = MeshFactory.create_buff_aura(0)
-				br_r.position = Vector3(0.0, 0.045, 0.0)
+				br_r.position = Vector3(0.0, Config.GROUND_FX_Y, 0.0)
 				br_r.visible = false
 				node.add_child(br_r)
 				var br_b: MeshInstance3D = MeshFactory.create_buff_aura(1)
-				br_b.position = Vector3(0.0, 0.055, 0.0)
+				br_b.position = Vector3(0.0, Config.GROUND_FX_Y + 0.01, 0.0)
 				br_b.visible = false
 				node.add_child(br_b)
 				buff_rings = [br_r, br_b]
@@ -5971,6 +5971,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 
