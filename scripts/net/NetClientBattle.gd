@@ -1324,6 +1324,11 @@ func _spawn_full_spell_fx(row: Array, caster: String) -> void:
 	}
 	var sid := str(row[24]) if row.size() > 24 else ""
 	SkillFxPresenter.play_spell(caster, slot, cp, tp, fd, sid, skd, int(row[FX_ROW_TEAM]), _vis_root, false)
+	# 大招语音台词：只播屏幕内英雄，音量按距离衰减（ChatService 统一判定）
+	if slot == 2:
+		var _cs_v = get_node_or_null("/root/ChatService")
+		if _cs_v != null:
+			_cs_v.call("hero_voice_ult", caster, cp)
 
 func _spawn_host_skill_fx(kind: int, p: Vector3, team: int, r: float, life: float, caster: String) -> void:
 	SkillFxPresenter.spawn_kind(kind, p, team, r, life, caster)
@@ -1544,6 +1549,27 @@ func _exit_tree() -> void:
 	Engine.time_scale = 1.0   # 本地顿帧兜底复位（防止中途退出卡在慢放）
 	if is_instance_valid(SfxManager):
 		SfxManager.stop_all()
+
+
+## 屏幕内英雄（供英雄语音定时播报；只返回相机视锥+屏幕范围内的存活英雄）
+func visible_voice_targets() -> Array:
+	var out: Array = []
+	if _cam == null or not is_instance_valid(_cam):
+		return out
+	var rect := get_viewport().get_visible_rect().grow(80.0)
+	for v in _views.values():
+		if int(v.get("type", -1)) != NET_HERO:
+			continue
+		if float(v.get("hp", 0.0)) <= 0.0:
+			continue
+		var pos: Vector3 = _view_pos(v)
+		var wp: Vector3 = pos + Vector3.UP * 1.2
+		if not _cam.is_position_in_frustum(wp):
+			continue
+		if not rect.has_point(_cam.unproject_position(wp)):
+			continue
+		out.append({"name": str(v.get("name", "")), "pos": pos, "role": ""})
+	return out
 
 
 # 视图节点当前世界位置（小地图绘制/距离判定用；无节点时退回快照目标点）

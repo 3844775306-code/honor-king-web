@@ -62,6 +62,53 @@ const LINES_DOING_ROTATE := ["我正在赶过去", "我在路上，到了就开"
 const LINES_DOING_AVOID := ["我正在绕后", "我在避战拉扯", "正在找位置"]
 const LINES_DOING_DEAD := ["我倒了，正在等复活", "我在看复活时间", "正在泉水等活"]
 const LINES_DOING_CAST := ["我正在放技能", "我在读条，别打断", "正在蓄力"]
+const HERO_ULT_LINES := {
+	"吕布": "方天画戟，天下无双！",
+	"亚瑟": "圣剑裁决！",
+	"马超": "枪出如龙！",
+	"铠": "以铠之名，恕你无罪！",
+	"不知火舞": "忍法，花蝶扇！",
+	"甄姬": "洛神降临！",
+	"狄仁杰": "以法律之名！",
+	"太乙真人": "起死回生！",
+	"东皇太一": "堕神契约！",
+	"李白": "十步杀一人，千里不留行！",
+	"兰陵王": "你的死期到了！",
+	"孙尚香": "究极弩炮！",
+	"马可波罗": "狂野之击！",
+	"张飞": "燕人张飞在此！",
+	"沈梦溪": "爆炸就是艺术！",
+	"安琪拉": "魔法，焚烧一切！",
+	"妲己": "女王崇拜！",
+	"小乔": "星华缭乱！",
+	"鲁班七号": "无敌鲨嘴炮！",
+	"夏侯惇": "不羁之刃！",
+	"后羿": "灼日之矢！",
+	"李元芳": "无间刃风！",
+	"元流之子": "万箭归流！",
+	"大禹": "鼎定山河！",
+	"王昭君": "冰封千里！",
+	"刘禅": "机关枪，开火！",
+	"孙悟空": "俺老孙来也！",
+	"英睿": "精准打击！",
+}
+const HERO_ULT_FALLBACK := ["看我的！", "受死吧！", "这一击，定胜负！"]
+
+const VOICE_AMBIENT_BY_ROLE := {
+	"战士": ["跟我上！", "这波能打！", "我去开团！", "别退，顶住！"],
+	"法师": ["等我技能。", "先消耗他们。", "注意站位。", "别被开到。"],
+	"刺客": ["我绕后。", "找机会切后排。", "别暴露我。", "等我先手。"],
+	"射手": ["保护我。", "我来输出。", "别抢我线。", "让我发育。"],
+	"辅助": ["我跟你。", "小心草丛。", "我来开视野。", "稳住，别急。"],
+}
+const VOICE_AMBIENT_DEFAULT := ["小心点。", "稳住。", "注意地图。", "别浪。"]
+
+var _hero_voice_t := 0.0
+var _hero_voice_global_last := -99.0
+var _hero_voice_next := {}
+var _hero_ult_last := {}
+
+
 
 var typing := false              # 正在打字：UiManager 据此屏蔽走位/技能输入
 
@@ -98,6 +145,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	_ensure_ui()
 	_tick_voice()
+	_tick_hero_voice(delta)
 	if _bm == null or not is_instance_valid(_bm):
 		return
 	if NetSession.mode == NetSession.Mode.CLIENT:
@@ -500,6 +548,118 @@ func _announce_intent() -> void:
 			continue
 		_intent_said[id] = now
 		_say(h, line)
+
+
+## 当前是否处于真实对局（单机 host / 联机客户端接管后）；大厅与回放不播英雄语音
+func _hero_voice_active_battle() -> bool:
+	if _bm != null and is_instance_valid(_bm) and _bm.get("hero") != null:
+		return true
+	var nc = get_tree().get_first_node_in_group("net_client_battle")
+	if nc != null and is_instance_valid(nc):
+		return int(nc.get("_state")) == 1 and bool(nc.get("_owned"))
+	return false
+
+
+## 世界坐标是否在屏幕内（英雄语音只播屏幕中的英雄）
+func _hero_point_visible(pos: Vector3) -> bool:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return false
+	var wp: Vector3 = pos + Vector3.UP * 1.2
+	if not cam.is_position_in_frustum(wp):
+		return false
+	return get_viewport().get_visible_rect().grow(80.0).has_point(cam.unproject_position(wp))
+
+
+## 播放英雄语音：音量按与相机的距离衰减（6m 内满音量，44m 外 -24dB）
+func _hero_voice_at(text: String, speaker: String, pos: Vector3) -> void:
+	if text == "":
+		return
+	var db := 0.0
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var d: float = cam.global_position.distance_to(pos)
+		db = lerpf(0.0, -24.0, clampf((d - 6.0) / 38.0, 0.0, 1.0))
+	var vs = get_node_or_null("/root/VoiceService")
+	if vs != null:
+		vs.call("speak", text, speaker, db)
+
+
+## 大招台词（由 Hero._finish_casting 的 3 技能调用；只播屏幕内）
+func hero_voice_ult(hero_name: String, pos: Vector3) -> void:
+	if not _hero_voice_active_battle():
+		return
+	if not _hero_point_visible(pos):
+		return
+	var now := Time.get_ticks_msec() * 0.001
+	var id := hero_name
+	if now - float(_hero_ult_last.get(id, -99.0)) < 1.5:
+		return
+	_hero_ult_last[id] = now
+	var line := str(HERO_ULT_LINES.get(hero_name, ""))
+	if line == "":
+		line = _pick(HERO_ULT_FALLBACK)
+	_hero_voice_at(line, hero_name, pos)
+
+
+## 每隔一段时间：屏幕内每位英雄各自到点播一句（全局 8 秒最小间隔，避免叠音）
+func _tick_hero_voice(delta: float) -> void:
+	_hero_voice_t += delta
+	if _hero_voice_t < 0.5:
+		return
+	_hero_voice_t = 0.0
+	if not _hero_voice_active_battle():
+		return
+	var now := Time.get_ticks_msec() * 0.001
+	if now - _hero_voice_global_last < 8.0:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var rect := get_viewport().get_visible_rect().grow(80.0)
+	# 主机：遍历真实 Hero 节点；联机客户端：由 NetClientBattle 提供屏幕内英雄视图
+	var targets: Array = []
+	if _bm != null and is_instance_valid(_bm) and _bm.get("hero") != null:
+		targets = get_tree().get_nodes_in_group("heroes")
+	else:
+		var nc = get_tree().get_first_node_in_group("net_client_battle")
+		if nc != null and is_instance_valid(nc):
+			targets = nc.call("visible_voice_targets")
+	for t in targets:
+		var nm := ""
+		var role := ""
+		var pos := Vector3.ZERO
+		var key := ""
+		if t is Node:
+			if not is_instance_valid(t) or float(t.get("health")) <= 0.0:
+				continue
+			nm = str(t.display_name)
+			role = str(t.get("role"))
+			pos = t.global_position
+			key = str(t.get_instance_id())
+		elif t is Dictionary:
+			nm = str(t.get("name", ""))
+			role = str(t.get("role", ""))
+			pos = t.get("pos", Vector3.ZERO)
+			key = "n:" + nm + ":" + str(int(hash(str(pos))))
+		if nm == "":
+			continue
+		var wp: Vector3 = pos + Vector3.UP * 1.2
+		if not cam.is_position_in_frustum(wp):
+			continue
+		if not rect.has_point(cam.unproject_position(wp)):
+			continue
+		if not _hero_voice_next.has(key):
+			_hero_voice_next[key] = now + randf_range(10.0, 30.0)
+			continue
+		if now < float(_hero_voice_next[key]):
+			continue
+		_hero_voice_next[key] = now + randf_range(35.0, 65.0)
+		var pool: Array = VOICE_AMBIENT_BY_ROLE.get(role, VOICE_AMBIENT_DEFAULT)
+		var text := _pick(pool)
+		_hero_voice_at(text, nm, pos)
+		_hero_voice_global_last = now
+		break
 
 
 ## 读取当前局势：塔数、龙、金币差、双方站位人数、玩家状态、自身血量

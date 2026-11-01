@@ -166,8 +166,8 @@ func _voice_for(speaker: String) -> String:
 	return str(pool[idx])
 
 
-## 朗读。speaker 区分声线；标点/情绪词改变音高语速
-func speak(text: String, speaker: String = "") -> void:
+## 朗读。speaker 区分声线；标点/情绪词改变音高语速；volume_db 为按距离衰减后的音量
+func speak(text: String, speaker: String = "", volume_db: float = 0.0) -> void:
 	if not enabled:
 		return
 	var clean := _clean(text)
@@ -179,6 +179,7 @@ func speak(text: String, speaker: String = "") -> void:
 	_last_text = clean
 	_last_ms = now
 	var emo := _emotion_params(clean, speaker)
+	emo["vol_db"] = clampf(volume_db, -40.0, 6.0)
 	if _online_mode == "browser" and _speak_web(clean, speaker, emo):
 		return
 	if _online_mode == "edge" and edge_enabled and _edge != null:
@@ -202,7 +203,7 @@ func _speak_web(clean: String, speaker: String, emo: Dictionary) -> bool:
 		var ss=window.speechSynthesis; if(!ss) return false;
 		ss.cancel();
 		var u=new SpeechSynthesisUtterance(%s);
-		u.lang='zh-CN'; u.pitch=%f; u.rate=%f; u.volume=1.0;
+		u.lang='zh-CN'; u.pitch=%f; u.rate=%f; u.volume=%f;
 		try{
 			var vs=(ss.getVoices()||[]).filter(function(v){return /^zh/i.test(v.lang||'');});
 			var f=vs.find(function(v){return /(xiaoxiao|xiaoyi|huihui|yaoyao|female|女)/i.test(v.name||'');});
@@ -210,7 +211,7 @@ func _speak_web(clean: String, speaker: String, emo: Dictionary) -> bool:
 			var pick=%s?f:m; if(!pick) pick=vs[0]; if(pick) u.voice=pick;
 		}catch(e2){}
 		ss.speak(u); return true;
-	}catch(e){return false;}})()""" % [txt, pitch, rate, female]
+	}catch(e){return false;}})()""" % [txt, pitch, rate, clampf(db_to_linear(float(emo.get("vol_db", 0.0))), 0.0, 1.0), female]
 	return bool(JavaScriptBridge.eval(js, true))
 
 
@@ -219,7 +220,8 @@ func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 	# Windows 本地 SAPI 兜底：网络音频不可用时至少能正确读出文字
 	if _sapi_enabled and _sapi != null and _sapi.call("available"):
 		var rate_i: int = clampi(int(round((float(emo.get("rate", 1.0)) - 1.0) * 10.0)), -5, 6)
-		if _sapi.call("speak", clean, rate_i, _is_female(speaker)):
+		var sapi_vol: int = clampi(int(round(db_to_linear(float(emo.get("vol_db", 0.0))) * 100.0)), 0, 100)
+		if _sapi.call("speak", clean, rate_i, _is_female(speaker), sapi_vol):
 			diag("local sapi speak rate=%d text=%s" % [rate_i, clean.substr(0, 20)])
 			return
 	var clauses := _split_clauses(clean)
@@ -235,7 +237,8 @@ func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 			_utt += 1
 			if _utt > 900000:
 				_utt = 1
-			var vol: int = clampi(int(round(float(emo["volume"]) + float(c.get("vol", 0)))), 55, 100)
+			var att: float = clampf(db_to_linear(float(emo.get("vol_db", 0.0))), 0.0, 1.0)
+			var vol: int = clampi(int(round((float(emo["volume"]) + float(c.get("vol", 0))) * att)), 0, 100)
 			DisplayServer.tts_speak(str(c["text"]), _voice_for(speaker), vol,
 				clampf(pitch, 0.5, 2.0), clampf(rate, 0.5, 2.0), _utt, false)
 			ids.append(_utt)
@@ -266,7 +269,7 @@ func _edge_pct(v: float, lo: int, hi: int) -> int:
 func _request_edge(clean: String, speaker: String, emo: Dictionary) -> void:
 	var key := speaker + "|" + clean
 	if _edge_cache.has(key):
-		_play_edge(_edge_cache[key])
+		_play_edge(_edge_cache[key], emo)
 		return
 	if _edge_busy:
 		if _edge_queue.size() < 4:
@@ -293,7 +296,7 @@ func _on_edge_done(_id: int, stream: AudioStreamMP3) -> void:
 		if _edge_cache.size() > 120:
 			_edge_cache.clear()
 		_edge_cache[key] = stream
-	_play_edge(stream)
+	_play_edge(stream, _edge_cur.get("e", {}))
 	_edge_next()
 
 
@@ -325,7 +328,7 @@ func _on_edge_failed(_id: int) -> void:
 func _request_http(clean: String, speaker: String, emo: Dictionary) -> void:
 	var key := speaker + "|" + clean
 	if _http_cache.has(key):
-		_play_edge(_http_cache[key])
+		_play_edge(_http_cache[key], emo)
 		return
 	if _http_busy:
 		if _http_queue.size() < 4:
@@ -343,7 +346,7 @@ func _on_http_done(_id: int, stream: AudioStreamMP3) -> void:
 		if _http_cache.size() > 120:
 			_http_cache.clear()
 		_http_cache[key] = stream
-	_play_edge(stream)
+	_play_edge(stream, _http_cur.get("e", {}))
 	_http_next()
 
 
@@ -380,9 +383,11 @@ func _edge_next() -> void:
 	_request_edge(str(nx.get("t", "")), str(nx.get("s", "")), nx.get("e", {}))
 
 
-func _play_edge(stream: AudioStreamMP3) -> void:
+func _play_edge(stream: AudioStreamMP3, emo: Dictionary = {}) -> void:
 	if _edge_player == null or stream == null:
 		return
+	var vol_db: float = float(emo.get("vol_db", 0.0))
+	var vol_lin: float = clampf(db_to_linear(vol_db), 0.0, 1.0)
 	if _edge != null:
 		_edge.call("diag", "play edge audio bytes=%d" % stream.data.size())
 	if _ok and DisplayServer.has_method("tts_stop"):
@@ -394,13 +399,15 @@ func _play_edge(stream: AudioStreamMP3) -> void:
 		var js2 := """(function(){try{
 			var a=window.__hkVoiceAudio;
 			if(!a){a=new Audio(); window.__hkVoiceAudio=a;}
+			a.volume=%f;
 			a.pause(); a.src='data:audio/mpeg;base64,%s';
 			var p=a.play(); if(p&&p.catch) p.catch(function(){});
 			return true;
-		}catch(e){return false;}})()""" % b64
+		}catch(e){return false;}})()""" % [vol_lin, b64]
 		if bool(JavaScriptBridge.eval(js2, true)):
 			return
 	_edge_player.stream = stream
+	_edge_player.volume_db = vol_db
 	_edge_player.play()
 
 
@@ -560,6 +567,7 @@ func _blip_speak(text: String, speaker: String, emo: Dictionary) -> void:
 	if _blip == null:
 		return
 	_blip.stop()
+	_blip.volume_db = float(emo.get("vol_db", 0.0))
 	var n := clampi(text.length(), 3, 16)
 	var sr := 22050
 	var pitch_mul: float = float(emo.get("pitch", 1.0))

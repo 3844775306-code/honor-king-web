@@ -4686,6 +4686,11 @@ func _finish_casting():
 	HeroWeapons.play(visual_mesh, "cast")   # 武器施法动作
 	dash_from = global_position   # 记录本次施放起点（位移类技能/燃痕回读）
 	if pending_skill_index < 0 or pending_skill_index >= skills.size(): return
+	# 大招（3 技能）语音台词：只播屏幕内、音量按距离衰减（ChatService 判定）
+	if pending_skill_index == 2:
+		var _cs_voice = get_tree().get_root().get_node_or_null("ChatService")
+		if _cs_voice != null:
+			_cs_voice.call("hero_voice_ult", display_name, global_position)
 	var skill = skills[pending_skill_index].duplicate()
 	if skill_restores[pending_skill_index]>0:
 		skill_restores[pending_skill_index]-=1

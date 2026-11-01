@@ -9,15 +9,16 @@ func available() -> bool:
 	return OS.has_feature("windows")
 
 
-## rate: -5..5（负数更慢）；pitch 暂不支持（System.Speech 的 SSML pitch 支持有限）
-func speak(text: String, rate: int = 0, female: bool = false) -> bool:
+## rate: -5..5（负数更慢）；volume: 0..100（距离衰减）；pitch 暂不支持（System.Speech 的 SSML pitch 支持有限）
+func speak(text: String, rate: int = 0, female: bool = false, volume: int = 100) -> bool:
 	if not available():
 		return false
 	var t := text.replace("'", "''").replace("\"", "''")
 	var r := clampi(rate, -6, 6)
 	# 按英雄性别选系统中文音色（SAPI 优先匹配 Gender；找不到则保持默认）
 	var gender := "Female" if female else "Male"
-	var script := "Add-Type -AssemblyName System.Speech;$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;$v=@($s.GetInstalledVoices())|Where-Object{$_.VoiceInfo.Culture.Name -like 'zh*' -and $_.VoiceInfo.Gender -eq '%s'}|Select-Object -First 1;if($v){$s.SelectVoice($v.VoiceInfo.Name)};$s.Rate=%d;$s.Speak('%s');$s.Dispose()" % [gender, r, t]
+	var vol := clampi(volume, 0, 100)
+	var script := "Add-Type -AssemblyName System.Speech;$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;$v=@($s.GetInstalledVoices())|Where-Object{$_.VoiceInfo.Culture.Name -like 'zh*' -and $_.VoiceInfo.Gender -eq '%s'}|Select-Object -First 1;if($v){$s.SelectVoice($v.VoiceInfo.Name)};$s.Rate=%d;$s.Volume=%d;$s.Speak('%s');$s.Dispose()" % [gender, r, vol, t]
 	# PowerShell -EncodedCommand 要求 UTF-16LE 的 Base64
 	var bytes := script.to_utf16_buffer()
 	var b64 := Marshalls.raw_to_base64(bytes)
