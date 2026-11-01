@@ -177,7 +177,8 @@ const COL_ENEMY := Color(0.95, 0.32, 0.30)
 const HUD_BASE := Vector2(1600.0, 900.0)
 
 # 接管相机：复刻主机固定俯视镜头（BattleManager：fov70 / -70°俯角 / 自英雄偏移(0,8,5.33)=原(0,12,8)÷1.5 画面放大1.5倍）
-const CAM_FOLLOW_OFF := Vector3(0.0, 12.0, 6.93)   # 同主机：固定俯角下让英雄居中
+const CAM_FOLLOW_OFF := Vector3(0.0, 12.0, 6.93)   # 同主机：固定俯角
+const HERO_BAR_CENTER_UP := 4.2                   # 主英雄血条锚点(body_radius1.5*2+1.2)：相机目标上移使血条在屏幕正中
 const CAM_FP_EYE := Vector3(0.0, 2.4, 0.0)    # 第一人称眼高（同主机；英雄模型总×3 后约头顶 2/3）
 const MM_GAZE_MS := 1200                       # 小地图轻点跳转保持毫秒（主机单击仅一帧，放宽防误触无感）
 # 普攻拖拽选敌阈值（与 Hero._handle_attack_wheel_input 同义）
@@ -3725,7 +3726,7 @@ func _update_camera() -> void:
 		var flip_yaw := PI if int(Config.player_team) == 1 else 0.0
 		var cam_off := CAM_FOLLOW_OFF.rotated(Vector3.UP, flip_yaw)
 		var pan_rot := _cam_pan.rotated(Vector3.UP, flip_yaw)
-		var target := _cam_focus + cam_off * zoom + pan_rot + _shake_offset()
+		var target := _cam_focus + cam_off * zoom + pan_rot + Vector3.UP * HERO_BAR_CENTER_UP + _shake_offset()
 		if _cam_intro_t < 0.0:
 			_cam_intro_t = 0.0
 		if _cam_intro_t < CAM_INTRO_DUR:

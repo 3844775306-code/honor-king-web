@@ -536,7 +536,7 @@ func _update_world_hud(t: float) -> void:
 		_apply_markers(fake, str(st.get("markers", "")))
 		fake.exp = int(float(st.get("exp", 0)))
 		fake.exp_to_next = int(maxf(1.0, float(st.get("exp_to_next", 200))))
-		var wp: Vector3 = (st.get("pos", Vector3.ZERO) as Vector3) + Vector3.UP * 2.4
+		var wp: Vector3 = (st.get("pos", Vector3.ZERO) as Vector3) + Vector3.UP * 4.2   # 与单机 HeroInfoControl 血条锚点一致
 		if _cam.is_position_behind(wp):
 			info.visible = false
 			continue
@@ -3021,7 +3021,7 @@ func _update_camera() -> void:
 		return
 	# 主视角：完全照搬单机对局镜头（固定偏移 (0,12,8)、俯角 -60°、fov70、指数平滑 + 远距吸附）
 	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
-		var tgt: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 12.0, 8.0)
+		var tgt: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 12.0, 8.0) + Vector3.UP * 4.2
 		var dlt: float = get_process_delta_time()
 		if _cam.global_position.distance_to(tgt) > 25.0:
 			_cam.global_position = tgt
