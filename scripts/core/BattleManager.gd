@@ -72,6 +72,10 @@ var _last_recorded_minute: int = 0
 # 前4分钟 AI 评估快照（t=240s 打印/写 user://；供阶段化调参对比）
 var _early_metrics_logged := false
 var early_game_metrics: Dictionary = {}
+# 前4分钟 AI 无头基准：--ai-bench / --ai-bench-seed=N / --ai-bench-speed=N
+var _ai_benchmark := false
+var _ai_benchmark_seed := 1
+var _ai_benchmark_speed := 1.0
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -273,7 +277,7 @@ func _ready():
 		call_deferred("_start_net_lineup", NetSession.get_picks())
 	# 联机 CI：--net-test（放在 `--` 之后）时跳过选人 UI 直接自动开局，
 	# 让无头主机能跑一局完整 AI 对局供快照广播。有画面时同样生效，便于本地双开调试。
-	elif "--net-test" in OS.get_cmdline_user_args():
+	elif "--net-test" in OS.get_cmdline_user_args() or "--ai-bench" in OS.get_cmdline_user_args():
 		call_deferred("_start_game", "亚瑟")
 
 func _start_net_lineup(picks: Dictionary) -> void:
@@ -511,6 +515,19 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	await _load_step(0.04)
 	_early_metrics_logged = false
 	early_game_metrics = {}
+	# 无头 AI 基准：--ai-bench 会把玩家英雄也交给 AI，固定随机种子并加速到 4 分钟后退出。
+	var _bench_args := OS.get_cmdline_user_args()
+	_ai_benchmark = "--ai-bench" in _bench_args
+	if _ai_benchmark:
+		for a in _bench_args:
+			if str(a).begins_with("--ai-bench-seed="):
+				_ai_benchmark_seed = int(str(a).get_slice("=", 1))
+			elif str(a).begins_with("--ai-bench-speed="):
+				_ai_benchmark_speed = clampf(float(str(a).get_slice("=", 1)), 1.0, 20.0)
+		seed(_ai_benchmark_seed)
+		AiConfig.difficulty = AiConfig.Difficulty.GOLD
+		Engine.time_scale = _ai_benchmark_speed
+		print("[AI-BENCH] start seed=%d speed=%.1f" % [_ai_benchmark_seed, _ai_benchmark_speed])
 	# 进入对局：淡出大厅环境音乐
 	SfxManager.stop_menu_music()
 	_clear_prewarm_protos()
@@ -530,6 +547,11 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 
 	# 创建实体：BP 结果传入（我方 AI 按号位顺序排除玩家席位；网络 host 路径数组为空→原随机）
 	_create_player_hero(hero_type, summoner_id)          # 玩家英雄
+	# 基准模式：玩家席位也交给 HeroAI，保证双方都是 5 个 AI，避免“玩家原地挂机”污染指标
+	if _ai_benchmark and is_instance_valid(hero):
+		hero.is_ai = true
+		var _bench_ai := HeroAI.new()
+		hero.add_child(_bench_ai)
 	sel_ally_ai_picks = []
 	if sel_ally_picks.size() == 5:
 		for i in 5:
@@ -5248,6 +5270,8 @@ func _log_early_game_metrics() -> void:
 	if f != null:
 		f.store_string(JSON.stringify(doc, "\t"))
 		f.close()
+	if _ai_benchmark:
+		get_tree().quit()
 
 
 func _count_alive_turrets(team: int) -> int:
@@ -5548,6 +5572,10 @@ func _spawn_lane_guides() -> void:
 	var lane: String = PlayerPrefs.get_lane()
 	if not HeroPickData.LANES.has(lane):
 		lane = HeroPickData.role_lane(str(hero.role))
+	# 辅助（游走）的开局推荐分路=发育路；必须在红蓝镜像前归一化，
+	# 否则红方会拿「蓝方发育路」直接镜像，指到红方对抗路。
+	if lane == "游走":
+		lane = "发育路"
 	# 红蓝双方镜像：红方的发育路/对抗路与蓝方相反（敌方对抗路=我方发育路）。
 	# 先换成蓝方视角的同一条路，再做点镜像，才不会把红方玩家指到错误的分路。
 	var route_lane: String = lane if our_team else _opposite_lane(lane)
@@ -5679,6 +5707,9 @@ func _process(delta):
 		if select_ui == null:
 			return
 	if game_over:
+		if _ai_benchmark:
+			print("[AI-BENCH] ended before 240s at t=%.1f" % game_time)
+			get_tree().quit()
 		return
 	_sync_postfx()
 	# 金币自动增长
