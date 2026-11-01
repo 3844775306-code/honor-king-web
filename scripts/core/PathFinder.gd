@@ -225,6 +225,38 @@ func find_path(from: Vector3, to: Vector3, bias_dir: Vector3 = Vector3.ZERO, tea
 	return path_3d
 
 
+## 世界坐标是否可站立（不在墙/地图边缘的实心格）
+func is_walkable_world(pos: Vector3) -> bool:
+	if not initialized or astar == null:
+		return true
+	var c := _world_to_cell(pos)
+	if not _is_in_bounds(c):
+		return false
+	return not astar.is_point_solid(c)
+
+
+## 找最近可站立的世界坐标（bias_dir 方向优先）
+func nearest_walkable_world(pos: Vector3, bias_dir: Vector3 = Vector3.ZERO) -> Vector3:
+	if not initialized or astar == null:
+		return pos
+	var bias_cell := Vector2i.ZERO
+	if bias_dir.length() > 0.01:
+		bias_cell = Vector2i(int(floor(bias_dir.x / CELL_SIZE)), int(floor(bias_dir.z / CELL_SIZE)))
+	var c := _find_nearest_walkable(_world_to_cell(pos), bias_cell)
+	return Vector3(c.x * CELL_SIZE, 0.0, c.y * CELL_SIZE)
+
+
+## 实际寻路长度（用于判断“绕墙要绕多远”）
+func path_length(from: Vector3, to: Vector3, team: int = -1) -> float:
+	var path := find_path(from, to, Vector3.ZERO, team)
+	if path.size() < 2:
+		return 0.0
+	var total := 0.0
+	for i in range(1, path.size()):
+		total += path[i - 1].distance_to(path[i])
+	return total
+
+
 func _world_to_cell(pos: Vector3) -> Vector2i:
 	return Vector2i(int(floor(pos.x / CELL_SIZE)), int(floor(pos.z / CELL_SIZE)))
 

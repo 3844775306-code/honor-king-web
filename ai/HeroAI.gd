@@ -145,6 +145,9 @@ func _try_travel_dash():
 	# 附近有可见敌方英雄：位移保留给先手/逃生
 	if perception.find_nearest_enemy_hero(AiConfig.TRAVEL_DASH_ENEMY_GUARD) != null:
 		return
+	# 召唤师闪现穿墙赶路（只有明显省路时才交，平时留着逃生）
+	if _try_flash_travel(dest):
+		return
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return
@@ -160,12 +163,8 @@ func _try_travel_dash():
 	if dir.length() < 0.01:
 		return
 	dir = dir.normalized()
-	var end := hero.global_position + dir * sk.self_displacement
-	# 直线段逐格采样：有任何不可通行格(墙/地图边界)则不跳，防止卡进墙里
-	if _dash_line_blocked(hero.global_position, end):
-		return
-	# 落点不进入任何敌方防御塔射程（避免赶路滚进塔里白挨打）
-	if _dash_landing_in_enemy_turret(end):
+	var end := _resolve_dash_end(hero.global_position, dir, sk.self_displacement)
+	if end == Vector3.ZERO:
 		return
 	hero._start_casting(idx, sk, dest)
 
@@ -200,6 +199,30 @@ func _pick_travel_dash_skill() -> int:
 			best_cd = cd
 			best = i
 	return best
+
+
+## 计算位移落点：允许“穿墙”，但只在前方绕路明显更远时才穿；落点必须可站立、不进敌方塔
+func _resolve_dash_end(from: Vector3, dir: Vector3, length: float) -> Vector3:
+	if length <= 0.1:
+		return Vector3.ZERO
+	var end: Vector3 = from + dir * length
+	if not PathFinder.is_walkable_world(end):
+		end = PathFinder.nearest_walkable_world(end, dir)
+		if end == Vector3.ZERO or from.distance_to(end) < length * 0.5:
+			return Vector3.ZERO
+	if from.distance_to(end) > length + 0.6:
+		return Vector3.ZERO      # 可落点被推得太远，这一下位移够不到
+	var straight: float = from.distance_to(end)
+	if straight < 0.2:
+		return Vector3.ZERO
+	if _dash_line_blocked(from, end):
+		# 直线被墙挡：只有走路需要绕远（>1.6 倍）才值得穿墙位移
+		var walk := PathFinder.path_length(from, end, hero.team)
+		if walk <= 0.0 or walk < straight * 1.6:
+			return Vector3.ZERO
+	if _dash_landing_in_enemy_turret(end):
+		return Vector3.ZERO
+	return end
 
 
 # 直线段逐米采样 PathFinder 网格：只要命中一个不可通行格(solid，墙体3×3/地图边缘)就视为会被墙挡住
@@ -259,11 +282,104 @@ func _pick_dash_skill() -> Dictionary:
 
 
 ## 追击：目标在普攻距离外时，用位移技能突进贴脸（落点不进军敌塔）
+## 闪现穿墙赶路：只有绕路明显更远时才用闪现，平时留给逃生/追击
+func _try_flash_travel(dest: Vector3) -> bool:
+	if not hero.summoner_skill or hero.summoner_cooldown > 0:
+		return false
+	if str(hero.summoner_skill.skill_name) != "闪现":
+		return false
+	var from: Vector3 = hero.global_position
+	var dir: Vector3 = dest - from
+	dir.y = 0.0
+	if dir.length() < 1.0:
+		return false
+	dir = dir.normalized()
+	var end: Vector3 = from + dir * AiConfig.FLASH_DISTANCE
+	if not PathFinder.is_walkable_world(end):
+		end = PathFinder.nearest_walkable_world(end, dir)
+		if end == Vector3.ZERO:
+			return false
+	var straight: float = from.distance_to(end)
+	if straight < 2.0:
+		return false
+	# 直线没墙就不值得交闪现（留给逃生）
+	if not _dash_line_blocked(from, end):
+		return false
+	var walk := PathFinder.path_length(from, end, hero.team)
+	if walk <= 0.0 or walk < straight * 1.6:
+		return false
+	hero.global_position = end
+	hero._clamp_to_map_edge()
+	hero.move_target = Vector3.ZERO
+	hero.summoner_cooldown = hero.summoner_skill.cooldown
+	return true
+
+
+## 只有目标残血且已进入普攻距离时，才允许 AI 把强普位移用于一次必杀普攻
+func _ai_update_enhanced_attack_flag() -> void:
+	if not is_instance_valid(hero) or not hero.has_method("ai_enhanced_aa_ready"):
+		return
+	hero.ai_enhanced_attack_ok = false
+	if not hero.ai_enhanced_aa_ready():
+		return
+	var t: GameEntity = hero.manual_target
+	if t == null or not is_instance_valid(t) or t.health <= 0.0:
+		return
+	if t.team == hero.team:
+		return
+	var dist: float = hero.global_position.distance_to(t.global_position)
+	var aa: float = hero.attack_range * 0.01
+	if dist <= aa + 0.6 and float(t.health) <= float(t.actual_max_health) * 0.3:
+		hero.ai_enhanced_attack_ok = true
+
+
+## 马超：安全时走向附近掉落的枪，积攒强化普攻层数（stat_timer 上限 8）
+func _try_collect_enhanced_charge() -> bool:
+	if not is_instance_valid(hero) or str(hero.display_name) != "马超":
+		return false
+	if state != State.PUSH and state != State.FARM:
+		return false
+	if hero.stat_timer >= 8.0:
+		return false
+	if perception.find_nearest_enemy_hero(9.0) != null:
+		return false
+	var objs: Array = hero.objs
+	if objs.is_empty():
+		return false
+	var best = null
+	var best_d := 1e20
+	for o in objs:
+		if not is_instance_valid(o):
+			continue
+		var d: float = hero.global_position.distance_to(o.global_position)
+		if d < 0.2 or d > 18.0:
+			continue
+		if d < best_d:
+			best_d = d
+			best = o
+	if best == null:
+		return false
+	if _dash_landing_in_enemy_turret(best.global_position):
+		return false
+	hero.manual_target = null
+	hero.move_target = best.global_position
+	return true
+
+
 ## 强化普攻位移：赶路（马超/铠/不知火舞空放；亚瑟Q/孙悟空借敌方目标跳跃）
 func _try_enhanced_aa_travel(dest: Vector3) -> bool:
 	if not is_instance_valid(hero) or not hero.has_method("ai_enhanced_aa_ready"):
 		return false
 	if not hero.ai_enhanced_aa_ready():
+		return false
+	# 积攒期不随便把强普花在赶路：马超未满层/距离不够远就留着
+	var dest_dist: float = hero.global_position.distance_to(dest)
+	var nm := str(hero.display_name)
+	if nm == "马超" and dest_dist < 22.0 and hero.stat_timer < 8.0:
+		return false
+	if nm == "铠" and dest_dist < 20.0:
+		return false
+	if nm == "不知火舞" and dest_dist < 18.0:
 		return false
 	var dir: Vector3 = dest - hero.global_position
 	dir.y = 0.0
@@ -273,11 +389,9 @@ func _try_enhanced_aa_travel(dest: Vector3) -> bool:
 	var dash_len: float = hero.ai_enhanced_aa_dash_len()
 	if dash_len <= 0.1:
 		return false
-	# 位移落点：不穿墙、不进敌方塔
-	var end: Vector3 = hero.clamp_dash_landing(dir, dash_len)
-	if hero.global_position.distance_to(end) < dash_len * 0.55:
-		return false
-	if _dash_landing_in_enemy_turret(end):
+	# 位移落点：允许穿墙（绕路明显更远才穿），不进敌方塔
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, dash_len)
+	if end == Vector3.ZERO:
 		return false
 	var jt: GameEntity = null
 	if str(hero.display_name) in ["亚瑟", "孙悟空"]:
@@ -331,10 +445,8 @@ func _try_enhanced_aa_escape(dir: Vector3) -> bool:
 	if str(hero.display_name) not in ["马超", "铠", "不知火舞"]:
 		return false
 	var dash_len: float = hero.ai_enhanced_aa_dash_len()
-	var end: Vector3 = hero.clamp_dash_landing(dir, dash_len)
-	if hero.global_position.distance_to(end) < dash_len * 0.55:
-		return false
-	if _dash_landing_in_enemy_turret(end):
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, dash_len)
+	if end == Vector3.ZERO:
 		return false
 	if hero.ai_enhanced_aa_dash(dir, null):
 		hero.move_target = Vector3.ZERO
@@ -389,12 +501,9 @@ func _try_chase_dash(target: GameEntity) -> bool:
 		return false
 	dir = dir.normalized()
 	# 落点做墙面修正：dash_move_to 不受碰撞约束，不修正会穿墙/卡在墙里
-	var end: Vector3 = hero.clamp_dash_landing(dir, float(d["len"]))
-	var real_len: float = hero.global_position.distance_to(end)
-	if real_len < float(d["len"]) * 0.6:
-		return false                      # 墙挡住大半位移，不值得交技能
-	if _dash_landing_in_enemy_turret(end):
-		return false
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, float(d["len"]))
+	if end == Vector3.ZERO:
+		return false                      # 穿墙绕路不值得/落点危险
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，免得突进被移动逻辑覆盖
 	hero._start_casting(int(d["index"]), d["skill"] as Skill, end)
 	return true
@@ -436,10 +545,9 @@ func _try_escape_dash() -> bool:
 		dir = Vector3(0.0, 0.0, 1.0)
 	dir = dir.normalized()
 	# 逃跑落点同样做墙面修正：贴着墙位移否则会把自己塞进墙角
-	var end: Vector3 = hero.clamp_dash_landing(dir, float(d["len"]))
-	var real_len: float = hero.global_position.distance_to(end)
-	if real_len < float(d["len"]) * 0.6:
-		return false                      # 前方被墙堵住，位移意义不大
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, float(d["len"]))
+	if end == Vector3.ZERO:
+		return false                      # 落点不可站/穿墙绕路不值得
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，保证撤退位移真正生效
 	hero._start_casting(int(d["index"]), d["skill"] as Skill, end)
 	return true
@@ -499,6 +607,7 @@ func _process(delta):
 		
 		_decide()
 		_try_upgrade_skills()
+		_ai_update_enhanced_attack_flag()   # 只有能收掉残血目标时才把强普位移交给普攻
 		_try_travel_dash()   # 非战斗位移技能赶路（孙尚香/马可波罗等）
 		# 敌方AI在无敌人视野时隐身
 		if hero.team != Config.Team.PLAYER:
@@ -526,6 +635,10 @@ func _process(delta):
 		if pack and is_instance_valid(pack):
 			hero.move_target = pack.global_position
 			return
+
+	# --- 马超：安全时顺路拾枪，积攒强化普攻层数（不浪费在普通对拼） ---
+	if _try_collect_enhanced_charge():
+		return
 
 	# --- 状态行为分发：RETREAT / RECALL_SAFE 只跑生存行为，不参与输出 ---
 	match state:

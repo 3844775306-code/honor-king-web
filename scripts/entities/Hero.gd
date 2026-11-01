@@ -61,6 +61,7 @@ const MAX_EQUIPMENT_SLOTS = 6
 # ==================== 经验与等级 ====================
 var exp: int = 0
 var is_ai: bool = false   # 是否由AI控制
+var ai_enhanced_attack_ok: bool = false   # AI 是否允许把强普位移用于普攻（默认攒着赶路/追击/逃跑）
 # 已被联机真人接管（NetSession._assign_hero_to 置 true；is_ai 仍保持 true 以走同一批原语）。
 # 区别于纯 AI 的关键：普攻/锁定目标不会自动追击超范围敌人——只打射程内目标，超出即脱锁等待玩家走近。
 var net_taken: bool = false
@@ -2231,7 +2232,7 @@ func _physics_process(delta):
 			if target and target.health > 0:
 				# 有可达目标：与普攻一致，AI/按住普攻/锁定目标/自动模式均触发突进
 				var mode_auto_m := not is_ai and can_act_m and _is_mode_target(target)
-				var want_dash = (is_ai and not is_recalling) or atk_held_m or (manual_target and is_instance_valid(manual_target)) or mode_auto_m
+				var want_dash = (is_ai and ai_enhanced_attack_ok) or atk_held_m or (not is_ai and manual_target and is_instance_valid(manual_target)) or mode_auto_m
 				if want_dash:
 					if is_recalling and not is_ai: cancel_recall()
 					_machao_enhanced_dash(target)
@@ -2250,7 +2251,7 @@ func _physics_process(delta):
 			if target and target.health > 0:
 				# 有可达目标：与普攻一致，AI/按住普攻/锁定目标/自动模式均触发突进
 				var mode_auto_k := not is_ai and can_act_k and _is_mode_target(target)
-				var want_dash_k = (is_ai and not is_recalling) or atk_held_k or (manual_target and is_instance_valid(manual_target)) or mode_auto_k
+				var want_dash_k = (is_ai and ai_enhanced_attack_ok) or atk_held_k or (not is_ai and manual_target and is_instance_valid(manual_target)) or mode_auto_k
 				if want_dash_k:
 					if is_recalling and not is_ai: cancel_recall()
 					_kai_enhanced_dash(target)

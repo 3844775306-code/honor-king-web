@@ -92,14 +92,38 @@ func _try_execute() -> bool:
 	return false
 
 
+## 闪现落点：允许穿墙，但落点必须可站立（被墙挡住就落到最近可站点）
+func _flash_end(dir: Vector3) -> Vector3:
+	var from: Vector3 = hero.global_position
+	var end: Vector3 = from + dir * AiConfig.FLASH_DISTANCE
+	if not PathFinder.is_walkable_world(end):
+		end = PathFinder.nearest_walkable_world(end, dir)
+		if end == Vector3.ZERO:
+			return Vector3.ZERO
+		if from.distance_to(end) < 1.0:
+			return Vector3.ZERO
+	if from.distance_to(end) > AiConfig.FLASH_DISTANCE + 0.5:
+		return Vector3.ZERO      # 推近的可落点超过闪现距离，不能穿
+	return end
+
+
+func _do_flash(end: Vector3) -> void:
+	hero.global_position = end
+	hero._clamp_to_map_edge()
+	hero.move_target = Vector3.ZERO
+	hero.summoner_cooldown = hero.summoner_skill.cooldown
+
+
 func _try_flash() -> bool:
 	# 危险逃离
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_CRITICAL \
 			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) >= AiConfig.FLEE_ENEMY_COUNT:
 		var enemy_near = perception.find_nearest_enemy_hero(AiConfig.RETREAT_RANGE)
 		var away = (hero.global_position - enemy_near.global_position).normalized() if enemy_near else Vector3.FORWARD
-		hero.global_position += away * AiConfig.FLASH_DISTANCE
-		hero.summoner_cooldown = hero.summoner_skill.cooldown
+		var end1 := _flash_end(away)
+		if end1 == Vector3.ZERO:
+			return false
+		_do_flash(end1)
 		return true
 	# 进攻闪现
 	if state == HeroAI.State.PUSH \
@@ -108,8 +132,10 @@ func _try_flash() -> bool:
 		var enemy = perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE)
 		if enemy and hero.global_position.distance_to(enemy.global_position) > AiConfig.MELEE_RANGE:
 			var toward = (enemy.global_position - hero.global_position).normalized()
-			hero.global_position += toward * AiConfig.FLASH_DISTANCE
-			hero.summoner_cooldown = hero.summoner_skill.cooldown
+			var end2 := _flash_end(toward)
+			if end2 == Vector3.ZERO:
+				return false
+			_do_flash(end2)
 			return true
 	return false
 
