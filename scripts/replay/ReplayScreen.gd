@@ -6,6 +6,7 @@ const Repo = preload("res://scripts/core/ReplayRecorder.gd")
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
+const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
 const TYPE_NAMES := ["melee", "ranged", "siege", "super", "dragon", "storm", "shadow_dragon"]
 const TYPE_COL := [Color(0.80, 0.78, 0.72), Color(0.86, 0.72, 0.52), Color(0.62, 0.58, 0.66),
@@ -34,6 +35,9 @@ var _bars: Control = null
 var _hero_uis: Array = []          # [{info, fake, i}]
 var _hero_state: Array = []        # 每帧英雄状态（血/蓝/等级/经验/位置）
 var _unit_world: Array = []        # 本帧需要画血条的单位（世界坐标）
+var _hud2: Control = null          # 小地图/英雄信息/技能/属性面板
+var _follow_hero := -1             # 主视角跟随英雄（-1=自由镜头）
+var _frame_gold: Array = [0, 0]
 var _statics: Node3D = null
 var _cam: Camera3D = null
 var _cam_yaw := 0.0
@@ -505,6 +509,8 @@ func _build_hud() -> void:
 		fake.health = 1000.0
 		fake.max_mana = 1000.0
 		fake.mana = 1000.0
+		fake.actual_max_health = 1000.0
+		fake.actual_mana_max = 1000.0
 		fake.exp = 0
 		fake.exp_to_next = 200
 		var info = HeroInfoControlScript.new()
@@ -512,6 +518,8 @@ func _build_hud() -> void:
 		info.visible = false
 		_hud_root.add_child(info)
 		_hero_uis.append({"info": info, "fake": fake})
+	_hud2 = ReplayHudScript.new()
+	_hud_root.add_child(_hud2)
 
 
 func _update_world_hud(t: float) -> void:
@@ -533,8 +541,10 @@ func _update_world_hud(t: float) -> void:
 		fake.health = float(st.get("hp", 0))
 		fake.max_health = maxf(1.0, float(st.get("mx", 1)))
 		fake.level = int(st.get("lvl", 1))
+		fake.actual_max_health = maxf(1.0, float(st.get("mx", 1)))
 		fake.mana = float(st.get("mana", 0))
 		fake.max_mana = maxf(1.0, float(st.get("max_mana", 1)))
+		fake.actual_mana_max = maxf(1.0, float(st.get("max_mana", 1)))
 		fake.exp = int(float(st.get("exp", 0)))
 		fake.exp_to_next = int(maxf(1.0, float(st.get("exp_to_next", 200))))
 		var wp: Vector3 = (st.get("pos", Vector3.ZERO) as Vector3) + Vector3.UP * 2.4
@@ -607,6 +617,45 @@ func _update_world_hud(t: float) -> void:
 			"marker_list": [], "last_hit": false, "show_numbers": false, "num_text": "",
 		})
 	_bars.rows = rows
+	# —— 回放 HUD（小地图/英雄面板/对战信息/主视角技能） ——
+	if _hud2 != null:
+		var meta_d: Dictionary = _doc.get("meta", {})
+		var me: int = int(meta_d.get("me", 0))
+		var heroes_st: Array = []
+		for i in range(_heroes.size()):
+			var meta: Dictionary = _heroes[i]
+			var st2: Dictionary = _hero_state[i] if i < _hero_state.size() and not (_hero_state[i] as Dictionary).is_empty() else {}
+			var sd: Array = meta.get("sd", [])
+			var pos3: Vector3 = st2.get("pos", Vector3.ZERO)
+			heroes_st.append({
+				"name": str(meta.get("name", "")), "team": int(meta.get("team", 0)),
+				"nick": str(meta.get("nick", "")), "ai": bool(meta.get("ai", true)),
+				"lvl": int(st2.get("lvl", 1)), "hp": float(st2.get("hp", 0)), "mx": maxf(1.0, float(st2.get("mx", 1))),
+				"mana": float(st2.get("mana", 0)), "mmax": maxf(1.0, float(st2.get("max_mana", 1))),
+				"k": int(st2.get("k", 0)), "d": int(st2.get("d", 0)), "a": int(st2.get("a", 0)),
+				"ad": int(st2.get("ad", 0)), "ap": int(st2.get("ap", 0)),
+				"armor": int(st2.get("armor", 0)), "mr": int(st2.get("mr", 0)),
+				"ms": int(st2.get("ms", 0)), "as": int(st2.get("as", 0)),
+				"cds": st2.get("cds", []), "cd_total": sd, "slevels": st2.get("slevels", []),
+				"alive": 1 if bool(st2.get("alive", false)) else 0,
+				"invis": 1 if bool(st2.get("invis", false)) else 0,
+				"wx": pos3.x, "wz": pos3.z, "is_me": 1 if i == me else 0,
+			})
+		var tur_st: Array = []
+		for u in _unit_world:
+			if str(u.get("kind", "")) != "turret":
+				continue
+			var tu: Vector3 = u.get("pos", Vector3.ZERO)
+			tur_st.append({"wx": tu.x, "wz": tu.z, "team": int(u.get("team", 0)),
+				"alive": 1, "type": str(u.get("sub", ""))})
+		var hero_nm := ""
+		if me >= 0 and me < _heroes.size():
+			hero_nm = str((_heroes[me] as Dictionary).get("name", ""))
+		_hud2.st = {
+			"t": float(_t), "heroes": heroes_st, "turrets": tur_st, "gold": _frame_gold,
+			"follow": _follow_hero, "mode": str(meta_d.get("mode", "")), "hero": hero_nm,
+		}
+		_hud2.queue_redraw()
 
 
 func _build_ui() -> void:
@@ -761,6 +810,8 @@ func _apply_frame(t: float) -> void:
 	# 英雄插值
 	var fi := _find_frame(t)
 	var fa: Dictionary = _frames[fi] if fi >= 0 and fi < _frames.size() else {}
+	var _g: Array = fa.get("g", [])
+	_frame_gold = [int(_g[0]) if _g.size() > 0 else 0, int(_g[1]) if _g.size() > 1 else 0]
 	var fb: Dictionary = _frames[mini(fi + 1, _frames.size() - 1)] if not _frames.is_empty() else {}
 	var ta: float = float(fa.get("t", 0)) / 1000.0
 	var tb: float = float(fb.get("t", 0)) / 1000.0
@@ -806,12 +857,29 @@ func _apply_frame(t: float) -> void:
 		node["root"].visible = not invis
 		while _hero_state.size() <= i:
 			_hero_state.append({})
+		var _cds: Array = []
+		for _ci in range(5):
+			var _raw = int(row_a[21 + _ci]) if row_a.size() > 21 + _ci else 0
+			_cds.append(float(_raw) / 100.0)
+		var _lv: Array = []
+		for _li in range(4):
+			_lv.append(int(row_a[26 + _li]) if row_a.size() > 26 + _li else 0)
 		_hero_state[i] = {
 			"hp": hp, "mx": mx, "lvl": int(row_a[6]) if row_a.size() > 6 else 1,
 			"mana": float(row_a[8]) if row_a.size() > 8 else 0.0,
 			"max_mana": float(row_a[9]) if row_a.size() > 9 else 100.0,
 			"exp": float(row_a[10]) if row_a.size() > 10 else 0.0,
 			"exp_to_next": float(row_a[11]) if row_a.size() > 11 else 200.0,
+			"k": int(row_a[12]) if row_a.size() > 12 else 0,
+			"d": int(row_a[13]) if row_a.size() > 13 else 0,
+			"a": int(row_a[14]) if row_a.size() > 14 else 0,
+			"ad": int(row_a[15]) if row_a.size() > 15 else 0,
+			"ap": int(row_a[16]) if row_a.size() > 16 else 0,
+			"armor": int(row_a[17]) if row_a.size() > 17 else 0,
+			"mr": int(row_a[18]) if row_a.size() > 18 else 0,
+			"ms": int(row_a[19]) if row_a.size() > 19 else 0,
+			"as": int(row_a[20]) if row_a.size() > 20 else 0,
+			"cds": _cds, "slevels": _lv,
 			"pos": Vector3(x, 0.0, z), "alive": alive, "invis": invis,
 		}
 	# 塔
@@ -1251,6 +1319,24 @@ func _toggle_highlight() -> void:
 		_hint_label.text = HINT_TEXT
 
 
+## 点英雄头像：切到该英雄主视角
+func _select_follow(idx: int) -> void:
+	if idx < 0 or idx >= _heroes.size():
+		return
+	_follow_hero = idx
+	_manual_follow = idx
+	_kill_cam_t = 0.0
+	_cam_pitch = -60.0
+	_cam_dist = 52.0
+	if _hint_label != null:
+		_hint_label.text = "正在跟随：%s（Esc 回自由镜头 / 点小地图跳转）" % str((_heroes[idx] as Dictionary).get("name", ""))
+
+
+func _clear_follow() -> void:
+	_follow_hero = -1
+	_manual_follow = -1
+
+
 func _cycle_follow() -> void:
 	if _heroes.is_empty():
 		return
@@ -1258,8 +1344,9 @@ func _cycle_follow() -> void:
 	if _manual_follow >= _heroes.size():
 		_manual_follow = -1
 	_kill_cam_t = 0.0
+	_follow_hero = _manual_follow
 	if _manual_follow >= 0:
-		_hint_label.text = "正在跟随：%s（F 切换 / 再按回自由视角）" % str(_heroes[_manual_follow].get("name", ""))
+		_hint_label.text = "正在跟随：%s（F 切换 / Esc 回自由视角）" % str(_heroes[_manual_follow].get("name", ""))
 	else:
 		_hint_label.text = HINT_TEXT
 
@@ -1293,7 +1380,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				_t = minf(_duration, _t + 5.0)
 				_sync_highlight_seek()
 			KEY_ESCAPE:
-				_back_to_lobby()
+				if _follow_hero >= 0 or _manual_follow >= 0:
+					_clear_follow()
+					if _hint_label != null:
+						_hint_label.text = HINT_TEXT
+				else:
+					_back_to_lobby()
 			KEY_F:
 				_cycle_follow()
 			KEY_N:
@@ -1305,6 +1397,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
+			var hitd: Dictionary = _hud2.call("hit", mb.position)
+			var hk := str(hitd.get("type", ""))
+			if hk == "map":
+				_clear_follow()
+				_cam_pitch = -60.0
+				_cam_dist = 62.0
+				_cam_target = Vector3(float(hitd.get("x", 0.0)), 0.0, float(hitd.get("z", 0.0)))
+				return
+			elif hk == "hero":
+				_select_follow(int(hitd.get("idx", 0)))
+				return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_cam_dist = clampf(_cam_dist - 6.0, 22.0, 110.0)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
@@ -1319,6 +1423,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _update_camera() -> void:
 	if _cam == null:
 		return
+	# 主视角：俯视 60° 跟随英雄（与对局镜头一致）
+	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
+		var tp: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 1.2, 0.0)
+		_cam_target = _cam_target.lerp(tp, clampf(get_process_delta_time() * 8.0, 0.0, 1.0))
+		_cam_pitch = -60.0
+		_cam_dist = 52.0
 	# 手动跟随优先；否则击杀镜头短暂跟拍；都没有时保持自由视角
 	if _manual_follow >= 0 and _manual_follow < _hero_pos.size():
 		_cam_target = _cam_target.lerp(_hero_pos[_manual_follow], clampf(get_process_delta_time() * 8.0, 0.0, 1.0))

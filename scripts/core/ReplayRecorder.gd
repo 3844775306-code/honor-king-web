@@ -123,11 +123,22 @@ func _try_start() -> void:
 	for i in range(order.size()):
 		var h: Hero = order[i]
 		_hero_ids[h.get_instance_id()] = i
+		var _sd: Array = []
+		for _si in range(5):
+			var _tot := 1.0
+			if _si < h.skills.size() and h.skills[_si] != null:
+				_tot = maxf(0.001, float(h.skills[_si].cooldown))
+			elif _si == 3 and h.summoner_skill != null:
+				_tot = maxf(0.001, float(h.summoner_skill.cooldown))
+			elif _si == 4 and h.skills.size() > 4 and h.skills[4] != null:
+				_tot = maxf(0.001, float(h.skills[4].cooldown))
+			_sd.append(_tot)
 		_hero_meta.append({
 			"name": str(h.display_name),
 			"team": int(h.team),
 			"ai": bool(h.is_ai),
 			"nick": str(h.player_name),
+			"sd": _sd,
 		})
 		_last_kills.append(int(h.kills))
 		_last_deaths.append(int(h.deaths))
@@ -151,7 +162,7 @@ func _sample(delta: float, finishing: bool) -> void:
 	_discover_jungle()
 	var hero_row: Array = []
 	for i in range(_hero_meta.size()):
-		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 	for h in get_tree().get_nodes_in_group("heroes"):
 		if not (h is Hero):
 			continue
@@ -165,11 +176,23 @@ func _sample(delta: float, finishing: bool) -> void:
 			flags |= 1
 		if h.has_method("is_invisible_to_enemy") and bool(h.is_invisible_to_enemy()):
 			flags |= 2
+		var _cds: Array = []
+		for _ci in range(5):
+			_cds.append(int(round(float(h.skill_cooldowns[_ci]) * 100.0)) if _ci < h.skill_cooldowns.size() else 0)
 		hero_row[idx] = [
 			int(round(p.x * 100.0)), int(round(p.z * 100.0)), int(round(p.y * 100.0)),
 			int(round(rad_to_deg(h.rotation.y))),
 			hp, int(round(h.max_health)), int(h.level), flags,
 			int(round(h.mana)), int(round(h.max_mana)), int(h.exp), int(maxi(1, h.exp_to_next)),
+			int(h.kills), int(h.deaths), int(h.assists),
+			int(round(h.actual_attack_damage)), int(round(h.ability_power)),
+			int(round(h.actual_armor)), int(round(h.actual_magic_resist)),
+			int(round(h.actual_move_speed * 10.0)), int(round(float(h.attack_speed) * 100.0)),
+			_cds[0], _cds[1], _cds[2], _cds[3], _cds[4],
+			int(h.skill_levels[0]) if h.skill_levels.size() > 0 else 0,
+			int(h.skill_levels[1]) if h.skill_levels.size() > 1 else 0,
+			int(h.skill_levels[2]) if h.skill_levels.size() > 2 else 0,
+			int(h.skill_levels[3]) if h.skill_levels.size() > 3 else 0,
 		]
 		# 事件：击杀 / 阵亡
 		if idx < _last_kills.size():
@@ -192,7 +215,10 @@ func _sample(delta: float, finishing: bool) -> void:
 			continue
 		var hp2: int = maxi(0, int(round(t.health)))
 		trow[int(tidx)] = [hp2, 1 if hp2 > 0 else 0]
-	_frames.append({"t": t_ms, "h": hero_row, "tn": trow})
+	_frames.append({
+		"t": t_ms, "h": hero_row, "tn": trow,
+		"g": [int(round(float(bm.get("team_player_gold")))), int(round(float(bm.get("team_enemy_gold"))))],
+	})
 	# 推塔 / 水晶事件
 	var alive_now := _turret_alive()
 	if _last_turrets_alive >= 0 and alive_now < _last_turrets_alive:
