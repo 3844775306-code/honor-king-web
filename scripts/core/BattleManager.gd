@@ -69,6 +69,9 @@ var team_enemy_exp: int = 0
 var team_enemy_kills: int = 0
 # 赛后统计
 var _last_recorded_minute: int = 0
+# 前4分钟 AI 评估快照（t=240s 打印/写 user://；供阶段化调参对比）
+var _early_metrics_logged := false
+var early_game_metrics: Dictionary = {}
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -506,6 +509,8 @@ func _load_step(p: float) -> void:
 
 func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	await _load_step(0.04)
+	_early_metrics_logged = false
+	early_game_metrics = {}
 	# 进入对局：淡出大厅环境音乐
 	SfxManager.stop_menu_music()
 	_clear_prewarm_protos()
@@ -5191,6 +5196,68 @@ func add_team_kill(team: int):
 		team_player_kills += 1
 	else:
 		team_enemy_kills += 1
+func _ai_lane_name(lane: int) -> String:
+	match lane:
+		AiConfig.Lane.FARM: return "发育路"
+		AiConfig.Lane.MID: return "中路"
+		AiConfig.Lane.CLASH: return "对抗路"
+		AiConfig.Lane.JUNGLE: return "打野"
+	return "未分配"
+
+
+# 4 分钟阶段评估快照：先量化前4分钟，再对比后续改动是否真的有效
+func _log_early_game_metrics() -> void:
+	if _early_metrics_logged:
+		return
+	_early_metrics_logged = true
+	var rows: Array = []
+	var totals := {"player": {"kills": 0, "deaths": 0, "cs": 0, "gold": 0},
+		"enemy": {"kills": 0, "deaths": 0, "cs": 0, "gold": 0}}
+	for entity in get_tree().get_nodes_in_group("heroes"):
+		if not (entity is Hero):
+			continue
+		var h := entity as Hero
+		var ai_node: HeroAI = null
+		for c in h.get_children():
+			if c is HeroAI:
+				ai_node = c
+				break
+		var team_key := "player" if h.team == Config.player_team else "enemy"
+		var row := {
+			"name": h.display_name, "role": h.role, "team": int(h.team),
+			"is_ai": h.is_ai, "lane": _ai_lane_name(ai_node.lane if ai_node != null else -1),
+			"level": h.level, "kills": h.kills, "deaths": h.deaths, "assists": h.assists,
+			"cs": h.last_hits, "gold": h.total_gold_earned,
+			"damage_heroes": roundi(h.damage_dealt_to_heroes),
+			"damage_taken": roundi(h.damage_taken_from_heroes),
+			"turret_damage": roundi(h.turret_damage),
+			"jungle_gold": h.jungle_gold,
+		}
+		rows.append(row)
+		totals[team_key]["kills"] += h.kills
+		totals[team_key]["deaths"] += h.deaths
+		totals[team_key]["cs"] += h.last_hits
+		totals[team_key]["gold"] += h.total_gold_earned
+	var doc := {"t": 240.0, "heroes": rows, "totals": totals,
+		"player_towers": _count_alive_turrets(Config.player_team),
+		"enemy_towers": _count_alive_turrets(Config.foe_team())}
+	early_game_metrics = doc
+	var text := "[AI-EARLY-METRICS] " + JSON.stringify(doc)
+	print(text)
+	var f := FileAccess.open("user://ai_early_metrics.json", FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(doc, "\t"))
+		f.close()
+
+
+func _count_alive_turrets(team: int) -> int:
+	var n := 0
+	for t in turrets:
+		if is_instance_valid(t) and t.team == team and t.health > 0 and t.display_name != "crystal":
+			n += 1
+	return n
+
+
 func _update_team_stats():
 	team_player_gold = 0; team_player_exp = 0; 
 	team_enemy_gold = 0; team_enemy_exp = 0; 
@@ -5678,6 +5745,8 @@ func _process(delta):
 		_update_team_stats()
 		_apply_natural_experience()
 		_apply_natural_gold()
+		if not _early_metrics_logged and game_time >= 240.0:
+			_log_early_game_metrics()
 		# 赛后统计：每分钟记录金币
 		var current_minute = int(game_time / 60)
 		if _last_recorded_minute < current_minute:

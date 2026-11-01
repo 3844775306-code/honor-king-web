@@ -117,6 +117,44 @@ func _is_under_own_tower(entity: GameEntity) -> bool:
 	return false
 
 
+# 对线期是否应该先打英雄：不是“看到英雄就上”，而是找血量/射程优势或正在攻击自己的目标。
+func _pick_engage_hero() -> Hero:
+	if hero.health <= 0:
+		return null
+	var my_ratio := hero.health / maxf(1.0, hero.actual_max_health)
+	var reach := maxf(2.0, hero.attack_range * 0.01)
+	var best: Hero = null
+	var best_score := 2.9
+	for entity in hero.get_tree().get_nodes_in_group("heroes"):
+		if not (entity is Hero) or entity.health <= 0 or entity.team == hero.team:
+			continue
+		var h := entity as Hero
+		var dist := hero.global_position.distance_to(h.global_position)
+		if dist > AiConfig.LANE_SEARCH_RANGE:
+			continue
+		if h.is_untargetable_by_enemies():
+			continue
+		# 敌方塔下的满血目标不主动越塔；残血且塔下无兵仍交给追击逻辑谨慎处理
+		if _is_under_own_tower(h) and h.health > h.actual_max_health * 0.2:
+			continue
+		var ratio := h.health / maxf(1.0, h.actual_max_health)
+		var score := 0.0
+		if h == hero.last_attacker:
+			score += 6.0
+		if ratio < 0.55:
+			score += 2.5
+		elif ratio < 0.72:
+			score += 1.0
+		if my_ratio > ratio + 0.12:
+			score += 1.5
+		if dist <= reach + 1.5:
+			score += 1.0
+		if score > best_score:
+			best_score = score
+			best = h
+	return best
+
+
 # ==================== 目标搜索（25m内优先级） ====================
 
 # 优先级: 敌方小兵(安全) > 敌方英雄(不在塔下) > 附近野怪(中路跳过) > 敌方防御塔(4分钟后+安全)
@@ -128,8 +166,16 @@ func _find_target() -> GameEntity:
 			var dist := hero.global_position.distance_to(entity.global_position)
 			if dist < 12:
 				return hero.last_attacker
+	# 1.5 前4分钟对线期：有血量/射程优势时先压英雄，而不是永远先补兵
+	if game_time < AiConfig.EARLY_GAME_END:
+		var engage_hero := _pick_engage_hero()
+		if engage_hero != null:
+			return engage_hero
+	# 2. 敌方小兵 — 优先补最后一下，其次选择更近/更低的兵
 	var best_minion: Minion = null
-	var best_minion_hp := 99999.0
+	var best_minion_score := -INF
+	var aa_damage := maxf(1.0, hero.actual_attack_damage)
+	var aa_reach := maxf(2.0, hero.attack_range * 0.01)
 	for entity in hero.get_tree().get_nodes_in_group("minions"):
 		if not (entity is Minion) or entity.health <= 0 or entity.team == hero.team:
 			continue
@@ -140,8 +186,15 @@ func _find_target() -> GameEntity:
 		if _is_under_unsafe_tower(entity):
 			continue
 		var m := entity as Minion
-		if m.health < best_minion_hp:
-			best_minion_hp = m.health
+		var m_ratio := m.health / maxf(1.0, m.actual_max_health)
+		var score := -m_ratio * 1.6
+		if m.health <= aa_damage * 1.15:
+			score += 2.0          # 可补最后一下
+		if dist <= aa_reach + 1.0:
+			score += 0.8
+		score -= dist * 0.02
+		if score > best_minion_score:
+			best_minion_score = score
 			best_minion = m
 	if best_minion:
 		return best_minion
@@ -370,6 +423,12 @@ func decide() -> void:
 
 	# 尝试执行预分配分路切换
 	try_switch_lane()
+
+	# 已经在敌方塔下且没有足够己方兵线掩护：先退出塔范围，避免前4分钟无意义送塔
+	if _is_under_unsafe_tower(hero):
+		hero.manual_target = null
+		hero.move_target = _get_defensive_position()
+		return
 
 	# 中路特殊规则
 	if lane == AiConfig.Lane.MID:
