@@ -55,6 +55,8 @@ var _voice_done := false
 var _voice_lines: Array = []
 var _player_last := {"kills": 0, "dead": false, "low": false, "low_cd": 0.0, "dead_said": false}
 var _recent_lines: Array = []
+var _last_minute := -1
+var _minute_idx := 0
 
 
 func _ready() -> void:
@@ -268,7 +270,7 @@ func _tick_ai(delta: float) -> void:
 		if now >= float(p["t"]):
 			var h = p["hero"]
 			if is_instance_valid(h):
-				_say(h, str(p["text"]))
+				_say(h, str(p["text"]), bool(p.get("force", false)))
 		else:
 			keep.append(p)
 	_pending = keep
@@ -277,6 +279,13 @@ func _tick_ai(delta: float) -> void:
 		_ambient_t = 0.0
 		_ambient_next = randf_range(AMBIENT_MIN, AMBIENT_MAX)
 		_ambient_line()
+	# 整分钟：随机一位 AI 英雄说一句「结合局势」的高质量台词（优先大模型）
+	if _bm != null and is_instance_valid(_bm):
+		var minute := int(float(_bm.get("game_time")) / 60.0)
+		if minute != _last_minute:
+			_last_minute = minute
+			if minute >= 1:
+				_minute_llm_line()
 
 
 func _ambient_line() -> void:
@@ -475,6 +484,91 @@ func _scan_player_reactions() -> void:
 	_player_last["dead"] = dead
 
 
+## 每分钟一次：挑一位 AI 英雄，结合局势让大模型说一句高质量台词；没有大模型则用情境台词兜底
+func _minute_llm_line() -> void:
+	var speakers := _ai_speakers()
+	if speakers.is_empty():
+		return
+	var h = speakers[_minute_idx % speakers.size()]
+	_minute_idx += 1
+	var st := _situation(h)
+	if _llm != null and bool(_llm.get("enabled")):
+		var who = h
+		var sys := _minute_system_prompt(h, st)
+		var usr := _minute_user_prompt(h, st)
+		var ok: bool = _llm.call("ask", sys, usr,
+			func(reply: String) -> void:
+				var line := _sanitize_llm_line(reply)
+				if line == "":
+					_say_later_force(who, _fallback_minute_line(who), randf_range(0.6, 1.4))
+				else:
+					_say_later_force(who, line, randf_range(0.4, 1.0)))
+		if ok:
+			return
+	_say_later_force(h, _fallback_minute_line(h), randf_range(0.6, 1.5))
+
+
+func _persona_of(h) -> String:
+	var names := ["稳健", "激进", "冷静", "话痨", "幽默", "护短"]
+	return names[int(abs(hash(str(h.display_name)))) % names.size()]
+
+
+func _minute_system_prompt(h, st: Dictionary) -> String:
+	return ("你是手机 MOBA《王者荣耀》对局中的 AI 队友，操控英雄「%s」（%s，性格%s）。"
+		+ "现在第 %d 分钟，请主动在队伍频道说一句 8~20 字的中文，像真人玩家："
+		+ "结合当前局势给队友一个具体建议或一句带情绪的话（催推进/提醒撤退/约龙/护人/吐槽都行），"
+		+ "不要复述数字、不要自我介绍、不要自称 AI 或模型，不要引号、括号、换行，只输出这一句话。") % [
+		str(h.display_name), str(h.role), _persona_of(h), int(st.get("minute", 0))]
+
+
+func _minute_user_prompt(h, st: Dictionary) -> String:
+	var obj_txt := "无大型资源"
+	if str(st.get("obj", "")) == "tyrant":
+		obj_txt = "主宰已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "主宰快刷新"
+	elif str(st.get("obj", "")) == "dragon":
+		obj_txt = "暴君已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "暴君快刷新"
+	var player_txt := "玩家已阵亡" if bool(st.get("player_dead", false)) else ("玩家血量偏低" if float(st.get("player_hp", 1.0)) < 0.3 else "玩家状态正常")
+	var lines := "、".join(_recent_lines.slice(maxi(0, _recent_lines.size() - 3)))
+	return ("局势：我方塔%d/敌方塔%d，金币差%+d，%s，%s；你自己血量%d%%，身边敌人%d个。最近说过：%s。请换一种说法，别重复。") % [
+		int(st.get("my_towers", 0)), int(st.get("foe_towers", 0)), int(st.get("gold_diff", 0)),
+		player_txt, obj_txt, int(round(float(st.get("self_hp", 1.0)) * 100.0)),
+		int(st.get("near_enemies", 0)), lines if lines != "" else "无"]
+
+
+func _sanitize_llm_line(raw: String) -> String:
+	var t := str(raw).replace("\n", " ").replace("\r", " ").replace("\t", " ")
+	t = t.strip_edges()
+	# 去掉引号/括号包裹与「英雄：」前缀
+	t = t.trim_prefix("「").trim_suffix("」").trim_prefix("“").trim_suffix("”")
+	t = t.trim_prefix("'").trim_suffix("'").trim_prefix("\"").trim_suffix("\"")
+	t = t.trim_prefix("（").trim_suffix("）").trim_prefix("(").trim_suffix(")")
+	if t.find("：") >= 0 and t.find("：") <= 8:
+		t = t.substr(t.find("：") + 1)
+	t = t.replace("\n", " ").strip_edges()
+	while t.find("  ") >= 0:
+		t = t.replace("  ", " ")
+	# 拒绝自曝 AI / 空话
+	if t.find("AI") >= 0 or t.find("模型") >= 0 or t.find("助手") >= 0:
+		return ""
+	if t.length() > 30:
+		t = t.substr(0, 30)
+	return t
+
+
+func _fallback_minute_line(h) -> String:
+	var ctx := _contextual_line(h)
+	if ctx != "":
+		return ctx
+	var diff := _kill_diff()
+	if int(h.team) == Config.player_team:
+		if diff >= 5:
+			return _pick(LINES_AHEAD)
+		elif diff <= -5:
+			return _pick(LINES_BEHIND)
+		return _pick(LINES_AMBIENT)
+	return _pick(LINES_ENEMY)
+
+
 func _reply_to_player(text: String) -> void:
 	# 喊灵宝就由小精灵回，不走队友 AI
 	if text.find("灵宝") >= 0:
@@ -604,11 +698,15 @@ func _say_later(h, text: String, delay: float) -> void:
 	_pending.append({"t": Time.get_ticks_msec() / 1000.0 + delay, "hero": h, "text": text})
 
 
-func _say(h, text: String) -> void:
+func _say_later_force(h, text: String, delay: float) -> void:
+	_pending.append({"t": Time.get_ticks_msec() / 1000.0 + delay, "hero": h, "text": text, "force": true})
+
+
+func _say(h, text: String, force: bool = false) -> void:
 	if not is_instance_valid(h):
 		return
 	var now := Time.get_ticks_msec() / 1000.0
-	if now - _last_ai_t < AI_MIN_GAP:
+	if not force and now - _last_ai_t < AI_MIN_GAP:
 		return
 	_last_ai_t = now
 	var nm := str(h.display_name)
