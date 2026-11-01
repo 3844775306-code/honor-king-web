@@ -152,7 +152,11 @@ var _title: Label = null
 var _feed: VBoxContainer = null
 var _event_toasts: Array = []
 var _dragging := false
-const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5 秒 · N 下一击杀 · F 跟随英雄 · +/- 倍速 · 右键拖动旋转 · 滚轮缩放 · Esc 退出"
+var _cam_drag := false          # 回放：直接拖动屏幕平移相机
+var _cam_drag_moved := false
+var _cam_drag_last := Vector2.ZERO
+var _cam_drag_prev_follow := -1
+const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5 秒 · N 下一击杀 · F 跟随英雄 · +/- 倍速 · 左键拖动平移 · 右键拖动旋转 · 滚轮缩放 · Esc 退出"
 
 var _hint_label: Label = null
 var _finisher_t := -1.0
@@ -3137,6 +3141,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_MINUS, KEY_KP_SUBTRACT:
 				_cycle_speed()
 		return
+	if event is InputEventScreenTouch:
+		var stouch: InputEventScreenTouch = event
+		if stouch.pressed:
+			_begin_cam_drag(stouch.position)
+		elif _cam_drag:
+			_end_cam_drag()
+		return
+	if event is InputEventScreenDrag:
+		if _cam_drag:
+			_pan_cam_drag((event as InputEventScreenDrag).position)
+		return
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
@@ -3150,6 +3165,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_manual_follow = -1
 					_cam_target = _mm_target
 				_mm_was_follow = -1
+			if _cam_drag:
+				_end_cam_drag()
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
 			var hitd: Dictionary = _hud2.call("hit", mb.position)
 			var hk := str(hitd.get("type", ""))
@@ -3174,6 +3191,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif hk == "hero":
 				_select_follow(int(hitd.get("idx", 0)))
 				return
+		# 左键拖拽空白区域：直接平移回放相机
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			_begin_cam_drag(mb.position)
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_cam_dist = clampf(_cam_dist - 6.0, 22.0, 110.0)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
@@ -3185,9 +3205,70 @@ func _unhandled_input(event: InputEvent) -> void:
 			if str(hitd2.get("type", "")) == "map":
 				_mm_target = Vector3(float(hitd2.get("x", 0.0)), 0.0, float(hitd2.get("z", 0.0)))
 			return
+		if _cam_drag:
+			_pan_cam_drag(mm.position)
 		if (mm.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
 			_cam_yaw -= mm.relative.x * 0.25
 			_cam_pitch = clampf(_cam_pitch - mm.relative.y * 0.2, -85.0, -20.0)
+
+
+func _begin_cam_drag(screen: Vector2) -> void:
+	if _mm_drag:
+		return
+	_cam_drag = true
+	_cam_drag_moved = false
+	_cam_drag_last = screen
+	_cam_drag_prev_follow = _follow_hero
+	# 跟随状态下拖动屏幕：先把自由视角目标放到当前英雄，再退出跟随，避免镜头跳回原点
+	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
+		_cam_target = _hero_pos[_follow_hero]
+	_follow_hero = -1
+	_manual_follow = -1
+
+
+func _pan_cam_drag(screen: Vector2) -> void:
+	var delta := screen - _cam_drag_last
+	if delta.length() < 0.01:
+		return
+	_cam_drag_last = screen
+	if delta.length() > 1.5:
+		_cam_drag_moved = true
+	var g_prev = _cam_ground_at(screen - delta)
+	var g_cur = _cam_ground_at(screen)
+	if g_prev != null and g_cur != null:
+		_cam_target += (g_prev as Vector3) - (g_cur as Vector3)
+	else:
+		# 射线打不到地面（极端俯角/屏幕外）时用相机朝向估算平移
+		var yaw := deg_to_rad(_cam_yaw)
+		var right := Vector3(cos(yaw), 0.0, -sin(yaw))
+		var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+		var k := maxf(0.08, _cam_dist * 0.0018)
+		_cam_target += (-right * delta.x + fwd * delta.y) * k
+	_cam_target.y = 0.0
+	_cam_target.x = clampf(_cam_target.x, -60.0, 60.0)
+	_cam_target.z = clampf(_cam_target.z, -60.0, 60.0)
+
+
+func _end_cam_drag() -> void:
+	_cam_drag = false
+	# 只是点了一下没拖动：恢复原来的跟随，不影响点选操作
+	if not _cam_drag_moved and _cam_drag_prev_follow >= 0:
+		_follow_hero = _cam_drag_prev_follow
+		_manual_follow = _cam_drag_prev_follow
+	_cam_drag_prev_follow = -1
+
+
+func _cam_ground_at(screen: Vector2):
+	if _cam == null:
+		return null
+	var origin := _cam.project_ray_origin(screen)
+	var dir := _cam.project_ray_normal(screen)
+	if absf(dir.y) < 0.0001:
+		return null
+	var t := -origin.y / dir.y
+	if t < 0.0:
+		return null
+	return origin + dir * t
 
 
 func _update_camera() -> void:
