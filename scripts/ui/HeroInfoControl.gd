@@ -6,6 +6,8 @@ const BuffArt = preload("res://scripts/ui/BuffArt.gd")
 
 
 var hero: Hero = null
+## 回放用：外部直接注入的状态条（录像里录下的被动/附魔/层数等），非空时优先于按 hero 字段计算
+var external_statuses: Array = []
 
 var bar_width: float = 280.0
 var bar_height: float = 28.0
@@ -484,6 +486,8 @@ func _status_entry(label: String, ratio: float, col: Color, segments: int, value
 	}
 
 func _status_entries() -> Array:
+	if not external_statuses.is_empty():
+		return external_statuses
 	return status_entries_of(hero)
 
 

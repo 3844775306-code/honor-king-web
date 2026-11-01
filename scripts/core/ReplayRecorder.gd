@@ -238,6 +238,7 @@ func _sample(delta: float, finishing: bool) -> void:
 			int(round(h.recall_timer * 100.0)), int(round(h.teleport_timer * 100.0)),
 			1 if h.is_recalling else 0, 1 if h.is_teleporting else 0,
 			int(round(float(h.flat_phys_pen))),   # idx45：固定物理穿透（补刀提示）
+			_pack_statuses(h),                    # idx48：被动/附魔/层数等状态条（回放血条用）
 		]
 		# 事件：升级
 		if idx < _last_levels.size() and int(h.level) > int(_last_levels[idx]):
@@ -631,6 +632,19 @@ func _on_chat_message(from_name: String, team: int, text: String, is_self: bool)
 		"tm": int(team), "txt": str(text), "me": 1 if is_self else 0})
 
 
+static func _pack_statuses(h) -> Array:
+	# 与 HeroInfoControl.status_entries_of 同源：被动条/附魔/层数/回城/传送等，
+	# 序列化成 [label, ratio, [r,g,b], segments, value, pulse]（回放血条直接还原）
+	var out: Array = []
+	if h == null or not is_instance_valid(h):
+		return out
+	for st in HeroInfoControl.status_entries_of(h):
+		var c: Color = st.get("color", Color.WHITE)
+		out.append([str(st.get("label", "")), float(st.get("ratio", 0.0)),
+			[c.r, c.g, c.b], int(st.get("segments", 0)), str(st.get("value", "")),
+			1 if bool(st.get("pulse", false)) else 0])
+	return out
+
 func _markers_to_str(h) -> String:
 	var parts: Array = []
 	for src in h.get_marker_sources():
@@ -957,3 +971,4 @@ static func load_replay(path: String) -> Dictionary:
 	f.close()
 	var data = JSON.parse_string(txt)
 	return data if data is Dictionary else {}
+
