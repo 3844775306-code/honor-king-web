@@ -45,6 +45,9 @@ var _heroes: Array = []
 var _turrets: Array = []
 var _frames: Array = []
 var _minis: Array = []
+var _health_frames: Array = []       # 录像血包状态关键帧
+var _health_packs: Dictionary = {}   # key -> HealthPack 视觉节点
+var _health_rows: Array = []         # 当前帧 [x,z,team,available]（HUD 小地图用）
 var _events: Array = []
 var _duration := 0.0
 var _hero_nodes: Array = []
@@ -184,6 +187,7 @@ func _ready() -> void:
 	_turrets = _doc.get("turrets", [])
 	_frames = _doc.get("frames", [])
 	_minis = _doc.get("minions", [])
+	_health_frames = _doc.get("health_packs", [])
 	_jungle = _doc.get("jungle", [])
 	_jungle_meta = _doc.get("jungle_meta", [])
 	_bullets = _doc.get("bullets", [])
@@ -267,13 +271,12 @@ func _build_world() -> void:
 	bm.set_physics_process(false)
 	bm.process_mode = Node.PROCESS_MODE_DISABLED
 	_world = bm
-	# 回放世界里的血包（固定点位；visual_only，不参与拾取）
-	for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
-		var hp := HealthPack.new()
-		hp.visual_only = true
-		hp.team = int(hp_spawn[1])
-		hp.position = hp_spawn[0] + Vector3(0.0, 0.3, 0.0)
-		bm.add_child(hp)
+	# 回放世界里的血包：有状态关键帧时由 _apply_replay_health_packs 动态创建；
+	# 旧录像没有该字段则回退固定点位全可用。
+	if _health_frames.is_empty():
+		for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
+			_make_replay_health_pack(hp_spawn[0].x, hp_spawn[0].z, int(hp_spawn[1]))
+			_health_rows.append([hp_spawn[0].x, hp_spawn[0].z, int(hp_spawn[1]), 1])
 	# 小地图静态数据（墙体/草丛）
 	var _walls: Array = []
 	for w in get_tree().get_nodes_in_group("walls"):
@@ -530,6 +533,66 @@ func _build_hud() -> void:
 	_tdv_layer.add_child(_tdv)
 
 
+func _make_replay_health_pack(wx: float, wz: float, team: int):
+	var key := "%d_%d" % [int(round(wx * 10.0)), int(round(wz * 10.0))]
+	var hp = _health_packs.get(key, null)
+	if hp != null and is_instance_valid(hp):
+		return hp
+	hp = HealthPack.new()
+	hp.visual_only = true
+	hp.team = team
+	hp.position = Vector3(wx, 0.3, wz)
+	add_child(hp)
+	_health_packs[key] = hp
+	return hp
+
+
+func _find_health_frame(t: float) -> int:
+	if _health_frames.is_empty():
+		return -1
+	var lo := 0
+	var hi := _health_frames.size() - 1
+	var ans := 0
+	while lo <= hi:
+		var mid := (lo + hi) / 2
+		if float(_health_frames[mid].get("t", 0)) / 1000.0 <= t:
+			ans = mid
+			lo = mid + 1
+		else:
+			hi = mid - 1
+	return ans
+
+
+func _apply_replay_health_packs(t: float) -> void:
+	if _health_frames.is_empty():
+		return
+	var fi := _find_health_frame(t)
+	var rows: Array = _health_frames[fi].get("h", []) if fi >= 0 else []
+	var seen := {}
+	_health_rows.clear()
+	for row in rows:
+		if not (row is Array) or (row as Array).size() < 4:
+			continue
+		var wx := float(row[0]) / 100.0
+		var wz := float(row[1]) / 100.0
+		var team := int(row[2])
+		var avail := int(row[3]) == 1
+		var hp = _make_replay_health_pack(wx, wz, team)
+		hp.visible = true
+		hp.apply_remote_state(avail,
+			float(row[4]) / 10.0 if row.size() > 4 else 0.0,
+			float(row[5]) / 10.0 if row.size() > 5 else 75.0)
+		var key := "%d_%d" % [int(round(wx * 10.0)), int(round(wz * 10.0))]
+		seen[key] = true
+		_health_rows.append([wx, wz, team, 1 if avail else 0])
+	# 状态帧里消失的血包 = 被塔毁等永久移除
+	for key in _health_packs:
+		if not seen.has(key):
+			var hp2 = _health_packs[key]
+			if hp2 != null and is_instance_valid(hp2):
+				hp2.visible = false
+
+
 func _update_world_hud(t: float) -> void:
 	var _hud_fi: int = _find_frame(t)
 	if _cam == null or _bars == null:
@@ -744,6 +807,7 @@ func _update_world_hud(t: float) -> void:
 			"follow": _follow_hero, "mode": str(meta_d.get("mode", "")), "hero": hero_nm,
 			"walls": _hud_static.get("walls", []), "bushes": _hud_static.get("bushes", []),
 			"jungle": jung_st, "minions": _hud_minions, "cam": _cam,
+			"health_packs": _health_rows, "health_data": not _health_frames.is_empty(),
 			"pings": pings_st, "marks": marks_st, "camps": camps_st,
 			"me_team": int(meta_d.get("player_team", 0)),
 			"feed": feed_st, "objectives": obj_st,
@@ -915,6 +979,7 @@ func _process(delta: float) -> void:
 
 
 func _apply_frame(t: float) -> void:
+	_apply_replay_health_packs(t)
 	_unit_world.clear()
 	_hud_turrets.clear()
 	_hud_minions.clear()

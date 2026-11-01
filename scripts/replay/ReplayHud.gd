@@ -247,10 +247,17 @@ func _draw_minimap() -> void:
 	var tex := _ensure_static_tex(inner)
 	if tex != null:
 		draw_texture_rect(tex, inner, false)
-	# 血包固定点位（与对局同坐标）
-	for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
-		var hpp := _world_to_mm(hp_spawn[0], inner)
-		MinimapDrawScript.draw_health_pack(self, hpp, true)
+	# 血包：有录像状态时按状态/存在性画，旧录像回退固定点位
+	if bool(st.get("health_data", false)):
+		for hrow in st.get("health_packs", []):
+			if not (hrow is Array) or (hrow as Array).size() < 4:
+				continue
+			var hpp := _world_to_mm(Vector3(float(hrow[0]), 0.0, float(hrow[1])), inner)
+			MinimapDrawScript.draw_health_pack(self, hpp, int(hrow[3]) == 1)
+	else:
+		for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
+			var hpp2 := _world_to_mm(hp_spawn[0], inner)
+			MinimapDrawScript.draw_health_pack(self, hpp2, true)
 	# 视野雾：以己方英雄/小兵/塔为视野源，按对局小地图同款网格压暗
 	var vision: Array = []
 	for h in st.get("heroes", []):

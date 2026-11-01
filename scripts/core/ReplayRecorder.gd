@@ -32,6 +32,8 @@ var _turret_meta: Array = [] # [{x, z, team, type, maxhp}]
 var _turret_ids := {}
 var _frames: Array = []      # [{t:int(ms), h:[[x,z,y,yaw,hp,maxhp,lvl,flags]...], tn:[[hp,alive]...]}]
 var _mini_frames: Array = [] # [{t, m:[[id,x,z,hp,team,type]...]}]
+var _health_frames: Array = [] # [{t, h:[[x,z,team,available,cd,cdmax]...]}] 血包状态变化
+var _health_sig := ""
 var _mini_ids := {}
 var _mini_next_id := 0
 var _events: Array = []      # [{t,k,a,b,x,z,team}]
@@ -460,6 +462,20 @@ func _sample(delta: float, finishing: bool) -> void:
 				int(round(float(m.armor))),   # idx9：护甲（补刀提示）
 			])
 		_mini_frames.append({"t": t_ms, "m": rows})
+		# 血包状态（拾取/冷却/塔毁删除）：只有变化才记关键帧
+		var hrows: Array = []
+		for hp in get_tree().get_nodes_in_group("health_packs"):
+			if not is_instance_valid(hp):
+				continue
+			var hpp: Vector3 = hp.global_position
+			hrows.append([int(round(hpp.x * 100.0)), int(round(hpp.z * 100.0)),
+				int(hp.get("team")), 1 if bool(hp.get("available")) else 0,
+				int(round(float(hp.get("cooldown_timer")) * 10.0)),
+				int(round(float(hp.get("respawn_time")) * 10.0))])
+		var hsig := str(hrows)
+		if hsig != _health_sig:
+			_health_sig = hsig
+			_health_frames.append({"t": t_ms, "h": hrows})
 		var jrows: Array = []
 		for j in get_tree().get_nodes_in_group("jungle_monsters"):
 			if not is_instance_valid(j):
@@ -838,6 +854,7 @@ func _save() -> void:
 		"turrets": _turret_meta,
 		"frames": _frames,
 		"minions": _mini_frames,
+		"health_packs": _health_frames,
 		"jungle": _jungle_frames,
 		"bullets": _bullet_frames,
 		"popups": _popup_events,
