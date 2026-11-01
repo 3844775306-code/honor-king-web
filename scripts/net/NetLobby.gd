@@ -537,15 +537,16 @@ func _show_menu() -> void:
 	# —— 右栏：操作按钮列 ——
 	var right := VBoxContainer.new()
 	# 右栏给足按钮内容宽度，并留出右侧安全边距；内容按两列重排，避免最小宽度把整栏顶出屏幕
-	right.anchor_left = 0.725
+	right.anchor_left = 0.715
 	right.anchor_top = 0.130
 	right.anchor_right = 0.980
 	right.anchor_bottom = 0.900
 	right.alignment = BoxContainer.ALIGNMENT_CENTER
-	right.add_theme_constant_override("separation", 14)
+	right.add_theme_constant_override("separation", 10)
 	stage.add_child(right)
 
-	var b_single := _mk_btn("▶  单机开局", UiKit.C_GOLD, true, Vector2(420, 88))
+	# 不再把 420px 作为硬最小宽度：网页窄屏/缩放下右栏会被按钮最小宽度顶出屏幕
+	var b_single := _mk_btn("▶  单机开局", UiKit.C_GOLD, true, Vector2(0, 88))
 	b_single.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_single.pressed.connect(_start_singleplayer)
 	right.add_child(b_single)
@@ -563,7 +564,9 @@ func _show_menu() -> void:
 	room_row.add_child(b_join)
 	if Config.on_web():
 		# 浏览器内无法监听端口：网页版隐藏建房，只能加入桌面主机
-		b_host.text = "■  创建房间（网页不可用）"
+		# 文案保持短，避免右侧两列按钮在窄屏下把整栏撑出屏幕
+		b_host.text = "■  网页不可建房"
+		b_host.tooltip_text = "浏览器无法监听端口，请加入桌面主机创建的房间"
 		b_host.disabled = true
 
 	# 连接参数（收成一行细输入，保持可用但不抢视线）
