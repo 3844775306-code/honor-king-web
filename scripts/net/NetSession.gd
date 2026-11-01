@@ -1554,6 +1554,64 @@ func _pack_hero_status(e: Node) -> Array:
 	return out
 
 
+func _pack_hero_markers(e: Node) -> Array:
+	var out: Array = []
+	if e == null or not e.has_method("get_marker_sources"):
+		return out
+	for src in e.get_marker_sources():
+		var cnt: int = int(e.count_markers(src))
+		if cnt > 0:
+			out.append([str(src.display_name), cnt])
+	return out
+
+
+func _pack_ai_chip(e: Node) -> Array:
+	if e == null or not bool(e.get("is_ai")):
+		return []
+	var ai = null
+	for child in e.get_children():
+		if child is HeroAI:
+			ai = child
+			break
+	if ai == null:
+		return []
+	var state_name := ""
+	var ai_col := Color(0.52, 0.78, 1.0)
+	match int(ai.state):
+		0:
+			state_name = "推线"; ai_col = Color(0.45, 0.90, 1.0)
+		1:
+			state_name = "打野"; ai_col = Color(0.72, 0.58, 1.0)
+		2:
+			state_name = "撤退"; ai_col = Color(1.0, 0.46, 0.38)
+		4:
+			state_name = "防守"; ai_col = Color(1.0, 0.78, 0.34)
+		5:
+			state_name = "回城"; ai_col = Color(0.56, 0.70, 1.0)
+	var lane_name := ""
+	match int(ai.lane):
+		AiConfig.Lane.FARM: lane_name = "发育"
+		AiConfig.Lane.MID: lane_name = "中"
+		AiConfig.Lane.CLASH: lane_name = "对抗"
+		AiConfig.Lane.JUNGLE: lane_name = "野"
+	var phase_name := ""
+	if int(ai.state) == 1 and ai.jungle_strategy != null:
+		match int(ai.jungle_strategy.current_phase):
+			0: phase_name = "发育路野区"
+			1: phase_name = "对抗路野区"
+			2: phase_name = "蹭线"
+	var parts: Array = []
+	if lane_name != "": parts.append(lane_name)
+	if state_name != "": parts.append(state_name)
+	if phase_name != "": parts.append(phase_name)
+	var mt = e.get("manual_target")
+	if mt != null and is_instance_valid(mt):
+		parts.append("→ " + str(mt.display_name))
+	if parts.is_empty():
+		return []
+	return [" · ".join(parts), ai_col.r, ai_col.g, ai_col.b]
+
+
 func _pack_hero(e: Node) -> Array:
 	# 尾字段 idx9.. = mana / maxmana / shield / exp / exp_to_next（客户端世界血条按主机
 	# HeroInfoControl 规格绘制蓝条/护盾，等级环经验弧用后两段）；idx14 = 暗印摘要（黄段+层数）
@@ -1562,7 +1620,9 @@ func _pack_hero(e: Node) -> Array:
 		_pack_lyf(e), e.rotation.y, 1 if bool(e.get("hidden_in_bush")) else 0,
 		str(e.get("player_name")),   # idx17：玩家/AI 昵称（无英雄名时兜底显示）
 		1 if bool(e.get("is_mvp")) else 0,   # idx18：MVP 王冠（客户端世界血条右侧徽章）
-		_pack_hero_status(e)]   # idx19：状态条（附魔/枪意/炸弹/剑意/回城/传送… 与单机 HeroInfoControl 同源）
+		_pack_hero_status(e),   # idx19：状态条（附魔/枪意/炸弹/剑意/回城/传送… 与单机 HeroInfoControl 同源）
+		_pack_hero_markers(e),  # idx20：标记图标行 [[name,count]]
+		_pack_ai_chip(e)]       # idx21：AI 决策胶囊 [label,r,g,b]（非 AI 为空）
 
 
 func _maxmana_of(e: Node) -> float:

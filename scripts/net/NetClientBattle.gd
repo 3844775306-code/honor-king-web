@@ -19,6 +19,7 @@ const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const NetDeathRecapScript = preload("res://scripts/net/NetDeathRecap.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
+const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -685,6 +686,8 @@ func _on_snapshot(snap: Array) -> void:
 				v.pname = str(ent[17]) if ent.size() > 17 else ""
 				v.mvp = int(ent[18]) == 1 if ent.size() > 18 else false
 				v.status = ent[19] if ent.size() > 19 else []
+				v.markers = ent[20] if ent.size() > 20 else []          # 标记图标行（专属图标+层数）
+				v.ai_chip = ent[21] if ent.size() > 21 else []          # AI 决策胶囊 [label,r,g,b]
 			if typ == NET_JUNGLE:
 				if hp < float(v.get("prev_hp", hp)) - 0.5:
 					v["hit_t"] = _last_snap_time
@@ -2851,6 +2854,12 @@ func _collect_world_bars() -> Array:
 					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, true, 1000.0, true))
 	return rows
 
+func _ai_chip_dict(a) -> Dictionary:
+	if a is Array and (a as Array).size() >= 4:
+		return {"label": str(a[0]), "r": float(a[1]), "g": float(a[2]), "b": float(a[3])}
+	return {}
+
+
 func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 	# 主机 HeroInfoControl 颜色：敌方红 / 本窗口玩家绿 / 队友青（host 以 is_ai 区分，我们以是否 self 区分）
 	var bar_col := Color(1.0, 0.33, 0.264)
@@ -2861,6 +2870,8 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 		"hp": float(v.hp), "maxhp": float(v.maxhp), "hp_col": bar_col,
 		"shield": float(v.get("shield", 0.0)), "mvp": bool(v.get("mvp", false)),
 		"status": v.get("status", []),
+		"markers": v.get("markers", []),
+		"ai_chip": _ai_chip_dict(v.get("ai_chip", [])),
 		"mana": float(v.get("mana", 0.0)), "maxmana": float(v.get("maxmana", 0.0)),
 		"exp": float(v.get("exp", 0.0)), "exp_to_next": float(v.get("exp_to_next", 0.0)),
 		"hidden": bool(v.get("hidden", false)) and int(v.team) != TEAM_ENEMY,
@@ -5178,176 +5189,14 @@ class Hud:
 		draw_polyline(outline, Color(0.10, 0.03, 0.05, 0.9), 1.5)
 
 	func _draw_hero_bar(r: Dictionary) -> void:
-		var cx := float(r.cx)
-		# 主机 HUD：position = 锚点屏幕位 - custom_minimum_size/2（HeroInfoControl 高 320 → /2=160）
-		var top := float(r.cy) - 160.0
-		# 等级圆环已改画到血条左端（见下方），此处保留原竖向占位，与主机 HeroInfoControl 版面一致
-		# 名称（含血量行；字号×2=34，几何同主机 HeroInfoControl：环底距名字基线 34，按实际多行高度推进）
-		var top2 := top + 66.0
-		# 血条上方同时显示英雄名称与玩家/AI 昵称
-		var disp_name := str(r.get("name", ""))
-		var nick_name := str(r.get("pname", ""))
-		if nick_name != "" and nick_name != disp_name:
-			disp_name = (disp_name + " · " + nick_name) if disp_name != "" else nick_name
-		if disp_name == "":
-			disp_name = "?"
-		# 与 host HeroInfoControl 一致：名称 28（超宽降 22 并省略），血条上方只显示名字，不显示血量数字
-		var name_fs := 28.0
-		if _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 28).x > 272.0:
-			name_fs = 22.0
-		var _nw := _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).x
-		var _name_base := top2 + _font.get_ascent(int(name_fs))
-		draw_string_outline(_font, Vector2(cx - _nw * 0.5, _name_base), disp_name,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs), 4, Color(0, 0, 0, 0.9))
-		draw_string(_font, Vector2(cx - _nw * 0.5, _name_base), disp_name,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs), Color.WHITE)
-		# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
-		var by := _name_base + _font.get_descent(int(name_fs)) + 3.0
-		var bw := 280.0
-		var bh := 28.0
-		var mhp := maxf(float(r.maxhp), 1.0)
-		var hp_now := clampf(float(r.hp), 0.0, mhp)
-		var ratio := hp_now / mhp
-		var hp_col: Color = r.get("hp_col", _team_color(int(r.get("team", 9))))
-		var bx := cx - bw / 2.0
-		var hpx := bw * ratio
-		var shield := clampf(float(r.get("shield", 0.0)), 0.0, mhp)
-		# 经验等级圈：血条左端（放大后与血条同高居中，同主机 HeroInfoControl）
-		var e2n := float(r.get("exp_to_next", 0.0))
-		var exp_ratio := 1.0
-		if e2n > 0.0:
-			exp_ratio = clampf(float(r.get("exp", 0.0)) / e2n, 0.0, 1.0)
-		_draw_level_ring(Vector2(bx - 10.0 - 24.0, by + bh * 0.5), 24.0, str(r.get("level", 1)), exp_ratio)
-		# 草丛隐藏标记：血条上方中央（主机 hidden_in_bush）
-		if bool(r.get("hidden", false)):
-			_draw_hidden_badge(Vector2(cx, by - 13.0), 11.0)
-		# 投影（两层）
-		draw_rect(Rect2(bx + 3.0, by + 5.0, bw, bh), Color(0, 0, 0, 0.22))
-		draw_rect(Rect2(bx + 1.5, by + 2.5, bw, bh), Color(0, 0, 0, 0.34))
-		# 外框：深底 + 队伍色细边
-		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(0.02, 0.03, 0.06, 0.96))
-		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(hp_col.r, hp_col.g, hp_col.b, 0.55), false, 1.5)
-		# 空槽（上亮下暗）
-		draw_rect(Rect2(bx, by, bw, bh), Color(0.10, 0.11, 0.15, 0.97))
-		draw_rect(Rect2(bx, by, bw, bh * 0.5), Color(0.17, 0.18, 0.22, 0.9))
-		# 残血拖尾（掉血后浅色回落，同 host _hp_lag：lerp(delta×4)）
-		var lag := _lag_value(int(r.get("nid", -1)), hp_now)
-		if lag > hp_now + 0.5:
-			var lagw := (lag / mhp) * bw
-			draw_rect(Rect2(bx + hpx, by, lagw - hpx, bh), Color(1.0, 0.93, 0.82, 0.34))
-			draw_rect(Rect2(bx + lagw - 2.0, by, 2.0, bh), Color(1.0, 0.9, 0.75, 0.85))
-		# 渐变填充（5 段 lerp）+ 顶部玻璃高光 / 次高光带 / 底部暗边
-		if hpx > 0.5:
-			var bands := 5
-			var c_top := hp_col.lightened(0.35)
-			var c_bot := hp_col.darkened(0.42)
-			for bi in range(bands):
-				var q := float(bi) / float(bands - 1)
-				draw_rect(Rect2(bx, by + bh * float(bi) / float(bands), hpx, bh / float(bands) + 1.0),
-						c_top.lerp(c_bot, q))
-			draw_rect(Rect2(bx, by, hpx, maxf(2.0, bh * 0.18)), Color(1, 1, 1, 0.50))
-			draw_rect(Rect2(bx, by + maxf(2.0, bh * 0.18), hpx, 1.5), Color(1, 1, 1, 0.14))
-			draw_rect(Rect2(bx, by + bh - 1.5, hpx, 1.5), Color(0, 0, 0, 0.35))
-		# 李元芳暗印预判：爆炸前将造成的实际伤害 → 当前血条右端相应段染黄（扣盾、封顶当前血）
-		var lyf_rows: Array = r.get("lyf", [])
-		var lyf_pred := 0.0
-		for m in lyf_rows:
-			if m.size() >= 3:
-				lyf_pred += float(m[2])
-		if lyf_pred > 0.0:
-			var doom := clampf(lyf_pred - shield, 0.0, hp_now)
-			var doom_w := (doom / mhp) * bw
-			if doom_w > 0.5:
-				draw_rect(Rect2(bx + hpx - doom_w, by, doom_w, bh), Color(1.0, 0.88, 0.18, 0.9))
-		# 护盾段（淡蓝 + 斜纹 + 白色左隔线，同 host）
-		var sw := minf((shield / mhp) * bw, bw - hpx)
-		if sw > 0.5:
-			draw_rect(Rect2(bx + hpx, by, sw, bh), Color(0.62, 0.84, 1.0, 0.95))
-			var hatch := int(sw / 7.0)
-			for hi in range(hatch):
-				var hx := bx + hpx + 2.0 + float(hi) * 7.0
-				draw_line(Vector2(hx, by + bh), Vector2(hx + 5.0, by), Color(1, 1, 1, 0.30), 1.0)
-			draw_rect(Rect2(bx + hpx, by, sw, 2.0), Color(1, 1, 1, 0.42))
-			draw_rect(Rect2(bx + hpx, by, 1.5, bh), Color(1, 1, 1, 0.9))
-		# 受伤闪橙：血量右端 0.5s 衰减（同 host HeroInfoControl）
-		var _nid_h := int(r.get("nid", -1))
-		if _nid_h >= 0:
-			var _fr_h := _flash_ratio_of(_nid_h)
-			if _fr_h > 0.0:
-				var _fw_h := (float(_flash_amt.get(_nid_h, 0.0)) / mhp) * bw * _fr_h
-				if _fw_h > 0.5:
-					draw_rect(Rect2(bx + hpx, by, _fw_h, bh), Color.ORANGE)
-		# 刻度：每 1000 血一条（暗线 + 右侧微高光，与 host HeroInfoControl 完全一致）
-		var _segs_h: int = int(floor(mhp / 1000.0))
-		for _si in range(1, _segs_h + 1):
-			var _sx: float = bx + (1000.0 * float(_si) / mhp) * bw
-			draw_line(Vector2(_sx, by + 1.0), Vector2(_sx, by + bh - 1.0), Color(0, 0, 0, 0.55), 1.0)
-			draw_line(Vector2(_sx + 1.0, by + 1.0), Vector2(_sx + 1.0, by + bh - 1.0), Color(1, 1, 1, 0.22), 1.0)
-		# 低血警示脉冲 + 顶部白线压边（同 host HeroInfoControl）
-		if ratio < 0.3 and ratio > 0.0:
-			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006)
-			draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0),
-					Color(1.0, 0.25, 0.18, 0.30 + 0.45 * pulse), false, 2.0)
-		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(1, 1, 1, 0.16), false, 1.0)
-		# MVP 王冠（host：血条右侧金色王冠徽章，半径 = bar_height×0.66）
-		if bool(r.get("mvp", false)):
-			_draw_mvp_badge(Vector2(bx + bw + 12.0 + bh * 0.66, by + bh * 0.5), bh * 0.66)
-		# 法力条（同 host：半高、3 段蓝渐变 + 蓝边框）
-		var mana_max := float(r.get("maxmana", 0.0))
-		if mana_max > 0.0:
-			var mby := by + bh + 3.0
-			var mh := bh * 0.5
-			var mw := clampf(float(r.get("mana", 0.0)) / mana_max, 0.0, 1.0) * bw
-			draw_rect(Rect2(bx, mby, bw, mh), Color(0.06, 0.08, 0.14, 0.95))
-			if mw > 0.5:
-				for mi in range(3):
-					var mq := float(mi) / 2.0
-					draw_rect(Rect2(bx, mby + mh * float(mi) / 3.0, mw, mh / 3.0 + 1.0),
-							Color(0.16, 0.42, 0.95).lerp(Color(0.05, 0.16, 0.55), mq))
-				draw_rect(Rect2(bx, mby, mw, 1.5), Color(1, 1, 1, 0.45))
-			draw_rect(Rect2(bx, mby, bw, mh), Color(0.35, 0.62, 1.0, 0.5), false, 1.0)
-		# 状态条（附魔/枪意/炸弹/剑意/回城/传送…）：与 host HeroInfoControl 同款 13px 行 + 1.5px 间隔
-		var _sts: Array = r.get("status", [])
-		if not _sts.is_empty():
-			var sy := by + bh + 3.0
-			if mana_max > 0.0:
-				sy += bh * 0.5 + 3.0
-			sy += 2.0
-			# 行底色块先铺（与 host 一样雷达血条+法条+状态条共用一个深色底板观感）
-			var _rows_h: float = _sts.size() * 13.0 + (_sts.size() - 1) * 1.5
-			draw_rect(Rect2(bx - 2.0, sy - 2.0, bw + 4.0, _rows_h + 4.0), Color(0.02, 0.03, 0.06, 0.96))
-			for st in _sts:
-				if not (st is Array) or (st as Array).size() < 6:
-					continue
-				var lb := str(st[0])
-				var rt := clampf(float(st[1]), 0.0, 1.0)
-				var scol := Color(float(st[2]), float(st[3]), float(st[4]), 1.0)
-				var val := str(st[5])
-				var pulse2: bool = int(st[6]) == 1 if (st as Array).size() > 6 else false
-				draw_rect(Rect2(bx, sy, bw, 13.0), Color(0.07, 0.08, 0.12, 0.9))
-				if rt > 0.0:
-					draw_rect(Rect2(bx, sy, bw * rt, 13.0), Color(scol.r, scol.g, scol.b, 0.66))
-					draw_rect(Rect2(bx, sy, bw * rt, 3.0), Color(1, 1, 1, 0.16))
-				draw_rect(Rect2(bx, sy, bw, 13.0), Color(0.35, 0.62, 1.0, 0.18), false, 1.0)
-				draw_string(_font, Vector2(bx + 7.0, sy + 10.0), lb, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.92, 0.96, 1.0))
-				draw_string(_font, Vector2(bx, sy + 10.0), val, HORIZONTAL_ALIGNMENT_RIGHT, bw - 7.0, 13, Color(0.88, 0.93, 1.0))
-				if pulse2:
-					var pp := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006)
-					draw_rect(Rect2(bx - 1.0, sy - 1.0, bw + 2.0, 15.0), Color(scol.r, scol.g, scol.b, 0.30 + 0.35 * pp), false, 1.4)
-				sy += 14.5
-		# 暗印层数文字（黄，最顶行；对齐主机 HeroInfoControl 标记行位置：内容顶 y0 基线）
-		var ltxt := ""
-		for m in lyf_rows:
-			if m.size() >= 3:
-				var _s2 := ("%d层" % int(m[1])) if int(m[1]) > 0 else ""
-				ltxt += ("%s·暗印%s " % [str(m[0]), _s2])
-		if ltxt != "":
-			var _lw := _font.get_string_size(ltxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-			draw_string(_font, Vector2(cx - _lw / 2.0, top + 2.0), ltxt,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 22.0, Color.YELLOW)
+		# 共享绘制：三端同一份 scripts/ui/shared/SharedHeroBar.gd；这里只把快照/本地差值喂成数据
+		var hp_now := clampf(float(r.hp), 0.0, float(r.maxhp))
+		var nid_h := int(r.get("nid", -1))
+		r["lag"] = _lag_value(nid_h, hp_now)
+		r["flash_ratio"] = _flash_ratio_of(nid_h) if nid_h >= 0 else 0.0
+		r["flash_amt"] = float(_flash_amt.get(nid_h, 0.0)) if nid_h >= 0 else 0.0
+		SharedHeroBarScript.draw(self, _font, r)
 
-	# 客户端世界血条 → 单机 WorldBarPainter 行格式：
-	# 名称/血量/护盾/刻度/残血拖尾/受伤闪橙/标记全部交给同一绘制器，质感与单机完全一致。
 	func _to_world_bar_row(r: Dictionary) -> Dictionary:
 		var w := float(r.get("w", 110.0))
 		var h := float(r.get("h", 15.0))

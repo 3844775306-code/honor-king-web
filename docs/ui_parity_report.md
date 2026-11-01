@@ -1,24 +1,21 @@
 # 三端 UI 对齐报告
 
-- 生成时间：2026-11-01 11:33
+- 生成时间：2026-11-01 11:38
 - 生成方式：`python scripts/dev/ui_parity_audit.py`
 - 数据源：`scripts/dev/ui_parity_features.json`（正则探测，命中即视为该端具备）
 
-## 未接受缺口：13 项
+## 未接受缺口：10 项
 
-1. 联机缺：英雄血条标记图标行（hero_bar_marker_row）
-2. 联机缺：英雄血条复活进度（hero_bar_revive）
-3. 联机缺：英雄血条 AI 决策胶囊（hero_bar_ai_chip）
-4. 回放缺：BUFF 图标行+详情浮层（buff_row）
-5. 回放缺：死亡回放面板（death_recap）
-6. 联机缺：商店键盘(1-9/↑↓/Enter)（shop_keyboard）
-7. 联机缺：敌人索敌头像条（touch_enemy_picker）
-8. 联机缺：键位自定义布局(拖动/缩放)（touch_layout_editor）
-9. 联机缺：阵亡观战点头像切镜头（spectator_click）
-10. 联机缺：C 英雄详情面板（hero_detail_panel）
-11. 联机缺：T 团队决策(AI 战术)（team_decision_panel）
-12. 联机缺：结算页底部按钮(返回/再来一局)（result_footer_buttons）
-13. 回放缺：阵亡全屏压暗/复活提示（death_overlay）
+1. 回放缺：BUFF 图标行+详情浮层（buff_row）
+2. 回放缺：死亡回放面板（death_recap）
+3. 联机缺：商店键盘(1-9/↑↓/Enter)（shop_keyboard）
+4. 联机缺：敌人索敌头像条（touch_enemy_picker）
+5. 联机缺：键位自定义布局(拖动/缩放)（touch_layout_editor）
+6. 联机缺：阵亡观战点头像切镜头（spectator_click）
+7. 联机缺：C 英雄详情面板（hero_detail_panel）
+8. 联机缺：T 团队决策(AI 战术)（team_decision_panel）
+9. 联机缺：结算页底部按钮(返回/再来一局)（result_footer_buttons）
+10. 回放缺：阵亡全屏压暗/复活提示（death_overlay）
 
 ## 全量清单
 
@@ -29,9 +26,9 @@
 | 世界血条(英雄+单位) | 单机/联机/回放 | ✅ | ✅ | ✅ |
 | 英雄血条1000血刻度 | 单机/联机/回放 | ✅ | ✅ | ✅ |
 | 英雄血条状态条(附魔/枪意/回城) | 单机/联机/回放 | ✅ | ✅ | ✅ |
-| 英雄血条标记图标行 | 单机/联机/回放 | ✅ | ❌ 缺 | ✅ |
-| 英雄血条复活进度 | 单机/联机/回放 | ✅ | ❌ 缺 | ✅ |
-| 英雄血条 AI 决策胶囊 | 单机/联机/回放 | ✅ | ❌ 缺 | ✅ |
+| 英雄血条标记图标行 | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 英雄血条复活进度 | 单机/联机/回放 | ✅ | ⚠️ 接受 | ✅ |
+| 英雄血条 AI 决策胶囊 | 单机/联机/回放 | ✅ | ✅ | ✅ |
 | BUFF 图标行+详情浮层 | 单机/联机/回放 | ✅ | ✅ | ❌ 缺 |
 | 击杀战报(含助攻/印记) | 单机/联机/回放 | ✅ | ✅ | ✅ |
 | 死亡回放面板 | 单机/联机/回放 | ✅ | ✅ | ❌ 缺 |
