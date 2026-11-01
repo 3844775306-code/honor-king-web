@@ -647,7 +647,26 @@ func _find_target():
 		current_target = best_tripod
 		return
 
-	# 不再兜底攻击「只是站在塔里的敌方英雄」：没有塔内打我方英雄的事件就不锁英雄
+	# 4. 塔内没有敌方小兵/戍鼎时：攻击范围内最近的敌方英雄
+	#    （王者荣耀规则：无兵线时防御塔照样打塔内英雄，否则英雄可以无兵越塔白嫖）
+	var best_hero: Hero = null
+	var best_hero_dist := reach + 1.0
+	for entity in get_tree().get_nodes_in_group("heroes"):
+		if not (entity is Hero):
+			continue
+		var h: Hero = entity
+		if h.team == team or h.health <= 0.0:
+			continue
+		if h.collision_layer == 0 or h.is_invisible_to_enemy() or h.is_untargetable_by_enemies():
+			continue
+		var hd := global_position.distance_to(h.global_position)
+		if hd <= reach + h.body_radius and hd < best_hero_dist:
+			best_hero_dist = hd
+			best_hero = h
+	if best_hero != null:
+		current_target = best_hero
+		return
+
 	current_target = null
 func get_hit_flash_root() -> Node3D:
 	return _body_vis if _body_vis != null and is_instance_valid(_body_vis) else self
