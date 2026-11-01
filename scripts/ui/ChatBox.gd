@@ -138,6 +138,12 @@ func _alpha(m: Dictionary) -> float:
 	return clampf(1.0 - (age - LIFE) / FADE, 0.0, 1.0)
 
 
+## 回放倒退重建：清空消息区
+func clear() -> void:
+	_msgs.clear()
+	queue_redraw()
+
+
 func _on_message(from_name: String, team: int, text: String, is_self: bool) -> void:
 	var col: Color = UiKit.C_GOLD if is_self else (
 		Color(0.55, 0.80, 1.0) if team == Config.player_team else Color(1.0, 0.55, 0.50))

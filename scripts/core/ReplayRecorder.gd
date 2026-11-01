@@ -51,7 +51,8 @@ var _last_kills: Array = []
 var _last_levels: Array = []
 var _last_deaths: Array = []
 var _buff_frames: Array = []
-var _ui_frames: Array = []      # 回放 HUD：每英雄 [gold, 目标摘要, 推荐装bundle]（2Hz）
+var _ui_frames: Array = []
+var _chat_events: Array = []    # 回放聊天：[{t,k:'chat',n,tm,txt,me}]      # 回放 HUD：每英雄 [gold, 目标摘要, 推荐装bundle]（2Hz）
 var _last_hit_ms := {}
 var _rb_last := {}   # hero idx -> 上次推荐装 bundle（变化才记录）   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
 var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
@@ -81,6 +82,8 @@ static func ensure(bm_node) -> Node:
 
 
 func _ready() -> void:
+	if is_instance_valid(ChatService):
+		ChatService.message.connect(_on_chat_message)
 	add_to_group(GROUP)
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	set_process(true)
@@ -552,6 +555,14 @@ func _maxhp_of_ent(e) -> float:
 	return 1.0
 
 
+func _on_chat_message(from_name: String, team: int, text: String, is_self: bool) -> void:
+	if _saved or not _started:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_chat_events.append({"t": int(round(gt * 1000.0)), "k": "chat", "n": str(from_name),
+		"tm": int(team), "txt": str(text), "me": 1 if is_self else 0})
+
+
 func _markers_to_str(h) -> String:
 	var parts: Array = []
 	for src in h.get_marker_sources():
@@ -714,6 +725,21 @@ func _save() -> void:
 	if not _frames.is_empty():
 		duration = float(int(_frames[_frames.size() - 1]["t"])) / 1000.0
 	var winner: int = int(bm.get("winner")) if bm != null and is_instance_valid(bm) else -1
+	# 终局统计（结算页/个人表现）：保存时抓一次各英雄最终数据
+	var final_rows: Array = []
+	for hf in get_tree().get_nodes_in_group("heroes"):
+		if not (hf is Hero):
+			continue
+		var fidx = _hero_ids.get(hf.get_instance_id())
+		if fidx == null:
+			continue
+		final_rows.append([int(fidx), int(hf.kills), int(hf.deaths), int(hf.assists),
+			int(hf.gold), int(hf.total_gold_earned),
+			int(hf.damage_dealt_to_heroes), int(hf.damage_taken_from_heroes),
+			int(hf.healing_done), int(hf.last_hits),
+			int(round(hf.cc_duration_dealt * 10.0)), int(hf.turret_damage), int(hf.jungle_gold),
+			1 if hf.is_mvp else 0,
+			(hf.equipment_slots.duplicate() if hf.equipment_slots is Array else [])])
 	var doc := {
 		"v": VERSION,
 		"meta": {
@@ -739,6 +765,8 @@ func _save() -> void:
 		"buff_frames": _buff_frames,
 		"buff_defs": _buff_defs,
 		"ui_frames": _ui_frames,
+		"chat": _chat_events,
+		"final": final_rows,
 	}
 	var f := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:

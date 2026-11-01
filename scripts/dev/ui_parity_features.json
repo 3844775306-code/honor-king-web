@@ -826,6 +826,58 @@
         ]
       },
       "accepted": {}
+    },
+    {
+      "id": "replay_chat",
+      "name": "回放聊天/语音(ChatBox)",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "ChatBox"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_end_banner",
+      "name": "回放终局横幅",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "EndBanner"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_postmatch",
+      "name": "回放终局聚光灯舞台",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "PostMatchView"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_result_panel",
+      "name": "回放结算页",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "NetResultPanel"
+        ]
+      },
+      "accepted": {}
     }
   ]
 }

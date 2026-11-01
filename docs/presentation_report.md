@@ -1,6 +1,6 @@
 # 三端表现对齐报告
 
-- 生成时间：2026-11-01 12:50
+- 生成时间：2026-11-01 12:57
 - 生成方式：`python scripts/dev/ui_parity_audit.py`
 - 数据源：`scripts/dev/presentation_features.json`（正则探测，命中即视为该端具备）
 
