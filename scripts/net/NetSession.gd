@@ -737,6 +737,16 @@ func _assign_hero_to(pid: int, h: Hero) -> void:
 	_update_overlay()
 
 
+# 从 SkillDatabase 反查 Skill 资源对应的 id（manifest 里要让客户端画出同款技能图标）
+func _skill_id_of(sk: Skill) -> String:
+	if sk == null:
+		return ""
+	for sid in SkillDatabase.skills:
+		if SkillDatabase.skills[sid] == sk:
+			return str(sid)
+	return ""
+
+
 func _build_manifest(pid: int, h: Hero, nid: int) -> Dictionary:
 	var sk: Array = []
 	for i in range(h.skills.size()):
@@ -744,6 +754,7 @@ func _build_manifest(pid: int, h: Hero, nid: int) -> Dictionary:
 		if s == null:
 			continue
 		sk.append({
+			"sid": _skill_id_of(s),   # 技能 id：客户端第 4 技能按钮要用它取 SkillDatabase 里的图标纹样
 			"name": s.skill_name, "type": s.type, "cd": s.cooldown, "mana": s.mana_cost,
 			"cdb": s.cd_bonus, "pw": s.power_bonus, "rad": s.radius,
 			"range": s.cast_range, "dis": s.self_displacement, "shield": s.shield_amount,

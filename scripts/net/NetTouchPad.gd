@@ -416,6 +416,10 @@ func set_extra_skill_state(st: Dictionary) -> void:
 	var nm := str(st.get("name", ""))
 	if b.display_name != nm:
 		b.display_name = nm
+	# 与 host 一致：英雄元素色 + 技能纹样（host TouchController._update_skill_button_ui 对 i=3 同样推送 art_hero/art_skill）
+	b.art_hero = str(st.get("hero", ""))
+	var sid4 := str(st.get("sid", ""))
+	b.art_skill = SkillDatabase.get_skill(sid4) if sid4 != "" else null
 	b.max_level = int(st.get("max_level", 1))
 	b.skill_level = maxi(int(st.get("level", 1)), 1)
 	var total := maxf(float(st.get("cdmax", 0.0)), 0.001)

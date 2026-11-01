@@ -368,6 +368,7 @@ func _process(delta: float) -> void:
 	if not _map_applied:
 		_apply_map_if_ready()
 	_update_atk_ring()
+	_update_tower_rings()
 	_update_epic_rings()
 	# 野区营地范围圈：到出生秒数才亮起（普通 30s / 角落空间之灵 60s），与主机营地在野怪首刷时才出现的节奏一致
 	if _state == 1 and not _camp_rings.is_empty():
@@ -662,6 +663,10 @@ func _on_snapshot(snap: Array) -> void:
 			v.team = team
 			if typ == NET_HERO:
 				v.pname = str(ent[17]) if ent.size() > 17 else ""
+			if typ == NET_JUNGLE:
+				if hp < float(v.get("prev_hp", hp)) - 0.5:
+					v["hit_t"] = _last_snap_time
+				v["prev_hp"] = hp
 			v.hp = hp
 			v.maxhp = maxhp
 			v.target = pos
@@ -1858,7 +1863,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	# 模型 + 头顶血条偏移（≈ 模型顶部）
 	var head_off := 1.6
 	var tower_ring: MeshInstance3D = null   # 防御塔攻击范围环（存回 view 供快照刷红/绿/黄）
-	var epic_ring_ref: MeshInstance3D = null   # 史诗野怪活动圈（默认隐藏，玩家攻击时显示）
+	var epic_ring_ref: MeshInstance3D = null   # 野怪活动圈（默认隐藏，玩家攻击时显示）
+	var _ring_r: float = 4.0                   # 野怪活动圈半径（普通营地 4 / 史诗 8，同 host）
 	var model_ref: Node3D = null            # 主模型实例（无骨骼动画的兵种做程序化后坐用）
 	match typ:
 		NET_HERO:
@@ -1887,6 +1893,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 			# 塔攻击范围圈（同主机 Turret._create_range_preview：贴地柔化环带，radius = 8.9 + 0.5）
 			tower_ring = MeshFactory.create_ground_ring(8.9 + 0.5, Color(1.0, 0.9, 0.35, 0.45))
 			tower_ring.name = "TowerRangeRing"
+			tower_ring.visible = false   # 与 host 一致：只在「敌方塔 + 本端玩家 ≤11m」时显示
 			node.add_child(tower_ring)
 		NET_MINION:
 			var mm := NetModels.minion(name, team)
@@ -1913,15 +1920,16 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				head_off = 4.0
 				if NetModels.is_epic_jungle(name):
 					head_off = 8.0
-					# 史诗野怪范围圈：半径≈8 的贴地柔化环（同主机 _add_activity_ring）
-					# 圈固定回巢穴圆心（不随怪移动）；怪在圈内=白色，走出圈外=红色
-					# 默认隐藏：只有本端玩家正在攻击这只野怪时才显示（同主机规则）
-					var er := MeshFactory.create_ground_ring(8.0, Color(1.0, 1.0, 1.0, 0.42), 0.0)
-					er.name = "EpicActivityRing"
-					er.top_level = true   # 世界坐标固定：圆心锁在巢穴，不随怪移动
-					er.visible = false
-					node.add_child(er)
-					epic_ring_ref = er
+					_ring_r = 8.0
+				# 活动范围圈（同 host _add_activity_ring(max(activity_radius,4))：普通营地 4m、史诗 8m）
+				# 圈固定回营地圆心（top_level，不随怪移动）；怪在圈内=白，拖出圈外=红
+				# 默认隐藏：只有本端玩家正在攻击这只野怪时显示（同 host 规则）
+				var er := MeshFactory.create_ground_ring(_ring_r, Color(1.0, 1.0, 1.0, 0.42), 0.0)
+				er.name = "EpicActivityRing"
+				er.top_level = true
+				er.visible = false
+				node.add_child(er)
+				epic_ring_ref = er
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 0.9
@@ -1972,7 +1980,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 		"level": 1, "mana": 0.0, "maxmana": 1.0, "shield": 0.0,
 		"exp": 0.0, "exp_to_next": 1.0, "under_attack": 0,
 		"ring": tower_ring, "epic_ring": epic_ring_ref,   # 塔范围环（快照刷红/绿/黄；非塔为 null）
-		"epic_center": Vector3.ZERO, "epic_center_set": false, "epic_red": false}
+		"epic_center": Vector3.ZERO, "epic_center_set": false, "epic_red": false,
+		"jring_r": (_ring_r if typ == NET_JUNGLE else 4.0), "prev_hp": 0.0, "hit_t": -999.0}
 	if model_ref != null:
 		view["model"] = model_ref
 	# #44 动画：英雄/小兵/野怪模型带 AnimationPlayer 就挂 idle/walk/attack/cast/die 驱动状态
@@ -2610,6 +2619,12 @@ func _collect_world_bars() -> Array:
 		if _cam.is_position_behind(anchor):
 			continue
 		var sp := _cam.unproject_position(anchor)
+		var dist: float = _cam.global_position.distance_to(v.node.global_position)
+		var is_monster: bool = int(v.type) == NET_JUNGLE
+		var is_turret_v: bool = int(v.type) == NET_TURRET
+		# 主机 HUD 同规则：小兵远处直接舍弃（塔/野怪不剔）
+		if not (is_turret_v or is_monster) and int(v.type) != NET_HERO and dist > 44.0:
+			continue
 		match int(v.type):
 			NET_HERO:
 				rows.append(_hero_bar_row(nid, v, sp))
@@ -2618,14 +2633,19 @@ func _collect_world_bars() -> Array:
 			NET_MINION:
 				var mn := str(v.get("name", ""))
 				var vanguard := mn.find("先锋") >= 0 or mn in ["dragon", "storm", "shadow_dragon"]
-				rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, vanguard, 1000.0))
+				# 满血小兵且中远距离：缩小细条（72×8），同 host HUD
+				var small: bool = float(v.hp) >= float(v.maxhp) and dist > 20.0
+				if small:
+					rows.append(_unit_bar_row(nid, v, sp, 72.0, 8.0, 84.0, false, false, false, 1000.0, false, true))
+				else:
+					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, vanguard, 1000.0))
 			NET_JUNGLE:
 				if NetModels.is_epic_jungle(str(v.get("name", ""))):
 					# 史诗怪大号分格紫条：宽随血量每格 1000 自适应（同主机 HUD）
 					var segs := maxi(1, int(ceil(float(v.maxhp) / 1000.0)))
-					rows.append(_unit_bar_row(nid, v, sp, clampf(segs * 22.0, 380.0, 880.0), 30.0, 84.0, true))
+					rows.append(_unit_bar_row(nid, v, sp, clampf(segs * 22.0, 380.0, 880.0), 30.0, 84.0, true, false, true, 1000.0, true))
 				else:
-					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, true, 1000.0))
+					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, true, 1000.0, true))
 	return rows
 
 func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
@@ -2643,12 +2663,14 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 		"lyf": v.get("lyf", [])}
 
 func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, label_off: float,
-		epic := false, turret := false, ticks := false, tick_step := 1000.0) -> Dictionary:
+		epic := false, turret := false, ticks := false, tick_step := 1000.0,
+		monster := false, small := false) -> Dictionary:
 	return {"kind": "unit", "nid": nid, "cx": sp.x, "cy": sp.y, "w": w, "h": h,
 		"team": int(v.team), "epic": epic, "shield": float(v.get("shield", 0.0)),
 		"name": str(v.get("name", "")), "hp": float(v.hp), "maxhp": float(v.maxhp),
 		"label_off": label_off, "lyf": v.get("lyf", []), "mk": v.get("mk", []),
-		"turret": turret, "ticks": ticks, "tick_step": tick_step}
+		"turret": turret, "ticks": ticks, "tick_step": tick_step,
+		"monster": monster, "small": small}
 
 # —— 世界 / 相机 / HUD 搭建 ——
 func _make_mat(col: Color, rough := 0.9) -> StandardMaterial3D:
@@ -3779,6 +3801,8 @@ func _update_skill_pad() -> void:
 		var total4 := maxf(float(sk4.get("cd", 0.0)), 0.001)
 		_pad.set_extra_skill_state({
 			"name": str(sk4.get("name", "")),
+			"sid": str(sk4.get("sid", "")),   # 第4技能图标（同 host：英雄元素色 + 技能纹样）
+			"hero": str(_manifest.get("hero_name", "")),
 			"level": maxi(slv4, 1), "max_level": 1,
 			"cd": cd4, "cdmax": total4,
 			"mana_ok": mana >= float(sk4.get("mana", 0.0)),
@@ -4222,6 +4246,24 @@ func _update_atk_ring() -> void:
 
 ## 史诗野怪活动圈：仅当本端玩家正在攻击这只野怪时显示（同主机 JungleMonster._update_activity_ring）
 ## 圈固定回巢穴圆心；怪在圈内=白色，走出圈外=红色
+# 敌方塔范围环：本端玩家进到 11m 内才显示（同 host Turret._update_range_preview）
+func _update_tower_rings() -> void:
+	var sp := _self_pos()
+	var alive := _owned and _state == 1 and int(_own.get("alive", 1)) != 0
+	for v in _views.values():
+		var r = v.get("ring")
+		if r == null or not is_instance_valid(r):
+			continue
+		var nd = v.get("node")
+		if nd == null or not is_instance_valid(nd):
+			(r as Node3D).visible = false
+			continue
+		var show: bool = alive and int(v.get("team", TEAM_PLAYER)) != TEAM_PLAYER \
+			and float(v.get("hp", 0.0)) > 0.0 \
+			and nd.global_position.distance_to(sp) <= 11.0
+		r.visible = show
+
+
 func _update_epic_rings() -> void:
 	var has_epic := false
 	for v in _views.values():
@@ -4242,19 +4284,23 @@ func _update_epic_rings() -> void:
 		var ring = v.get("epic_ring")
 		if ring == null or not is_instance_valid(ring):
 			continue
-		var show: bool = held and nid == tgt and float(v.get("hp", 0.0)) > 0.0
-		ring.visible = show
-		if not show:
-			continue
 		var nd = v.get("node")
 		if nd == null or not is_instance_valid(nd):
+			(ring as Node3D).visible = false
+			continue
+		# host JungleMonster._update_activity_ring：最近 2 秒挨过玩家的打 + 当前目标就是它
+		var recent: bool = float(_last_snap_time) - float(v.get("hit_t", -999.0)) <= 2.0
+		var show: bool = recent and nid == tgt and float(v.get("hp", 0.0)) > 0.0
+		ring.visible = show
+		if not show:
 			continue
 		if not bool(v.get("epic_center_set", false)):
 			v["epic_center_set"] = true
 			v["epic_center"] = nd.global_position
 		var ctr: Vector3 = v["epic_center"]
 		(ring as Node3D).global_position = Vector3(ctr.x, ctr.y + 0.17, ctr.z)
-		var out: bool = nd.global_position.distance_to(ctr) > 8.0
+		var _rr: float = float(v.get("jring_r", 4.0))
+		var out: bool = nd.global_position.distance_to(ctr) > _rr
 		if out != bool(v.get("epic_red", false)):
 			v["epic_red"] = out
 			MeshFactory.set_ground_ring_color(ring,
@@ -4479,17 +4525,18 @@ class Hud:
 			disp_name = (disp_name + " · " + nick_name) if disp_name != "" else nick_name
 		if disp_name == "":
 			disp_name = "?"
-		var name_fs := 34.0
-		if nick_name != "" and _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 34).x > 280.0:
-			name_fs = 26.0
-		var name_str := "%s\n%d/%d" % [disp_name, int(r.hp), int(r.maxhp)]
-		var _nw := 0.0
-		for _ln in name_str.split("\n"):
-			_nw = maxf(_nw, _font.get_string_size(_ln, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).x)
-		draw_string(_font, Vector2(cx - _nw * 0.5, top2), name_str,
-				HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs, Color.WHITE)
+		# 与 host HeroInfoControl 一致：名称 28（超宽降 22 并省略），血条上方只显示名字，不显示血量数字
+		var name_fs := 28.0
+		if _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 28).x > 272.0:
+			name_fs = 22.0
+		var _nw := _font.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).x
+		var _name_base := top2 + _font.get_ascent(int(name_fs))
+		draw_string_outline(_font, Vector2(cx - _nw * 0.5, _name_base), disp_name,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs), 4, Color(0, 0, 0, 0.9))
+		draw_string(_font, Vector2(cx - _nw * 0.5, _name_base), disp_name,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs), Color.WHITE)
 		# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
-		var by := top2 + _font.get_multiline_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).y + 2.0
+		var by := _name_base + _font.get_descent(int(name_fs)) + 3.0
 		var bw := 280.0
 		var bh := 28.0
 		var mhp := maxf(float(r.maxhp), 1.0)
@@ -4635,13 +4682,29 @@ class Hud:
 					draw_rect(Rect2(left + fw - doom_w, top2, doom_w, bh), Color(1.0, 0.88, 0.18, 0.9))
 			if shield > 0.0:
 				var sw := minf(shield / mhp * bw, bw - fw)
-				if sw > 0.0:
-					draw_rect(Rect2(left + fw, top2, sw, bh), Color(0.8, 0.8, 0.8))
-			# 受伤闪橙：血量右端 0.5s 衰减（复刻主机 HealthBarControl L117-121）
+				if sw > 0.5:
+					var sr := Rect2(left + fw, top2, sw, bh)
+					draw_rect(sr, Color(0.72, 0.82, 0.95, 0.92))
+					draw_rect(Rect2(sr.position, Vector2(sw, maxf(1.5, bh * 0.14))), Color(1, 1, 1, 0.55))
+					var hx2 := 2.0
+					while hx2 < sw:
+						draw_line(sr.position + Vector2(hx2, bh), sr.position + Vector2(hx2 + bh * 0.55, 0),
+							Color(1, 1, 1, 0.28), 1.0)
+						hx2 += 4.0
+					draw_rect(Rect2(sr.position, Vector2(1.0, bh)), Color(1, 1, 1, 0.75))
+			# 受伤闪橙：血量右端 0.5s 衰减（同 host WorldBarPainter：1.0,0.58,0.10 + 顶部亮边）
 			if _fratio_u > 0.0 and _fhp_u > 0.0:
 				var _fw_u := (_fhp_u / mhp) * bw * _fratio_u
 				if _fw_u > 0.5:
-					draw_rect(Rect2(left + fw, top2, _fw_u, bh), Color.ORANGE)
+					draw_rect(Rect2(left + fw, top2, _fw_u, bh), Color(1.0, 0.58, 0.10, 0.85))
+					draw_rect(Rect2(left + fw, top2, _fw_u, maxf(1.5, bh * 0.14)), Color(1.0, 0.85, 0.55, 0.9))
+			# 低血脉冲（<30% 红色呼吸外发光，同 host）
+			var _ratio_u := hp_now / mhp
+			if _ratio_u < 0.3 and hp_now > 0.0:
+				var _pulse_u: float = 0.30 + 0.35 * absf(sin(Time.get_ticks_msec() * 0.0052))
+				draw_rect(Rect2(left - 2.0, top2 - 2.0, bw + 4.0, bh + 4.0),
+					Color(1.0, 0.20, 0.14, _pulse_u * 0.55), false, 2.0)
+				draw_rect(Rect2(left, top2, bw, bh), Color(1.0, 0.30, 0.22, _pulse_u * 0.22))
 			# 野怪 / 主宰先锋：每 1000 血一条分隔线（复刻主机 WorldBarPainter）
 			if bool(r.get("ticks", false)):
 				var tick_step: float = maxf(100.0, float(r.get("tick_step", 1000.0))) / mhp * bw
@@ -4655,8 +4718,9 @@ class Hud:
 						tx += tick_step
 			draw_rect(Rect2(left, top2, bw, bh), Color(tc.r, tc.g, tc.b, 0.5), false, 1.0)
 		# 防御塔：不画名称标签，改为血条下方一个指向塔身的小三角箭头
-		var label := str(r.get("name", ""))   # 默认不显示具体血量数值
-		var fs := 32.0
+		# host 规则：只有野怪显示名称（show_name = is_monster），字号 20、居中、带描边；小兵不挂名字
+		var label := str(r.get("name", ""))
+		var fs := 20.0
 		var _lh := 0.0
 		if bool(r.get("turret", false)):
 			var tc_ar := _team_color(int(r.get("team", 9)))
@@ -4671,17 +4735,15 @@ class Hud:
 				Vector2(ax2 - aw2, ay2), Vector2(ax2 + aw2, ay2), Vector2(ax2, ay2 + ah2),
 				Vector2(ax2 - aw2, ay2),
 			]), Color(0, 0, 0, 0.65), 1.2)
-		else:
-			# 名称标签（字号×2=32：文本块底距血条顶 6px；黑描边近似主机 Label outline）
-			_lh = _font.get_multiline_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).y
+		elif bool(r.get("monster", false)) and not bool(r.get("small", false)) and label != "":
+			# 野怪名称：居中压在血条上方 10px（与 host WorldBarPainter / HUD 同款：fs 20 + 阴影 + 4px 描边）
 			var _asc := _font.get_ascent(fs)
-			var lp := Vector2(left, (top2 - 6.0 - _lh) + _asc)
-			var blk := Color(0, 0, 0)
-			draw_string(_font, lp + Vector2(-1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-			draw_string(_font, lp + Vector2(1.5, -1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-			draw_string(_font, lp + Vector2(-1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-			draw_string(_font, lp + Vector2(1.5, 1.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, blk)
-			draw_string(_font, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+			var np := Vector2(left + 1.2, top2 - 10.0 + _asc + 1.5)
+			draw_string(_font, np, label, HORIZONTAL_ALIGNMENT_CENTER, bw, fs, Color(0, 0, 0, 0.55))
+			draw_string_outline(_font, Vector2(left, top2 - 10.0 + _asc), label,
+				HORIZONTAL_ALIGNMENT_CENTER, bw, fs, 4, Color(0, 0, 0, 0.9))
+			draw_string(_font, Vector2(left, top2 - 10.0 + _asc), label,
+				HORIZONTAL_ALIGNMENT_CENTER, bw, fs, Color(0.96, 0.97, 1.0))
 		# 标记图标（血条上方一行；专属图标 + 右上角层数）
 		var _mk_rows: Array = []
 		for m in lyf_rows2:
