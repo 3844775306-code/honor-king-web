@@ -423,13 +423,19 @@ void fragment() {
 	vec3 col = mix(shallow_color, deep_color, center * 0.95);
 	col *= 0.86 + 0.20 * streak;
 
+	// 岸边过渡：先往湿沙色过渡（避免水面边缘与河滩形成一条硬线），再叠泡沫与水线
+	float shore_col = smoothstep(7.6, 9.9, d);
+	col = mix(col, vec3(0.30, 0.31, 0.26), shore_col * 0.42);
 	// 岸边泡沫：贴岸窄带上随波推进的泡沫 + 湿沙高光（只占岸边一条，别糊满水面）
 	float foam_wave = sin(d * 5.4 - t * 2.4 + sin(along * 1.1 + t * 0.6) * 1.6) * 0.5 + 0.5;
-	float shore = smoothstep(7.8, 9.0, d) * (1.0 - smoothstep(9.7, 10.05, d));
-	float foam = smoothstep(0.55, 0.95, foam_wave) * shore;
-	float wet_line = smoothstep(9.1, 9.55, d) * (1.0 - smoothstep(9.75, 10.1, d));
-	col = mix(col, foam_color, clamp(foam * 0.55, 0.0, 1.0));
-	col = mix(col, foam_color, wet_line * 0.30);
+	float shore = smoothstep(7.2, 8.8, d) * (1.0 - smoothstep(9.55, 10.1, d));
+	float foam = smoothstep(0.48, 0.92, foam_wave) * shore;
+	float wet_line = smoothstep(8.7, 9.45, d) * (1.0 - smoothstep(9.6, 10.15, d));
+	col = mix(col, foam_color, clamp(foam * 0.62, 0.0, 1.0));
+	col = mix(col, foam_color, wet_line * 0.34);
+	// 最贴岸的一线湿光：稍稍提亮，让水/沙/石交界有一道自然的水线
+	float lip = smoothstep(9.55, 9.95, d) * (1.0 - smoothstep(9.95, 10.1, d));
+	col += vec3(0.10, 0.12, 0.11) * lip * (0.6 + 0.4 * sin(along * 2.2 + t * 1.8));
 	col += vec3(0.09, 0.13, 0.14) * sparkle;
 
 	// 菲涅尔：掠射角染天空色，像真实水面反射天光（强度收敛，别把水面洗成天空色）
@@ -455,19 +461,33 @@ static func spawn_river_banks(parent: Node3D) -> void:
 	# 垂直河心方向（世界）= (1,0,-1)/√2；顺流方向 = (1,0,1)/√2
 	var perp := Vector3(0.70710678, 0.0, -0.70710678)
 
-	# 1) 河滩湿沙：两岸各一条长条平面（宽 3.6，长 132）
+	# 1) 河滩：干沙（外） + 湿沙（内，压到水面边缘下方），两层叠出潮湿过渡带
 	var sand_mat := StandardMaterial3D.new()
 	sand_mat.albedo_color = Color(0.30, 0.27, 0.215)
 	sand_mat.roughness = 0.97
+	# 湿沙：更深、更亮（潮湿反光），内沿压到 d≈9.4，与水面泡沫线交叠，消除岸边硬切
+	var wet_sand_mat := StandardMaterial3D.new()
+	wet_sand_mat.albedo_color = Color(0.215, 0.205, 0.165)
+	wet_sand_mat.roughness = 0.55
+	wet_sand_mat.metallic = 0.05
 	for side in [-1.0, 1.0]:
 		var bank := MeshInstance3D.new()
 		var pm := PlaneMesh.new()
-		pm.size = Vector2(3.6, 132.0)
+		pm.size = Vector2(3.4, 132.0)
 		bank.mesh = pm
 		bank.material_override = sand_mat
 		bank.rotation_degrees = Vector3(0, 45, 0)
-		bank.position = Vector3(0.0, 0.014, 0.0) + perp * (side * 12.0)
+		bank.position = Vector3(0.0, 0.0125, 0.0) + perp * (side * 12.15)
 		parent.add_child(bank)
+		# 湿沙内层：宽 1.6，内沿到 d≈9.4（水面到 d=10，重叠 0.6m，被水面盖住一部分）
+		var wet := MeshInstance3D.new()
+		var wpm := PlaneMesh.new()
+		wpm.size = Vector2(1.6, 132.0)
+		wet.mesh = wpm
+		wet.material_override = wet_sand_mat
+		wet.rotation_degrees = Vector3(0, 45, 0)
+		wet.position = Vector3(0.0, 0.010, 0.0) + perp * (side * 10.2)   # 低于水面最低点(0.02)，避免 z-fighting
+		parent.add_child(wet)
 
 	# 2) 半浸礁石：扁球体，靠岸散落，部分压在水线下
 	var rock_mesh := SphereMesh.new()

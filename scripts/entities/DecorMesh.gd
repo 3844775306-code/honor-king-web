@@ -89,9 +89,21 @@ void fragment() {
 	// 底部泥土
 	float dirt = smoothstep(0.45, 0.05, wp.y);
 	base = mix(base, dirt_col.rgb, dirt * 0.6);
+	// 接地暗部（假 AO）：墙脚往地面过渡的一圈压暗，避免墙像“切”在地面上
+	float contact = (1.0 - smoothstep(0.03, 0.58, wp.y)) * (0.72 + 0.28 * vnoise(wp * 7.0));
+	base *= 1.0 - contact * 0.22;
+	// 竖直面湿痕：墙脚 0~0.9m 压暗 + 微苔绿（近水面/近地面都像被水汽浸过，不再生硬切入）
+	float vert = 1.0 - smoothstep(0.45, 0.92, up);
+	float wet = (1.0 - smoothstep(0.55, 1.15, wp.y)) * vert;
+	wet *= 0.65 + 0.55 * vnoise(wp * 6.2 + vec3(3.0));
+	base *= 1.0 - clamp(wet, 0.0, 1.0) * 0.26;
+	base = mix(base, moss_col.rgb * 0.85, clamp(wet, 0.0, 1.0) * 0.16 * smoothstep(0.62, 0.12, wp.y));
+	// 水线湿光：贴地约 0.05~0.18m 一道微亮的湿石反光，暗示墙与水/地面接触的潮湿带
+	float waterline = (1.0 - smoothstep(0.04, 0.20, abs(wp.y - 0.075))) * vert;
+	base = mix(base, vec3(0.33, 0.39, 0.37), clamp(waterline, 0.0, 1.0) * 0.34);
 	ALBEDO = base;
-	ROUGHNESS = 0.95 - 0.12 * moss;
-	SPECULAR = 0.14;
+	ROUGHNESS = clamp(0.95 - 0.12 * moss - 0.30 * clamp(wet, 0.0, 1.0), 0.35, 0.98);
+	SPECULAR = 0.14 + 0.42 * clamp(waterline, 0.0, 1.0);
 }
 """
 
@@ -137,6 +149,21 @@ void fragment() {
 """
 
 # ==================== 墙体 ====================
+
+## 墙段视觉基线高度：分路/高地台面会埋掉墙脚，视觉根节点按地面抬升。
+## 只影响视觉，不影响碰撞/寻路；host 与联机客户端共用。
+static func wall_ground_y(p: Vector3) -> float:
+	var q := Vector2(p.x, p.z)
+	if q.distance_to(Vector2(-60.0, 60.0)) <= 35.6 or q.distance_to(Vector2(60.0, -60.0)) <= 35.6:
+		return 0.18
+	# 最外圈城墙在路基之外，保持草地基准
+	if absf(p.x) > 61.0 or absf(p.z) > 61.0:
+		return -0.02
+	if absf(p.x + p.z) * 0.70710678 <= 8.0:
+		return 0.12
+	if absf(absf(p.x) - 55.0) <= 8.2 or absf(absf(p.z) - 55.0) <= 8.2:
+		return 0.12
+	return -0.02
 
 ## 石砌立柱/岩壁：5 层错缝巨石 + 基底碎石 + 苔藓土盘（高度 ≈ 3.0，与碰撞盒一致）
 static func wall_visual(seed_val: int = 0) -> Node3D:
@@ -192,8 +219,9 @@ static func _build_wall_mesh(rng: RandomNumberGenerator) -> ArrayMesh:
 		var rr: float = rng.randf_range(0.08, 0.15)
 		_append(st, rock, Vector3(cos(a) * d, rr * 0.55, sin(a) * d), Vector3(rr, rr * 0.72, rr),
 			Vector3(rng.randf_range(0.0, TAU), rng.randf_range(0.0, TAU), 0.0))
-	# 苔藓土盘
-	st.append_from(_disc(0.86, 0.06, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
+	# 墙脚外扩的苔藓/碎石裙，让墙根从石墙自然过渡到草地
+	_append_ground_apron(st, 0.82, rng, 10)
+	st.append_from(_disc(1.06, 0.05, 14), 0, Transform3D(Basis(), Vector3(0.0, 0.025, 0.0)))
 	return st.commit()
 
 # ==================== 草丛 ====================
@@ -311,7 +339,8 @@ static func _build_wall_mesh_hq(rng: RandomNumberGenerator) -> ArrayMesh:
 		var rr: float = rng.randf_range(0.09, 0.16)
 		_append(st, rock, Vector3(cos(a) * d, rr * 0.5, sin(a) * d), Vector3(rr, rr * 0.7, rr),
 			Vector3(rng.randf_range(0.0, TAU), rng.randf_range(0.0, TAU), 0.0))
-	st.append_from(_disc(0.92, 0.06, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
+	_append_ground_apron(st, 0.86, rng, 10)
+	st.append_from(_disc(1.10, 0.05, 14), 0, Transform3D(Basis(), Vector3(0.0, 0.025, 0.0)))
 	return st.commit()
 
 # ==================== 外周连续城墙 ====================
@@ -370,6 +399,10 @@ static func _build_outer_wall_mesh(length: float) -> ArrayMesh:
 		var rr: float = 0.075 + 0.025 * float(i % 2)
 		_append(st, rock, Vector3(sx, rr * 0.55, sz), Vector3(rr, rr * 0.62, rr),
 			Vector3(float(i) * 1.7, float(i) * 2.1, 0.0))
+	# 连续城墙的墙脚碎石/苔藓带：沿两侧铺低矮扁石，打破 1.2m 基座的直线切口
+	var apron_rng := RandomNumberGenerator.new()
+	apron_rng.seed = int(round(length * 1000.0)) + 913
+	_append_ground_apron(st, h, apron_rng, maxi(6, int(round(length * 4.0))), 0.66)
 	return st.commit()
 
 ## 墙端小柱：连续墙两端收口（基座 + 柱身 + 柱头 + 顶饰），与墙体同一石材质感
@@ -394,6 +427,17 @@ static func _build_pillar_mesh() -> ArrayMesh:
 	_append(st, box, Vector3(0.0, 1.15, 0.0), Vector3(0.44, 1.80, 0.44), Vector3.ZERO)   # 柱身
 	_append(st, box, Vector3(0.0, 2.13, 0.0), Vector3(0.58, 0.16, 0.58), Vector3.ZERO)   # 柱头
 	_append(st, box, Vector3(0.0, 2.31, 0.0), Vector3(0.34, 0.20, 0.34), Vector3.ZERO)   # 顶饰
+	# 柱脚碎石裙 + 苔藓土盘
+	var rock := _rock_sphere()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77123
+	for i in range(6):
+		var a: float = rng.randf_range(0.0, TAU)
+		var d: float = rng.randf_range(0.38, 0.66)
+		var rr: float = rng.randf_range(0.08, 0.16)
+		_append(st, rock, Vector3(cos(a) * d, rr * 0.5, sin(a) * d), Vector3(rr, rr * 0.65, rr),
+			Vector3(rng.randf_range(0.0, TAU), rng.randf_range(0.0, TAU), 0.0))
+	st.append_from(_disc(0.92, 0.05, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.025, 0.0)))
 	return st.commit()
 
 # ==================== 内部工具 ====================
@@ -437,6 +481,22 @@ static func _disc(radius: float, height: float, segs: int) -> CylinderMesh:
 	cm.height = height
 	cm.radial_segments = segs
 	return cm
+
+
+## 墙脚裙：在墙体基线外圈铺低矮、压扁的不规则碎石/土块，打断直墙与地面的硬切口。
+## 复用墙体材质，低处会被岩石 shader 自动染成苔藓/泥土。
+static func _append_ground_apron(st: SurfaceTool, half_len: float, rng: RandomNumberGenerator,
+		count: int, side_z: float = 0.0) -> void:
+	var rock := _rock_sphere()
+	for i in range(count):
+		var x: float = rng.randf_range(-half_len, half_len)
+		var side: float = -1.0 if (i % 2 == 1) else 1.0
+		var z: float = side * (side_z if side_z > 0.0 else rng.randf_range(0.46, 0.82))
+		var rr: float = rng.randf_range(0.10, 0.24)
+		var sc := Vector3(rr * rng.randf_range(1.35, 2.15), rr * rng.randf_range(0.32, 0.58),
+			rr * rng.randf_range(0.95, 1.55))
+		_append(st, rock, Vector3(x, sc.y * 0.38, z), sc,
+			Vector3(rng.randf_range(-0.18, 0.18), rng.randf_range(0.0, TAU), rng.randf_range(-0.18, 0.18)))
 
 # ==================== 青砖铺装（防御塔外周地面） ====================
 # 单块薄圆盘 + 世界坐标画砖缝的 shader：不同塔/相邻塔的砖纹能自然接上，且只有 1 个 draw call。
