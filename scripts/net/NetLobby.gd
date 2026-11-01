@@ -134,6 +134,14 @@ var _lane_locked := false              # 选人页是否强制锁该职责（被
 # --- 顺序选人（draft：host 权威；空/无此字段 = 旧流程同时选人） ---
 var _draft_step := -1              # -1=无顺序；0..9=当前步；10=已完成
 var _draft_left := 0.0             # 剩余秒（host 权威值，各端本地递减显示）
+var _pick_stage := true          # true=选英雄浮层阶段（同单机 _set_sel_stage）
+var _select_bar = null
+var _select_right_block = null
+var _select_side_left = null
+var _select_side_right = null
+var _select_pick_layer = null
+var _select_pick_summary = null
+var _select_nick_edit = null
 var _draft_turn: Array = []        # 当前步 [team, seat]
 var _draft_picks := {}             # "team-seat" -> 英雄名（我方 AI/敌方席位也按顺序自动选，用于展示/占位）
 var _draft_taken := {}             # 展示阵容/他人已选英雄（本机不可再选）
@@ -296,6 +304,13 @@ func _clear_stack() -> void:
 	for c in _stack.get_children():
 		_stack.remove_child(c)
 		c.queue_free()
+	# 清理浮层（选人中央面板/悬停浮层等直接挂在 _page 上、不属于 _stack）
+	if _page != null:
+		for c2 in _page.get_children():
+			if c2 == _stack:
+				continue
+			_page.remove_child(c2)
+			c2.queue_free()
 	# 同步清空指向已释放控件的缓存，避免跨页误用/误刷新
 	_status = null
 	_diff_btn = null
@@ -1810,6 +1825,7 @@ func _show_select(state: Dictionary) -> void:
 	_ui = UIState.SELECT
 	if entering_select:
 		_pick_ai_names_ready = false
+		_pick_stage = true
 	_connecting = false
 	_clear_stack()
 	_set_page_pad(16, 8)
@@ -1868,7 +1884,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var left := HBoxContainer.new()
 	left.add_theme_constant_override("separation", 8)
 	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var lt := _mk_label("我方", _fs(UiKit.FS_XS), UiKit.C_TEAM0)
+	var lt := _mk_label("我方", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
 	lt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	left.add_child(lt)
 	_my_slots = HBoxContainer.new()
@@ -1900,7 +1916,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 			stage_sub_txt = "本机分路：%s · 只能选择%s" % [lane, _lane_role]
 		elif _lane_role != "":
 			stage_sub_txt = "本机分路「%s」已被队友占用，可选其他职责" % lane
-	_stage_sub = _mk_label(stage_sub_txt, _fs(UiKit.FS_XS), COL_SUB)
+	_stage_sub = _mk_label(stage_sub_txt, _fs(UiKit.FS_SM), COL_SUB)
 	_stage_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tv.add_child(_stage_sub)
 	mv.add_child(tv)
@@ -1910,7 +1926,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var right := HBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var rt := _mk_label("敌方", _fs(UiKit.FS_XS), UiKit.C_TEAM1)
+	var rt := _mk_label("敌方", _fs(UiKit.FS_SM), UiKit.C_TEAM1)
 	rt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	right.add_child(rt)
 	_enemy_slots = HBoxContainer.new()
@@ -2001,7 +2017,7 @@ func _build_select_main(data: Dictionary) -> Control:
 	main.size_flags_vertical = Control.SIZE_EXPAND_FILL
 
 	_my_col = VBoxContainer.new()
-	_my_col.custom_minimum_size = Vector2(190, 0)
+	_my_col.custom_minimum_size = Vector2(218, 0)
 	_my_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_my_col.alignment = BoxContainer.ALIGNMENT_CENTER
 	_my_col.add_theme_constant_override("separation", 6)
@@ -2014,7 +2030,7 @@ func _build_select_main(data: Dictionary) -> Control:
 	main.add_child(_build_center_stage())
 
 	_enemy_col = VBoxContainer.new()
-	_enemy_col.custom_minimum_size = Vector2(190, 0)
+	_enemy_col.custom_minimum_size = Vector2(218, 0)
 	_enemy_col.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_enemy_col.alignment = BoxContainer.ALIGNMENT_CENTER
 	_enemy_col.add_theme_constant_override("separation", 6)
@@ -2050,13 +2066,16 @@ func _build_center_stage() -> Control:
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_child(v)
 
-	_preview_name = _mk_label("请选择英雄", int(_fs(UiKit.FS_HUGE) * 1.8), Color.WHITE)
+	_preview_name = _mk_label("—", int(round(UiKit.FS_HUGE * 1.12 * UiKit.scale())), COL_GOLD)
+	_preview_name.add_theme_constant_override("outline_size", 8)
+	_preview_name.add_theme_color_override("font_outline_color", Color(0.10, 0.07, 0.02, 0.9))
 	_preview_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_preview_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_preview_name)
 
-	_preview_nick = _mk_label("玩家 · %s" % _local_nickname(), _fs(UiKit.FS_MD), COL_SUB)
+	_preview_nick = _mk_label("玩家 · %s" % _local_nickname(), _fs(UiKit.FS_SM), COL_SUB)
+	_preview_nick.visible = false   # 单机选人页预览层无昵称行（昵称在席位卡），保持一致
 	_preview_nick.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_nick.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_preview_nick)
@@ -2067,23 +2086,23 @@ func _build_center_stage() -> Control:
 	v.add_child(chip_row)
 
 	_prev_role_chip = PanelContainer.new()
-	_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.55, 12))
+	_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.95, 12))
 	_prev_role_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_preview_role = _mk_label("职责 —", _fs(UiKit.FS_MD), UiKit.C_TEAM0)
+	_preview_role = _mk_label("定位 · —", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
 	_preview_role.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_role.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prev_role_chip.add_child(_preview_role)
 	chip_row.add_child(_prev_role_chip)
 
 	_prev_summ_chip = PanelContainer.new()
-	_prev_summ_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_GOLD, 0.55, 12))
+	_prev_summ_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_GOLD, 0.9, 12))
 	_prev_summ_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var srow := HBoxContainer.new()
 	srow.add_theme_constant_override("separation", 6)
 	srow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_preview_summ_icon = SelectArt.SummonerGlyph.new("", 28)
+	_preview_summ_icon = SelectArt.SummonerGlyph.new("", 48)
 	srow.add_child(_preview_summ_icon)
-	_preview_summ = _mk_label("召唤师 · 未选择", _fs(UiKit.FS_MD), COL_GOLD)
+	_preview_summ = _mk_label("推荐召唤师 · —", _fs(UiKit.FS_SM), COL_GOLD)
 	_preview_summ.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_summ.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	srow.add_child(_preview_summ)
@@ -2101,7 +2120,7 @@ func _build_center_stage() -> Control:
 	_prev_skill_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_prev_skill_row)
 
-	_preview_tip = _mk_label("点英雄卡选英雄 → 右侧选召唤师 → 点锁定；锁后仍可改选再锁", _fs(UiKit.FS_XS), COL_DIM)
+	_preview_tip = _mk_label("分路：%s · 只能选择%s · 每队每个职责限选 1 名英雄" % [PlayerPrefs.get_lane(), _lane_role], _fs(UiKit.FS_XS), Color(1,1,1,0.4))
 	_preview_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_preview_tip)
@@ -2118,12 +2137,12 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	if hero != "":
 		accent = HeroPickData.ROLE_COLORS.get(role, accent)
 	var p := PanelContainer.new()
-	p.custom_minimum_size = Vector2(236, 142)
+	p.custom_minimum_size = Vector2(214, 138)
 	p.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD if mine else accent, mine, 0.72))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	p.add_child(row)
-	row.add_child(SelectArt.Avatar.new(hero, accent, 48))
+	row.add_child(SelectArt.Avatar.new(hero, accent, 76))
 	var v := VBoxContainer.new()
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	v.add_theme_constant_override("separation", 1)
@@ -2173,48 +2192,34 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 # 底部 300：左职业 tab + hero 横条 | 右召唤师 2 列 + 详情 + 离开/锁定 + 自动开局状态行
 func _build_select_bottom() -> Control:
 	var bar := HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 10)
+	_select_bar = bar
+	bar.add_theme_constant_override("separation", 16)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 500)
+	bar.custom_minimum_size = Vector2(0, 0)
 
-	# 左：职业 tab + 横向英雄卡条
-	var left := _panel_block(UiKit.C_TEAM0, 0.32, 14, 10.0)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	bar.add_child(left)
-	var lv := VBoxContainer.new()
-	lv.add_theme_constant_override("separation", 8)
-	left.add_child(lv)
-	_tab_row = HBoxContainer.new()
-	_tab_row.add_theme_constant_override("separation", 8)
-	lv.add_child(_tab_row)
-	_tab_btns.clear()
-	var tabs: Array = [""]
-	tabs.append_array(HeroPickData.ROLES_ORDER)
-	for r in tabs:
-		var active := str(r) == _tab_role
-		var tb := _mk_tab_btn("全部" if str(r) == "" else str(r),
-			UiKit.C_GOLD if active else UiKit.C_TEAM0, active)
-		tb.pressed.connect(_select_tab.bind(str(r)))
-		if _lane_locked and str(r) != _lane_role:
-			# 分路已锁定：其它职业 tab 置灰不可点
-			tb.disabled = true
-			tb.tooltip_text = "本机分路：%s · 只能选择%s" % [PlayerPrefs.get_lane(), _lane_role]
-		_tab_row.add_child(tb)
-		_tab_btns[str(r)] = tb
-	var strip_scroll := ScrollContainer.new()
-	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	strip_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	strip_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	lv.add_child(strip_scroll)
-	_hero_strip = HBoxContainer.new()
-	_hero_strip.add_theme_constant_override("separation", 10)
-	strip_scroll.add_child(_hero_strip)
-	_rebuild_strip()
+	# 左操作区（同单机 SelectSideLeft 190 宽）：换英雄 / 返回大厅
+	var side_left := VBoxContainer.new()
+	_select_side_left = side_left
+	side_left.custom_minimum_size = Vector2(190, 0)
+	side_left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	side_left.add_theme_constant_override("separation", 10)
+	bar.add_child(side_left)
+	var back_btn := _mk_btn("换英雄", UiKit.C_PANEL_EDGE, false, Vector2(190, 86))
+	back_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	back_btn.pressed.connect(_back_to_pick)
+	side_left.add_child(back_btn)
+	_leave_btn = _mk_btn("返回大厅", UiKit.C_TEAM1, false, Vector2(190, 86))
+	_leave_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	_leave_btn.pressed.connect(_leave_room)
+	side_left.add_child(_leave_btn)
 
-	# 右：召唤 / 出装 双 tab（与单机选人页对齐：860 宽；召唤 5 列网格 / 出装 方案行 + 6 张装备卡）
+	var sp_l := Control.new()
+	sp_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(sp_l)
+
+	# 右 860：召唤 / 出装 双 tab（与单机右栏同尺寸）
 	var right := _panel_block(UiKit.C_GOLD, 0.32, 14, 10.0)
+	_select_right_block = right
 	right.custom_minimum_size = Vector2(860, 0)
 	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	bar.add_child(right)
@@ -2223,20 +2228,21 @@ func _build_select_bottom() -> Control:
 	right.add_child(rv)
 
 	var rtab := HBoxContainer.new()
+	rtab.custom_minimum_size = Vector2(0, 40)
 	rtab.add_theme_constant_override("separation", 8)
 	rv.add_child(rtab)
 	_summ_tab_btn = _mk_tab_btn("召唤", UiKit.C_GOLD, true)
 	_summ_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_summ_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	_summ_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
 	_summ_tab_btn.pressed.connect(_switch_right_tab.bind("召唤"))
 	rtab.add_child(_summ_tab_btn)
 	_build_tab_btn = _mk_tab_btn("出装", UiKit.C_TEAM0, false)
 	_build_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_build_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	_build_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
 	_build_tab_btn.pressed.connect(_switch_right_tab.bind("出装"))
 	rtab.add_child(_build_tab_btn)
 
-	# —— 召唤面板：5 列召唤师卡 + 悬停详情 ——
+	# —— 召唤面板：5 列召唤师卡 + 详情 ——
 	_summ_panel = VBoxContainer.new()
 	_summ_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_summ_panel.add_theme_constant_override("separation", 6)
@@ -2249,8 +2255,8 @@ func _build_select_bottom() -> Control:
 	_summ_panel.add_child(sscroll)
 	var grid := GridContainer.new()
 	grid.columns = 5
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sscroll.add_child(grid)
 	_summ_btns.clear()
@@ -2283,7 +2289,7 @@ func _build_select_bottom() -> Control:
 	_summ_detail.custom_minimum_size = Vector2(0, 34)
 	_summ_panel.add_child(_summ_detail)
 
-	# —— 出装面板：方案行（4 列）+ 6 张装备卡（3 列，悬浮看详情）——
+	# —— 出装面板 ——
 	_build_panel = VBoxContainer.new()
 	_build_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_build_panel.add_theme_constant_override("separation", 6)
@@ -2308,36 +2314,149 @@ func _build_select_bottom() -> Control:
 	_build_cards.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_build_panel.add_child(_build_cards)
 
+	var sp_r := Control.new()
+	sp_r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(sp_r)
+
+	# 右操作区（190 宽）：昵称 + 锁定 + 底栏状态（同单机 SelectSideRight）
+	var side_right := VBoxContainer.new()
+	_select_side_right = side_right
+	side_right.custom_minimum_size = Vector2(190, 0)
+	side_right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	side_right.add_theme_constant_override("separation", 8)
+	bar.add_child(side_right)
+	var name_box := VBoxContainer.new()
+	name_box.add_theme_constant_override("separation", 4)
+	name_box.add_child(_mk_label("我的昵称", _fs(UiKit.FS_XS), COL_DIM))
+	var name_edit := LineEdit.new()
+	_select_nick_edit = name_edit
+	name_edit.max_length = 12
+	name_edit.placeholder_text = "输入昵称"
+	name_edit.text = _local_nickname()
+	name_edit.custom_minimum_size = Vector2(190, 56)
+	name_edit.add_theme_font_override("font", UiKit.font())
+	name_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	name_edit.add_theme_color_override("font_color", COL_TEXT)
+	name_edit.add_theme_color_override("font_placeholder_color", COL_DIM)
+	name_edit.add_theme_stylebox_override("normal", UiKit.skin_chip(UiKit.C_GOLD, 0.85))
+	name_edit.add_theme_stylebox_override("focus", UiKit.skin_chip(UiKit.C_GOLD, 1.0))
+	name_edit.text_changed.connect(func(t: String) -> void:
+		if t.strip_edges() != "":
+			NameStore.save_player_name(t.strip_edges()))
+	name_box.add_child(name_edit)
+	side_right.add_child(name_box)
+	if _my_seat <= NetSession.MAX_SIDE_PLAYERS:
+		_pick_confirm_btn = _mk_btn("√  锁定选择", UiKit.C_GOLD, true, Vector2(190, 100))
+		_pick_confirm_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+		_pick_confirm_btn.pressed.connect(_on_pick_confirm)
+		side_right.add_child(_pick_confirm_btn)
+	else:
+		var sp := _mk_label("旁观中 · 有人离场可上场", _fs(UiKit.FS_XS), COL_DIM)
+		sp.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		side_right.add_child(sp)
+	_auto_start_lab = _mk_label("全员锁定后自动进入对局（0 人已锁）", _fs(UiKit.FS_XS), COL_SUB)
+	_auto_start_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_auto_start_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	side_right.add_child(_auto_start_lab)
+
+	# —— 中央选英雄浮层（同单机 SelectPickLayer：未选英雄阶段只显示这一块）——
+	var pick_layer := Control.new()
+	_select_pick_layer = pick_layer
+	pick_layer.name = "SelectPickLayer"
+	pick_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pick_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var pick_center := CenterContainer.new()
+	pick_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pick_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pick_layer.add_child(pick_center)
+	var pick_panel := PanelContainer.new()
+	pick_panel.custom_minimum_size = Vector2(minf(1560.0, get_viewport().get_visible_rect().size.x * 0.88), 0)
+	var pick_style := UiKit.skin_card(UiKit.C_TEAM0, false, 0.94)
+	pick_style.content_margin_left = 18
+	pick_style.content_margin_right = 18
+	pick_style.content_margin_top = 12
+	pick_style.content_margin_bottom = 14
+	pick_panel.add_theme_stylebox_override("panel", pick_style)
+	pick_center.add_child(pick_panel)
+	var pick_v := VBoxContainer.new()
+	pick_v.add_theme_constant_override("separation", 10)
+	pick_panel.add_child(pick_v)
+	var pick_head := HBoxContainer.new()
+	pick_head.add_theme_constant_override("separation", 14)
+	pick_v.add_child(pick_head)
+	pick_head.add_child(_mk_label("选择英雄", _fs(UiKit.FS_LG), COL_GOLD))
+	_select_pick_summary = _mk_label("请选择英雄", _fs(UiKit.FS_SM), COL_DIM)
+	_select_pick_summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_select_pick_summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pick_head.add_child(_select_pick_summary)
+	_tab_row = HBoxContainer.new()
+	_tab_row.custom_minimum_size = Vector2(0, 48)
+	_tab_row.add_theme_constant_override("separation", 8)
+	pick_v.add_child(_tab_row)
+	_tab_btns.clear()
+	var tabs: Array = [""]
+	tabs.append_array(HeroPickData.ROLES_ORDER)
+	for r in tabs:
+		var active := str(r) == _tab_role
+		var tb := _mk_tab_btn("全部" if str(r) == "" else str(r),
+			UiKit.C_GOLD if active else UiKit.C_TEAM0, active)
+		tb.custom_minimum_size = Vector2(112, 48)
+		tb.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+		tb.pressed.connect(_select_tab.bind(str(r)))
+		if _lane_locked and str(r) != _lane_role:
+			tb.disabled = true
+			tb.tooltip_text = "本机分路：%s · 只能选择%s" % [PlayerPrefs.get_lane(), _lane_role]
+		_tab_row.add_child(tb)
+		_tab_btns[str(r)] = tb
+	var tab_gap := Control.new()
+	tab_gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tab_row.add_child(tab_gap)
+	var strip_scroll := ScrollContainer.new()
+	strip_scroll.custom_minimum_size = Vector2(0, 236)
+	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	strip_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	strip_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pick_v.add_child(strip_scroll)
+	_hero_strip = HBoxContainer.new()
+	_hero_strip.add_theme_constant_override("separation", 8)
+	strip_scroll.add_child(_hero_strip)
+	_rebuild_strip()
 	_pick_status = _mk_label("", _fs(UiKit.FS_XS), COL_ERR)
 	_pick_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	rv.add_child(_pick_status)
+	pick_v.add_child(_pick_status)
 	_pick_summary = _mk_label("", _fs(UiKit.FS_XS), COL_GOLD)
 	_pick_summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_pick_summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	rv.add_child(_pick_summary)
+	pick_v.add_child(_pick_summary)
+	# 浮层挂到页面根（不占底部 HBox 高度，居中覆盖 3D 立绘）
+	_page.add_child(pick_layer)
 
-	var brow := HBoxContainer.new()
-	brow.alignment = BoxContainer.ALIGNMENT_CENTER
-	brow.add_theme_constant_override("separation", 8)
-	rv.add_child(brow)
-	if _my_seat <= NetSession.MAX_SIDE_PLAYERS:
-		_pick_confirm_btn = _mk_btn("√  锁定选择", UiKit.C_TEAM0, true, Vector2(340, 84))
-		_pick_confirm_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-		_pick_confirm_btn.pressed.connect(_on_pick_confirm)
-		brow.add_child(_pick_confirm_btn)
-	else:
-		var sp := _mk_label("旁观中 · 有人离场可上场", _fs(UiKit.FS_XS), COL_DIM)
-		brow.add_child(sp)
-	_leave_btn = _mk_btn("离开房间", UiKit.C_DANGER, false, Vector2(180, 84))
-	_leave_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	_leave_btn.pressed.connect(_leave_room)
-	brow.add_child(_leave_btn)
-	# 底栏状态行（替代原「开始对局」按钮）：全员锁定后自动进入对局
-	_auto_start_lab = _mk_label("全员锁定后自动进入对局（0 人已锁）", _fs(UiKit.FS_XS), COL_SUB)
-	_auto_start_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	rv.add_child(_auto_start_lab)
 	_switch_right_tab("召唤")
+	_update_select_stage()
 	return bar
+
+
+func _back_to_pick() -> void:
+	if _sel_hero != "" and _pick_confirm_btn != null and _pick_confirm_btn.disabled == false:
+		pass
+	_pick_stage = true
+	_update_select_stage()
+
+
+## 与单机 _set_sel_stage 同义：选英雄阶段只显示中央浮层；选定后显示 3D 立绘 + 底部 344
+func _update_select_stage() -> void:
+	if _select_bar == null or _select_pick_layer == null:
+		return
+	var picking: bool = _pick_stage
+	_select_pick_layer.visible = picking
+	if _select_right_block != null:
+		_select_right_block.visible = not picking
+	if _select_side_left != null:
+		_select_side_left.visible = not picking
+	if _select_side_right != null:
+		_select_side_right.visible = not picking
+	_select_bar.custom_minimum_size = Vector2(0, 0 if picking else 344)
 
 
 # 职业 tab 键
@@ -2536,6 +2655,7 @@ func _pick_hero(hname: String) -> void:
 	if _blocked_roles.has(role):
 		return
 	_sel_hero = hname
+	_pick_stage = false
 	if not _summ_manual:
 		_apply_recommended_summoner(hname)
 	_sync_pick_ui()
