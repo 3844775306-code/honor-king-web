@@ -807,6 +807,49 @@ func _nearest_desc(e) -> String:
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
 
 
+## 胶囊威胁指标：高/中/低（塔下、残血、多敌会升级）
+func _chip_threat() -> String:
+	var en: int = perception.count_enemy_heroes_near(12.0)
+	var hpr: float = float(hero.health) / maxf(1.0, float(hero.actual_max_health))
+	if bool(hero.get("under_tower_attack")) or _is_under_enemy_tower(hero):
+		if en > 0:
+			return "高(塔下)"
+	if hpr <= 0.3 and en > 0:
+		return "高(残血)"
+	var ne = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO)
+	var nd: float = 999.0
+	if ne != null and is_instance_valid(ne):
+		nd = hero.global_position.distance_to(ne.global_position)
+	if en >= 2 or (en >= 1 and nd <= 8.0) or (en >= 1 and hpr <= 0.5):
+		return "高"
+	if en == 1 or (ne != null and nd <= 16.0):
+		return "中"
+	return "低"
+
+
+## 胶囊当前任务：优先团队任务，其次防守/龙团/回城，最后按状态兜底
+func _chip_task() -> String:
+	if team_task != null and is_instance_valid(team_task) and team_task.is_active():
+		return team_task.label()
+	if _defending_high_turret != null and is_instance_valid(_defending_high_turret):
+		return "守高地"
+	if is_dragon_rally:
+		return "龙团集合"
+	if hero.is_recalling:
+		return "回城"
+	if hero.is_teleporting:
+		return "支援"
+	if hero.manual_target != null and is_instance_valid(hero.manual_target):
+		return "交战"
+	match state:
+		State.PUSH: return "推线"
+		State.FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
+		State.RETREAT: return "撤退"
+		State.RECALL, State.RECALL_SAFE: return "回城"
+		State.AVOID: return "躲避"
+	return "待命"
+
+
 ## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
 func debug_chip_info() -> Dictionary:
 	var now := Time.get_ticks_msec() * 0.001
@@ -845,25 +888,9 @@ func debug_chip_info() -> Dictionary:
 		p1.append("→ " + _safe_name(hero.manual_target))
 	var line1 := " · ".join(p1)
 	var p2: Array = []
+	p2.append("威胁:" + _chip_threat())
 	p2.append("意图:" + intent_cn)
-	var en = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO)
-	if en != null and is_instance_valid(en):
-		var emx: float = maxf(1.0, float(en.get("max_health")))
-		p2.append("敌 %s %d%% %.1fm" % [_safe_name(en), int(round(float(en.health) / emx * 100.0)), hero.global_position.distance_to(en.global_position)])
-	p2.append("敌%d友%d" % [perception.count_enemy_heroes_near(12.0), perception.count_ally_heroes_near(12.0)])
-	var hmx: float = maxf(1.0, float(hero.actual_max_health))
-	p2.append("HP%d%%" % int(round(float(hero.health) / hmx * 100.0)))
-	if _chase_target != null and is_instance_valid(_chase_target):
-		p2.append("追 " + _safe_name(_chase_target))
-	if hero.is_recalling:
-		p2.append("回城中")
-	elif hero.is_teleporting:
-		p2.append("支援中")
-	if skill_tactics != null:
-		var td: Dictionary = skill_tactics.call("debug_snapshot")
-		var cl := int(td.get("combo_len", 0))
-		if cl > 1:
-			p2.append("连招%d/%d" % [int(td.get("combo_step", 0)) + 1, cl])
+	p2.append("任务:" + _chip_task())
 	var line2 := " | ".join(p2)
 	var col := Color(0.52, 0.78, 1.0)
 	match state:

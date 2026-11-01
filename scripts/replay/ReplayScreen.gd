@@ -2893,12 +2893,26 @@ func _chip_from_snapshot(snap: Dictionary) -> Dictionary:
 	if st_cn != "": p1.append(st_cn)
 	if str(snap.get("intent_target", "")) != "": p1.append("→ " + str(snap.get("intent_target", "")))
 	var p2: Array = []
-	if it_cn != "": p2.append("意图:" + it_cn)
 	var p: Dictionary = snap.get("perception", {})
-	if str(p.get("near_enemy_hero", "")) != "": p2.append("敌 " + str(p.get("near_enemy_hero", "")))
-	p2.append("敌%d友%d" % [int(p.get("enemies12", 0)), int(p.get("allies12", 0))])
+	var enemies: int = int(p.get("enemies12", 0))
 	var hpm: float = maxf(1.0, float(snap.get("hp_max", 1.0)))
-	p2.append("HP%d%%" % int(round(float(snap.get("hp", 0)) / hpm * 100.0)))
+	var hpr: float = float(snap.get("hp", 0)) / hpm
+	var threat := "低"
+	if enemies >= 2 or (enemies >= 1 and hpr <= 0.5):
+		threat = "高"
+	elif enemies == 1:
+		threat = "中"
+	p2.append("威胁:" + threat)
+	if it_cn != "": p2.append("意图:" + it_cn)
+	var task := ""
+	match str(snap.get("state", "")):
+		"PUSH": task = "推线"
+		"FARM": task = "刷野" if str(snap.get("lane", "")) == "野区" else "补刀"
+		"RETREAT": task = "撤退"
+		"RECALL", "RECALL_SAFE": task = "回城"
+		"AVOID": task = "躲避"
+	if task == "": task = "待命"
+	p2.append("任务:" + task)
 	return {"line1": " · ".join(p1), "line2": " | ".join(p2), "r": 0.52, "g": 0.78, "b": 1.0}
 
 
