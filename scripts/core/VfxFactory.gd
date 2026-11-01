@@ -78,13 +78,19 @@ var _net_spell_visual_suppress := false   # play_spell 本体内部不再逐条�
 
 func _net_push(kind: int, pos: Vector3, team: int, r: float, life: float,
 		caster: String = "", min_ms: int = 120, extra: Array = []) -> void:
-	if NetSession.mode != NetSession.Mode.HOST or _net_spell_visual_suppress:
+	if _net_spell_visual_suppress:
 		return
 	var key := "%d|%s" % [kind, caster]
 	var now := Time.get_ticks_msec()
 	if now - int(_net_fx_ms.get(key, -999999)) < min_ms:
 		return
 	_net_fx_ms[key] = now
+	# 录像：host 在 play_spell 之外补的原语（位移/护盾/爆发/光柱等）逐条记录，回放同帧重放
+	var _rec = get_tree().get_first_node_in_group("replay_recorder") if get_tree() != null else null
+	if _rec != null and _rec.has_method("note_fx"):
+		_rec.call("note_fx", kind, pos, team, r, life, caster)
+	if NetSession.mode != NetSession.Mode.HOST:
+		return
 	NetSession.push_net_fx(kind, pos, team, r, life, caster, extra)
 
 # 最近英雄名（FX 事件不带 caster 时，客户端据此取元素配色）

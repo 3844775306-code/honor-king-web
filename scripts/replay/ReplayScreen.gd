@@ -2854,6 +2854,14 @@ func _push_event(ev: Dictionary) -> void:
 				Vfx.sigil(lp, Color(1.0, 0.86, 0.4), 1.6, 0.5)
 				Vfx.cast_glow(lp, Color(1.0, 0.92, 0.6), 1.4, 0.7)
 		return
+	if kind0 == "fx" and int(ev.get("kind", 0)) != 29:
+		var evt_f: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt_f - _t) < 0.9:
+			var fp := Vector3(float(ev.get("x", 0)) / 100.0, float(ev.get("y", 0)) / 100.0,
+				float(ev.get("z", 0)) / 100.0)
+			SkillFxPresenter.spawn_kind(int(ev.get("kind", 24)), fp, int(ev.get("tm", 0)),
+				float(ev.get("r", 1.0)), float(ev.get("life", 0.5)), str(ev.get("caster", "")))
+		return
 	if kind0 == "cast" or kind0 == "atk":
 		var evt0: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt0 - _t) < 0.9:
@@ -2954,15 +2962,17 @@ func _clear_toasts() -> void:
 func _play_cast_fx(ev: Dictionary) -> void:
 	# 三端共享 SkillFxPresenter：录像带 skill id 时用 SkillDatabase 原技能，与 host 播放完全同源
 	var caster_name := str(ev.get("n", ""))
-	var cp := Vector3(float(ev.get("cx", 0)) / 100.0, 0.0, float(ev.get("cz", 0)) / 100.0)
+	# host 记录的 caster_pos 已是 Vfx.play_spell 的 cp（含 +UP*1.2 + fwd*0.65）；
+	# SkillFxPresenter 内部还会再加一次，这里先减掉，避免回放技能特效整体偏高/偏前。
+	var cp := Vector3(float(ev.get("cx", 0)) / 100.0, float(ev.get("cy", 120)) / 100.0, float(ev.get("cz", 0)) / 100.0)
 	var tp := Vector3(float(ev.get("tx", 0)) / 100.0, 0.0, float(ev.get("tz", 0)) / 100.0)
 	var fd := Vector3(float(ev.get("fx", 0.0)), 0.0, float(ev.get("fz", 1.0)))
 	if fd.length() < 0.01:
 		fd = Vector3.FORWARD
 	fd = fd.normalized()
 	var skd: Dictionary = ev.get("sk", {})
-	SkillFxPresenter.play_spell(caster_name, int(ev.get("s", 0)), cp, tp, fd,
-		str(ev.get("sid", "")), skd, int(ev.get("tm", 0)), self, true)
+	SkillFxPresenter.play_spell(caster_name, int(ev.get("s", 0)), cp - Vector3.UP * 1.2 - fd * 0.65,
+		tp, fd, str(ev.get("sid", "")), skd, int(ev.get("tm", 0)), self, true)
 	# 施法起手动作（同一时刻，与 host 的 cast 动画同源）
 	_play_cast_anim(_hero_index_by_name(caster_name))
 

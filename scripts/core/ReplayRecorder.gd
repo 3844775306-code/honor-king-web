@@ -555,12 +555,24 @@ func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Ve
 		}
 	_events.append({
 		"t": int(round(gt * 1000.0)), "k": "cast", "n": str(hero_name), "s": int(slot),
-		"cx": int(round(caster_pos.x * 100.0)), "cz": int(round(caster_pos.z * 100.0)),
+		"cx": int(round(caster_pos.x * 100.0)), "cy": int(round(caster_pos.y * 100.0)),
+		"cz": int(round(caster_pos.z * 100.0)),
 		"tx": int(round(target_pos.x * 100.0)), "tz": int(round(target_pos.z * 100.0)),
 		"fx": snappedf(facing.x, 0.001), "fz": snappedf(facing.z, 0.001),
 		"sk": skd, "tm": int(team),
 		"sid": SkillFxPresenter.skill_id_of(skill),
 	})
+
+
+## Vfx 通用原语（host 在 play_spell 之外补的位移/护盾/爆发等）→ 回放同帧重放
+func note_fx(kind: int, pos: Vector3, team: int, r: float, life: float, caster: String = "") -> void:
+	if _saved or not _started or int(kind) == 29:   # 29=完整技能事件，已由 cast 事件重放，避免重复
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_events.append({"t": int(round(gt * 1000.0)), "k": "fx", "kind": int(kind),
+		"x": int(round(pos.x * 100.0)), "y": int(round(pos.y * 100.0)), "z": int(round(pos.z * 100.0)),
+		"tm": int(team), "r": snappedf(float(r), 0.01), "life": snappedf(float(life), 0.01),
+		"caster": str(caster)})
 
 
 ## 普攻出手（Hero._perform_attack 里调用）：按英雄限流，避免每帧刷爆事件表
