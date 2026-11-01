@@ -51,7 +51,7 @@ var _net_travel: float = 0.0
 var _net_progress: float = 0.0   # 1.2s 窗口内沿“到目的地”方向的实际前进量（忽略碰撞推离抖动）
 var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
-static var debug_show_path: bool = false
+static var debug_show_path: bool = true   # 默认显示AI移动路径（F4可关）
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
 const DEBUG_PATH_Y := 0.22          # 抬到兵线面(0.14)/高地砖(0.177)之上，否则路径被地面盖住看不见
 var _astar_log_cd: float = 0.0
@@ -1307,9 +1307,29 @@ func _update_debug_path_visual():
 	# 方针：把调试「霓虹线+发光球」改成贴地的旧地图路标——低饱和队伍色混一点羊皮纸金，
 	# 半透明窄带 + 终点圆环，避免亮青/亮橙在绿色地形上像 UI 叠加层。
 	var path_color := team_color.lerp(Color(0.72, 0.66, 0.50), 0.45)
-	path_color.a = 0.72
-	# A*失败（空路径）：脚边暗红圆环，不再在头顶挂高亮球
+	path_color.a = 0.85
+	# A*失败/尚未算出路径：仍画出英雄→当前移动目标的直线指示，避免完全看不到路径
 	if _nav_path.is_empty():
+		var _fallback_end: Vector3 = _nav_target
+		if _fallback_end != Vector3.ZERO and global_position.distance_to(_fallback_end) > 1.2:
+			var _fp: Array[Vector3] = [global_position + Vector3(0, DEBUG_PATH_Y, 0), _fallback_end + Vector3(0, DEBUG_PATH_Y, 0)]
+			var _fmat := StandardMaterial3D.new()
+			_fmat.albedo_color = path_color
+			_fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_fmat.emission_enabled = true
+			_fmat.emission = path_color * 0.12
+			var _fimm := ImmediateMesh.new()
+			_fimm.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _fmat)
+			_add_path_ribbon(_fimm, _fp[0], _fp[1], 0.30)
+			_fimm.surface_end()
+			var _fmi := MeshInstance3D.new()
+			_fmi.mesh = _fimm
+			_fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			parent.add_child(_fmi)
+			_debug_path_nodes.append(_fmi)
+			return
+		# 无移动目标：脚边暗红圆环
 		var fail_mesh = TorusMesh.new()
 		fail_mesh.inner_radius = 0.28
 		fail_mesh.outer_radius = 0.38
@@ -1348,7 +1368,7 @@ func _update_debug_path_visual():
 		var imm = ImmediateMesh.new()
 		imm.surface_begin(Mesh.PRIMITIVE_TRIANGLES, line_mat)
 		for i in range(pts.size() - 1):
-			_add_path_ribbon(imm, pts[i], pts[i + 1], 0.24)
+			_add_path_ribbon(imm, pts[i], pts[i + 1], 0.32)
 		imm.surface_end()
 		var line_mi = MeshInstance3D.new()
 		line_mi.mesh = imm
