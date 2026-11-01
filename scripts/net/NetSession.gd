@@ -1503,6 +1503,16 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 			1 if s.vision_active else 0, s.get_net_progress(), s.get_net_state()])
 	out.append(vision_rows)
 
+	# 血包状态：[x,z,team,available,cooldown_timer,respawn_time]（客户端/回放模型驱动）
+	var hp_rows: Array = []
+	for hp in get_tree().get_nodes_in_group("health_packs"):
+		if not is_instance_valid(hp):
+			continue
+		hp_rows.append([hp.global_position.x, hp.global_position.z, int(hp.get("team")),
+			1 if bool(hp.get("available")) else 0,
+			float(hp.get("cooldown_timer")), float(hp.get("respawn_time"))])
+	out.append(hp_rows)
+
 	return out
 
 

@@ -56,6 +56,7 @@ const SNAP_EVENTS := 9        # #44 数值弹出/经验珠/攻击动作事件段
 const SNAP_SCORE := 10        # 顶部实时战况（击杀比分+经济比分）：{pk,ek,pg,eg}（host 全量统计）
 const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _build_respawn_rows 尾段；长度守卫防旧 host）
 const SNAP_VISION := 12       # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
+const SNAP_HEALTH_PACKS := 13 # 血包状态 [x,z,team,available,cooldown_timer,respawn_time]
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 const MOVE_JUMP_UNITS := 100.0    # 相邻快照样本位移超此即判瞬移/位移技能/回城：直接贴最新，不插值滑行
 
@@ -199,6 +200,8 @@ var _rtime := -1.0        # 渲染插值时钟（游戏秒）：收到首个快�
                           # 相邻两个快照样本之间逐帧匀速扫过，杜绝 15Hz 离散目标"追赶→被拽走"的一顿一顿
 
 var _views := {}          # net_id -> {node, type, team, name, hp, maxhp, bar_off, target, set}
+var _health_packs := {}    # key "x_z" -> HealthPack（visual_only，纯表现）
+var _health_pack_available := {}
 var _residual_vision: Array = []   # 死亡视野残留 [{pos,r,until}]：塔2s / 小兵1s
 var _vision_views := {}   # iid -> VisionSpirit（联机客户端表现副本）
 var _tower_locks := {}      # 防御塔锁定光束：key(塔位) -> {mesh, from, to, cur, t}
@@ -883,6 +886,35 @@ func _on_snapshot(snap: Array) -> void:
 		_apply_vision_spirits(snap[SNAP_VISION])
 	else:
 		_apply_vision_spirits([])
+	if snap.size() > SNAP_HEALTH_PACKS:
+		_apply_health_packs(snap[SNAP_HEALTH_PACKS])
+	else:
+		_apply_health_packs([])
+
+func _apply_health_packs(rows: Array) -> void:
+	_health_pack_available.clear()
+	for row in rows:
+		if not (row is Array) or (row as Array).size() < 4:
+			continue
+		var hp_x := float(row[0])
+		var hp_z := float(row[1])
+		var key := "%d_%d" % [int(round(hp_x * 10.0)), int(round(hp_z * 10.0))]
+		var pack = _health_packs.get(key, null)
+		if pack == null or not is_instance_valid(pack):
+			pack = HealthPack.new()
+			pack.visual_only = true
+			pack.team = int(row[2])
+			pack.position = Vector3(hp_x, 0.3, hp_z)
+			_static_root.add_child(pack)
+			_health_packs[key] = pack
+		var avail := int(row[3]) == 1
+		var cd_left := float(row[4]) if row.size() > 4 else 0.0
+		var cd_total := float(row[5]) if row.size() > 5 else 75.0
+		pack.apply_remote_state(avail, cd_left, cd_total)
+		_health_pack_available[key] = avail
+	if _mm != null:
+		_mm.health_pack_available = _health_pack_available
+
 
 func _apply_vision_spirits(rows: Array) -> void:
 	if _mm != null:

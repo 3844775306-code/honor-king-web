@@ -1532,14 +1532,15 @@ func spawn_health_pack(pos: Vector3, team: int):
 	pack.position = pos
 	pack.position.y +=0.3
 	add_child(pack)
+const HEALTH_PACK_SPAWNS := [
+	[Vector3(24, 0, 58), 0], [Vector3(-58, 0, -24), 0], [Vector3(-17, 0, 17), 0],
+	[Vector3(-24, 0, -58), 1], [Vector3(58, 0, 24), 1], [Vector3(17, 0, -17), 1],
+]
+
 func _create_turrets():
 	# 玩家方防御塔数据
-	spawn_health_pack(Vector3(24,0,58),0)
-	spawn_health_pack(Vector3(-58,0,-24),0)
-	spawn_health_pack(Vector3(-17,0,17),0)
-	spawn_health_pack(Vector3(-24,0,-58),1)
-	spawn_health_pack(Vector3(--58,0,--24),1)
-	spawn_health_pack(Vector3(--17,0,-17),1)
+	for hp_spawn in HEALTH_PACK_SPAWNS:
+		spawn_health_pack(hp_spawn[0], int(hp_spawn[1]))
 	var player_turret_data = [
 		# 发育路外塔、二塔、高地塔
 		{"pos": Vector3(28,0,58), "type": "outer"},

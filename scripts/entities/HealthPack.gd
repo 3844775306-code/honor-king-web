@@ -10,6 +10,7 @@ var team: int = 0
 var respawn_time: float = 75.0
 var cooldown_timer: float = 0.0
 var available: bool = true
+var visual_only: bool = false   # 客户端/回放：只复刻模型和可用状态，不参与拾取/治疗结算
 var turret: Turret = null
 var col: CollisionShape3D
 var ring_grey: MeshInstance3D
@@ -29,7 +30,30 @@ var _t: float = 0.0               # 本地动画时钟
 func _ready():
 	add_to_group("health_packs")
 	_create_visual()
-	body_entered.connect(_on_body_entered)
+	if visual_only:
+		monitoring = false
+		monitorable = false
+		collision_layer = 0
+		collision_mask = 0
+		col.disabled = true
+	else:
+		body_entered.connect(_on_body_entered)
+
+
+## 客户端按 host 快照更新血包可用性；visual_only 专用，不触发本地治疗
+func apply_remote_state(avail: bool, cd_left: float, total_cd: float) -> void:
+	if not visual_only:
+		return
+	available = bool(avail)
+	if available:
+		_set_orb_visible(true)
+		ring_green.visible = false
+		cooldown_timer = 0.0
+		return
+	_set_orb_visible(false)
+	cooldown_timer = maxf(0.0, cd_left)
+	respawn_time = maxf(1.0, total_cd)
+	_draw_green_arc(clampf(1.0 - cooldown_timer / respawn_time, 0.0, 1.0))
 
 func _create_visual():
 	# —— 三层风化石台：底石、收腰石、顶盖，逐层收分，像被长期踩踏磨圆的古迹 ——
@@ -285,6 +309,8 @@ func _process(delta):
 		if _ground:
 			_ground.scale = Vector3.ONE * (1.0 + sin(_t * 1.7) * 0.05)
 		return
+	if visual_only:
+		return   # 可用性完全由 host 快照驱动
 	cooldown_timer -= delta
 	if cooldown_timer <= 0:
 		available = true

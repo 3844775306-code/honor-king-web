@@ -28,6 +28,7 @@ const NET_JUNGLE := 3
 var player_team := TEAM_PLAYER
 var views := {}              # net_id -> view（NetClientBattle 每帧整体替换引用）
 var residual_vision: Array = []   # 死亡视野残留 [{pos, r, until}，塔2s/小兵1s]
+var health_pack_available := {}   # 血包 key "x_z" -> available
 var vision_rows: Array = []  # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 var self_net := -1
 var own_recalling := 0       # 自己英雄回城中（画回城黄线）
@@ -228,7 +229,7 @@ func _draw() -> void:
 	for w in _static_walls:
 		MinimapDraw.draw_wall(self, w["p"], w["a"], 4.5, 2.8)
 	for pk in _static_packs:
-		MinimapDraw.draw_health_pack(self, pk, true)
+		MinimapDraw.draw_health_pack(self, pk["p"], bool(health_pack_available.get(str(pk["k"]), true)))
 	# —— 我方视野之灵：20 米视野圈 + 青色灵体标记（host 快照行）——
 	var spirit_range_px := 20.0 / float(MAP_SIZE) * MINIMAP_SIZE
 	for row in vision_rows:
@@ -586,4 +587,9 @@ func _cache_static_map() -> void:
 			_static_camps.append(_world_to_minimap(Vector3(float(c[0]), 0.0, float(c[1]))))
 	for pk in payload.get("packs", []):
 		if pk.size() >= 2:
-			_static_packs.append(_world_to_minimap(Vector3(float(pk[0]), 0.0, float(pk[1]))))
+			var wx := float(pk[0])
+			var wz := float(pk[1])
+			_static_packs.append({
+				"p": _world_to_minimap(Vector3(wx, 0.0, wz)),
+				"k": "%d_%d" % [int(round(wx * 10.0)), int(round(wz * 10.0))],
+			})

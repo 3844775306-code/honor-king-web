@@ -247,6 +247,10 @@ func _draw_minimap() -> void:
 	var tex := _ensure_static_tex(inner)
 	if tex != null:
 		draw_texture_rect(tex, inner, false)
+	# 血包固定点位（与对局同坐标）
+	for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
+		var hpp := _world_to_mm(hp_spawn[0], inner)
+		MinimapDrawScript.draw_health_pack(self, hpp, true)
 	# 视野雾：以己方英雄/小兵/塔为视野源，按对局小地图同款网格压暗
 	var vision: Array = []
 	for h in st.get("heroes", []):
@@ -276,17 +280,17 @@ func _draw_minimap() -> void:
 			continue
 		var jp := _world_to_mm(Vector3(float(j.get("wx", 0.0)), 0.0, float(j.get("wz", 0.0))), inner)
 		MinimapDrawScript.draw_jungle(self, jp, str(j.get("kind", "")), true)
-	# 小兵：聚类成簇
-	var ally_dots: Array = []
-	var enemy_dots: Array = []
+	# 小兵：按绝对阵营上色（蓝方=蓝、红方=红），不跟随回放玩家的“我方/敌方”视角
+	var blue_dots: Array = []
+	var red_dots: Array = []
 	for m in st.get("minions", []):
 		var mp := _world_to_mm(Vector3(float(m.get("wx", 0.0)), 0.0, float(m.get("wz", 0.0))), inner)
-		if Config.is_ally(int(m.get("team", 0))):
-			ally_dots.append(mp)
+		if int(m.get("team", 0)) == 0:
+			blue_dots.append(mp)
 		else:
-			enemy_dots.append(mp)
-	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(ally_dots, 3.0), Color(0.35, 0.95, 0.5), 2.6 * _s)
-	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(enemy_dots, 3.0), Color(1.0, 0.42, 0.36), 2.6 * _s)
+			red_dots.append(mp)
+	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(blue_dots, 3.0), Color(0.0, 0.886, 1.0), 2.6 * _s)
+	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(red_dots, 3.0), Color(1.0, 0.33, 0.264), 2.6 * _s)
 	# 英雄（同款头像 + 朝向箭头 + 血量环）
 	var follow: int = int(st.get("follow", -1))
 	var heroes: Array = st.get("heroes", [])
