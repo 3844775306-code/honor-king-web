@@ -24,6 +24,7 @@ const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")                   # 三端共享动画 clip 映射
 const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
+const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")   # 三端共享技能特效
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -1137,6 +1138,7 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 func _spawn_full_spell_fx(row: Array, caster: String) -> void:
 	if caster == "":
 		return
+	# 三端共享 SkillFxPresenter：优先 skill id → SkillDatabase 原技能（与 host 完全同源）
 	var slot := int(row[10])
 	var cp := Vector3(float(row[11]), float(row[12]), float(row[13]))
 	var tp := Vector3(float(row[14]), float(row[15]), float(row[16]))
@@ -1144,45 +1146,15 @@ func _spawn_full_spell_fx(row: Array, caster: String) -> void:
 	if fd.length() < 0.01:
 		fd = Vector3.FORWARD
 	fd = fd.normalized()
-	var sk := Skill.new()
-	sk.type = int(row[19])
-	sk.radius = float(row[20])
-	sk.duration = float(row[21])
-	sk.self_displacement = float(row[22])
-	sk.is_channeling = int(row[23]) == 1
-	Vfx.play_spell(caster, slot, cp + Vector3.UP * 1.2 + fd * 0.65, tp, sk, fd, false)
-	# 持续区域（甄姬水区/王昭君暴风雪等）：与单机/回放同款 ground_zone
-	var team := int(row[FX_ROW_TEAM])
-	if int(sk.type) != 4 and sk.radius >= 2.0 and sk.duration >= 0.6:
-		var zn := Vfx.ground_zone(sk.radius, team, caster, maxf(0.8, sk.duration))
-		if zn != null and is_instance_valid(zn):
-			zn.position = Vector3(tp.x, 0.06, tp.z)
-			_vis_root.add_child(zn)
+	var skd := {
+		"type": int(row[19]), "radius": float(row[20]), "duration": float(row[21]),
+		"self_displacement": float(row[22]), "is_channeling": int(row[23]) == 1,
+	}
+	var sid := str(row[24]) if row.size() > 24 else ""
+	SkillFxPresenter.play_spell(caster, slot, cp, tp, fd, sid, skd, int(row[FX_ROW_TEAM]), _vis_root, false)
 
-
-# 技能视觉轻量还原（≤2 MeshInstance）：host VfxFactory 插桩的通用技能事件；
-# 元素色优先（caster 由快照行末位带过来），缺失退回阵营色。
-# 联机技能视觉 → host Vfx 同款原语（与单机技能特效同源，不再简化自绘）
 func _spawn_host_skill_fx(kind: int, p: Vector3, team: int, r: float, life: float, caster: String) -> void:
-	if get_tree() == null:
-		return
-	var col: Color = Vfx.color_for_hero(caster) if caster != "" else Vfx.team_color(team)
-	match kind:
-		FX_PILLAR:
-			Vfx.pillar(p, col, maxf(r, 0.8), maxf(r * 3.0, 4.0), maxf(life, 0.5))
-		FX_SKILL_DASH:
-			Vfx.cast_glow(p, col, maxf(r, 0.8), maxf(life, 0.3))
-			Vfx.shockwave(p, maxf(r, 1.0), col, maxf(life, 0.3))
-		FX_SKILL_GLOW:
-			Vfx.cast_glow(p, col, maxf(r, 0.8), maxf(life, 0.3))
-		FX_SKILL_ULT:
-			Vfx.cast_burst(caster, p, Vector3.UP, 2.0)
-			Vfx.shockwave(p, maxf(r, 2.0), col, maxf(life, 0.6))
-			Vfx.pillar(p, col, maxf(r * 0.5, 0.8), maxf(r * 2.4, 4.0), maxf(life, 0.6))
-		_:
-			Vfx.cast_burst(caster, p, Vector3.UP, 1.2)
-			Vfx.shockwave(p, maxf(r, 1.0), col, maxf(life, 0.4))
-
+	SkillFxPresenter.spawn_kind(kind, p, team, r, life, caster)
 
 func _build_skill_fx(kind: int, team: int, r: float, caster: String) -> Node3D:
 	var root := Node3D.new()

@@ -3,6 +3,7 @@ extends Node
 ## 回放只重建「视觉」，不跑战斗逻辑，所以不会因为随机数/版本差异失真。
 ## 创建：BattleManager._create_player_hero() 里 ReplayScript.ensure(self)
 
+const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")
 const GROUP := "replay_recorder"
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 
@@ -422,6 +423,7 @@ func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Ve
 		"tx": int(round(target_pos.x * 100.0)), "tz": int(round(target_pos.z * 100.0)),
 		"fx": snappedf(facing.x, 0.001), "fz": snappedf(facing.z, 0.001),
 		"sk": skd, "tm": int(team),
+		"sid": SkillFxPresenter.skill_id_of(skill),
 	})
 
 

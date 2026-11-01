@@ -10,6 +10,7 @@ const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")   # 三端共享动画 clip 映射
 const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
+const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")   # 三端共享技能特效
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -1813,7 +1814,8 @@ func _clear_toasts() -> void:
 
 
 func _play_cast_fx(ev: Dictionary) -> void:
-	var nm := str(ev.get("n", ""))
+	# 三端共享 SkillFxPresenter：录像带 skill id 时用 SkillDatabase 原技能，与 host 播放完全同源
+	var caster_name := str(ev.get("n", ""))
 	var cp := Vector3(float(ev.get("cx", 0)) / 100.0, 0.0, float(ev.get("cz", 0)) / 100.0)
 	var tp := Vector3(float(ev.get("tx", 0)) / 100.0, 0.0, float(ev.get("tz", 0)) / 100.0)
 	var fd := Vector3(float(ev.get("fx", 0.0)), 0.0, float(ev.get("fz", 1.0)))
@@ -1821,23 +1823,9 @@ func _play_cast_fx(ev: Dictionary) -> void:
 		fd = Vector3.FORWARD
 	fd = fd.normalized()
 	var skd: Dictionary = ev.get("sk", {})
-	var sk: Skill = Skill.new()
-	sk.type = int(skd.get("type", 1))
-	sk.radius = float(skd.get("radius", 0.0))
-	sk.duration = float(skd.get("duration", 0.0))
-	sk.self_displacement = float(skd.get("self_displacement", -1.0))
-	sk.is_channeling = bool(skd.get("is_channeling", false))
-	Vfx.play_spell(nm, int(ev.get("s", 0)), cp + Vector3.UP * 1.2 + fd * 0.65, tp, sk, fd, true)
-	# 技能持续区域（甄姬水区/周瑜火区这类）：用对局同一套 ground_zone 复现
-	if int(skd.get("type", 1)) != 4 and sk.radius >= 2.0 and sk.duration >= 0.6:
-		var zn := Vfx.ground_zone(sk.radius, int(ev.get("tm", 0)), nm, maxf(0.8, sk.duration))
-		if zn != null and is_instance_valid(zn):
-			zn.position = Vector3(tp.x, 0.06, tp.z)
-			add_child(zn)
+	SkillFxPresenter.play_spell(caster_name, int(ev.get("s", 0)), cp, tp, fd,
+		str(ev.get("sid", "")), skd, int(ev.get("tm", 0)), self, true)
 
-
-## 普攻出手特效：枪口闪光 + 命中火花（与对局同一套 Vfx）
-## 装备主动：按类别用与对局同源的 Vfx 表现（主动装备本体特效较少，主要是光环/爆发）
 func _play_item_fx(nm: String, cat: String, _item: String) -> void:
 	var hi: int = _hero_index_by_name(nm)
 	if hi < 0 or hi >= _hero_pos.size():

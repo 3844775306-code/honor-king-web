@@ -850,6 +850,15 @@ func screen_flash(color: Color, dur: float = 0.18) -> void:
 
 # ---------------- P1 逐技能签名表现 ----------------
 # #43 联机：把一次技能出手折算成一条 FX 事件（大招=大爆发 / 区域=地面法阵 / 位移=脚下环 / 其余=命中爆发）
+func _skill_id_of(skill) -> String:
+	if skill == null:
+		return ""
+	for sid in SkillDatabase.skills:
+		if SkillDatabase.skills[sid] == skill:
+			return str(sid)
+	return ""
+
+
 func _net_spell_evt(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,
 		skill, facing: Vector3) -> void:
 	# 只推一条完整技能事件：客户端远程调用同一个 Vfx.play_spell，而不是再用 kind 猜简化形态
@@ -865,6 +874,7 @@ func _net_spell_evt(hero_name: String, slot: int, caster_pos: Vector3, target_po
 		float(skill.duration) if skill != null else 0.0,
 		float(skill.self_displacement) if skill != null else -1.0,
 		1 if (skill != null and skill.is_channeling) else 0,
+		_skill_id_of(skill),
 	]
 	_net_push(NET_FX_SPELL_FULL, pos, _net_team_at(pos), 1.0, 0.8, hero_name, 0, extra)
 

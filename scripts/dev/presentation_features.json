@@ -2,31 +2,247 @@
   "meta": {
     "desc": "三端「表现层」对齐基线：动画/模型/子弹/技能特效源。patterns 命中任意一个即视为该端具备；accepted 为设计性差异。",
     "sides": {
-      "host": ["scripts/entities", "scripts/core", "scripts/mobile", "scripts/presentation", "scripts/ui"],
-      "net": ["scripts/net", "scripts/presentation", "scripts/ui"],
-      "replay": ["scripts/replay", "scripts/presentation", "scripts/ui"]
+      "host": [
+        "scripts/entities",
+        "scripts/core",
+        "scripts/mobile",
+        "scripts/presentation",
+        "scripts/ui"
+      ],
+      "net": [
+        "scripts/net",
+        "scripts/presentation",
+        "scripts/ui"
+      ],
+      "replay": [
+        "scripts/replay",
+        "scripts/presentation",
+        "scripts/ui"
+      ]
     }
   },
   "features": [
-    {"id": "actor_walk_opts", "name": "行走参数单一来源(ActorPresenter)", "target": ["host", "net"],
-     "patterns": {"host": ["ActorPresenter"], "net": ["ActorPresenter"]}, "accepted": {"replay": "回放无行走模拟，仅播动画"}},
-    {"id": "anim_clip_map", "name": "动画 clip 映射单一来源(AnimMap)", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["AnimMap|_play_anim\\("], "net": ["AnimMap"], "replay": ["AnimMap"]}},
-    {"id": "actor_scale_source", "name": "模型缩放/材质来源", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["target_height|VISUAL_SCALE"], "net": ["NetModels"], "replay": ["_build_actors|HeroModel"]}, "accepted": {"replay": "回放按录像元数据构建模型"}},
-    {"id": "projectile_shared", "name": "子弹表现单一来源(ProjectilePresenter)", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["ProjectilePresenter"], "net": ["ProjectilePresenter"], "replay": ["ProjectilePresenter"]}},
-    {"id": "bullet_impact_events", "name": "子弹命中特效事件", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["on_hit|hit_spark"], "net": ["hit_spark|_apply_bullets"], "replay": ["hit_spark|bullet"]}, "accepted": {}},
-    {"id": "skill_fx_shared", "name": "技能特效统一走 Vfx", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["Vfx\\."], "net": ["Vfx\\."], "replay": ["Vfx\\."]}},
-    {"id": "signature_spell_table", "name": "签名技能特效表(SpellFxTable)", "target": ["host", "net"],
-     "patterns": {"host": ["SpellFxTable"], "net": ["SpellFxTable"]}, "accepted": {"replay": "回放录 cast 参数复用 Vfx.play_spell"}},
-    {"id": "hit_react", "name": "受击反馈(闪白/硬直)", "target": ["host", "net"],
-     "patterns": {"host": ["play_hit_react|hit_flash|\\.flash"], "net": ["hit_flash|flash_ratio"]}, "accepted": {"replay": "回放无受击反馈"}},
-    {"id": "death_visual", "name": "死亡表现", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["death|die\\("], "net": ["dying|_proc_death"], "replay": ["die|death"]}},
-    {"id": "cast_anim_events", "name": "施法动作事件(cast)", "target": ["host", "net", "replay"],
-     "patterns": {"host": ["cast_dur|_finish_casting"], "net": ["ACT_CAST|cast"], "replay": ["_play_cast_fx|cast"]}}
+    {
+      "id": "actor_walk_opts",
+      "name": "行走参数单一来源(ActorPresenter)",
+      "target": [
+        "host",
+        "net"
+      ],
+      "patterns": {
+        "host": [
+          "ActorPresenter"
+        ],
+        "net": [
+          "ActorPresenter"
+        ]
+      },
+      "accepted": {
+        "replay": "回放无行走模拟，仅播动画"
+      }
+    },
+    {
+      "id": "anim_clip_map",
+      "name": "动画 clip 映射单一来源(AnimMap)",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "AnimMap|_play_anim\\("
+        ],
+        "net": [
+          "AnimMap"
+        ],
+        "replay": [
+          "AnimMap"
+        ]
+      }
+    },
+    {
+      "id": "actor_scale_source",
+      "name": "模型缩放/材质来源",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "target_height|VISUAL_SCALE"
+        ],
+        "net": [
+          "NetModels"
+        ],
+        "replay": [
+          "_build_actors|HeroModel"
+        ]
+      },
+      "accepted": {
+        "replay": "回放按录像元数据构建模型"
+      }
+    },
+    {
+      "id": "projectile_shared",
+      "name": "子弹表现单一来源(ProjectilePresenter)",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "ProjectilePresenter"
+        ],
+        "net": [
+          "ProjectilePresenter"
+        ],
+        "replay": [
+          "ProjectilePresenter"
+        ]
+      }
+    },
+    {
+      "id": "bullet_impact_events",
+      "name": "子弹命中特效事件",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "on_hit|hit_spark"
+        ],
+        "net": [
+          "hit_spark|_apply_bullets"
+        ],
+        "replay": [
+          "hit_spark|bullet"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "skill_fx_shared",
+      "name": "技能特效统一走 Vfx",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "Vfx\\."
+        ],
+        "net": [
+          "Vfx\\."
+        ],
+        "replay": [
+          "Vfx\\."
+        ]
+      }
+    },
+    {
+      "id": "signature_spell_table",
+      "name": "签名技能特效表(SpellFxTable)",
+      "target": [
+        "host",
+        "net"
+      ],
+      "patterns": {
+        "host": [
+          "SpellFxTable"
+        ],
+        "net": [
+          "SpellFxTable"
+        ]
+      },
+      "accepted": {
+        "replay": "回放录 cast 参数复用 Vfx.play_spell"
+      }
+    },
+    {
+      "id": "hit_react",
+      "name": "受击反馈(闪白/硬直)",
+      "target": [
+        "host",
+        "net"
+      ],
+      "patterns": {
+        "host": [
+          "play_hit_react|hit_flash|\\.flash"
+        ],
+        "net": [
+          "hit_flash|flash_ratio"
+        ]
+      },
+      "accepted": {
+        "replay": "回放无受击反馈"
+      }
+    },
+    {
+      "id": "death_visual",
+      "name": "死亡表现",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "death|die\\("
+        ],
+        "net": [
+          "dying|_proc_death"
+        ],
+        "replay": [
+          "die|death"
+        ]
+      }
+    },
+    {
+      "id": "cast_anim_events",
+      "name": "施法动作事件(cast)",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "cast_dur|_finish_casting"
+        ],
+        "net": [
+          "ACT_CAST|cast"
+        ],
+        "replay": [
+          "_play_cast_fx|cast"
+        ]
+      }
+    },
+    {
+      "id": "skill_fx_presenter",
+      "name": "技能特效统一入口(Vfx.play_spell/SkillFxPresenter)",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "Vfx\\.play_spell"
+        ],
+        "net": [
+          "SkillFxPresenter"
+        ],
+        "replay": [
+          "SkillFxPresenter"
+        ]
+      },
+      "accepted": {}
+    }
   ]
 }
