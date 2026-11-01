@@ -47,6 +47,13 @@ var _defending_high_turret: Turret = null
 var _chase_target: Hero = null
 var _chase_time: float = 0.0
 
+# --- 调试：思考过程（F3 / 录像） ---
+var _dbg_log: Array = []
+var _dbg_last_state := -1
+var _dbg_last_target := ""
+var _dbg_last_casting := false
+var _dbg_last_recall := false
+
 func _ready():
 	if get_parent() is Hero:
 		hero = get_parent() as Hero
@@ -582,6 +589,8 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	_debug_track()
+
 	# 威胁记忆与换血状态每帧维护：视野消失的敌人仍保留最后位置/血量，不直接消失。
 	var _bm_now = get_tree().get_first_node_in_group("battle_manager")
 	var _gt_now: float = float(_bm_now.game_time) if _bm_now != null else 0.0
@@ -685,6 +694,167 @@ func _process(delta):
 
 # ==================== 决策 ====================
 # 每个 think tick 评估一次：先处理高地/塔防御与撤退/回城，再交给分路/打野策略
+# ==================== 调试：思考过程 ====================
+
+func _state_name(st: int) -> String:
+	match st:
+		State.PUSH: return "PUSH"
+		State.FARM: return "FARM"
+		State.RETREAT: return "RETREAT"
+		State.RECALL: return "RECALL"
+		State.AVOID: return "AVOID"
+		State.RECALL_SAFE: return "RECALL_SAFE"
+	return str(st)
+
+
+func _debug_lane() -> String:
+	match lane:
+		AiConfig.Lane.FARM: return "下路"
+		AiConfig.Lane.MID: return "中路"
+		AiConfig.Lane.CLASH: return "上路"
+		_: return "野区"
+
+
+func _debug_intent() -> String:
+	if hero.is_recalling: return "recall"
+	if hero.is_teleporting: return "rotate"
+	match state:
+		State.RETREAT: return "retreat"
+		State.RECALL_SAFE, State.RECALL: return "recall"
+		State.AVOID: return "avoid"
+	if hero.manual_target != null and is_instance_valid(hero.manual_target):
+		var t = hero.manual_target
+		var d: float = hero.global_position.distance_to(t.global_position)
+		var hp: float = float(t.health) / maxf(1.0, float(t.get("max_health")))
+		if hp <= 0.3: return "kill"
+		if d > hero.attack_range * 0.01 + 1.0: return "chase"
+		return "fight"
+	if state == State.FARM: return "jungle" if lane == AiConfig.Lane.JUNGLE else "farm"
+	return "push"
+
+
+func _dbg_time() -> float:
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and is_instance_valid(bm):
+		return float(bm.get("game_time"))
+	return Time.get_ticks_msec() * 0.001
+
+
+func _dbg_add(txt: String) -> void:
+	_dbg_log.append({"t": snappedf(_dbg_time(), 0.1), "s": txt})
+	if _dbg_log.size() > 30:
+		_dbg_log.pop_front()
+
+
+func _debug_track() -> void:
+	if state != _dbg_last_state:
+		_dbg_add("状态 -> %s（目标=%s）" % [_state_name(state), _ent_name(hero.manual_target)])
+		_dbg_last_state = state
+	var tn := _ent_name(hero.manual_target)
+	if tn != _dbg_last_target:
+		_dbg_add("锁定目标 -> %s" % (tn if tn != "" else "无"))
+		_dbg_last_target = tn
+	if hero.casting_skill != _dbg_last_casting:
+		_dbg_add("施法 %s（技能槽=%d）" % ["开始" if hero.casting_skill else "结束", int(hero.pending_skill_index)])
+		_dbg_last_casting = hero.casting_skill
+	if hero.is_recalling != _dbg_last_recall:
+		_dbg_add("回城 %s" % ("开始" if hero.is_recalling else "中断/完成"))
+		_dbg_last_recall = hero.is_recalling
+
+
+func _vec2(v: Vector3) -> Vector2:
+	return Vector2(snappedf(v.x, 0.1), snappedf(v.z, 0.1))
+
+
+func _safe_name(e) -> String:
+	if e == null or not is_instance_valid(e):
+		return ""
+	var v = e.get("display_name")
+	if v != null:
+		return str(v)
+	return str(e.name)
+
+
+func _ent_name(e) -> String:
+	return _safe_name(e)
+
+
+func _ent_desc(e) -> String:
+	if e == null or not is_instance_valid(e):
+		return ""
+	var d: float = hero.global_position.distance_to(e.global_position)
+	var mx: float = maxf(1.0, float(e.get("max_health") if e.get("max_health") != null else 1.0))
+	var hp: float = float(e.get("health") if e.get("health") != null else 0.0)
+	return "%s(%s) hp%d%% d%.1f" % [_safe_name(e), str(e.get_class()), int(round(hp / mx * 100.0)), d]
+
+
+func _nearest_desc(e) -> String:
+	if e == null or not is_instance_valid(e):
+		return ""
+	var d: float = hero.global_position.distance_to(e.global_position)
+	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
+
+
+## 单个 AI 的完整思考快照（JSON 安全；F3 与录像共用）
+func debug_snapshot() -> Dictionary:
+	var sn: Dictionary = perception.snapshot()
+	var tactics := {}
+	if skill_tactics != null and skill_tactics.has_method("debug_snapshot"):
+		tactics = skill_tactics.call("debug_snapshot")
+	var skills := []
+	for i in range(mini(3, hero.skill_cooldowns.size())):
+		skills.append({"lv": int(hero.skill_levels[i]) if i < hero.skill_levels.size() else 0,
+			"cd": snappedf(float(hero.skill_cooldowns[i]), 0.1)})
+	var brain_path := ""
+	if brain != null:
+		brain_path = str(brain.get_script().resource_path.get_file().get_basename())
+	var lane_txt := ""
+	if lane_strategy != null:
+		lane_txt = "bush=(%.1f,%.1f) pending=%d" % [lane_strategy.default_bush_pos.x, lane_strategy.default_bush_pos.z, int(lane_strategy.pending_lane)]
+	var jungle_txt := ""
+	if jungle_strategy != null:
+		jungle_txt = "phase=%d idx=%d assigned=%d" % [int(jungle_strategy.current_phase), int(jungle_strategy._phase_index), int(jungle_strategy.assigned_lane)]
+	return {
+		"name": hero.display_name, "role": hero.role, "team": int(hero.team),
+		"state": _state_name(state), "lane": _debug_lane(),
+		"intent": _debug_intent(), "intent_target": _ent_name(hero.manual_target),
+		"hp": int(hero.health), "hp_max": int(hero.actual_max_health),
+		"mana": int(hero.mana), "mana_max": int(hero.actual_mana_max),
+		"lvl": int(hero.level), "k": int(hero.kills), "d": int(hero.deaths), "a": int(hero.assists),
+		"pos": _vec2(hero.global_position),
+		"think": snappedf(think_timer, 0.01), "score": snappedf(decide_score, 0.01),
+		"manual": _ent_desc(hero.manual_target), "chase": _ent_desc(_chase_target),
+		"move": _vec2(hero.move_target) if hero.move_target != Vector3.ZERO else Vector2.ZERO,
+		"perception": {
+			"near_enemy_hero": _nearest_desc(sn.get("nearest_enemy_hero")),
+			"near_enemy_minion": _nearest_desc(sn.get("nearest_enemy_minion")),
+			"near_enemy_turret": _nearest_desc(sn.get("nearest_enemy_turret")),
+			"near_friendly_turret": _nearest_desc(sn.get("nearest_friendly_turret")),
+			"near_jungle": _nearest_desc(sn.get("nearest_jungle")),
+			"near_health_pack": _nearest_desc(sn.get("nearest_health_pack")),
+			"allies6": perception.count_ally_heroes_near(6.0), "enemies6": perception.count_enemy_heroes_near(6.0),
+			"allies12": perception.count_ally_heroes_near(12.0), "enemies12": perception.count_enemy_heroes_near(12.0),
+			"allies20": perception.count_ally_heroes_near(20.0), "enemies20": perception.count_enemy_heroes_near(20.0),
+		},
+		"combat": {
+			"skills": skills,
+			"enhanced": bool(hero.call("_enhanced_aa_queued")),
+			"recall": snappedf(float(hero.recall_timer), 0.1),
+			"teleport": snappedf(float(hero.teleport_timer), 0.1),
+			"is_recalling": bool(hero.is_recalling),
+			"is_teleporting": bool(hero.is_teleporting),
+			"stuck": snappedf(float(hero.get("_stuck_timer")), 0.1),
+			"move_lock": snappedf(maxf(0.0, float(hero.get("_move_lock_until")) - Time.get_ticks_msec() * 0.001), 0.1),
+		},
+		"tactics": tactics,
+		"items": {"last": str(item_tactics.last_action)},
+		"summoner": {"last": str(summoner_tactics.last_action)},
+		"brain": brain_path,
+		"strategy": {"lane": lane_txt, "jungle": jungle_txt},
+		"log": _dbg_log.duplicate(),
+	}
+
+
 func _decide():
 	var tree := hero.get_tree()
 	for turret in tree.get_nodes_in_group("turrets"):

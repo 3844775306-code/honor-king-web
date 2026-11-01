@@ -18,6 +18,15 @@ func _init(p_hero: Hero, p_perception: AiPerception) -> void:
 	perception = p_perception
 
 
+func debug_snapshot() -> Dictionary:
+	var tn := ""
+	if _combo_target != null and is_instance_valid(_combo_target):
+		tn = str(_combo_target.display_name)
+	return {"combo_step": int(_combo_step), "combo_len": _combo_skills.size(),
+		"combo_target": tn, "combo_wait": snappedf(float(_combo_wait), 0.1),
+		"feed": snappedf(float(skill_feed_timer), 0.1)}
+
+
 func update(delta: float) -> void:
 	if skill_feed_timer > 0:
 		skill_feed_timer -= delta

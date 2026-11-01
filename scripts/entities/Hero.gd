@@ -2985,6 +2985,15 @@ func _skill_target_allowed(t: GameEntity, slot: int = -1) -> bool:
 		slot = pending_skill_index
 	return display_name == "李元芳" and slot == 0
 
+## 取本英雄的 AI 调试快照（F3 覆盖层 / 录像共用；非 AI 或未挂 HeroAI 返回空）
+func ai_debug_snapshot() -> Dictionary:
+	for c in get_children():
+		if c.get_script() != null and str(c.get_script().resource_path).ends_with("HeroAI.gd"):
+			if c.has_method("debug_snapshot"):
+				return c.call("debug_snapshot")
+	return {}
+
+
 ## 空放普攻是否允许（强化普攻有专属空放位移的英雄优先走各自的空放逻辑，避免同帧双重触发）
 func _empty_attack_allowed() -> bool:
 	match display_name:

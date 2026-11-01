@@ -17,6 +17,8 @@ const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetRecommendBarScript = preload("res://scripts/net/NetRecommendBar.gd")
 const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
 const RosterViewScript = preload("res://scripts/ui/RosterView.gd")
+const AIDebugPanelScript = preload("res://scripts/ui/AIDebugPanel.gd")
+const AIDebugFormatScript = preload("res://scripts/debug/AIDebugFormat.gd")
 const NetKillFeedScript = preload("res://scripts/net/NetKillFeed.gd")
 const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")
@@ -83,6 +85,9 @@ var _buff_ptr := 0
 var _buff_view = null
 var _buff_sig := ""
 var _ui_frames: Array = []
+var _ai_frames: Array = []        # 录像中的 AI 思考快照 [{t, a:[...]}]
+var _ai_dbg: Control = null       # F3 AI 思考覆盖层
+var _ai_dbg_t: float = 0.0
 var _ui_ptr := 0
 var _pad = null
 var _rec_bar = null
@@ -159,7 +164,7 @@ var _cam_drag := false          # 回放：直接拖动屏幕平移相机
 var _cam_drag_moved := false
 var _cam_drag_last := Vector2.ZERO
 var _cam_drag_prev_follow := -1
-const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5秒（Shift ±1秒） · ↑/↓ 倍速 · 1~5 指定倍速 · N/J 下/上个击杀 · F 切换英雄（Shift+F 反向）\nP 集锦 · C 英雄面板 · T 团队面板 · Home/End 首尾 · PageUp/PageDown ±30秒 · R 重置镜头 · H 隐藏界面 · Esc 退出 · 左键平移/右键旋转/滚轮缩放"
+const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5秒（Shift ±1秒） · ↑/↓ 倍速 · 1~5 指定倍速 · N/J 下/上个击杀 · F 切换英雄（Shift+F 反向）\nP 集锦 · C 英雄面板 · T 团队面板 · Home/End 首尾 · PageUp/PageDown ±30秒 · R 重置镜头 · H 隐藏界面 · F3 AI思考 · Esc 退出 · 左键平移/右键旋转/滚轮缩放"
 
 var _hint_label: Label = null
 var _finisher_t := -1.0
@@ -197,6 +202,7 @@ func _ready() -> void:
 	_buff_frames = _doc.get("buff_frames", [])
 	_buff_defs = _doc.get("buff_defs", {})
 	_ui_frames = _doc.get("ui_frames", [])
+	_ai_frames = _doc.get("ai_frames", [])
 	_chat_events = _doc.get("chat", [])
 	_final_rows = _doc.get("final", [])
 	# 飘字/音效并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
@@ -233,6 +239,7 @@ func _ready() -> void:
 	_build_actors()
 	_build_ui()
 	_build_hud()
+	_build_ai_debug()
 	_t = 0.0
 	_apply_frame(0.0)
 
@@ -822,6 +829,44 @@ func _update_world_hud(t: float) -> void:
 		_update_replay_controls()
 
 
+## 回放 AI 思考覆盖层（F3）：从录像 ai_frames 取当前时间之前最近一帧
+func _build_ai_debug() -> void:
+	var cl := CanvasLayer.new()
+	cl.name = "ReplayAIDebugLayer"
+	cl.layer = 280
+	add_child(cl)
+	_ai_dbg = AIDebugPanelScript.new()
+	_ai_dbg.visible = false
+	cl.add_child(_ai_dbg)
+
+
+func _toggle_ai_debug() -> void:
+	if _ai_dbg == null:
+		return
+	_ai_dbg.visible = not _ai_dbg.visible
+	_ai_dbg_t = 0.0
+	if _ai_dbg.visible:
+		_refresh_ai_debug_replay()
+
+
+func _refresh_ai_debug_replay() -> void:
+	if _ai_dbg == null:
+		return
+	var title := "回放 AI 思考过程（F3 关闭）"
+	if _ai_frames.is_empty():
+		_ai_dbg.set_text(title + "\n\n该录像没有 AI 思考数据（旧版本录制）。")
+		return
+	var target_ms := int(round(_t * 1000.0))
+	var best: Dictionary = {}
+	for fr in _ai_frames:
+		if int(fr.get("t", 0)) <= target_ms:
+			best = fr
+		else:
+			break
+	var rows: Array = best.get("a", [])
+	_ai_dbg.set_text(AIDebugFormatScript.all(rows, title, "回放时间 %.1fs" % _t))
+
+
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 140
@@ -980,6 +1025,11 @@ func _process(delta: float) -> void:
 	_update_postfx(delta)
 	_update_ui()
 	_update_camera()
+	if _ai_dbg != null and _ai_dbg.visible:
+		_ai_dbg_t -= delta
+		if _ai_dbg_t <= 0.0:
+			_ai_dbg_t = 0.3
+			_refresh_ai_debug_replay()
 
 
 func _apply_frame(t: float) -> void:
@@ -1060,6 +1110,13 @@ func _apply_frame(t: float) -> void:
 		node["root"].position = Vector3(x, _fy, z)
 		_update_replay_wukong_cloud(i, str((_heroes[i] as Dictionary).get("name", "")), _fy, x, z)
 		var moved: bool = prev.distance_to(Vector3(x, 0.0, z)) > 0.02
+		if _pad != null and i == int(_follow_hero):
+			if moved:
+				var _mv := Vector2(x - prev.x, -(z - prev.z))
+				if _mv.length() > 0.001:
+					_pad.set_joystick_external(_mv.normalized())
+			else:
+				_pad.set_joystick_external(Vector2.ZERO)
 		node["last"] = Vector3(x, 0.0, z)
 		var ap2: AnimationPlayer = node.get("ap")
 		var want: String = str(node.get("anim", "idle"))
@@ -3044,6 +3101,8 @@ func _play_item_fx(nm: String, cat: String, _item: String) -> void:
 
 func _play_attack_fx(ev: Dictionary) -> void:
 	var nm := str(ev.get("n", ""))
+	if _pad != null and _is_followed_caster(nm):
+		_pad.flash_attack()
 	var from_p := Vector3(float(ev.get("cx", 0)) / 100.0, 1.2, float(ev.get("cz", 0)) / 100.0)
 	var to_p := Vector3(float(ev.get("tx", 0)) / 100.0, 0.0, float(ev.get("tz", 0)) / 100.0)
 	var dir := (to_p - from_p)
@@ -3081,6 +3140,16 @@ func _chat_speaker_is_ai(nm: String) -> bool:
 		if (h is Dictionary) and str(h.get("name", "")) == nm and bool(h.get("ai", false)):
 			return true
 	return false
+
+
+## 回放 HUD 操作按钮只对应主视角英雄：判断施法/普攻是否来自该英雄
+func _is_followed_caster(nm: String) -> bool:
+	if _pad == null or nm == "":
+		return false
+	var fi: int = int(_follow_hero)
+	if fi < 0 or fi >= _heroes.size():
+		return false
+	return str((_heroes[fi] as Dictionary).get("name", "")) == nm
 
 
 func _hero_name(idx: int) -> String:
@@ -3426,6 +3495,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_change_speed(-1)
 			KEY_F11:
 				_toggle_fullscreen()
+			KEY_F3:
+				_toggle_ai_debug()
 		return
 	if event is InputEventScreenTouch:
 		var stouch: InputEventScreenTouch = event

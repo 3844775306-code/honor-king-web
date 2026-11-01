@@ -5,6 +5,7 @@ var hero: Hero
 var perception: AiPerception
 var state: int
 var lane: int
+var last_action := ""
 
 
 func _init(p_hero: Hero, p_perception: AiPerception) -> void:
@@ -20,17 +21,20 @@ func try_use(p_state: int, p_lane: int) -> bool:
 		return false
 
 	var sk: String = hero.summoner_skill.skill_name
+	var ok := false
 	match sk:
-		"治疗术": return _try_heal()
-		"传送": return _try_teleport()
-		"疾跑": return _try_sprint()
-		"狂暴": return _try_frenzy()
-		"净化": return _try_cleanse()
-		"弱化": return _try_weaken()
-		"终结": return _try_execute()
-		"闪现": return _try_flash()
-		"惩击": return _try_smite()
-	return false
+		"治疗术": ok = _try_heal()
+		"传送": ok = _try_teleport()
+		"疾跑": ok = _try_sprint()
+		"狂暴": ok = _try_frenzy()
+		"净化": ok = _try_cleanse()
+		"弱化": ok = _try_weaken()
+		"终结": ok = _try_execute()
+		"闪现": ok = _try_flash()
+		"惩击": ok = _try_smite()
+	if ok:
+		last_action = sk
+	return ok
 
 
 func _try_heal() -> bool:

@@ -55,6 +55,7 @@ var _last_levels: Array = []
 var _last_deaths: Array = []
 var _buff_frames: Array = []
 var _ui_frames: Array = []
+var _ai_frames: Array = []        # [{t, a:[AI 思考快照...]}] 0.5s 采样，供回放 F3 调试
 var _chat_events: Array = []    # 回放聊天：[{t,k:'chat',n,tm,txt,me}]      # 回放 HUD：每英雄 [gold, 目标摘要, 推荐装bundle]（2Hz）
 var _last_hit_ms := {}
 var _rb_last := {}   # hero idx -> 上次推荐装 bundle（变化才记录）   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
@@ -261,6 +262,20 @@ func _sample(delta: float, finishing: bool) -> void:
 	# 子弹（普攻/直线技能弹道）：10Hz 采样，回放里插值移动
 	# BUFF 图标行：2Hz 采样（仅记录有 buff 的英雄；定义去重进 _buff_defs）
 	_sample_n += 1
+	# AI 思考过程：0.5s 采样一次（10Hz 下每 5 帧），供回放调试
+	if _sample_n % 5 == 0:
+		var _ai_rows: Array = []
+		for _ah in get_tree().get_nodes_in_group("heroes"):
+			if not (_ah is Hero) or not _ah.is_ai or _ah.net_taken:
+				continue
+			var _asnap: Dictionary = _ah.call("ai_debug_snapshot")
+			if _asnap.is_empty():
+				continue
+			var _logs: Array = _asnap.get("log", [])
+			if _logs.size() > 8:
+				_asnap["log"] = _logs.slice(_logs.size() - 8)
+			_ai_rows.append(_json_safe(_asnap))
+		_ai_frames.append({"t": t_ms, "a": _ai_rows})
 	if _sample_n % 2 == 0:
 		var bents: Array = []
 		for hb in get_tree().get_nodes_in_group("heroes"):
@@ -899,6 +914,7 @@ func _save() -> void:
 		"buff_frames": _buff_frames,
 		"buff_defs": _buff_defs,
 		"ui_frames": _ui_frames,
+		"ai_frames": _ai_frames,
 		"chat": _chat_events,
 		"final": final_rows,
 	}
