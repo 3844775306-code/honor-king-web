@@ -143,7 +143,16 @@ var _preview_summ_icon = null      # 中栏英雄预览：召唤师技能图标
 var _preview_tip: Label = null     # 中栏底部提示（含本局分路说明）
 var _prev_skill_row: HBoxContainer = null    # 中栏英雄预览：3 个英雄技能 chip 行
 var _prev_skill_tip: PanelContainer = null   # 技能 chip 悬停浮层
-var _build_row: HBoxContainer = null         # 出装方案按钮行（内置推荐 + 已存方案）
+var _build_row: HBoxContainer = null         # （保留）旧出装按钮行容器引用
+var _right_tab := "召唤"                     # 右栏当前页签：召唤 / 出装
+var _summ_panel: VBoxContainer = null
+var _build_panel: VBoxContainer = null
+var _summ_tab_btn: Button = null
+var _build_tab_btn: Button = null
+var _build_scheme_row: GridContainer = null   # 出装面板：方案按钮网格（4 列）
+var _build_cards: GridContainer = null        # 出装面板：6 张装备卡（3 列 × 2 行）
+var _item_tip: PanelContainer = null          # 装备图标悬浮详情卡
+var _summ_detail: Label = null                 # 召唤面板：选中召唤师的冷却/类型说明
 var _build_hero := ""                        # 当前出装方案归属英雄
 var _build_ids: Array = []                   # 当前套用的出装 id 列表
 var _hero_cfg_cache := {}                    # BattleManager.hero_configs 懒加载缓存（只读）
@@ -1873,23 +1882,6 @@ func _build_center_stage() -> Control:
 	_prev_skill_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_prev_skill_row)
 
-	# 推荐出装方案行：内置 3 套 + 玩家已存方案 + 恢复推荐，点击即写本局推荐出装
-	var bbar := HBoxContainer.new()
-	bbar.add_theme_constant_override("separation", 8)
-	v.add_child(bbar)
-	var blab := _mk_label("推荐出装", _fs(UiKit.FS_XS), COL_SUB)
-	blab.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bbar.add_child(blab)
-	var bscroll := ScrollContainer.new()
-	bscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	bscroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	bscroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bscroll.custom_minimum_size = Vector2(0, 44)
-	bbar.add_child(bscroll)
-	_build_row = HBoxContainer.new()
-	_build_row.add_theme_constant_override("separation", 6)
-	bscroll.add_child(_build_row)
-
 	_preview_tip = _mk_label("点英雄卡选英雄 → 右侧选召唤师 → 点锁定；锁后仍可改选再锁", _fs(UiKit.FS_XS), COL_DIM)
 	_preview_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1952,7 +1944,7 @@ func _build_select_bottom() -> Control:
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 10)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.custom_minimum_size = Vector2(0, 300)
+	bar.custom_minimum_size = Vector2(0, 500)
 
 	# 左：职业 tab + 横向英雄卡条
 	var left := _panel_block(UiKit.C_TEAM0, 0.32, 14, 10.0)
@@ -1990,41 +1982,60 @@ func _build_select_bottom() -> Control:
 	strip_scroll.add_child(_hero_strip)
 	_rebuild_strip()
 
-	# 右：召唤师技能 + 详情 + 操作键
+	# 右：召唤 / 出装 双 tab（与单机选人页对齐：860 宽；召唤 5 列网格 / 出装 方案行 + 6 张装备卡）
 	var right := _panel_block(UiKit.C_GOLD, 0.32, 14, 10.0)
-	right.custom_minimum_size = Vector2(520, 0)
+	right.custom_minimum_size = Vector2(860, 0)
 	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	bar.add_child(right)
 	var rv := VBoxContainer.new()
 	rv.add_theme_constant_override("separation", 6)
 	right.add_child(rv)
-	rv.add_child(_mk_label("召唤师技能（点击选择）", _fs(UiKit.FS_XS), COL_SUB))
+
+	var rtab := HBoxContainer.new()
+	rtab.add_theme_constant_override("separation", 8)
+	rv.add_child(rtab)
+	_summ_tab_btn = _mk_tab_btn("召唤", UiKit.C_GOLD, true)
+	_summ_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_summ_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	_summ_tab_btn.pressed.connect(_switch_right_tab.bind("召唤"))
+	rtab.add_child(_summ_tab_btn)
+	_build_tab_btn = _mk_tab_btn("出装", UiKit.C_TEAM0, false)
+	_build_tab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_build_tab_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	_build_tab_btn.pressed.connect(_switch_right_tab.bind("出装"))
+	rtab.add_child(_build_tab_btn)
+
+	# —— 召唤面板：5 列召唤师卡 + 悬停详情 ——
+	_summ_panel = VBoxContainer.new()
+	_summ_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_summ_panel.add_theme_constant_override("separation", 6)
+	rv.add_child(_summ_panel)
 	var sscroll := ScrollContainer.new()
 	sscroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	sscroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	sscroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sscroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	sscroll.custom_minimum_size = Vector2(0, 120)
-	rv.add_child(sscroll)
+	_summ_panel.add_child(sscroll)
 	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
+	grid.columns = 5
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sscroll.add_child(grid)
 	_summ_btns.clear()
 	for sname in HeroPickData.SUMMONERS:
 		var sid: String = HeroPickData.SUMMONERS[sname]
 		var sb := _mk_card_btn("", Color(0.36, 0.46, 0.66))
-		sb.custom_minimum_size = Vector2(200, 64)
+		sb.custom_minimum_size = Vector2(0, 84)
+		sb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var srow := HBoxContainer.new()
 		srow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		srow.alignment = BoxContainer.ALIGNMENT_CENTER
-		srow.add_theme_constant_override("separation", 8)
+		srow.add_theme_constant_override("separation", 4)
 		srow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		srow.add_child(SelectArt.SummonerGlyph.new(sname, 36))
-		var slab := _mk_label(sname, _fs(UiKit.FS_MD), COL_TEXT)
-		slab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		srow.add_child(SelectArt.SummonerGlyph.new(sname, 32))
+		var slab := _mk_label(sname, _fs(UiKit.FS_SM), COL_TEXT)
+		slab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		slab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		slab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		srow.add_child(slab)
@@ -2034,6 +2045,37 @@ func _build_select_bottom() -> Control:
 		sb.mouse_exited.connect(_hide_summ_tip)
 		grid.add_child(sb)
 		_summ_btns[sid] = sb
+	_summ_detail = _mk_label("选中后显示冷却与说明", _fs(UiKit.FS_XS), COL_SUB)
+	_summ_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_summ_detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_summ_detail.clip_text = true
+	_summ_detail.custom_minimum_size = Vector2(0, 34)
+	_summ_panel.add_child(_summ_detail)
+
+	# —— 出装面板：方案行（4 列）+ 6 张装备卡（3 列，悬浮看详情）——
+	_build_panel = VBoxContainer.new()
+	_build_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_build_panel.add_theme_constant_override("separation", 6)
+	_build_panel.visible = false
+	rv.add_child(_build_panel)
+	var bscroll2 := ScrollContainer.new()
+	bscroll2.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	bscroll2.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	bscroll2.custom_minimum_size = Vector2(0, 88)
+	bscroll2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_build_panel.add_child(bscroll2)
+	_build_scheme_row = GridContainer.new()
+	_build_scheme_row.columns = 4
+	_build_scheme_row.add_theme_constant_override("h_separation", 6)
+	_build_scheme_row.add_theme_constant_override("v_separation", 6)
+	_build_scheme_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bscroll2.add_child(_build_scheme_row)
+	_build_cards = GridContainer.new()
+	_build_cards.columns = 3
+	_build_cards.add_theme_constant_override("h_separation", 6)
+	_build_cards.add_theme_constant_override("v_separation", 6)
+	_build_cards.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_build_panel.add_child(_build_cards)
 
 	_pick_status = _mk_label("", _fs(UiKit.FS_XS), COL_ERR)
 	_pick_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -2048,14 +2090,14 @@ func _build_select_bottom() -> Control:
 	brow.add_theme_constant_override("separation", 8)
 	rv.add_child(brow)
 	if _my_seat <= NetSession.MAX_SIDE_PLAYERS:
-		_pick_confirm_btn = _mk_btn("√  锁定选择", UiKit.C_TEAM0, true, Vector2(340, 92))
+		_pick_confirm_btn = _mk_btn("√  锁定选择", UiKit.C_TEAM0, true, Vector2(340, 84))
 		_pick_confirm_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 		_pick_confirm_btn.pressed.connect(_on_pick_confirm)
 		brow.add_child(_pick_confirm_btn)
 	else:
 		var sp := _mk_label("旁观中 · 有人离场可上场", _fs(UiKit.FS_XS), COL_DIM)
 		brow.add_child(sp)
-	_leave_btn = _mk_btn("离开房间", UiKit.C_DANGER, false, Vector2(180, 92))
+	_leave_btn = _mk_btn("离开房间", UiKit.C_DANGER, false, Vector2(180, 84))
 	_leave_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	_leave_btn.pressed.connect(_leave_room)
 	brow.add_child(_leave_btn)
@@ -2063,6 +2105,7 @@ func _build_select_bottom() -> Control:
 	_auto_start_lab = _mk_label("全员锁定后自动进入对局（0 人已锁）", _fs(UiKit.FS_XS), COL_SUB)
 	_auto_start_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	rv.add_child(_auto_start_lab)
+	_switch_right_tab("召唤")
 	return bar
 
 
@@ -2280,7 +2323,35 @@ func _pick_summ(sname: String, sid: String) -> void:
 	_sel_summ = sname
 	_sel_sid = sid
 	_summ_manual = true
+	_refresh_summ_detail()
 	_sync_pick_ui()
+
+
+# 召唤面板详情行：冷却 / 类型 / 距离（与单机选人页的选中详情同口径）
+func _refresh_summ_detail() -> void:
+	if _summ_detail == null:
+		return
+	if _sel_sid == "":
+		_summ_detail.text = "选中后显示冷却与说明"
+		return
+	var sk: Skill = SkillDatabase.get_skill(_sel_sid)
+	if sk == null:
+		_summ_detail.text = _sel_summ
+		return
+	var t := ""
+	match int(sk.type):
+		0: t = "指向"
+		1: t = "范围"
+		2: t = "增益"
+		3: t = "线性"
+		4: t = "位移"
+		5: t = "多段"
+		6: t = "护盾"
+		_: t = "技能"
+	var txt := "%s · %s · 冷却 %.0fs" % [_sel_summ, t, float(sk.cooldown)]
+	if sk.cast_range > 0.0:
+		txt += " · 距离 %.0fm" % float(sk.cast_range)
+	_summ_detail.text = txt
 
 
 # 召唤师卡悬停浮层：技能名 + 冷却/类型/距离/法力 + 推荐·已选标记（Skill 无描述字段，不编造）
@@ -2503,11 +2574,28 @@ func _skill_desc(sk: Skill) -> String:
 	return " · ".join(parts)
 
 # 出装方案按钮行：内置 3 套推荐 + 玩家已存方案 + 恢复推荐（点击写本局推荐出装）
+# 右栏页签：召唤 / 出装（与单机选人页同款）
+func _switch_right_tab(tab: String) -> void:
+	_right_tab = tab
+	if _summ_panel != null:
+		_summ_panel.visible = tab == "召唤"
+	if _build_panel != null:
+		_build_panel.visible = tab == "出装"
+	if _summ_tab_btn != null:
+		_summ_tab_btn.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, tab == "召唤"))
+		_summ_tab_btn.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, tab == "召唤"))
+	if _build_tab_btn != null:
+		_build_tab_btn.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, tab == "出装"))
+		_build_tab_btn.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, tab == "出装"))
+	if tab == "出装":
+		_refresh_build_row()
+
+
 func _refresh_build_row() -> void:
-	if _build_row == null:
+	if _build_scheme_row == null:
 		return
-	for c in _build_row.get_children():
-		_build_row.remove_child(c)
+	for c in _build_scheme_row.get_children():
+		_build_scheme_row.remove_child(c)
 		c.queue_free()
 	if _sel_hero == "":
 		return
@@ -2516,20 +2604,162 @@ func _refresh_build_row() -> void:
 	var presets := _preset_builds(_sel_hero)
 	for i in presets.size():
 		var ids := _clean_build_items(presets[i])
-		_build_row.add_child(_mk_build_btn("方案%d" % (i + 1), ids, _build_items_tooltip(ids), UiKit.C_TEAM0))
+		_build_scheme_row.add_child(_mk_build_btn("推荐方案%d" % (i + 1), ids, _build_items_tooltip(ids), UiKit.C_TEAM0))
 	var builds: Array = HeroBuildStore.get_builds(_sel_hero)
 	for i in mini(builds.size(), 6):
 		var ids := _clean_build_items((builds[i] as Dictionary).get("items", []))
-		_build_row.add_child(_mk_build_btn(str((builds[i] as Dictionary).get("name", "方案")), ids,
+		_build_scheme_row.add_child(_mk_build_btn(str((builds[i] as Dictionary).get("name", "方案")), ids,
 			_build_items_tooltip(ids), UiKit.C_GOLD))
-	_build_row.add_child(_mk_build_btn("恢复推荐", _preset_build(_sel_hero, 0), "回到内置推荐方案1", UiKit.C_GOLD))
+	_build_scheme_row.add_child(_mk_build_btn("恢复推荐", _preset_build(_sel_hero, 0), "回到内置推荐方案1", UiKit.C_GOLD))
+	_refresh_build_cards()
+
+
+# 出装面板下半：当前方案的 6 件装备卡（图标 + 名称 + 价格 + 效果一行，悬浮看详情）
+func _refresh_build_cards() -> void:
+	if _build_cards == null:
+		return
+	for c in _build_cards.get_children():
+		_build_cards.remove_child(c)
+		c.queue_free()
+	if _sel_hero == "":
+		return
+	for i in range(6):
+		var id := str(_build_ids[i]) if i < _build_ids.size() else ""
+		_build_cards.add_child(_mk_item_card(i, id))
+
+
+# 出装卡调序（写回本局推荐 override，与单机选人一致）
+func _move_build_item(idx: int, dir: int) -> void:
+	var j := idx + dir
+	if idx < 0 or j < 0 or idx >= _build_ids.size() or j >= _build_ids.size():
+		return
+	var tmp = _build_ids[idx]
+	_build_ids[idx] = _build_ids[j]
+	_build_ids[j] = tmp
+	if _sel_hero != "":
+		ItemDatabase.set_recommended_override(_sel_hero, _build_ids)
+	_refresh_build_row()
+
+
+func _mk_item_card(idx: int, item_id: String) -> Control:
+	var it: Dictionary = ItemDatabase.get_item(item_id) if item_id != "" else {}
+	var tier := int(it.get("tier", 1))
+	var nm := str(it.get("name", "空槽" if item_id == "" else item_id))
+	var cost := int(it.get("cost", 0))
+	var card := PanelContainer.new()
+	card.custom_minimum_size = Vector2(0, 96)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_PANEL_EDGE, 0.8, 10))
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 8)
+	card.add_child(h)
+	if item_id != "":
+		h.add_child(SelectArt.ItemIcon.new(nm, tier, 64))
+	var v := VBoxContainer.new()
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 2)
+	h.add_child(v)
+	var nl := _mk_label("%d. %s" % [idx + 1, nm], _fs(UiKit.FS_MD), COL_TEXT if item_id != "" else COL_DIM)
+	nl.clip_text = true
+	nl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	v.add_child(nl)
+	if item_id != "":
+		v.add_child(_mk_label("%d 金" % cost, _fs(UiKit.FS_SM), COL_GOLD))
+		var eff := UiKit.item_effect(it)
+		if eff != "":
+			var el := _mk_label(eff, _fs(UiKit.FS_XS), COL_SUB)
+			el.clip_text = true
+			el.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			v.add_child(el)
+		var up := _mk_btn("↑", UiKit.C_TEAM0, false, Vector2(34, 24))
+		up.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+		up.disabled = idx <= 0
+		up.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		up.pressed.connect(_move_build_item.bind(idx, -1))
+		h.add_child(up)
+		var down := _mk_btn("↓", UiKit.C_TEAM0, false, Vector2(34, 24))
+		down.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+		down.disabled = idx >= mini(5, _build_ids.size() - 1)
+		down.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		down.pressed.connect(_move_build_item.bind(idx, 1))
+		h.add_child(down)
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		card.mouse_entered.connect(_show_item_tip.bind(item_id, card))
+		card.mouse_exited.connect(_hide_item_tip)
+	return card
+
+
+# 装备悬浮详情（名称 / 品质 / 价格 / 属性 / 被动 / 合成）
+func _show_item_tip(item_id: String, ctrl: Control) -> void:
+	_hide_item_tip()
+	var it: Dictionary = ItemDatabase.get_item(item_id)
+	if it.is_empty() or ctrl == null:
+		return
+	var tier := int(it.get("tier", 1))
+	var qcol: Color = UiKit.QUALITY_COLORS[clampi(tier, 1, 5)]
+	var tip := PanelContainer.new()
+	tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tip.z_index = 300
+	tip.custom_minimum_size = Vector2(_fs(420), 0)
+	tip.add_theme_stylebox_override("panel", UiKit.skin_card(qcol, true, 0.97))
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", _fs(3))
+	tip.add_child(v)
+	v.add_child(_mk_label(str(it.get("name", item_id)), _fs(UiKit.FS_LG), qcol.lightened(0.25)))
+	var cls_map := {"attack": "物理", "magic": "法术", "defense": "防御", "boots": "鞋子",
+		"jungle": "打野", "support": "游走", "survival": "保命", "attack_speed": "攻速"}
+	var cls := str(it.get("class", ""))
+	var meta := "T%d · %d 金" % [tier, int(it.get("cost", 0))]
+	if cls != "":
+		meta += " · " + str(cls_map.get(cls, cls))
+	v.add_child(_mk_label(meta, _fs(UiKit.FS_SM), COL_SUB))
+	var stat_names := {"attack": "攻击", "magic_attack": "法强", "health": "生命", "armor": "物防",
+		"magic_resist": "法防", "attack_speed": "攻速%", "crit_chance": "暴击%", "cooldown": "冷缩%",
+		"speed": "移速", "lifesteal": "吸血%", "mana": "蓝量", "hp_regen": "回血",
+		"armor_pen_percent": "物穿%", "magic_pen": "法穿"}
+	var parts: Array = []
+	for k in stat_names:
+		var val := int(it.get(str(k), 0))
+		if val != 0:
+			parts.append("%s+%d" % [str(stat_names[k]), val])
+	if not parts.is_empty():
+		var sl := _mk_label("属性：" + " · ".join(parts), _fs(UiKit.FS_SM), COL_TEXT)
+		v.add_child(sl)
+	var passive := str(it.get("passive", ""))
+	if passive != "":
+		var pl := _mk_label("被动：" + passive, _fs(UiKit.FS_SM), COL_GOLD)
+		v.add_child(pl)
+	var reqs: Array = it.get("requires", [])
+	if not reqs.is_empty():
+		var names: Array = []
+		for rid in reqs:
+			names.append(str(ItemDatabase.get_item(str(rid)).get("name", rid)))
+		v.add_child(_mk_label("合成：" + " + ".join(names), _fs(UiKit.FS_SM), COL_SUB))
+	add_child(tip)
+	tip.size = tip.get_combined_minimum_size()
+	var r: Rect2 = ctrl.get_global_rect()
+	var vp := get_viewport_rect().size
+	var pos := Vector2(r.position.x, r.end.y + _fs(8))
+	if pos.y + tip.size.y > vp.y - _fs(8):
+		pos.y = r.position.y - tip.size.y - _fs(8)
+	pos.x = clampf(pos.x, _fs(8), maxf(_fs(8), vp.x - tip.size.x - _fs(8)))
+	tip.global_position = pos
+	_item_tip = tip
+
+
+func _hide_item_tip() -> void:
+	if _item_tip != null and is_instance_valid(_item_tip):
+		_item_tip.queue_free()
+	_item_tip = null
 
 func _mk_build_btn(text: String, ids: Array, tip: String, accent: Color) -> Button:
 	var active: bool = ids == _build_ids
 	var b := Button.new()
 	b.text = text
 	b.tooltip_text = tip
-	b.custom_minimum_size = Vector2(92, 34)
+	b.custom_minimum_size = Vector2(180, 40)
 	b.add_theme_font_size_override("font_size", _fs(UiKit.FS_XS))
 	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", accent, active))
 	b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", accent, active))
