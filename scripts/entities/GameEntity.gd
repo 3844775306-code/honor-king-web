@@ -27,6 +27,7 @@ var _last_feedback_msec: int = 0           # 镜头反馈节流
 var _last_hit_flash_msec: int = 0          # 非英雄受击闪光节流
 var can_move: bool = false
 var attack_timer: float = 0.0
+var anim_atk_seq: int = 0   # 每次真正出手 +1，客户端据此严格按服务器节奏播攻击动作
 var current_target: GameEntity = null
 var move_speed: int = 350
 var vision_range: int = 7

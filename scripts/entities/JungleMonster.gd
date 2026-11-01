@@ -428,6 +428,7 @@ func _perform_attack():
 
 # 普攻前摇（暗影/风暴阶段0.5s），随后 _finish_cast 执行 "aa"
 func _do_melee_attack():
+	anim_atk_seq += 1
 	attack_timer = 1.0 / attack_speed
 	if monster_phase >= 1:
 		windup_timer = 0.5

@@ -1720,7 +1720,7 @@ func _proc_recoil(v: Dictionary, yaw: float) -> void:
 	if mdl == null or not is_instance_valid(mdl):
 		return
 	var kind := str(v.get("name", mdl.get_meta("minion_model_kind", "")))
-	var pivot: Node3D = mdl.get_node_or_null("ModelPivot")
+	var pivot: Node3D = _find_model_pivot(mdl)
 	if kind == "siege":
 		_siege_recoil_client(mdl, pivot, yaw)
 		_fire_ammo_client(mdl)
