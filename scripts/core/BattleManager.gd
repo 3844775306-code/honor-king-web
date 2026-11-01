@@ -526,6 +526,7 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 				_ai_benchmark_speed = clampf(float(str(a).get_slice("=", 1)), 1.0, 20.0)
 		seed(_ai_benchmark_seed)
 		AiConfig.difficulty = AiConfig.Difficulty.GOLD
+		Config.player_team = Config.Team.PLAYER
 		Engine.time_scale = _ai_benchmark_speed
 		print("[AI-BENCH] start seed=%d speed=%.1f" % [_ai_benchmark_seed, _ai_benchmark_speed])
 	# 进入对局：淡出大厅环境音乐
@@ -553,7 +554,11 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		var _bench_ai := HeroAI.new()
 		hero.add_child(_bench_ai)
 	sel_ally_ai_picks = []
-	if sel_ally_picks.size() == 5:
+	if _ai_benchmark:
+		# 固定双方阵容，避免每次随机 BP 改变对位，导致前后对比混入阵容噪声
+		sel_ally_ai_picks = ["妲己", "李白", "狄仁杰", "太乙真人"]
+		sel_enemy_picks = ["铠", "安琪拉", "兰陵王", "孙尚香", "东皇太一"]
+	elif sel_ally_picks.size() == 5:
 		for i in 5:
 			if i != sel_player_seat and str(sel_ally_picks[i]) != "":
 				sel_ally_ai_picks.append(str(sel_ally_picks[i]))
