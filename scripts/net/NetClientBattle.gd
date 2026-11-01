@@ -681,6 +681,7 @@ func _on_snapshot(snap: Array) -> void:
 			if typ == NET_HERO:
 				v.pname = str(ent[17]) if ent.size() > 17 else ""
 				v.mvp = int(ent[18]) == 1 if ent.size() > 18 else false
+				v.status = ent[19] if ent.size() > 19 else []
 			if typ == NET_JUNGLE:
 				if hp < float(v.get("prev_hp", hp)) - 0.5:
 					v["hit_t"] = _last_snap_time
@@ -2766,6 +2767,7 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 		"name": str(v.get("name", "")), "pname": str(v.get("pname", "")), "level": int(v.get("level", 1)),
 		"hp": float(v.hp), "maxhp": float(v.maxhp), "hp_col": bar_col,
 		"shield": float(v.get("shield", 0.0)), "mvp": bool(v.get("mvp", false)),
+		"status": v.get("status", []),
 		"mana": float(v.get("mana", 0.0)), "maxmana": float(v.get("maxmana", 0.0)),
 		"exp": float(v.get("exp", 0.0)), "exp_to_next": float(v.get("exp_to_next", 0.0)),
 		"hidden": bool(v.get("hidden", false)) and int(v.team) != TEAM_ENEMY,
@@ -5104,6 +5106,35 @@ class Hud:
 							Color(0.16, 0.42, 0.95).lerp(Color(0.05, 0.16, 0.55), mq))
 				draw_rect(Rect2(bx, mby, mw, 1.5), Color(1, 1, 1, 0.45))
 			draw_rect(Rect2(bx, mby, bw, mh), Color(0.35, 0.62, 1.0, 0.5), false, 1.0)
+		# 状态条（附魔/枪意/炸弹/剑意/回城/传送…）：与 host HeroInfoControl 同款 13px 行 + 1.5px 间隔
+		var _sts: Array = r.get("status", [])
+		if not _sts.is_empty():
+			var sy := by + bh + 3.0
+			if mana_max > 0.0:
+				sy += bh * 0.5 + 3.0
+			sy += 2.0
+			# 行底色块先铺（与 host 一样雷达血条+法条+状态条共用一个深色底板观感）
+			var _rows_h: float = _sts.size() * 13.0 + (_sts.size() - 1) * 1.5
+			draw_rect(Rect2(bx - 2.0, sy - 2.0, bw + 4.0, _rows_h + 4.0), Color(0.02, 0.03, 0.06, 0.96))
+			for st in _sts:
+				if not (st is Array) or (st as Array).size() < 6:
+					continue
+				var lb := str(st[0])
+				var rt := clampf(float(st[1]), 0.0, 1.0)
+				var scol := Color(float(st[2]), float(st[3]), float(st[4]), 1.0)
+				var val := str(st[5])
+				var pulse2: bool = int(st[6]) == 1 if (st as Array).size() > 6 else false
+				draw_rect(Rect2(bx, sy, bw, 13.0), Color(0.07, 0.08, 0.12, 0.9))
+				if rt > 0.0:
+					draw_rect(Rect2(bx, sy, bw * rt, 13.0), Color(scol.r, scol.g, scol.b, 0.66))
+					draw_rect(Rect2(bx, sy, bw * rt, 3.0), Color(1, 1, 1, 0.16))
+				draw_rect(Rect2(bx, sy, bw, 13.0), Color(0.35, 0.62, 1.0, 0.18), false, 1.0)
+				draw_string(_font, Vector2(bx + 7.0, sy + 10.0), lb, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.92, 0.96, 1.0))
+				draw_string(_font, Vector2(bx, sy + 10.0), val, HORIZONTAL_ALIGNMENT_RIGHT, bw - 7.0, 13, Color(0.88, 0.93, 1.0))
+				if pulse2:
+					var pp := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006)
+					draw_rect(Rect2(bx - 1.0, sy - 1.0, bw + 2.0, 15.0), Color(scol.r, scol.g, scol.b, 0.30 + 0.35 * pp), false, 1.4)
+				sy += 14.5
 		# 暗印层数文字（黄，最顶行；对齐主机 HeroInfoControl 标记行位置：内容顶 y0 基线）
 		var ltxt := ""
 		for m in lyf_rows:

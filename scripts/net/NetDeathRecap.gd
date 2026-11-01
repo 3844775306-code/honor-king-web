@@ -16,6 +16,13 @@ func _ready() -> void:
 	_view.closed_by_user.connect(_close)
 	NetSession.net_death_recap.connect(_on_recap)
 
+## 公共入口：RPC 或快照兜底载荷都走这里；空载荷直接忽略，避免弹出空白面板
+func show_payload(p: Dictionary) -> void:
+	if p == null or (p as Dictionary).is_empty():
+		return
+	_on_recap(p)
+
+
 func _on_recap(p: Dictionary) -> void:
 	_view.set_data(p)
 	_place()

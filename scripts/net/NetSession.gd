@@ -1492,6 +1492,17 @@ func _maxhp_of(e: Node) -> float:
 	return e.max_health
 
 
+func _pack_hero_status(e: Node) -> Array:
+	var out: Array = []
+	if e == null:
+		return out
+	for st in HeroInfoControl.status_entries_of(e):
+		var c: Color = st.get("color", Color.WHITE)
+		out.append([str(st.get("label", "")), float(st.get("ratio", 0.0)),
+			c.r, c.g, c.b, str(st.get("value", "")), 1 if bool(st.get("pulse", false)) else 0])
+	return out
+
+
 func _pack_hero(e: Node) -> Array:
 	# 尾字段 idx9.. = mana / maxmana / shield / exp / exp_to_next（客户端世界血条按主机
 	# HeroInfoControl 规格绘制蓝条/护盾，等级环经验弧用后两段）；idx14 = 暗印摘要（黄段+层数）
@@ -1499,7 +1510,8 @@ func _pack_hero(e: Node) -> Array:
 		e.mana, _maxmana_of(e), e.shield_remaining, int(e.exp), int(e.exp_to_next),
 		_pack_lyf(e), e.rotation.y, 1 if bool(e.get("hidden_in_bush")) else 0,
 		str(e.get("player_name")),   # idx17：玩家/AI 昵称（无英雄名时兜底显示）
-		1 if bool(e.get("is_mvp")) else 0]   # idx18：MVP 王冠（客户端世界血条右侧徽章）
+		1 if bool(e.get("is_mvp")) else 0,   # idx18：MVP 王冠（客户端世界血条右侧徽章）
+		_pack_hero_status(e)]   # idx19：状态条（附魔/枪意/炸弹/剑意/回城/传送… 与单机 HeroInfoControl 同源）
 
 
 func _maxmana_of(e: Node) -> float:

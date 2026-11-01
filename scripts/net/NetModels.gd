@@ -164,12 +164,21 @@ static func tower_shield(team: int, crystal: bool = false) -> Node3D:
 	return TurretMesh.tower_shield_visual(team, crystal)
 
 
-static func wall(hq: bool = false, outer: bool = false, outer_len: float = 2.0) -> Node3D:
-	# 与主机 Wall.gd 完全同源：程序化石墙（不再加载 wall.glb）
+static func wall(hq: bool = false, outer: bool = false, outer_len: float = 2.0,
+		continuous_len: float = 0.0, pillar: bool = false, seed_v: int = -1, thick: float = 1.0) -> Node3D:
+	# 与主机 Wall.gd 完全同源：程序化石墙（位置哈希种子 / 连续墙端面平齐 / 端柱 / 厚度差异化）
 	_viz_seed += 37
+	var sd: int = seed_v if seed_v >= 0 else _viz_seed
+	var thick_v: float = maxf(thick, 1.0)
+	if pillar:
+		return DecorMesh.pillar_visual()
+	if continuous_len > 0.0:
+		var cv := DecorMesh.outer_wall_visual(continuous_len)
+		cv.scale = Vector3(1.0, 0.62, thick_v)
+		return cv
 	if outer:
 		return DecorMesh.outer_wall_visual(outer_len)
-	return DecorMesh.wall_visual_hq(_viz_seed) if hq else DecorMesh.wall_visual(_viz_seed)
+	return DecorMesh.wall_visual_hq(sd) if hq else DecorMesh.wall_visual(sd)
 
 
 static func bush() -> Node3D:

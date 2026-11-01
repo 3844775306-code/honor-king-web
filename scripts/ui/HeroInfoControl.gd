@@ -484,56 +484,74 @@ func _status_entry(label: String, ratio: float, col: Color, segments: int, value
 	}
 
 func _status_entries() -> Array:
+	return status_entries_of(hero)
+
+
+## 状态条（附魔/枪意/炸弹/回城/传送等）：单机绘制与联机快照共用同一份数据
+static func status_entries_of(hero) -> Array:
 	var out: Array = []
-	if not hero:
+	if hero == null:
 		return out
 	match hero.display_name:
 		"吕布":
 			if hero.stat_timer > 0.0:
-				out.append(_status_entry("附魔", hero.stat_timer / 8.0, Color(0.74, 0.38, 1.0), 0, "%.1fs" % hero.stat_timer, true))
+				out.append(_status_entry_s("附魔", hero.stat_timer / 8.0, Color(0.74, 0.38, 1.0), 0, "%.1fs" % hero.stat_timer, true))
 		"王昭君":
 			if hero.wangzhaojun_combat_timer > 0.0:
-				out.append(_status_entry("冰霜", hero.wangzhaojun_combat_timer / 5.0, Color(0.42, 0.80, 1.0), 0, "%.1fs" % hero.wangzhaojun_combat_timer, true))
+				out.append(_status_entry_s("冰霜", hero.wangzhaojun_combat_timer / 5.0, Color(0.42, 0.80, 1.0), 0, "%.1fs" % hero.wangzhaojun_combat_timer, true))
 		"马超":
 			if hero.stat_timer > 0.0:
-				out.append(_status_entry("枪意", hero.stat_timer / 8.0, Color(0.72, 0.94, 1.0), 0, "%.1fs" % hero.stat_timer, true))
+				out.append(_status_entry_s("枪意", hero.stat_timer / 8.0, Color(0.72, 0.94, 1.0), 0, "%.1fs" % hero.stat_timer, true))
 		"不知火舞":
 			if hero.stat_timer > 0.0:
-				out.append(_status_entry("忍锋", hero.stat_timer / 5.0, Color(1.0, 0.52, 0.28), 0, "%.1fs" % hero.stat_timer, true))
+				out.append(_status_entry_s("忍锋", hero.stat_timer / 5.0, Color(1.0, 0.52, 0.28), 0, "%.1fs" % hero.stat_timer, true))
 		"沈梦溪":
 			if hero.stat > 0.0:
-				out.append(_status_entry("炸弹", hero.stat / 10.0, Color(1.0, 0.66, 0.18), 10, "%d/10" % int(round(hero.stat)), false))
+				out.append(_status_entry_s("炸弹", hero.stat / 10.0, Color(1.0, 0.66, 0.18), 10, "%d/10" % int(round(hero.stat)), false))
 		"狄仁杰":
 			if hero.stat > 0.0:
-				out.append(_status_entry("被动", hero.stat / 5.0, Color(1.0, 0.78, 0.30), 5, "%d/5" % int(round(hero.stat)), false))
+				out.append(_status_entry_s("被动", hero.stat / 5.0, Color(1.0, 0.78, 0.30), 5, "%d/5" % int(round(hero.stat)), false))
 		"元流之子":
 			if hero.yuanliu_flow > 0:
-				out.append(_status_entry("流", hero.yuanliu_flow / 9.0, Color(0.30, 0.94, 0.82), 9, "%d/9" % hero.yuanliu_flow, false))
+				out.append(_status_entry_s("流", hero.yuanliu_flow / 9.0, Color(0.30, 0.94, 0.82), 9, "%d/9" % hero.yuanliu_flow, false))
 		"英睿":
 			if hero.yingrui_aa_count > 0:
-				out.append(_status_entry("冰爽", hero.yingrui_aa_count / 3.0, Color(0.62, 0.86, 1.0), 3, "%d/3" % hero.yingrui_aa_count, false))
+				out.append(_status_entry_s("冰爽", hero.yingrui_aa_count / 3.0, Color(0.62, 0.86, 1.0), 3, "%d/3" % hero.yingrui_aa_count, false))
 		"后羿":
 			if hero.stat > 0.0:
-				out.append(_status_entry("惩戒", hero.stat / 3.0, Color(1.0, 0.56, 0.18), 3, "%d/3" % int(round(hero.stat)), false))
+				out.append(_status_entry_s("惩戒", hero.stat / 3.0, Color(1.0, 0.56, 0.18), 3, "%d/3" % int(round(hero.stat)), false))
 		"鲁班七号":
 			if hero.luban_passive_stacks > 0:
-				out.append(_status_entry("扫射", hero.luban_passive_stacks / 5.0, Color(1.0, 0.70, 0.24), 5, "%d/5" % hero.luban_passive_stacks, false))
+				out.append(_status_entry_s("扫射", hero.luban_passive_stacks / 5.0, Color(1.0, 0.70, 0.24), 5, "%d/5" % hero.luban_passive_stacks, false))
 		"李白":
 			if hero.libai_xia_active:
 				if hero.libai_xia_timer > 0.0:
-					out.append(_status_entry("侠客行", hero.libai_xia_timer / 5.0, Color(0.78, 0.92, 1.0), 0, "%.1fs" % hero.libai_xia_timer, true))
+					out.append(_status_entry_s("侠客行", hero.libai_xia_timer / 5.0, Color(0.78, 0.92, 1.0), 0, "%.1fs" % hero.libai_xia_timer, true))
 			elif hero.libai_sword_auras > 0:
-				out.append(_status_entry("剑意", hero.libai_sword_auras / 4.0, Color(0.62, 0.88, 1.0), 4, "%d/4" % hero.libai_sword_auras, false))
+				out.append(_status_entry_s("剑意", hero.libai_sword_auras / 4.0, Color(0.62, 0.88, 1.0), 4, "%d/4" % hero.libai_sword_auras, false))
 		"太乙真人":
 			if hero.taiyi_q_channeling and hero.taiyi_q_timer > 0.0:
-				out.append(_status_entry("引爆", hero.taiyi_q_timer / 5.0, Color(0.80, 0.50, 1.0), 0, "%.1fs" % hero.taiyi_q_timer, true))
+				out.append(_status_entry_s("引爆", hero.taiyi_q_timer / 5.0, Color(0.80, 0.50, 1.0), 0, "%.1fs" % hero.taiyi_q_timer, true))
 	if hero.is_teleporting:
-		var tr := clampf(hero.teleport_progress / Hero.TELEPORT_DURATION, 0.0, 1.0)
-		out.append(_status_entry("传送", tr, Color(0.34, 0.72, 1.0), 0, "%d%%" % int(tr * 100.0), true))
+		# teleport_progress 已是 0..1 的传送进度（Hero 内按 TELEPORT_DURATION 累加），
+		# 不能再除一次时长，否则读条只会走到约 1/4 且看起来按回城时长算。
+		var tr := clampf(hero.teleport_progress, 0.0, 1.0)
+		out.append(_status_entry_s("传送", tr, Color(0.34, 0.72, 1.0), 0, "%d%%" % int(tr * 100.0), true))
 	if hero.is_recalling:
 		var rr := clampf(1.0 - hero.recall_timer / Hero.RECALL_DURATION, 0.0, 1.0)
-		out.append(_status_entry("回城", rr, Color(0.50, 0.96, 0.72), 0, "%.1fs" % hero.recall_timer, true))
+		out.append(_status_entry_s("回城", rr, Color(0.50, 0.96, 0.72), 0, "%.1fs" % hero.recall_timer, true))
 	return out
+
+
+static func _status_entry_s(label: String, ratio: float, col: Color, segments: int, value: String, pulse: bool = false) -> Dictionary:
+	return {
+		"label": label,
+		"ratio": clampf(ratio, 0.0, 1.0),
+		"color": col,
+		"segments": segments,
+		"value": value,
+		"pulse": pulse,
+	}
 
 func _status_style(bg: Color, border: Color, border_w: int, radius: int, glow: Color = Color(0, 0, 0, 0)) -> StyleBoxFlat:
 	var key := "%s|%s|%d|%d|%s" % [bg.to_html(true), border.to_html(true), border_w, radius, glow.to_html(true)]
