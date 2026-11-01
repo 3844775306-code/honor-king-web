@@ -76,6 +76,7 @@ const FX_SKILL_DASH := 25    # 位移技能起手（脚下元素色环）
 const FX_SKILL_ULT := 26     # 大招爆发（更大更久，元素色）
 const FX_PILLAR := 27        # 地面光柱（技能柱/落地柱）
 const FX_SKILL_GLOW := 28    # 施法蓄力/护盾起手光
+const FX_SPELL_FULL := 29    # 完整技能视觉：直接调 Vfx.play_spell，与单机同源
 
 # —— #44 events kind 与行字段（与 NetSession 快照 events 段对齐）——
 #   段 = [seq(int), row, ...]；行 = [fid, kind, x, y, z, ...kind 专属]
@@ -764,6 +765,7 @@ func _on_snapshot(snap: Array) -> void:
 	if snap.size() > SNAP_EVENTS:
 		_apply_events(snap)
 	# 顶部实时战况（host v6 idx10 全量统计）→ 击杀比分+经济比分
+	_check_own_death_recap()
 	if snap.size() > SNAP_SCORE:
 		_score = snap[SNAP_SCORE]
 	else:
@@ -1007,8 +1009,12 @@ func _apply_fx(snap: Array) -> void:
 		if life <= 0.0:
 			life = 0.5
 		var caster := str(row[9]) if row.size() > 9 else ""
-		# 技能类：直接调用 host 同款 Vfx 原语（cast_burst / cast_glow / shockwave / pillar），
-		# 与单机技能特效同一套实现（原先客户端自绘简化球+环，观感不一致）
+		# 完整技能事件：直接复用单机 Vfx.play_spell（签名大招/元素爆发/技能道具全同款）
+		if kind == FX_SPELL_FULL and row.size() >= 24:
+			_spawn_full_spell_fx(row, caster)
+			_fx_seen_fid[fid] = true
+			continue
+		# 旧版/其他技能类：直接调用 host 同款 Vfx 原语（cast_burst / cast_glow / shockwave / pillar）
 		if kind == FX_SKILL_BURST or kind == FX_SKILL_DASH or kind == FX_SKILL_ULT \
 				or kind == FX_SKILL_GLOW or kind == FX_PILLAR:
 			_spawn_host_skill_fx(kind, Vfx.ground_pos(p), team, rr, life, caster)
@@ -1158,6 +1164,34 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 			sm.set_meta("base_a", sm.albedo_color.a)
 	root.set_meta("mats", mats)
 	return root
+
+
+# 完整技能事件：行尾附加 [slot, caster xyz, target xyz, facing xz, skill 参数]，
+# 直接调用单机同一个 Vfx.play_spell，签名大招/元素爆发/技能道具都不会再走客户端简化版。
+func _spawn_full_spell_fx(row: Array, caster: String) -> void:
+	if caster == "":
+		return
+	var slot := int(row[10])
+	var cp := Vector3(float(row[11]), float(row[12]), float(row[13]))
+	var tp := Vector3(float(row[14]), float(row[15]), float(row[16]))
+	var fd := Vector3(float(row[17]), 0.0, float(row[18]))
+	if fd.length() < 0.01:
+		fd = Vector3.FORWARD
+	fd = fd.normalized()
+	var sk := Skill.new()
+	sk.type = int(row[19])
+	sk.radius = float(row[20])
+	sk.duration = float(row[21])
+	sk.self_displacement = float(row[22])
+	sk.is_channeling = int(row[23]) == 1
+	Vfx.play_spell(caster, slot, cp + Vector3.UP * 1.2 + fd * 0.65, tp, sk, fd, false)
+	# 持续区域（甄姬水区/王昭君暴风雪等）：与单机/回放同款 ground_zone
+	var team := int(row[FX_ROW_TEAM])
+	if int(sk.type) != 4 and sk.radius >= 2.0 and sk.duration >= 0.6:
+		var zn := Vfx.ground_zone(sk.radius, team, caster, maxf(0.8, sk.duration))
+		if zn != null and is_instance_valid(zn):
+			zn.position = Vector3(tp.x, 0.06, tp.z)
+			_vis_root.add_child(zn)
 
 
 # 技能视觉轻量还原（≤2 MeshInstance）：host VfxFactory 插桩的通用技能事件；
@@ -2394,6 +2428,15 @@ func _update_cast_preview() -> void:
 		_pv_arrow.visible = false
 
 # —— 接管 ——
+# own 快照里的死亡回放兜底载荷（host 在死亡跃迁帧塞入）
+func _check_own_death_recap() -> void:
+	if _dr == null or _own.is_empty():
+		return
+	var d = _own.get("dr", null)
+	if d is Dictionary and not (d as Dictionary).is_empty():
+		_dr.show_payload(d)
+
+
 func _on_takeover(manifest: Dictionary) -> void:
 	_manifest = manifest
 	_skills = manifest.get("skills", [])
@@ -3175,6 +3218,14 @@ func _add_river() -> void:
 
 
 # —— 静态地图布局（墙/草丛/营地环），从 NetSession 的 map payload 一次性填充 ——
+# 递归关闭投影（同 host Wall._set_shadow_off）
+func _net_set_shadow_off(n: Node) -> void:
+	if n is MeshInstance3D:
+		(n as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for c in n.get_children():
+		_net_set_shadow_off(c)
+
+
 func _apply_map_if_ready() -> void:
 	if _map_applied or _static_root == null:
 		return
@@ -3206,12 +3257,22 @@ func _apply_map_if_ready() -> void:
 		var hq: bool = w.size() > 3 and int(w[3]) == 1
 		var outer: bool = w.size() > 4 and int(w[4]) == 1
 		var outer_len: float = float(w[5]) if w.size() > 5 else 2.0
-		var wall_model := NetModels.wall(hq, outer, outer_len)
+		var cont_len: float = float(w[6]) if w.size() > 6 else 0.0
+		var pillar: bool = int(w[7]) == 1 if w.size() > 7 else false
+		var thick: float = float(w[9]) if w.size() > 9 else 1.0
+		# 位置哈希种子（同 host Wall.gd：镜像对称）
+		var seed_v: int = int(round(absf(root.position.x) * 10.0)) * 37 + int(round(absf(root.position.z) * 10.0)) * 91
+		var wall_model := NetModels.wall(hq, outer, outer_len, cont_len, pillar, seed_v, thick)
 		if wall_model == null:
 			continue
 		# 与主机同源的墙脚贴地抬升（分路/高地台面不埋墙根）
 		wall_model.position.y = DecorMesh.wall_ground_y(root.position)
 		root.add_child(wall_model)
+		# 较厚的老墙挂常春藤等装饰（同 host Wall.gd 条件）
+		if cont_len > 0.0 and maxf(thick, 1.0) > 1.10 and seed_v % 3 == 0:
+			root.add_child(DecorMesh.wall_decor_visual(seed_v))
+		# 静态墙体不投影（同 host：700+ 墙段是阴影 pass 主要 draw call）
+		_net_set_shadow_off(wall_model)
 		_static_root.add_child(root)
 		# 程序化石墙已自带基底碎石与苔藓（与主机同源），不再叠加旧装饰
 	for c in camps:

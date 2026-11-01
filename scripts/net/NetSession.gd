@@ -1138,7 +1138,9 @@ func _build_snapshot(bm: Node) -> Array:
 		# P3e 死亡跃迁 1→0：对该 pid 推一次死亡回放（受控时长 + 近7秒伤害聚合，host 同款逻辑）
 		var _pa := int(_prev_alive.get(pid, _al))
 		if _pa == 1 and _al == 0 and multiplayer.is_server():
-			rpc_id(pid, "_rpc_death_recap", _pack_death_recap(h))
+			var _drp := _pack_death_recap(h)
+			rpc_id(pid, "_rpc_death_recap", _drp)
+			own["dr"] = _drp   # 兜底：随快照一起下发（RPC 单包丢失时客户端仍能弹完整回放）
 		_prev_alive[pid] = _al
 	out.append(own)
 
@@ -1241,8 +1243,11 @@ func _build_snapshot(bm: Node) -> Array:
 		_fx_buf = keep
 	var fx_out: Array = [_fx_seq]
 	for e in _fx_buf:
-		# 末位补施法英雄名（客户端据此取元素/技能配色；旧客户端行大小判断兼容）
-		fx_out.append([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[9]])
+		# 末位补施法英雄名；再附加完整技能字段（旧客户端按行大小判断兼容）
+		var out_row := [e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[9]]
+		if e.size() > 10:
+			out_row.append_array(e.slice(10))
+		fx_out.append(out_row)
 	out.append(fx_out)
 
 	# #44 数值/经验珠/攻击动作 events 段：[seq, [fid, kind, ...], …]——变长行、born_ms 单存 [0]；
@@ -1338,15 +1343,17 @@ func _bullet_vkind(bl: Bullet) -> int:
 # team 只用于客户端上色：0/1 红蓝阵营色，-1 表示固定色域（水系/风暴/元流池，与阵营无关）。
 # 事件入 _fx_buf 后由 _build_snapshot 随快照广播并 ~0.35s 后剪掉。
 func push_net_fx(kind: int, pos: Vector3, team: int, r: float, life: float,
-		hero_name: String = "") -> void:
+		hero_name: String = "", extra: Array = []) -> void:
 	if mode != Mode.HOST:
 		return
 	if not _fx_ally_near(Vector3(pos.x, 0.0, pos.z)):
 		return
 	var now := Time.get_ticks_msec()
 	_fx_fid += 1
-	# 第 10 位：施法英雄名，客户端据此用 host 同款 Vfx.ground_zone 元素/技能配色；旧客户端忽略多余字段
-	_fx_buf.append([_fx_fid, kind, pos.x, pos.y, pos.z, int(team), r, life, now, hero_name])
+	# 第 10 位：施法英雄名；第 11 位起为完整技能事件附加字段（slot/caster/target/facing/skill 参数）
+	var row := [_fx_fid, kind, pos.x, pos.y, pos.z, int(team), r, life, now, hero_name]
+	row.append_array(extra)
+	_fx_buf.append(row)
 	if _fx_buf.size() > 64:
 		_fx_buf.pop_front()
 
@@ -1906,7 +1913,13 @@ func _collect_map_payload(bm: Node) -> Dictionary:
 			var is_hq: int = 1 if w.get("hq") == true else 0
 			var is_outer: int = 1 if w.get("outer") == true else 0
 			var outer_len: float = float(w.get("outer_len")) if w.get("outer_len") != null else 2.0
-			walls.append([w.global_position.x, w.global_position.z, w.rotation.y, is_hq, is_outer, outer_len])
+			# 第 7/8/9/10 位：连续墙长度 / 端柱 / 开放端 / 厚度倍率（客户端复刻 host 同款程序化石墙，
+			# 含位置哈希种子、厚度缩放与连续墙装饰柱）
+			walls.append([w.global_position.x, w.global_position.z, w.rotation.y, is_hq, is_outer, outer_len,
+				float(w.get("continuous_len")) if w.get("continuous_len") != null else 0.0,
+				1 if w.get("pillar") == true else 0,
+				1 if w.get("open_end") == true else 0,
+				float(w.get("thick")) if w.get("thick") != null else 1.0])
 	var packs: Array = []
 	for hp in get_tree().get_nodes_in_group("health_packs"):
 		if is_instance_valid(hp) and hp.get("available") != null:

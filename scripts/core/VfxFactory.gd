@@ -70,20 +70,22 @@ const NET_FX_DASH := 25    # 位移起手环
 const NET_FX_ULT := 26     # 大招爆发
 const NET_FX_PILLAR := 27  # 地面光柱
 const NET_FX_GLOW := 28    # 蓄力/护盾起手光
+const NET_FX_SPELL_FULL := 29  # 完整技能视觉事件：客户端/回放直接调 Vfx.play_spell，与单机同源
 
 # #43 联机 FX 插桩：host 侧技能视觉入快照流（非 HOST 自动 no-op）；同 caster+kind 节流防爆量
 var _net_fx_ms := {}
+var _net_spell_visual_suppress := false   # play_spell 本体内部不再逐条推流，只推一条完整事件
 
 func _net_push(kind: int, pos: Vector3, team: int, r: float, life: float,
-		caster: String = "", min_ms: int = 120) -> void:
-	if NetSession.mode != NetSession.Mode.HOST:
+		caster: String = "", min_ms: int = 120, extra: Array = []) -> void:
+	if NetSession.mode != NetSession.Mode.HOST or _net_spell_visual_suppress:
 		return
 	var key := "%d|%s" % [kind, caster]
 	var now := Time.get_ticks_msec()
 	if now - int(_net_fx_ms.get(key, -999999)) < min_ms:
 		return
 	_net_fx_ms[key] = now
-	NetSession.push_net_fx(kind, pos, team, r, life, caster)
+	NetSession.push_net_fx(kind, pos, team, r, life, caster, extra)
 
 # 最近英雄名（FX 事件不带 caster 时，客户端据此取元素配色）
 func _net_caster_at(pos: Vector3) -> String:
@@ -848,29 +850,23 @@ func screen_flash(color: Color, dur: float = 0.18) -> void:
 
 # ---------------- P1 逐技能签名表现 ----------------
 # #43 联机：把一次技能出手折算成一条 FX 事件（大招=大爆发 / 区域=地面法阵 / 位移=脚下环 / 其余=命中爆发）
-func _net_spell_evt(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3, skill) -> void:
-	var is_ult: bool = slot == 2 and SPELL_FX.has_ult(hero_name)
-	var shape: String = SPELL_FX.get_skill_shape(skill) if skill != null else "bolt"
+func _net_spell_evt(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,
+		skill, facing: Vector3) -> void:
+	# 只推一条完整技能事件：客户端远程调用同一个 Vfx.play_spell，而不是再用 kind 猜简化形态
 	var pos: Vector3 = target_pos if target_pos != Vector3.ZERO else caster_pos
-	var kind := NET_FX_BURST
-	var rr := 2.2
-	var life := 0.6
-	if is_ult:
-		kind = NET_FX_ULT
-		rr = 3.4
-		life = 1.0
-	elif shape == "dash":
-		kind = NET_FX_DASH
-		pos = caster_pos
-		rr = 1.8
-		life = 0.45
-	elif shape == "zone" or shape == "aura":
-		kind = NET_FX_ZONE   # FX_SPELL：客户端用同款 Vfx.ground_zone 还原
-		rr = clampf(float(skill.radius) if skill != null else 2.5, 1.4, 6.5)
-		life = 0.9
-		if skill != null and float(skill.duration) >= 1.5:
-			life = clampf(float(skill.duration), 1.0, 4.0)
-	_net_push(kind, pos, _net_team_at(pos), rr, life, hero_name, 100)
+	var fd: Vector3 = facing.normalized() if facing.length() > 0.01 else Vector3.FORWARD
+	var extra := [
+		slot,
+		caster_pos.x, caster_pos.y, caster_pos.z,
+		pos.x, pos.y, pos.z,
+		fd.x, fd.z,
+		int(skill.type) if skill != null else 1,
+		float(skill.radius) if skill != null else 0.0,
+		float(skill.duration) if skill != null else 0.0,
+		float(skill.self_displacement) if skill != null else -1.0,
+		1 if (skill != null and skill.is_channeling) else 0,
+	]
+	_net_push(NET_FX_SPELL_FULL, pos, _net_team_at(pos), 1.0, 0.8, hero_name, 0, extra)
 
 ## 技能出手统一入口：签名大招走 SpellFxTable，其余走通用元素爆发。
 ## slot: 0/1/2（对应 1/2/3 技能）；caster_pos 为手口位置（只用 x/z 定位地面法阵）。
@@ -879,7 +875,9 @@ func play_spell(hero_name: String, slot: int, caster_pos: Vector3, target_pos: V
 	if quality <= 0 or get_tree() == null:
 		return
 	# #43 联机：技能出手视觉入 FX 流（客户端看不到 host 的 play_spell 本地特效）
-	_net_spell_evt(hero_name, slot, caster_pos, target_pos, skill)
+	_net_spell_evt(hero_name, slot, caster_pos, target_pos, skill, facing)
+	# 本函数内部的原语（burst/sigil/telegraph/...）不再各自推流，避免客户端重复播放
+	_net_spell_visual_suppress = true
 	if slot != 2 or not SPELL_FX.has_ult(hero_name):
 		# P2：非签名技能按「技能类型 + 元素」自动分档，50+ 技能无需逐个手写
 		var s_el: Dictionary = element_data(element_of(hero_name))
@@ -912,6 +910,7 @@ func play_spell(hero_name: String, slot: int, caster_pos: Vector3, target_pos: V
 					beam(caster_pos + sfdir * 0.4, target_pos + Vector3.UP * 0.9, s_col, 0.16, 0.26)
 				hit_spark(target_pos + Vector3.UP, s_col, Vector3.UP, 0.8)
 		_spawn_skill_prop(hero_name, slot, caster_pos, target_pos, s_col)
+		_net_spell_visual_suppress = false
 		return
 	var entry: Dictionary = SPELL_FX.get_ult(hero_name)
 	var el: Dictionary = element_data(str(entry.get("el", element_of(hero_name))))
@@ -957,6 +956,7 @@ func play_spell(hero_name: String, slot: int, caster_pos: Vector3, target_pos: V
 		"dash":
 			dash_fx(cp, gy, col)
 	_spawn_skill_prop(hero_name, slot, caster_pos, target_pos, col)
+	_net_spell_visual_suppress = false
 
 ## 地面法阵：径向光斑 + 两圈反向旋转的环，用于大招落点/区域技能
 func sigil(pos: Vector3, color: Color, radius: float = 3.0, dur: float = 0.9) -> void:
