@@ -61,6 +61,7 @@ var _last_hit_ms := {}
 var _rb_last := {}   # hero idx -> 上次推荐装 bundle（变化才记录）   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
 var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
 var _sample_n := 0
+var _ai_sample_n := 0
 var _last_turrets_alive := -1
 var _last_turrets_by_team: Array = []
 var _last_crystal_by_team: Array = []
@@ -261,9 +262,9 @@ func _sample(delta: float, finishing: bool) -> void:
 				_last_deaths[idx] = int(h.deaths)
 	# 子弹（普攻/直线技能弹道）：10Hz 采样，回放里插值移动
 	# BUFF 图标行：2Hz 采样（仅记录有 buff 的英雄；定义去重进 _buff_defs）
-	_sample_n += 1
 	# AI 思考过程：0.5s 采样一次（10Hz 下每 5 帧），供回放调试
-	if _sample_n % 5 == 0:
+	_ai_sample_n += 1
+	if _ai_sample_n % 5 == 0:
 		var _ai_rows: Array = []
 		for _ah in get_tree().get_nodes_in_group("heroes"):
 			if not (_ah is Hero) or not _ah.is_ai or _ah.net_taken:

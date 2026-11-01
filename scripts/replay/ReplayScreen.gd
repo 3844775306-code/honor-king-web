@@ -1714,10 +1714,18 @@ func _update_buff_row() -> void:
 			_buff_sig = ""
 		return
 	var t_ms: int = int(round(_t * 1000.0))
-	while _buff_ptr + 1 < _buff_frames.size() and int(_buff_frames[_buff_ptr + 1].get("t", 0)) <= t_ms:
-		_buff_ptr += 1
-	if int(_buff_frames[_buff_ptr].get("t", 0)) > t_ms and _buff_ptr > 0:
-		_buff_ptr -= 1
+	# 二分找最近 ≤t 的采样帧：拖动时间轴回退时也不会停留在旧帧
+	var lo := 0
+	var hi := _buff_frames.size() - 1
+	var ans := 0
+	while lo <= hi:
+		var mid := (lo + hi) / 2
+		if int(_buff_frames[mid].get("t", 0)) <= t_ms:
+			ans = mid
+			lo = mid + 1
+		else:
+			hi = mid - 1
+	_buff_ptr = ans
 	var fr: Dictionary = _buff_frames[_buff_ptr]
 	_apply_buff_rings(fr)
 	var elapsed: float = maxf(0.0, (t_ms - int(fr.get("t", 0))) / 1000.0)
