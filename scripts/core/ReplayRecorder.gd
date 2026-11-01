@@ -171,7 +171,7 @@ func _sample(delta: float, finishing: bool) -> void:
 	_discover_jungle()
 	var hero_row: Array = []
 	for i in range(_hero_meta.size()):
-		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", 0])
+		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0])
 	for h in get_tree().get_nodes_in_group("heroes"):
 		if not (h is Hero):
 			continue
@@ -210,6 +210,8 @@ func _sample(delta: float, finishing: bool) -> void:
 			int(round(h.wd_timer * 100.0)), int(round(h.revive_timer * 100.0)),
 			_markers_to_str(h),
 			1 if h.is_mvp else 0,
+			int(round(h.recall_timer * 100.0)), int(round(h.teleport_timer * 100.0)),
+			1 if h.is_recalling else 0, 1 if h.is_teleporting else 0,
 		]
 		# 事件：升级
 		if idx < _last_levels.size() and int(h.level) > int(_last_levels[idx]):
@@ -429,6 +431,7 @@ func _discover_jungle() -> void:
 			"x": int(round(j.global_position.x * 100.0)),
 			"z": int(round(j.global_position.z * 100.0)),
 			"maxhp": int(round(j.max_health)),
+			"rt": float(j.respawn_time),
 		})
 
 

@@ -197,6 +197,24 @@ func _draw_minimap() -> void:
 			str(h.get("name", "")), ring)
 		if i == follow:
 			draw_arc(hp, 30.0 * _s, 0.0, TAU, 32, Color(1.0, 0.9, 0.4, 0.9), 2.4 * _s, true)
+	# 塔被攻击的黄色警告圈（与对局小地图一致的表现）
+	for pg in st.get("pings", []):
+		var pp := _world_to_mm(Vector3(float(pg.get("wx", 0)), 0.0, float(pg.get("wz", 0))), inner)
+		var age: float = float(pg.get("age", 0.0))
+		var f: float = clampf(age / 2.0, 0.0, 1.0)
+		draw_arc(pp, 8.0 * _s + 30.0 * _s * f, 0.0, TAU, 32, Color(1.0, 0.85, 0.2, 1.0 - f), 2.4 * _s, true)
+	# 击杀/阵亡事件标记
+	for mk in st.get("marks", []):
+		var mp2 := _world_to_mm(Vector3(float(mk.get("wx", 0)), 0.0, float(mk.get("wz", 0))), inner)
+		var mage: float = float(mk.get("age", 0.0))
+		var mf: float = clampf(mage / 2.5, 0.0, 1.0)
+		var mcol: Color = Color(1.0, 0.35, 0.3) if int(mk.get("team", 0)) != int(st.get("me_team", 0)) else Color(0.35, 1.0, 0.45)
+		draw_arc(mp2, 12.0 * _s, 0.0, TAU, 24, Color(mcol.r, mcol.g, mcol.b, 1.0 - mf), 2.0 * _s, true)
+	# 野怪刷新倒计时
+	for cp in st.get("camps", []):
+		var cp_pos := _world_to_mm(Vector3(float(cp.get("wx", 0)), 0.0, float(cp.get("wz", 0))), inner)
+		MinimapDrawScript.draw_camp_respawn(self, cp_pos, str(cp.get("kind", "")), float(cp.get("left", 0.0)),
+			int(round(12.0 * _s)))
 	# 当前镜头视野框（拖动小地图可移视角）
 	var cam = st.get("cam")
 	if cam != null and is_instance_valid(cam):

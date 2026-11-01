@@ -28,6 +28,9 @@ var _jungle_meta: Array = []
 var _bullets: Array = []
 var _popups_data: Array = []
 var _marker_src_cache: Dictionary = {}
+var _recall_nodes: Dictionary = {}   # hero idx -> 回城/传送特效节点
+var _mm_pings: Array = []
+var _mm_marks: Array = []
 var _pops: Array = []
 var _shake_t := 0.0
 var _shake_amp := 0.0
@@ -133,6 +136,11 @@ func _exit_tree() -> void:
 		if fake != null and is_instance_valid(fake):
 			fake.free()
 	_hero_uis.clear()
+	for k in _recall_nodes.keys():
+		var rn = _recall_nodes[k]
+		if rn != null and is_instance_valid(rn):
+			rn.queue_free()
+	_recall_nodes.clear()
 
 
 func _latest_replay_path() -> String:
@@ -477,6 +485,30 @@ func _update_world_hud(t: float) -> void:
 				jk = str((_jungle_meta[i] as Dictionary).get("name", ""))
 			jung_st.append({"wx": jroot.position.x, "wz": jroot.position.z, "kind": jk,
 				"alive": 1 if jroot.visible else 0})
+		var pings_st: Array = []
+		for pg in _mm_pings:
+			var age_p: float = _t - float(pg.get("t0", 0))
+			if age_p <= 2.0:
+				pings_st.append({"wx": float(pg.get("wx", 0)), "wz": float(pg.get("wz", 0)), "age": age_p})
+		var marks_st: Array = []
+		for mk in _mm_marks:
+			var age_m: float = _t - float(mk.get("t0", 0))
+			if age_m <= 2.5:
+				marks_st.append({"wx": float(mk.get("wx", 0)), "wz": float(mk.get("wz", 0)),
+					"team": int(mk.get("team", 0)), "age": age_m, "kind": int(mk.get("kind", 0))})
+		var camps_st: Array = []
+		for jn2 in _jungle_nodes:
+			var jroot2: Node3D = jn2["root"]
+			if float(jn2.get("dead_t", -1.0)) >= 0.0 and float(jn2.get("last_seen", -1.0)) >= 0.0:
+				var rt: float = 75.0
+				var jidx2: int = _jungle_nodes.find(jn2)
+				if jidx2 >= 0 and jidx2 < _jungle_meta.size():
+					rt = float((_jungle_meta[jidx2] as Dictionary).get("rt", 75.0))
+				var left: float = rt - (_t - float(jn2.get("dead_t", 0.0)))
+				if left > 0.0:
+					camps_st.append({"wx": jroot2.position.x, "wz": jroot2.position.z,
+						"kind": str((_jungle_meta[jidx2] as Dictionary).get("name", "")) if jidx2 >= 0 and jidx2 < _jungle_meta.size() else "",
+						"left": left})
 		var hero_nm := ""
 		if me >= 0 and me < _heroes.size():
 			hero_nm = str((_heroes[me] as Dictionary).get("name", ""))
@@ -485,6 +517,8 @@ func _update_world_hud(t: float) -> void:
 			"follow": _follow_hero, "mode": str(meta_d.get("mode", "")), "hero": hero_nm,
 			"walls": _hud_static.get("walls", []), "bushes": _hud_static.get("bushes", []),
 			"jungle": jung_st, "minions": _hud_minions, "cam": _cam,
+			"pings": pings_st, "marks": marks_st, "camps": camps_st,
+			"me_team": int(meta_d.get("player_team", 0)),
 		}
 		_hud2.queue_redraw()
 
@@ -758,8 +792,13 @@ func _apply_frame(t: float) -> void:
 			"revive": float(row_a[40]) / 100.0 if row_a.size() > 40 else 0.0,
 			"markers": str(row_a[41]) if row_a.size() > 41 else "",
 			"mvp": int(row_a[42]) if row_a.size() > 42 else 0,
+			"recall": float(row_a[43]) / 100.0 if row_a.size() > 43 else 0.0,
+			"tp": float(row_a[44]) / 100.0 if row_a.size() > 44 else 0.0,
+			"is_recall": int(row_a[45]) if row_a.size() > 45 else 0,
+			"is_tp": int(row_a[46]) if row_a.size() > 46 else 0,
 			"pos": Vector3(x, 0.0, z), "alive": alive, "invis": invis,
 		}
+		_update_recall_fx(i, Vector3(x, 0.0, z), alive, _hero_state[i])
 	# 塔
 	var tna: Array = fa.get("tn", [])
 	var tnb: Array = fb.get("tn", [])
@@ -779,6 +818,10 @@ func _apply_frame(t: float) -> void:
 			Turret.play_collapse(node2["root"], 1.9 if is_crys else 1.6, get_parent())
 		if i < _turrets.size():
 			var td0: Dictionary = _turrets[i]
+			var prev_hp: float = float(node2.get("prev_hp", hpv))
+			if hpv > 0.5 and prev_hp - hpv >= 30.0:
+				_mm_pings.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0, "t0": _t})
+			node2["prev_hp"] = hpv
 			_hud_turrets.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0,
 				"team": int(td0.get("team", 0)), "type": str(td0.get("type", "outer")),
 				"alive": 1 if hpv > 0.5 else 0, "hp": hpv, "mx": maxf(1.0, float(node2["max"]))})
@@ -862,16 +905,22 @@ func _apply_frame(t: float) -> void:
 		var jmb: Dictionary = {}
 		for jrb in jb.get("j", []):
 			jmb[int(jrb[0])] = jrb
+		var jseen: Dictionary = {}
 		for jid in jma.keys():
 			var ji2: int = int(jid)
 			if ji2 < 0 or ji2 >= _jungle_nodes.size():
 				continue
+			jseen[ji2] = true
 			var jra: Array = jma[ji2]
 			var jrb2: Array = jmb.get(ji2, jra)
 			var jhp: float = lerpf(float(jra[3]), float(jrb2[3]) if jrb2.size() > 3 else float(jra[3]), jk)
 			var jnode: Dictionary = _jungle_nodes[ji2]
 			var jroot: Node3D = jnode["root"]
 			var jap2: AnimationPlayer = jnode.get("ap")
+			if jhp > 0.5:
+				jnode["last_seen"] = _t
+			elif float(jnode.get("last_seen", -1.0)) >= 0.0 and float(jnode.get("dead_t", -1.0)) < 0.0:
+				jnode["dead_t"] = _t
 			if jhp > 0.5:
 				if bool(jnode.get("dying", false)):
 					jnode["dying"] = false
@@ -902,6 +951,28 @@ func _apply_frame(t: float) -> void:
 					lerpf(float(jra[1]), float(jrb2[1]) if jrb2.size() > 1 else float(jra[1]), jk) / 100.0,
 					0.0,
 					lerpf(float(jra[2]), float(jrb2[2]) if jrb2.size() > 2 else float(jra[2]), jk) / 100.0)
+		# 从帧里消失的野怪 = 被击杀/回城：播放倒地并开始刷新倒计时
+		for jidx_u in range(_jungle_nodes.size()):
+			if jseen.has(jidx_u):
+				continue
+			var jn_u: Dictionary = _jungle_nodes[jidx_u]
+			var jroot_u: Node3D = jn_u["root"]
+			if not jroot_u.visible and float(jn_u.get("last_seen", -1.0)) < 0.0:
+				continue
+			if float(jn_u.get("last_seen", -1.0)) >= 0.0 and float(jn_u.get("dead_t", -1.0)) < 0.0:
+				jn_u["dead_t"] = _t
+			if not bool(jn_u.get("dying", false)):
+				jn_u["dying"] = true
+				jn_u["dead_at"] = _t
+				var jap_u: AnimationPlayer = jn_u.get("ap")
+				var jdc_u := _clip_hint(jap_u, ["die", "death"])
+				if jap_u != null and jdc_u != "":
+					jap_u.play(jdc_u)
+			var jage_u: float = _t - float(jn_u.get("dead_at", _t))
+			jroot_u.rotation.x = minf(PI * 0.5, jage_u * 6.0)
+			jroot_u.position.y = -minf(0.4, jage_u * 1.0)
+			if jage_u > 1.0:
+				jroot_u.visible = false
 	# 子弹：10Hz 采样插值，短命弹体按缺帧隐藏
 	var bi := _find_bullet_frame(t)
 	if bi >= 0 and bi < _bullets.size():
@@ -1063,7 +1134,10 @@ func _spawn_popup(ev: Dictionary) -> void:
 				col = Color(1.0, 0.93, 0.72)
 			if bool(d.get("shield", false)):
 				col = Color(0.55, 0.85, 1.0)
-			if float(d.get("am", 0.0)) >= 40.0:
+			if float(d.get("am", 0.0)) >= 80.0:
+				Vfx.hit_impact(wp + Vector3.UP * 0.6, Vector3.UP, col, col.lightened(0.3),
+					clampf(float(d.get("am", 0.0)) / 260.0, 0.5, 1.7))
+			elif float(d.get("am", 0.0)) >= 40.0:
 				Vfx.hit_spark(wp + Vector3.UP * 0.8, col, Vector3.UP, 0.55)
 				if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
 					if wp.distance_to(_hero_pos[_follow_hero]) < 18.0 and float(d.get("am", 0.0)) >= 60.0:
@@ -1146,6 +1220,76 @@ func _shake_vec(delta: float) -> Vector3:
 	if _shake_t <= 0.0:
 		_shake_amp = 0.0
 	return Vector3(sin(now * 61.0), sin(now * 47.0) * 0.6, cos(now * 53.0)) * a
+
+
+func _update_recall_fx(i: int, pos: Vector3, alive: bool, st: Dictionary) -> void:
+	var node: Node3D = _recall_nodes.get(i)
+	var rec_t: float = float(st.get("recall", 0.0))
+	var tp_t: float = float(st.get("tp", 0.0))
+	var active: bool = alive and (float(st.get("is_recall", 0)) != 0.0 or rec_t > 0.0 or tp_t > 0.0)
+	if not active:
+		if node != null:
+			node.visible = false
+		return
+	if node == null:
+		node = Node3D.new()
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 1.9
+		tm.outer_radius = 2.45
+		tm.rings = 48
+		tm.ring_segments = 8
+		ring.mesh = tm
+		var rm := StandardMaterial3D.new()
+		rm.albedo_color = Color(0.45, 0.82, 1.0, 0.75)
+		rm.emission_enabled = true
+		rm.emission = Color(0.35, 0.75, 1.0)
+		rm.emission_energy_multiplier = 2.2
+		rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ring.material_override = rm
+		ring.position.y = 0.12
+		node.add_child(ring)
+		var beam := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.5
+		cyl.bottom_radius = 0.8
+		cyl.height = 6.0
+		cyl.radial_segments = 20
+		beam.mesh = cyl
+		var bm2 := StandardMaterial3D.new()
+		bm2.albedo_color = Color(0.5, 0.85, 1.0, 0.18)
+		bm2.emission_enabled = true
+		bm2.emission = Color(0.4, 0.8, 1.0)
+		bm2.emission_energy_multiplier = 1.2
+		bm2.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bm2.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		beam.material_override = bm2
+		beam.position.y = 3.0
+		node.add_child(beam)
+		add_child(node)
+		_recall_nodes[i] = node
+	node.visible = true
+	node.position = pos
+	var prog: float = 1.0
+	if rec_t > 0.0:
+		prog = clampf(1.0 - rec_t / 7.0, 0.0, 1.0)
+	elif tp_t > 0.0:
+		prog = clampf(1.0 - tp_t / 4.0, 0.0, 1.0)
+	var ring2: MeshInstance3D = node.get_child(0)
+	ring2.rotation.y += get_process_delta_time() * 2.2
+	ring2.scale = Vector3.ONE * (0.85 + 0.3 * prog + 0.04 * sin(_t * 10.0))
+
+
+func _add_mm_mark(idx: int, kind: int) -> void:
+	if idx < 0 or idx >= _hero_state.size():
+		return
+	var st: Dictionary = _hero_state[idx]
+	if st.is_empty():
+		return
+	var pos3: Vector3 = st.get("pos", Vector3.ZERO)
+	_mm_marks.append({"wx": pos3.x, "wz": pos3.z, "team": int((_heroes[idx] as Dictionary).get("team", 0)),
+		"kind": kind, "t0": _t})
 
 
 func _hero_index_by_name(nm: String) -> int:
@@ -1354,10 +1498,12 @@ func _push_event(ev: Dictionary) -> void:
 	var col := Color(0.92, 0.96, 1.0)
 	match str(ev.get("k", "")):
 		"k":
+			_add_mm_mark(int(ev.get("a", -1)), 0)
 			var who := _hero_name(int(ev.get("a", -1)))
 			txt = "%s 击杀" % who
 			col = Color(1.0, 0.86, 0.45)
 		"d":
+			_add_mm_mark(int(ev.get("a", -1)), 1)
 			var who2 := _hero_name(int(ev.get("a", -1)))
 			txt = "%s 阵亡" % who2
 			col = Color(1.0, 0.5, 0.45)
