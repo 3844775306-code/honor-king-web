@@ -50,7 +50,8 @@ const POPUP_MAX := 30000
 var _last_kills: Array = []
 var _last_levels: Array = []
 var _last_deaths: Array = []
-var _buff_frames: Array = []      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
+var _buff_frames: Array = []
+var _last_hit_ms := {}   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
 var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
 var _sample_n := 0
 var _last_turrets_alive := -1
@@ -372,6 +373,22 @@ func _sample(delta: float, finishing: bool) -> void:
 
 ## 技能出手（Hero._finish_cast 里调用）：记下英雄/槽位/落点/朝向 + 表现所需技能字段
 ## 飘字（伤害/治疗/金币）：由 UI_Manager 的三个飘字函数在真实对局中回调
+## 受击反馈（同 host GameEntity._damage_feedback：受击闪白/后仰时刻）→ 回放逐帧复现
+func note_hit(ent, amount: float) -> void:
+	if _saved or not _started or not (ent is Hero):
+		return
+	var now := Time.get_ticks_msec()
+	var eid: int = int(ent.get_instance_id())
+	if now - int(_last_hit_ms.get(eid, 0)) < 100:
+		return
+	_last_hit_ms[eid] = now
+	var idx = _hero_ids.get(eid)
+	if idx == null:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_events.append({"t": int(round(gt * 1000.0)), "k": "hit", "a": int(idx), "d": snappedf(amount, 1.0)})
+
+
 func note_popup(kind: String, pos: Vector3, data: Dictionary) -> void:
 	if _saved or not _started:
 		return

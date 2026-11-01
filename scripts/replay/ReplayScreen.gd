@@ -1516,6 +1516,41 @@ func _add_mm_mark(idx: int, kind: int) -> void:
 		"kind": kind, "t0": _t})
 
 
+## 受击反馈：闪白+脉冲（英雄再加一次后仰），与 host GameEntity._damage_feedback 同观感
+func _play_hit_react(idx: int, amount: float) -> void:
+	if idx < 0 or idx >= _hero_nodes.size():
+		return
+	var nd: Dictionary = _hero_nodes[idx]
+	var root3: Node3D = nd.get("root")
+	if root3 == null or not is_instance_valid(root3):
+		return
+	UnitVisuals.hit_flash(root3)
+	UnitVisuals.hit_pulse(root3)
+	if amount > 0.0:
+		var tw: Tween = root3.create_tween()
+		tw.tween_property(root3, "rotation:x", -0.10, 0.06)
+		tw.tween_property(root3, "rotation:x", 0.0, 0.14)
+
+
+## 施法起手动作：与 host 同一 AnimMap.clip(cast)（回放此前只播特效不播动作）
+func _play_cast_anim(idx: int) -> void:
+	if idx < 0 or idx >= _hero_nodes.size():
+		return
+	var nd: Dictionary = _hero_nodes[idx]
+	var ap: AnimationPlayer = nd.get("ap")
+	if ap == null:
+		return
+	var nm := str((_heroes[idx] as Dictionary).get("name", ""))
+	var clip := AnimMap.clip(ap, "cast", nm)
+	if clip == "":
+		clip = str(nd.get("attack", ""))
+	if clip == "" or not ap.has_animation(clip):
+		return
+	ap.play(clip)
+	nd["anim"] = "attack"
+	nd["atk_until"] = _t + 0.55
+
+
 func _hero_index_by_name(nm: String) -> int:
 	for i in range(_heroes.size()):
 		if str((_heroes[i] as Dictionary).get("name", "")) == nm:
@@ -1686,6 +1721,12 @@ func _fmt(sec: float) -> String:
 
 func _push_event(ev: Dictionary) -> void:
 	var kind0 := str(ev.get("k", ""))
+	if kind0 == "hit":
+		# 受击反馈（与 host 同一时刻）：闪白+脉冲；英雄后仰
+		var hi_hit := int(ev.get("a", -1))
+		if hi_hit >= 0 and hi_hit < _hero_nodes.size():
+			_play_hit_react(hi_hit, float(ev.get("d", 0.0)))
+		return
 	if kind0 == "sfx" or kind0 == "ann":
 		var evt3: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt3 - _t) < 0.5:
@@ -1825,6 +1866,8 @@ func _play_cast_fx(ev: Dictionary) -> void:
 	var skd: Dictionary = ev.get("sk", {})
 	SkillFxPresenter.play_spell(caster_name, int(ev.get("s", 0)), cp, tp, fd,
 		str(ev.get("sid", "")), skd, int(ev.get("tm", 0)), self, true)
+	# 施法起手动作（同一时刻，与 host 的 cast 动画同源）
+	_play_cast_anim(_hero_index_by_name(caster_name))
 
 func _play_item_fx(nm: String, cat: String, _item: String) -> void:
 	var hi: int = _hero_index_by_name(nm)

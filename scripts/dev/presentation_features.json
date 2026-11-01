@@ -169,7 +169,8 @@
       "name": "受击反馈(闪白/硬直)",
       "target": [
         "host",
-        "net"
+        "net",
+        "replay"
       ],
       "patterns": {
         "host": [
@@ -177,11 +178,12 @@
         ],
         "net": [
           "hit_flash|flash_ratio"
+        ],
+        "replay": [
+          "UnitVisuals\\.hit_flash|_play_hit_react"
         ]
       },
-      "accepted": {
-        "replay": "回放无受击反馈"
-      }
+      "accepted": {}
     },
     {
       "id": "death_visual",
@@ -240,6 +242,27 @@
         ],
         "replay": [
           "SkillFxPresenter"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "cast_windup_anim",
+      "name": "施法起手动作时序",
+      "target": [
+        "host",
+        "net",
+        "replay"
+      ],
+      "patterns": {
+        "host": [
+          "ACT_CAST"
+        ],
+        "net": [
+          "ACT_CAST"
+        ],
+        "replay": [
+          "_play_cast_anim"
         ]
       },
       "accepted": {}

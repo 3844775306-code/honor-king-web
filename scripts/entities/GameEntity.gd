@@ -646,6 +646,10 @@ func _update_shield_visual() -> void:
 func _damage_feedback(actual: float, _is_magic: bool) -> void:
 	if actual <= 0.0 or get_tree() == null:
 		return
+	# 回放：记录受击时刻（与本地闪白/后仰同一时机），回放按同帧复现
+	var _rec = get_tree().get_first_node_in_group("replay_recorder")
+	if _rec != null and self is Hero:
+		_rec.call("note_hit", self, actual)
 	if not (self is Hero):
 		var now := Time.get_ticks_msec()
 		if now - _last_hit_flash_msec >= 70:

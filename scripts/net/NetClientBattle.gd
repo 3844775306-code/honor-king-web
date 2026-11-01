@@ -710,9 +710,14 @@ func _on_snapshot(snap: Array) -> void:
 				v.ai_chip = ent[21] if ent.size() > 21 else []          # AI 决策胶囊 [label,r,g,b]
 				v.role = str(ent[22]) if ent.size() > 22 else ""        # 职责（T 面板）
 				v.lane_assigned = int(ent[23]) if ent.size() > 23 else -1  # 战术分路
+			# 受击模型反馈（同 host GameEntity._damage_feedback：闪白+脉冲；英雄加后仰；70ms 节流）
+			if hp < float(v.get("prev_hp", hp)) - 0.5:
+				_net_hit_flash(v)
 			if typ == NET_JUNGLE:
 				if hp < float(v.get("prev_hp", hp)) - 0.5:
 					v["hit_t"] = _last_snap_time
+				v["prev_hp"] = hp
+			elif typ != NET_HERO:
 				v["prev_hp"] = hp
 			v.hp = hp
 			v.maxhp = maxhp
@@ -1841,6 +1846,24 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 
 
 # 近战出手挥砍光弧（复刻 host Hero/Minion 攻击里的 Vfx.weapon_hit，仅近处可见）
+# 受击反馈（复刻 host：非英雄闪白+脉冲，英雄后仰；70ms 节流）
+func _net_hit_flash(v: Dictionary) -> void:
+	var now := Time.get_ticks_msec()
+	if now - int(v.get("last_flash", 0)) < 70:
+		return
+	v["last_flash"] = now
+	var mdl = v.get("model")
+	var root3: Node3D = mdl if (mdl != null and is_instance_valid(mdl)) else v.get("node")
+	if root3 == null or not is_instance_valid(root3):
+		return
+	UnitVisuals.hit_flash(root3)
+	UnitVisuals.hit_pulse(root3)
+	if int(v.get("type", -1)) == NET_HERO and mdl != null and is_instance_valid(mdl):
+		var tw: Tween = mdl.create_tween()
+		tw.tween_property(mdl, "rotation:x", -0.10, 0.06)
+		tw.tween_property(mdl, "rotation:x", 0.0, 0.14)
+
+
 func _net_melee_slash(v: Dictionary, yaw: float) -> void:
 	var nn: Node3D = v.get("node")
 	if nn == null or not is_instance_valid(nn):
