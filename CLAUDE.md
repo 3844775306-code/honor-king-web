@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `pwsh -NoProfile -File scripts\dev\notify.ps1 -Title "HonorKing · <任务名>" -Message "<一句话结果>"`
   （脚本已就绪，失败会静默降级，不阻断交付）。
 
-### 强制 Git 与 UI 资产原则（所有会话、所有任务）
+### 强制 Git、三端统一与 UI 资产原则（所有会话、所有任务）
 
 1. **每次修改都必须提交 Git**：完成任何代码、场景、资源或文档改动后，立即 `git add` 相关文件并 `git commit`，禁止把改动留在工作区跨任务交付。提交说明必须注明：
    - **修改时间**：本地时间，格式 `YYYY-MM-DD HH:mm`（精确到分钟）；
@@ -23,6 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    推荐标题格式：`YYYY-MM-DD HH:mm | <模块>：<一句话内容>`，正文补充要点。
 2. **UI 尽可能复用游戏内图标资产**：展示英雄、技能、装备的界面优先使用英雄头像（`HeroArt` / `EntityIconArt`）、技能图标（`SkillArt`）和装备图标（`UiKit.item_icon` / `ItemGlyph`），不要长期只用纯文本堆信息。
 3. **装备图标必须可查看详情**：所有可交互装备图标要支持鼠标悬浮 / 触摸长按查看装备详情（名称、品质、价格、属性、被动/主动效果），数据统一取自 `ItemDatabase`；不能只显示名称或无说明的图标。
+4. **单机 / 联机客户端 / 录像回放三端必须同步**：每次修改都要检查三端，包括游戏内各种界面、HUD、弹窗、技能/装备/野怪特效、动画、数值提示、音效和输入交互。优先抽取共享函数或共享数据源，禁止只改单机、只改客户端或只改回放中的一端；确实无法共用时必须同步对应实现，并在提交说明中列出三端验证结果（至少 `battle.tscn`、`net_client.tscn`、`replay.tscn` 加载检查）。
 
 ## Project Overview
 
