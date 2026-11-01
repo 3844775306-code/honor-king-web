@@ -1753,6 +1753,10 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 	var v: Dictionary = _views.get(nid, {})
 	if v.is_empty():
 		return
+	var nn0: Node3D = v.get("node")
+	if nn0 != null and is_instance_valid(nn0):
+		# 攻击朝向：所有单位（含无 AnimationPlayer 的程序化小兵/攻城车）都先转向目标
+		nn0.rotation.y = yaw
 	if not v.has("ap"):
 		if act == NetSession.ACT_DIE:
 			_proc_death(v)
@@ -5563,28 +5567,32 @@ class Hud:
 	# team_stats_bg（中心 -145..+315 / y6..150，0.62 玻璃圆角 + 投影）、time_chip（-140..+110 / y8..52，居中 24px 计时）、
 	# K/D/A（右对齐到 +300 / y12..48，20px）、经济比分（中心 +85 / y82 起，24px）、FPS（bg 内 (5,50) 120×24 居中，14px 固定绿）
 	func _draw_score_strip(s: float) -> void:
-		var cx := size.x * 0.5
 		var st := safe_top
-		var bg_style := UiKit.flat(0.62, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0), 10.0, 6.0)
-		draw_style_box(bg_style, Rect2(cx - 145.0 + BAND_SHIFT, 6.0 + st, 410.0, 144.0))
-		draw_style_box(bg_style, Rect2(cx - 140.0 + BAND_SHIFT, 8.0 + st, 250.0, 44.0))
+		# 与 host UI_Manager._create_info_labels 完全同一套右锚定坐标：
+		# 主面板 x=W-781..W-371 / y=6..196；计时条 W-776..W-526 / y=8..52；比分中心 W-576。
+		var panel_left := size.x - 781.0
+		var bg_style := UiKit.flat(0.62, 0, 0, Color.TRANSPARENT, Color(0, 0, 0, 0.62), 0.0)
+		draw_style_box(bg_style, Rect2(panel_left, 6.0 + st, 410.0, 190.0))
+		draw_style_box(bg_style, Rect2(size.x - 776.0, 8.0 + st, 250.0, 44.0))
 		var gs := 24.0 * s
 		var gd := _font.get_ascent(gs) + _font.get_descent(gs)
 		var gy := 8.0 + st + (44.0 - gd) * 0.5 + _font.get_ascent(gs)
-		draw_string(_font, Vector2(cx - 140.0 + BAND_SHIFT, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
+		draw_string(_font, Vector2(size.x - 776.0, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
 				HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
-		# FPS：bg 内 (5,50) 120×24 居中，固定绿色（同 host fps_label，不按帧率变色）
+		# FPS：bg 内 (5,50) 120×24 居中，颜色与 host 一样按帧率变化
 		var fs := 14.0 * s
 		var fd := _font.get_ascent(fs) + _font.get_descent(fs)
 		var fy := 6.0 + st + 50.0 + (24.0 - fd) * 0.5 + _font.get_ascent(fs)
-		draw_string(_font, Vector2(cx - 140.0 + BAND_SHIFT, fy), "FPS %d" % Engine.get_frames_per_second(),
-				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, Color(0.55, 0.95, 0.65))
+		var fps_now := Engine.get_frames_per_second()
+		var fps_col := Color(1.0, 0.42, 0.38) if fps_now < 30 else (Color(1.0, 0.82, 0.35) if fps_now < 50 else Color(0.55, 0.95, 0.65))
+		draw_string(_font, Vector2(size.x - 776.0, fy), "FPS %d" % fps_now,
+				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, fps_col)
 		if kda.size() >= 3:
 			var ks := 20.0 * s
 			var kd := _font.get_ascent(ks) + _font.get_descent(ks)
 			var ky := 12.0 + st + (36.0 - kd) * 0.5 + _font.get_ascent(ks)
-			draw_string(_font, Vector2(cx - 120.0 + BAND_SHIFT, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
-					HORIZONTAL_ALIGNMENT_RIGHT, 380.0, ks, Color.WHITE)
+			draw_string(_font, Vector2(size.x - 773.0, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
+					HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, Color.WHITE)
 		var sz := 24.0 * s
 		var base := 82.0 + st + _font.get_ascent(sz)
 		var segs: Array = [
@@ -5609,13 +5617,13 @@ class Hud:
 				vcol = Color(1.0, 0.33, 0.264)
 			else:
 				vtxt = "%s 已出完" % str(vg[0])
-			draw_string(_font, Vector2(cx - 300.0 + BAND_SHIFT, vy), vtxt,
-				HORIZONTAL_ALIGNMENT_CENTER, 600.0, vs, vcol)
-		# 第二行在比分面板内居中（面板中心相对屏幕中心 +519，同 host 右锚定版式）
+			draw_string(_font, Vector2(panel_left, vy), vtxt,
+				HORIZONTAL_ALIGNMENT_CENTER, 410.0, vs, vcol)
+		# 第二行在比分面板内居中（host 面板中心 = 屏幕右缘 -576）
 		var total := 0.0
 		for g in segs:
 			total += _font.get_string_size(str(g[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
-		var bx := cx + 60.0 + BAND_SHIFT - total * 0.5
+		var bx := size.x - 576.0 - total * 0.5
 		for g in segs:
 			var txt: String = str(g[0])
 			_text(Vector2(bx, base), txt, sz, g[1])
