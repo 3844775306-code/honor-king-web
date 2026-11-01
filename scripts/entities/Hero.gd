@@ -2977,7 +2977,17 @@ func _perform_attack(target: GameEntity):
 	var _replay_rec2 = get_tree().get_first_node_in_group("replay_recorder")
 	if _replay_rec2 != null:
 		var _aim: Vector3 = target.global_position if target != null and is_instance_valid(target) else global_position + Vector3(sin(rotation.y), 0.0, cos(rotation.y)) * 3.0
-		_replay_rec2.call("note_attack", display_name, global_position + Vector3.UP * 1.2, _aim, Vfx.color_for_hero(display_name))
+		var _tk := ""
+		var _tr := 0.85
+		var _th := 1.15
+		if target is Minion:
+			_tk = "minion"; _tr = float(target.body_radius) + 0.3; _th = 0.75
+		elif target is Turret:
+			_tk = "turret"; _tr = 1.5; _th = 1.6
+		elif target is Hero:
+			_tk = "hero"
+		_replay_rec2.call("note_attack", display_name, _muzzle_pos(), _aim, Vfx.color_for_hero(display_name),
+			is_melee_aa(), _tk, _tr, _th)
 	manual_target = target
 	# 补刀提示：记录本次普攻目标并给一个略长于攻击间隔的有效期
 	aa_target = target
@@ -5806,4 +5816,3 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
 			await get_tree().create_timer(0.15).timeout
-

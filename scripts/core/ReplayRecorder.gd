@@ -576,7 +576,8 @@ func note_fx(kind: int, pos: Vector3, team: int, r: float, life: float, caster: 
 
 
 ## 普攻出手（Hero._perform_attack 里调用）：按英雄限流，避免每帧刷爆事件表
-func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: Color) -> void:
+func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: Color,
+		is_melee: bool = false, target_kind: String = "", target_r: float = 0.85, target_h: float = 1.15) -> void:
 	if _saved or not _started:
 		return
 	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
@@ -589,6 +590,8 @@ func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: C
 		"cx": int(round(from_pos.x * 100.0)), "cz": int(round(from_pos.z * 100.0)),
 		"tx": int(round(to_pos.x * 100.0)), "tz": int(round(to_pos.z * 100.0)),
 		"cr": snappedf(color.r, 0.01), "cg": snappedf(color.g, 0.01), "cb": snappedf(color.b, 0.01),
+		"mz": 1 if is_melee else 0, "tk": str(target_kind),
+		"tr": snappedf(float(target_r), 0.01), "th": snappedf(float(target_h), 0.01),
 	})
 
 

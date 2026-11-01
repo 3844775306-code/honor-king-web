@@ -1431,8 +1431,20 @@ func _apply_frame(t: float) -> void:
 				var col_b := Color(float(ra2[4]), float(ra2[5]), float(ra2[6]))
 				node_b = _make_bullet(ra2, col_b, maxf(0.08, float(ra2[7])))
 				_bullet_nodes[bid2] = node_b
+				# 与 host Bullet._build_unified_visual 同款出手弹跳：0.7 → 1.08 → 1.0
+				var _vk0: int = int(ra2[9]) if ra2.size() > 9 else 0
+				if _vk0 >= 100:
+					var fs: Vector3 = node_b.scale
+					node_b.scale = fs * 0.7
+					var btw := create_tween()
+					btw.tween_property(node_b, "scale", fs * 1.08, 0.06)
+					btw.tween_property(node_b, "scale", fs, 0.05)
 			node_b.visible = true
 			node_b.position = Vector3(bx, by, bz)
+			# Spin 子节点旋转（host Bullet._spin_node）
+			var _spn = node_b.get_node_or_null("Spin")
+			if _spn is Node3D:
+				(_spn as Node3D).rotate_y(float(node_b.get_meta("spin", 0.0)) * get_process_delta_time())
 			# 朝向：用广播帧的真实位移（render-t 帧间位移在 10Hz 采样下会抖动/反向，导致轨迹看起来歪）
 			var pdx: float = (float(rb2[1]) - float(ra2[1])) / 100.0 if rb2.size() > 1 else 0.0
 			var pdz: float = (float(rb2[2]) - float(ra2[2])) / 100.0 if rb2.size() > 2 else 0.0
@@ -2493,7 +2505,7 @@ func _play_attack_anim(idx: int) -> void:
 	var shoot := str(nd.get("atk_shoot", ""))
 	var al := str(nd.get("atk_l", ""))
 	var ar2 := str(nd.get("atk_r", ""))
-	if ar > 2.5 and shoot != "":
+	if ar > 5.0 and shoot != "":
 		clip = shoot
 	elif al != "" or ar2 != "":
 		var flip := bool(nd.get("melee_flip", false))
@@ -2508,7 +2520,7 @@ func _play_attack_anim(idx: int) -> void:
 		atk.loop_mode = Animation.LOOP_NONE
 	ap.play(clip)
 	nd["anim"] = "attack"
-	nd["atk_until"] = _t + 0.42
+	nd["atk_until"] = _t + 0.5
 
 
 ## 回放孙悟空筋斗云：按录像高度/位移驱动脚下云团（与主机同一份 WukongCloud）
@@ -3007,14 +3019,35 @@ func _play_item_fx(nm: String, cat: String, _item: String) -> void:
 func _play_attack_fx(ev: Dictionary) -> void:
 	var nm := str(ev.get("n", ""))
 	var from_p := Vector3(float(ev.get("cx", 0)) / 100.0, 1.2, float(ev.get("cz", 0)) / 100.0)
-	var to_p := Vector3(float(ev.get("tx", 0)) / 100.0, 1.0, float(ev.get("tz", 0)) / 100.0)
+	var to_p := Vector3(float(ev.get("tx", 0)) / 100.0, 0.0, float(ev.get("tz", 0)) / 100.0)
 	var dir := (to_p - from_p)
+	dir.y = 0.0
 	if dir.length() < 0.01:
 		dir = Vector3.FORWARD
+	dir = dir.normalized()
 	var col := Color(float(ev.get("cr", 1.0)), float(ev.get("cg", 0.9)), float(ev.get("cb", 0.6)))
 	var col2 := Vfx.color2_for_hero(nm) if nm != "" else col.lerp(Color.WHITE, 0.5)
-	Vfx.muzzle(from_p, dir.normalized(), col, col2)
-	Vfx.hit_spark(to_p + Vector3.UP * 0.6, col, Vector3.UP, 0.75)
+	var melee: bool = bool(int(ev.get("mz", -1)) == 1)
+	if int(ev.get("mz", -1)) < 0:
+		# 旧录像无 mz：按录像里的 attack_range 判定（host MELEE_AA_RANGE_MAX=5m）
+		melee = _hero_ar_of(nm) <= 5.0
+	if melee:
+		# 与 host _melee_weapon_fx 同款：武器刀光从刀身拉向敌人朝我侧体表 + 接触火花
+		var tr: float = float(ev.get("tr", 0.85))
+		var th: float = float(ev.get("th", 1.15))
+		var contact: Vector3 = to_p - dir * tr + Vector3.UP * th
+		var tip: Vector3 = contact - dir * 1.2 + Vector3.UP * 0.1
+		Vfx.weapon_hit(tip, contact, col, col2, 1.0)
+	else:
+		# 与 host _perform_attack 远程普攻同款：元素枪口爆发
+		Vfx.cast_burst(nm, from_p, dir, 0.5)
+
+
+func _hero_ar_of(nm: String) -> float:
+	for m in _heroes:
+		if str((m as Dictionary).get("name", "")) == nm:
+			return float((m as Dictionary).get("ar", 0.0))
+	return 0.0
 
 
 func _hero_name(idx: int) -> String:
