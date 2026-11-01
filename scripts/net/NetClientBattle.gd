@@ -4116,7 +4116,7 @@ func _build_rec_bar() -> void:
 # —— P3e 击杀战报带：监听 host 广播（UI_Manager.show_kill_feed 全网转发）；顶部中央，不拦截鼠标 ——
 func _build_kill_feed() -> void:
 	var cl := CanvasLayer.new()
-	cl.layer = 40
+	cl.layer = 101   # 播报需压在英雄头像/HUD(20)与触摸键(100)之上，仍在死亡覆盖(104)/结算(110)之下
 	add_child(cl)
 	_kf = NetKillFeedScript.new()
 	cl.add_child(_kf)

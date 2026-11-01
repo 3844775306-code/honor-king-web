@@ -1018,6 +1018,7 @@ func _kf_pump() -> void:
 		return
 	var p: Dictionary = _kf_queue.pop_front()
 	var panel := _create_kill_feed_panel(p)
+	panel.z_index = 50   # 播报永远压在英雄头像栏（respawn_container z=0）与其它 HUD 之上
 	_kf_cur = panel
 	kill_feed_slots = [panel]
 	add_child(panel)

@@ -472,7 +472,7 @@ func _build_hud() -> void:
 	_rec_bar.visible = false
 	# —— 击杀战报（复用联机同款 NetKillFeed：头像/印记/助攻行）——
 	var kcl := CanvasLayer.new()
-	kcl.layer = 70
+	kcl.layer = 125   # 播报压在 ReplayHud(121，含英雄头像栏/战况带)之上，回放控制 UI(140)之下
 	add_child(kcl)
 	_kfeed = NetKillFeedScript.new()
 	kcl.add_child(_kfeed)
