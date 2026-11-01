@@ -168,6 +168,8 @@ var _kill_cam_t := 0.0           # 击杀镜头剩余时间
 var _kill_cam_idx := -1          # 击杀镜头目标英雄
 var _manual_follow := -1         # 手动跟随英雄下标（-1=关闭）
 var _kill_times: Array = []      # 所有击杀时刻（集锦模式用）
+var _kill_heroes: Array = []     # 与 _kill_times 对应：击杀者英雄下标（集锦自动跟随）
+var _hl_prev_manual := -1        # 进入集锦前的主视角，退出时恢复
 var _highlight := false          # 集锦模式（只看击杀前后 3 秒）
 var _hl_idx := 0
 var _hl_end := -1.0
@@ -226,6 +228,7 @@ func _ready() -> void:
 	for ev in _events:
 		if str(ev.get("k", "")) == "k":
 			_kill_times.append(float(ev.get("t", 0)) / 1000.0)
+			_kill_heroes.append(int(ev.get("a", -1)))
 	_build_world()
 	_build_actors()
 	_build_ui()
@@ -3152,6 +3155,7 @@ func _sync_highlight_seek() -> void:
 	_hl_end = -1.0
 	if _hl_idx < _kill_times.size():
 		_hl_end = minf(_duration, float(_kill_times[_hl_idx]) + 3.0)
+		_follow_highlight_killer()
 	else:
 		_highlight = false
 		_hl_btn.text = "◆ 集锦"
@@ -3166,11 +3170,30 @@ func _kl_index_after(t: float) -> int:
 
 
 func _jump_to_highlight(idx: int) -> void:
-	var kt: float = float(_kill_times[clampi(idx, 0, _kill_times.size() - 1)])
+	var ii := clampi(idx, 0, _kill_times.size() - 1)
+	_hl_idx = ii
+	var kt: float = float(_kill_times[ii])
 	_t = maxf(0.0, kt - 3.0)
 	_hl_end = minf(_duration, kt + 3.0)
+	_follow_highlight_killer()
+	if _hint_label != null and ii < _kill_heroes.size():
+		var hi := int(_kill_heroes[ii])
+		if hi >= 0 and hi < _heroes.size():
+			_hint_label.text = "集锦 %d/%d：%s 击杀（已自动切到击杀者视角）" % [ii + 1, _kill_times.size(), str((_heroes[hi] as Dictionary).get("name", ""))]
 	_rebuild_feed(_t)
 	_apply_frame(_t)
+
+
+## 集锦模式：切到当前击杀者的主视角
+func _follow_highlight_killer() -> void:
+	if not _highlight:
+		return
+	if _hl_idx < 0 or _hl_idx >= _kill_heroes.size():
+		return
+	var hi := int(_kill_heroes[_hl_idx])
+	if hi >= 0 and hi < _heroes.size():
+		if _manual_follow != hi:
+			_select_follow(hi)
 
 
 func _toggle_highlight() -> void:
@@ -3179,6 +3202,7 @@ func _toggle_highlight() -> void:
 		return
 	_highlight = not _highlight
 	if _highlight:
+		_hl_prev_manual = _manual_follow
 		_hl_idx = _kl_index_after(_t)
 		if _hl_idx >= _kill_times.size():
 			_hl_idx = 0
@@ -3186,11 +3210,19 @@ func _toggle_highlight() -> void:
 		_playing = true
 		_play_btn.text = "⏸ 暂停"
 		_jump_to_highlight(_hl_idx)
-		_hint_label.text = "集锦模式：第 %d/%d 个击杀（←/→ 仍可切段，F 跟随）" % [_hl_idx + 1, _kill_times.size()]
+		_hint_label.text = "集锦模式：第 %d/%d 个击杀（自动跟随击杀者，←/→ 切段）" % [_hl_idx + 1, _kill_times.size()]
 	else:
 		_hl_end = -1.0
 		_hl_btn.text = "◆ 集锦"
-		_hint_label.text = HINT_TEXT
+		# 退出集锦：恢复进入前的主视角
+		if _hl_prev_manual >= 0 and _hl_prev_manual < _heroes.size():
+			_select_follow(_hl_prev_manual)
+			_hint_label.text = "已退出集锦，恢复 %s 视角" % str((_heroes[_hl_prev_manual] as Dictionary).get("name", ""))
+		elif _manual_follow >= 0:
+			_clear_follow()
+			_hint_label.text = HINT_TEXT
+		else:
+			_hint_label.text = HINT_TEXT
 
 
 ## 点英雄头像：切到该英雄主视角
