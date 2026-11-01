@@ -289,6 +289,8 @@ func _draw():
 			if hero.manual_target and is_instance_valid(hero.manual_target):
 				parts.append("→ " + str(hero.manual_target.display_name))
 			ai_label = " · ".join(parts)
+	if not GameEntity.debug_show_ai_chip:
+		ai_label = ""
 	var name_fs := 28
 	# 英雄名+昵称较长时缩一号字，尽量让两者都完整显示
 	if font.get_string_size(name_str, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs).x > size.x - 8.0:

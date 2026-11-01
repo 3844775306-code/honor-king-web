@@ -2907,6 +2907,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		var k := event as InputEventKey
 		if k.echo:
 			return
+		if k.pressed and (k.keycode == KEY_F5 or k.physical_keycode == KEY_F5):
+			GameEntity.debug_show_ai_chip = not GameEntity.debug_show_ai_chip
+			return
 		if not _owned:
 			# 未接管/观战也能看全局英雄面板（同 host：C/T 随时可开）
 			if k.pressed and k.physical_keycode == KEY_C:

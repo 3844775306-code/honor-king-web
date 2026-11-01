@@ -6582,6 +6582,12 @@ func _unhandled_input(event):
 			print("[Debug] AI思考覆盖层: ", "开" if _ai_dbg.visible else "关")
 		return
 
+	# F5：隐藏/显示 AI 决策胶囊
+	if event is InputEventKey and event.keycode == KEY_F5 and event.pressed and not event.echo:
+		GameEntity.debug_show_ai_chip = not GameEntity.debug_show_ai_chip
+		print("[Debug] AI决策胶囊: ", "开" if GameEntity.debug_show_ai_chip else "关")
+		return
+
 	# F4：切换AI的A*路径小球显示
 	if event is InputEventKey and event.keycode == KEY_F4 and event.pressed:
 		GameEntity.debug_show_path = not GameEntity.debug_show_path

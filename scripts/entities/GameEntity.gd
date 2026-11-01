@@ -53,6 +53,7 @@ var _net_progress: float = 0.0   # 1.2s 窗口内沿“到目的地”方向的�
 var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
 static var debug_show_path: bool = true   # 默认显示AI移动路径（F4可关）
+static var debug_show_ai_chip: bool = true  # 显示AI决策胶囊（F5可关）
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
 const DEBUG_PATH_Y := 0.22          # 抬到兵线面(0.14)/高地砖(0.177)之上，否则路径被地面盖住看不见
 var _astar_log_cd: float = 0.0

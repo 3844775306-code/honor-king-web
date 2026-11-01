@@ -44,7 +44,7 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 	# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
 	var by := _name_base + f.get_descent(int(name_fs)) + 1.0
 	# AI 决策胶囊：单机画在「名字与血条之间」占 21px，此处同样让位，避免血条贴住名字
-	var _ai0: Dictionary = r.get("ai_chip", {})
+	var _ai0: Dictionary = r.get("ai_chip", {}) if GameEntity.debug_show_ai_chip else {}
 	if not _ai0.is_empty() and str(_ai0.get("label", "")) != "":
 		by += 21.0
 	by += 2.0
@@ -76,7 +76,7 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 		if not _mk_rows.is_empty():
 			MarkerIconScript.draw_row(ci, cx, top + 24.0 + 22.0, _mk_rows, 15.0)
 	# AI 决策胶囊（同 host：分路·状态·野区阶段·目标，一行限宽）
-	var _ai: Dictionary = r.get("ai_chip", {})
+	var _ai: Dictionary = r.get("ai_chip", {}) if GameEntity.debug_show_ai_chip else {}
 	if not _ai.is_empty() and str(_ai.get("label", "")) != "":
 		var _atxt := str(_ai["label"])
 		var _acol := Color(float(_ai.get("r", 0.52)), float(_ai.get("g", 0.78)), float(_ai.get("b", 1.0)))
