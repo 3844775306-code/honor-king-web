@@ -5516,9 +5516,8 @@ func _lane_route(lane: String) -> Array:
 			# 蓝 buff → 河道岔口 → 红 buff：从自家野区刷起，不走线上
 			return [Vector3(-53, 0, 53), Vector3(-40, 0, 20), Vector3(-28, 0, -5), Vector3(-8, 0, 18), Vector3(3, 0, 38)]
 		_:
-			# 游走：中路起手 → 河道游走（配合中路/发育路）
-			return [Vector3(-53, 0, 53), Vector3(-40, 0, 40), Vector3(-27, 0, 27), Vector3(-14, 0, 14),
-				Vector3(0, 0, 0), Vector3(14, 0, -14)]
+			# 游走（辅助）：开局推荐分路 = 发育路（跟射手，蓝方走发育路、红方镜像后走红方发育路）
+			return [Vector3(-53, 0, 53), Vector3(-35, 0, 55), Vector3(-15, 0, 56), Vector3(28, 0, 58)]
 
 func _lane_guide_fade(v: float, root: Node3D) -> void:
 	if not is_instance_valid(root):
