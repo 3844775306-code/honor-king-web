@@ -37,6 +37,9 @@ var _jungle_frames: Array = []  # [{t, j:[[id,x,z,hp]...]}]
 var _map_meta: Dictionary = {}  # {walls:[[x,z,ry,hq,outer,olen,pillar,cont,thick]...], bushes:[[x,z,ry]...]}
 var _map_captured := false
 var _atk_last := {}          # hero_name -> 上次记录普攻的游戏时间（限流）
+var _bullet_ids := {}        # 子弹 instance_id -> 录像内 id
+var _bullet_next_id := 0
+var _bullet_frames: Array = []  # [{t, b:[[id,x,z,team,r,g,bl,radius]...]}]
 var _last_kills: Array = []
 var _last_deaths: Array = []
 var _last_turrets_alive := -1
@@ -202,6 +205,34 @@ func _sample(delta: float, finishing: bool) -> void:
 			if int(h.deaths) > int(_last_deaths[idx]):
 				_events.append({"t": t_ms, "k": "d", "a": int(idx)})
 				_last_deaths[idx] = int(h.deaths)
+	# 子弹（普攻/直线技能弹道）：10Hz 采样，回放里插值移动
+	var brows: Array = []
+	for b in get_tree().get_nodes_in_group("projectiles"):
+		if not is_instance_valid(b):
+			continue
+		var bid = _bullet_ids.get(b.get_instance_id())
+		if bid == null:
+			bid = _bullet_next_id
+			_bullet_next_id += 1
+			_bullet_ids[b.get_instance_id()] = bid
+		var bp2: Vector3 = b.global_position
+		var cr := 1.0
+		var cg := 1.0
+		var cb := 1.0
+		var src = b.get("source")
+		if src is Hero and is_instance_valid(src):
+			var cc: Color = Vfx.color_for_hero(str(src.display_name))
+			cr = cc.r
+			cg = cc.g
+			cb = cc.b
+		elif src is Turret or src is Minion:
+			var tcol2: Color = Color(0.0, 0.886, 1.0) if Config.is_ally(int(b.team)) else Color(1.0, 0.33, 0.264)
+			cr = tcol2.r
+			cg = tcol2.g
+			cb = tcol2.b
+		brows.append([int(bid), int(round(bp2.x * 100.0)), int(round(bp2.z * 100.0)), int(b.team),
+			snappedf(cr, 0.01), snappedf(cg, 0.01), snappedf(cb, 0.01), snappedf(float(b.get("radius")), 0.01)])
+	_bullet_frames.append({"t": t_ms, "b": brows})
 	# 塔血量（顺序与 meta 一致）
 	var trow: Array = []
 	trow.resize(_turret_meta.size())
@@ -417,6 +448,7 @@ func _save() -> void:
 		"frames": _frames,
 		"minions": _mini_frames,
 		"jungle": _jungle_frames,
+		"bullets": _bullet_frames,
 		"jungle_meta": _jungle_meta,
 		"map": _map_meta,
 		"events": _events,

@@ -4,7 +4,11 @@ extends Control
 ## 本身只负责绘制与命中测试，鼠标事件由 ReplayScreen 统一处理（不挡镜头拖拽）。
 
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
+const MinimapDrawScript = preload("res://scripts/ui/MinimapDraw.gd")
+
 var st: Dictionary = {}          # 每帧状态（由 ReplayScreen 填充）
+var _static_tex: ImageTexture = null   # 地形+墙体+草丛烘焙图（与对战小地图同款思路）
+var _static_key := -1
 
 const MM_W := 236.0
 const ROW_H := 54.0
@@ -40,10 +44,9 @@ func _roster_rect() -> Rect2:
 func hit(pos: Vector2) -> Dictionary:
 	var mr := _minimap_rect()
 	if mr.has_point(pos):
-		var half := 70.0
 		var fx: float = clampf((pos.x - mr.position.x) / mr.size.x, 0.0, 1.0)
 		var fz: float = clampf((pos.y - mr.position.y) / mr.size.y, 0.0, 1.0)
-		return {"type": "map", "x": -half + fx * half * 2.0, "z": -half + fz * half * 2.0}
+		return {"type": "map", "x": (fx - 0.5) * 120.0, "z": (fz - 0.5) * 120.0}
 	var rr := _roster_rect()
 	if rr.has_point(pos):
 		var rel: float = pos.y - rr.position.y - 46.0 * _s - 6.0 * _s
@@ -56,6 +59,8 @@ func hit(pos: Vector2) -> Dictionary:
 
 func _draw() -> void:
 	_s = UiKit.scale()
+	var _r := _minimap_rect()
+	_mm_inner = Rect2(_r.position + Vector2(7, 7) * _s, _r.size - Vector2(14, 14) * _s)
 	_draw_info()
 	_draw_minimap()
 	_draw_roster()
@@ -103,51 +108,112 @@ func _draw_info() -> void:
 
 # ---------------- 小地图 ----------------
 
+func _world_to_mm(w: Vector3, rect: Rect2) -> Vector2:
+	var fx: float = clampf((w.x / 120.0) + 0.5, 0.0, 1.0)
+	var fz: float = clampf((w.z / 120.0) + 0.5, 0.0, 1.0)
+	return rect.position + Vector2(fx * rect.size.x, fz * rect.size.y)
+
+
+func _ensure_static_tex(rect: Rect2) -> ImageTexture:
+	var walls: Array = st.get("walls", [])
+	var bushes: Array = st.get("bushes", [])
+	var key: int = walls.size() * 1000 + bushes.size()
+	if _static_tex != null and _static_key == key:
+		return _static_tex
+	var n := 192
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for py in range(n):
+		for px in range(n):
+			var wx: float = (float(px) / float(n) - 0.5) * 120.0
+			var wz: float = (float(py) / float(n) - 0.5) * 120.0
+			img.set_pixel(px, py, MinimapDrawScript.world_color(wx, wz, 120.0))
+	for w in walls:
+		var p0 := Vector2((float(w[0]) / 120.0 + 0.5) * n, (float(w[1]) / 120.0 + 0.5) * n)
+		var ang: float = float(w[2]) if w.size() > 2 else 0.0
+		var ln: float = float(w[3]) if w.size() > 3 else 5.0
+		for t in range(4):
+			var q := p0 + Vector2(cos(ang), sin(ang)) * (ln * 120.0 / 120.0) * (float(t) / 3.0 - 0.5) * 2.0
+			var ix := clampi(int(q.x), 0, n - 1)
+			var iy := clampi(int(q.y), 0, n - 1)
+			img.set_pixel(ix, iy, Color(0.36, 0.34, 0.30, 1.0))
+	for bsh in bushes:
+		var bp := Vector2((float(bsh[0]) / 120.0 + 0.5) * n, (float(bsh[1]) / 120.0 + 0.5) * n)
+		for dy in range(-2, 3):
+			for dx in range(-2, 3):
+				if dx * dx + dy * dy > 5:
+					continue
+				var ix2 := clampi(int(bp.x) + dx, 0, n - 1)
+				var iy2 := clampi(int(bp.y) + dy, 0, n - 1)
+				img.set_pixel(ix2, iy2, Color(0.10, 0.30, 0.12, 1.0))
+	_static_tex = ImageTexture.create_from_image(img)
+	_static_key = key
+	return _static_tex
+
+
 func _draw_minimap() -> void:
 	var rect := _minimap_rect()
-	draw_style_box(UiKit.flat(0.75, 12, 1, Color(0.45, 0.62, 1.0, 0.3), Color(0.02, 0.035, 0.06, 0.94), 8.0, 8.0), rect)
-	var inner := Rect2(rect.position + Vector2(8, 8) * _s, rect.size - Vector2(16, 16) * _s)
-	draw_rect(inner, Color(0.07, 0.10, 0.09, 0.96))
-	# 三条分路
-	var p := inner.position
-	var sz := inner.size
-	var lane_col := Color(0.20, 0.28, 0.24, 0.95)
-	var lw := maxf(2.0, 3.0 * _s)
-	draw_line(p, p + sz, lane_col, lw)
-	draw_line(Vector2(p.x, p.y + sz.y), Vector2(p.x + sz.x, p.y), lane_col, lw)
-	draw_line(Vector2(p.x, p.y + sz.y * 0.5), Vector2(p.x + sz.x, p.y + sz.y * 0.5), lane_col, lw)
-	# 河道
-	draw_line(Vector2(p.x, p.y + sz.y * 0.5 - 10.0 * _s), Vector2(p.x + sz.x, p.y + sz.y * 0.5 + 10.0 * _s),
-		Color(0.16, 0.34, 0.55, 0.85), 6.0 * _s)
-	var to_world := func(wx: float, wz: float) -> Vector2:
-		var fx: float = clampf((wx + 70.0) / 140.0, 0.0, 1.0)
-		var fz: float = clampf((wz + 70.0) / 140.0, 0.0, 1.0)
-		return p + Vector2(fx * sz.x, fz * sz.y)
-	# 塔
+	draw_style_box(UiKit.flat(0.78, 12, 1, Color(0.45, 0.62, 1.0, 0.3), Color(0.02, 0.035, 0.06, 0.94), 8.0, 8.0), rect)
+	var inner := Rect2(rect.position + Vector2(7, 7) * _s, rect.size - Vector2(14, 14) * _s)
+	draw_rect(inner, Color(0.03, 0.05, 0.04, 1.0))
+	var tex := _ensure_static_tex(inner)
+	if tex != null:
+		draw_texture_rect(tex, inner, false)
+	# 防御塔（对局同款图标：外塔方/内塔带框/高地菱形/水晶六边形 + 血条）
 	for tt in st.get("turrets", []):
-		if int(tt.get("alive", 1)) != 1:
+		var tp := _world_to_mm(Vector3(float(tt.get("wx", 0.0)), 0.0, float(tt.get("wz", 0.0))), inner)
+		var tcol: Color = Color(0.0, 0.886, 1.0) if Config.is_ally(int(tt.get("team", 0))) else Color(1.0, 0.33, 0.264)
+		var hp_ratio: float = float(tt.get("hp", 1.0)) / maxf(1.0, float(tt.get("mx", 1.0)))
+		MinimapDrawScript.draw_turret(self, tp, clampf(hp_ratio, 0.0, 1.0), tcol,
+			str(tt.get("type", "outer")), int(tt.get("alive", 1)) == 1)
+	# 野怪 / 史诗龙
+	for j in st.get("jungle", []):
+		if int(j.get("alive", 1)) != 1:
 			continue
-		var tp: Vector2 = to_world.call(float(tt.get("wx", 0.0)), float(tt.get("wz", 0.0)))
-		var tc: Color = Color(0.0, 0.886, 1.0) if Config.is_ally(int(tt.get("team", 0))) else Color(1.0, 0.33, 0.264)
-		var tr := (4.2 if str(tt.get("type", "")) == "crystal" else 3.0) * _s
-		draw_circle(tp, tr, tc)
-	# 英雄
+		var jp := _world_to_mm(Vector3(float(j.get("wx", 0.0)), 0.0, float(j.get("wz", 0.0))), inner)
+		MinimapDrawScript.draw_jungle(self, jp, str(j.get("kind", "")), true)
+	# 小兵：聚类成簇
+	var ally_dots: Array = []
+	var enemy_dots: Array = []
+	for m in st.get("minions", []):
+		var mp := _world_to_mm(Vector3(float(m.get("wx", 0.0)), 0.0, float(m.get("wz", 0.0))), inner)
+		if Config.is_ally(int(m.get("team", 0))):
+			ally_dots.append(mp)
+		else:
+			enemy_dots.append(mp)
+	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(ally_dots, 3.0), Color(0.35, 0.95, 0.5), 2.6 * _s)
+	MinimapDrawScript.draw_clusters(self, MinimapDrawScript.cluster(enemy_dots, 3.0), Color(1.0, 0.42, 0.36), 2.6 * _s)
+	# 英雄（同款头像 + 朝向箭头 + 血量环）
 	var follow: int = int(st.get("follow", -1))
 	var heroes: Array = st.get("heroes", [])
 	for i in range(heroes.size()):
 		var h: Dictionary = heroes[i]
-		if int(h.get("alive", 0)) != 1:
-			continue
-		var hp: Vector2 = to_world.call(float(h.get("wx", 0.0)), float(h.get("wz", 0.0)))
-		var col: Color = Color(0.35, 0.95, 0.5) if Config.is_ally(int(h.get("team", 0))) else Color(1.0, 0.42, 0.36)
+		var hp := _world_to_mm(Vector3(float(h.get("wx", 0.0)), 0.0, float(h.get("wz", 0.0))), inner)
+		var yaw: float = deg_to_rad(float(h.get("yaw", 0.0)))
+		var dir := Vector2(sin(yaw), cos(yaw))
+		var base_col: Color = Color(0.35, 0.95, 0.5) if Config.is_ally(int(h.get("team", 0))) else Color(1.0, 0.42, 0.36)
+		var ring: Color = Color(0.30, 0.95, 0.42) if Config.is_ally(int(h.get("team", 0))) else Color(1.0, 0.42, 0.36)
+		MinimapDrawScript.draw_hero(self, hp, dir, base_col,
+			clampf(float(h.get("hp", 0)) / maxf(1.0, float(h.get("mx", 1))), 0.0, 1.0),
+			int(h.get("is_me", 0)) == 1, int(h.get("alive", 1)) == 0, 0.0,
+			str(h.get("name", "")), ring)
 		if i == follow:
-			draw_circle(hp, 7.5 * _s, Color(1.0, 0.9, 0.4, 0.35))
-			draw_arc(hp, 7.5 * _s, 0.0, TAU, 20, Color(1.0, 0.9, 0.4), 1.8 * _s, true)
-		draw_circle(hp, 4.6 * _s, col)
-		if int(h.get("is_me", 0)) == 1:
-			draw_arc(hp, 6.2 * _s, 0.0, TAU, 16, Color(1, 1, 1, 0.85), 1.2 * _s, true)
-	UiKit.text(self, Vector2(rect.position.x + 10.0 * _s, rect.position.y + 20.0 * _s), "小地图（点击跳转）",
-		int(round(14.0 * _s)), Color(0.72, 0.82, 0.95))
+			draw_arc(hp, 30.0 * _s, 0.0, TAU, 32, Color(1.0, 0.9, 0.4, 0.9), 2.4 * _s, true)
+	# 当前镜头视野框（拖动小地图可移视角）
+	var cam = st.get("cam")
+	if cam != null and is_instance_valid(cam):
+		var cb := Callable(self, "_world_to_mm_cb")
+		var corners: PackedVector2Array = MinimapDrawScript.viewport_corners(cam, cb)
+		if corners.size() >= 3:
+			MinimapDrawScript.draw_viewport(self, corners, false)
+	UiKit.text(self, Vector2(rect.position.x + 10.0 * _s, rect.position.y + 18.0 * _s),
+		"小地图（拖动移视角）", int(round(13.0 * _s)), Color(0.78, 0.86, 0.98))
+
+
+func _world_to_mm_cb(w: Vector3) -> Vector2:
+	return _world_to_mm(w, _mm_inner)
+
+
+var _mm_inner := Rect2()
 
 
 # ---------------- 全局英雄信息面板 ----------------

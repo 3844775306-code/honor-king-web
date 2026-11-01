@@ -25,6 +25,8 @@ var _hero_nodes: Array = []
 var _turret_nodes: Array = []
 var _mini_nodes: Dictionary = {}     # id -> Node3D
 var _jungle_meta: Array = []
+var _bullets: Array = []
+var _bullet_nodes: Dictionary = {}   # id -> Node3D
 var _jungle: Array = []
 var _jungle_nodes: Array = []
 var _map: Dictionary = {}
@@ -38,6 +40,11 @@ var _unit_world: Array = []        # 本帧需要画血条的单位（世界坐�
 var _hud2: Control = null          # 小地图/英雄信息/技能/属性面板
 var _follow_hero := -1             # 主视角跟随英雄（-1=自由镜头）
 var _frame_gold: Array = [0, 0]
+var _hud_static: Dictionary = {}     # 墙体/草丛（小地图烘焙用）
+var _hud_turrets: Array = []
+var _hud_minions: Array = []
+var _hud_jungle: Array = []
+var _mm_drag := false
 var _statics: Node3D = null
 var _cam: Camera3D = null
 var _cam_yaw := 0.0
@@ -87,6 +94,7 @@ func _ready() -> void:
 	_minis = _doc.get("minions", [])
 	_jungle = _doc.get("jungle", [])
 	_jungle_meta = _doc.get("jungle_meta", [])
+	_bullets = _doc.get("bullets", [])
 	_map = _doc.get("map", {})
 	_events = _doc.get("events", [])
 	var meta: Dictionary = _doc.get("meta", {})
@@ -132,6 +140,17 @@ func _build_world() -> void:
 	bm.set_physics_process(false)
 	bm.process_mode = Node.PROCESS_MODE_DISABLED
 	_world = bm
+	# 小地图静态数据（墙体/草丛）
+	var _walls: Array = []
+	for w in get_tree().get_nodes_in_group("walls"):
+		if is_instance_valid(w):
+			_walls.append([w.global_position.x, w.global_position.z, w.rotation.y,
+				float(w.get("continuous_len") if w.get("continuous_len") != null else 5.0)])
+	var _bushes: Array = []
+	for bsh in get_tree().get_nodes_in_group("bush"):
+		if is_instance_valid(bsh):
+			_bushes.append([bsh.global_position.x, bsh.global_position.z])
+	_hud_static = {"walls": _walls, "bushes": _bushes}
 	# 回放自己的相机
 	_cam = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
@@ -204,10 +223,12 @@ func _build_actors() -> void:
 		_setup_idle_walk(ap)
 		var idle_c := _clip_hint(ap, ["idle"])
 		var walk_c := _clip_hint(ap, ["walk", "run"])
+		var atk_c := _clip_hint(ap, ["attack"])
 		if idle_c != "":
 			ap.play(idle_c)
 		# 名字/血条交给真实战场的 HeroInfoControl（下一段 _build_hud 创建），这里只留模型
-		_hero_nodes.append({"root": root, "ap": ap, "idle": idle_c, "walk": walk_c, "last": Vector3.ZERO, "anim": "idle"})
+		_hero_nodes.append({"root": root, "ap": ap, "idle": idle_c, "walk": walk_c, "attack": atk_c,
+			"last": Vector3.ZERO, "anim": "idle", "atk_until": -1.0})
 	# 防御塔 / 水晶
 	for i in range(_turrets.size()):
 		var t: Dictionary = _turrets[i]
@@ -411,19 +432,24 @@ func _update_world_hud(t: float) -> void:
 				"invis": 1 if bool(st2.get("invis", false)) else 0,
 				"wx": pos3.x, "wz": pos3.z, "is_me": 1 if i == me else 0,
 			})
-		var tur_st: Array = []
-		for u in _unit_world:
-			if str(u.get("kind", "")) != "turret":
-				continue
-			var tu: Vector3 = u.get("pos", Vector3.ZERO)
-			tur_st.append({"wx": tu.x, "wz": tu.z, "team": int(u.get("team", 0)),
-				"alive": 1, "type": str(u.get("sub", ""))})
+		var tur_st: Array = _hud_turrets.duplicate()
+		var jung_st: Array = []
+		for i in range(_jungle_nodes.size()):
+			var jn: Dictionary = _jungle_nodes[i]
+			var jroot: Node3D = jn["root"]
+			var jk := ""
+			if i < _jungle_meta.size():
+				jk = str((_jungle_meta[i] as Dictionary).get("name", ""))
+			jung_st.append({"wx": jroot.position.x, "wz": jroot.position.z, "kind": jk,
+				"alive": 1 if jroot.visible else 0})
 		var hero_nm := ""
 		if me >= 0 and me < _heroes.size():
 			hero_nm = str((_heroes[me] as Dictionary).get("name", ""))
 		_hud2.st = {
 			"t": float(_t), "heroes": heroes_st, "turrets": tur_st, "gold": _frame_gold,
 			"follow": _follow_hero, "mode": str(meta_d.get("mode", "")), "hero": hero_nm,
+			"walls": _hud_static.get("walls", []), "bushes": _hud_static.get("bushes", []),
+			"jungle": jung_st, "minions": _hud_minions, "cam": _cam,
 		}
 		_hud2.queue_redraw()
 
@@ -577,6 +603,8 @@ func _process(delta: float) -> void:
 
 func _apply_frame(t: float) -> void:
 	_unit_world.clear()
+	_hud_turrets.clear()
+	_hud_minions.clear()
 	# 英雄插值
 	var fi := _find_frame(t)
 	var fa: Dictionary = _frames[fi] if fi >= 0 and fi < _frames.size() else {}
@@ -611,7 +639,14 @@ func _apply_frame(t: float) -> void:
 		node["last"] = Vector3(x, 0.0, z)
 		var ap2: AnimationPlayer = node.get("ap")
 		var want: String = str(node.get("anim", "idle"))
-		if ap2 != null and moved != (want == "walk"):
+		var atk_until: float = float(node.get("atk_until", -1.0))
+		if atk_until > 0.0 and _t > atk_until and want == "attack":
+			node["anim"] = "idle"
+			want = "idle"
+			var idle_clip2 := str(node.get("idle", ""))
+			if ap2 != null and idle_clip2 != "":
+				ap2.play(idle_clip2)
+		if ap2 != null and want != "attack" and moved != (want == "walk"):
 			want = "walk" if moved else "idle"
 			var clip := str(node.get(want, ""))
 			if clip != "":
@@ -649,7 +684,7 @@ func _apply_frame(t: float) -> void:
 			"mr": int(row_a[18]) if row_a.size() > 18 else 0,
 			"ms": int(row_a[19]) if row_a.size() > 19 else 0,
 			"as": int(row_a[20]) if row_a.size() > 20 else 0,
-			"cds": _cds, "slevels": _lv,
+			"cds": _cds, "slevels": _lv, "yaw": float(row_a[3]) if row_a.size() > 3 else 0.0,
 			"pos": Vector3(x, 0.0, z), "alive": alive, "invis": invis,
 		}
 	# 塔
@@ -663,6 +698,11 @@ func _apply_frame(t: float) -> void:
 			continue
 		var hpv: float = lerpf(float(ra[0]), float(rb[0] if rb.size() > 0 else ra[0]), k)
 		node2["root"].visible = hpv > 0.5
+		if i < _turrets.size():
+			var td0: Dictionary = _turrets[i]
+			_hud_turrets.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0,
+				"team": int(td0.get("team", 0)), "type": str(td0.get("type", "outer")),
+				"alive": 1 if hpv > 0.5 else 0, "hp": hpv, "mx": maxf(1.0, float(node2["max"]))})
 		if hpv > 0.5 and i < _turrets.size():
 			var td: Dictionary = _turrets[i]
 			_unit_world.append({"kind": "turret", "pos": Vector3(float(td.get("x", 0)) / 100.0, 0.0, float(td.get("z", 0)) / 100.0),
@@ -697,6 +737,7 @@ func _apply_frame(t: float) -> void:
 				node3 = _make_minion(int(r[3]), int(r[4]))
 				_mini_nodes[id] = node3
 			node3.visible = true
+			_hud_minions.append({"wx": float(r[1]), "wz": float(r[2]), "team": int(r[4])})
 			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
 				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
 				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)]})
@@ -745,6 +786,38 @@ func _apply_frame(t: float) -> void:
 					lerpf(float(jra[1]), float(jrb2[1]) if jrb2.size() > 1 else float(jra[1]), jk) / 100.0,
 					0.0,
 					lerpf(float(jra[2]), float(jrb2[2]) if jrb2.size() > 2 else float(jra[2]), jk) / 100.0)
+	# 子弹：10Hz 采样插值，短命弹体按缺帧隐藏
+	var bi := _find_bullet_frame(t)
+	if bi >= 0 and bi < _bullets.size():
+		var ba: Dictionary = _bullets[bi]
+		var bb: Dictionary = _bullets[mini(bi + 1, _bullets.size() - 1)]
+		var bta: float = float(ba.get("t", 0)) / 1000.0
+		var btb: float = float(bb.get("t", 0)) / 1000.0
+		var bk: float = 0.0 if btb - bta <= 0.0001 else clampf((t - bta) / (btb - bta), 0.0, 1.0)
+		var bmap: Dictionary = {}
+		for rb in ba.get("b", []):
+			bmap[int(rb[0])] = rb
+		var bmap_b: Dictionary = {}
+		for rbb in bb.get("b", []):
+			bmap_b[int(rbb[0])] = rbb
+		var seen_b := {}
+		for bid in bmap.keys():
+			var bid2: int = int(bid)
+			var ra2: Array = bmap[bid2]
+			var rb2: Array = bmap_b.get(bid2, ra2)
+			var bx: float = lerpf(float(ra2[1]), float(rb2[1]) if rb2.size() > 1 else float(ra2[1]), bk) / 100.0
+			var bz: float = lerpf(float(ra2[2]), float(rb2[2]) if rb2.size() > 2 else float(ra2[2]), bk) / 100.0
+			seen_b[bid2] = true
+			var node_b = _bullet_nodes.get(bid2)
+			if node_b == null:
+				var col_b := Color(float(ra2[4]), float(ra2[5]), float(ra2[6]))
+				node_b = _make_bullet(col_b, maxf(0.08, float(ra2[7])))
+				_bullet_nodes[bid2] = node_b
+			node_b.visible = true
+			node_b.position = Vector3(bx, 1.15, bz)
+		for bid3 in _bullet_nodes.keys():
+			if not seen_b.has(bid3):
+				_bullet_nodes[bid3].visible = false
 	_update_world_hud(t)
 	# 事件：向前推进时播报；回退时按时间重建最近几条
 	if t < _t - 0.5 or t < _last_ev_time - 0.5:
@@ -806,6 +879,65 @@ func _find_jungle_frame(t: float) -> int:
 	if lo > 0 and float(_jungle[lo].get("t", 0)) / 1000.0 > t:
 		lo -= 1
 	return clampi(lo, 0, _jungle.size() - 1)
+
+
+func _hero_index_by_name(nm: String) -> int:
+	for i in range(_heroes.size()):
+		if str((_heroes[i] as Dictionary).get("name", "")) == nm:
+			return i
+	return -1
+
+
+func _play_attack_anim(idx: int) -> void:
+	if idx < 0 or idx >= _hero_nodes.size():
+		return
+	var nd: Dictionary = _hero_nodes[idx]
+	var ap: AnimationPlayer = nd.get("ap")
+	var clip := str(nd.get("attack", ""))
+	if ap == null or clip == "":
+		return
+	var atk := ap.get_animation(clip)
+	if atk != null:
+		atk.loop_mode = Animation.LOOP_NONE
+	ap.play(clip)
+	nd["anim"] = "attack"
+	nd["atk_until"] = _t + 0.42
+
+
+func _find_bullet_frame(t: float) -> int:
+	if _bullets.is_empty():
+		return -1
+	var lo := 0
+	var hi := _bullets.size() - 1
+	while lo < hi:
+		var mid := int((lo + hi) / 2)
+		if float(_bullets[mid].get("t", 0)) / 1000.0 < t:
+			lo = mid + 1
+		else:
+			hi = mid
+	if lo > 0 and float(_bullets[lo].get("t", 0)) / 1000.0 > t:
+		lo -= 1
+	return clampi(lo, 0, _bullets.size() - 1)
+
+
+func _make_bullet(col: Color, radius: float) -> Node3D:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius * 1.6
+	sm.height = radius * 3.2
+	sm.radial_segments = 10
+	sm.rings = 6
+	mi.mesh = sm
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = col.lightened(0.2)
+	m.emission_enabled = true
+	m.emission = col
+	m.emission_energy_multiplier = 2.0
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	return mi
 
 
 func _make_minion(type_code: int, team: int) -> Node3D:
@@ -924,6 +1056,7 @@ func _push_event(ev: Dictionary) -> void:
 				_play_cast_fx(ev)
 			else:
 				_play_attack_fx(ev)
+				_play_attack_anim(_hero_index_by_name(str(ev.get("n", ""))))
 		return
 	var txt := ""
 	var col := Color(0.92, 0.96, 1.0)
@@ -1170,10 +1303,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
+		if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			_mm_drag = false
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
 			var hitd: Dictionary = _hud2.call("hit", mb.position)
 			var hk := str(hitd.get("type", ""))
 			if hk == "map":
+				_mm_drag = true
 				_clear_follow()
 				_cam_pitch = -60.0
 				_cam_dist = 62.0
@@ -1188,6 +1324,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cam_dist = clampf(_cam_dist + 6.0, 22.0, 110.0)
 	elif event is InputEventMouseMotion and (event as InputEventMouseMotion).relative != Vector2.ZERO:
 		var mm: InputEventMouseMotion = event
+		if _mm_drag and _hud2 != null:
+			var hitd2: Dictionary = _hud2.call("hit", mm.position)
+			if str(hitd2.get("type", "")) == "map":
+				_cam_target = Vector3(float(hitd2.get("x", 0.0)), 0.0, float(hitd2.get("z", 0.0)))
+			return
 		if (mm.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
 			_cam_yaw -= mm.relative.x * 0.25
 			_cam_pitch = clampf(_cam_pitch - mm.relative.y * 0.2, -85.0, -20.0)
