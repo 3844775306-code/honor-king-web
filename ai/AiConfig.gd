@@ -112,6 +112,7 @@ const LANE_SEARCH_RANGE: float = 12.0          # 线上目标搜索范围
 const DEFENSIVE_HP_RATIO: float = 0.6          # 防守触发血量比（敌方/我方）
 const JUNGLE_HERO_SEARCH_RANGE: float = 10.0   # 打野模式英雄搜索范围
 const TEAM_ALLOCATION_INTERVAL: float = 10.0   # 团队任务重规划间隔（秒；事件另有 request_replan）
+const TASK_COMMIT_WINDOW: float = 4.0           # 接任务后的承诺窗口（秒），期间不换任务
 const MID_SWITCH_COOLDOWN: float = 30.0        # 中路换线冷却（秒）
 const MID_SWITCH_GRACE: float = 30.0           # 开局保护：前 30 秒（第一波兵线未交火）不触发中路游走
 const MID_SWITCH_QUIET: float = 6.0            # 中路连续无敌方兵线且无目标多少秒后才允许游走

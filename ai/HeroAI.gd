@@ -52,6 +52,7 @@ var _safe_route_goal := Vector3.ZERO
 var _safe_route_plan_time := -999.0
 var _retreat_goal_cache := Vector3.ZERO
 var _retreat_goal_time := -999.0
+var _task_commit_until := -999.0
 var _recall_spot_cache := Vector3.ZERO
 var _recall_spot_time := -999.0
 
@@ -664,6 +665,9 @@ func _process(delta):
 	if _try_collect_enhanced_charge():
 		return
 
+	# --- 逃跑时用远程技能反打/消耗：只锁最近敌人，不原地空放 ---
+	if state == State.RETREAT or state == State.RECALL_SAFE:
+		_try_flee_poke()
 	# --- 状态行为分发：RETREAT / RECALL_SAFE 只跑生存行为，不参与输出 ---
 	match state:
 		State.RECALL_SAFE:
@@ -1071,9 +1075,20 @@ func _decide():
 
 # 由团队指挥官下发的结构化主线任务
 func assign_team_task(task: TeamTask) -> void:
-	team_task = task
 	if task == null:
 		return
+	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	var now := bm.game_time if bm else 0.0
+	var cur_dist := _task_distance(team_task)
+	var new_dist := _task_distance(task)
+	# 接任务后的承诺窗口：期间不接其他任务；窗口结束后优先保留更近的目标。
+	if team_task != null and team_task.is_active():
+		if now < _task_commit_until:
+			return
+		if cur_dist > 0.0 and new_dist > cur_dist - 1.0:
+			return
+	team_task = task
+	_task_commit_until = now + AiConfig.TASK_COMMIT_WINDOW
 	if task.type == TeamTask.Type.OBJECTIVE:
 		is_dragon_rally = true
 		dragon_rally_pos = task.target_pos
@@ -1081,6 +1096,16 @@ func assign_team_task(task: TeamTask) -> void:
 		is_dragon_rally = false
 	if task.lane >= 0:
 		lane = task.lane
+
+
+func _task_distance(task: TeamTask) -> float:
+	if task == null:
+		return 0.0
+	if task.target_hero != null and is_instance_valid(task.target_hero):
+		return hero.global_position.distance_to(task.target_hero.global_position)
+	if task.target_pos != Vector3.ZERO:
+		return hero.global_position.distance_to(task.target_pos)
+	return 0.0
 
 
 func task_feedback() -> Dictionary:
@@ -1391,11 +1416,11 @@ func _update_finish_chase(delta: float) -> bool:
 	hero.manual_target = _chase_target
 	hero.move_target = Vector3.ZERO
 	state = State.PUSH
-	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
+	# 够不到就先交位移技能贴脸（追击用）；远程技能由 SkillTactics 按射程筛选，
+	# 追击途中也能用远程技能继续消耗。
 	if _try_chase_dash(_chase_target):
 		return true
-	if hero.global_position.distance_to(_chase_target.global_position) < AiConfig.SKILL_USE_RANGE:
-		_try_use_skills(_chase_target)
+	_try_use_skills(_chase_target)
 	return true
 
 
@@ -1668,7 +1693,23 @@ func _leave_recall_spot() -> void:
 
 # ==================== 技能使用 ====================
 func _try_use_skills(target: GameEntity):
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return
 	skill_tactics.try_best_combo(target, brain.get_combos(target))
+
+
+func _try_flee_poke() -> void:
+	if hero.is_recalling or hero.is_teleporting:
+		return
+	var enemy := perception.find_nearest_enemy_hero(AiConfig.SKILL_USE_RANGE)
+	if enemy != null and is_instance_valid(enemy) and not enemy.is_untargetable_by_enemies():
+		# 贴脸或极残时不要停步施法，避免前摇送命。
+		if hero.global_position.distance_to(enemy.global_position) <= 4.0:
+			return
+		if hero.health < hero.actual_max_health * 0.30:
+			return
+		# use_best_skill 内含射程与目标校验，不会对射程外目标空放。
+		skill_tactics.use_best_skill(enemy, 0.0)
 
 
 # ==================== 购买 ====================
