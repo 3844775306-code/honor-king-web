@@ -107,6 +107,16 @@ static func _team_of_entry(e: Dictionary) -> int:
 		return int((hs[mi] as Dictionary).get("team", int(Config.player_team)))
 	return int(Config.player_team)
 
+static func _fmt_size(n: int) -> String:
+	if n <= 0:
+		return "—"
+	if n >= 1048576:
+		return "%.1f MB" % (float(n) / 1048576.0)
+	if n >= 1024:
+		return "%.0f KB" % (float(n) / 1024.0)
+	return "%d B" % n
+
+
 func _row(e: Dictionary) -> Control:
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(0, 62)
@@ -142,6 +152,19 @@ func _row(e: Dictionary) -> Control:
 	d.add_theme_color_override("font_color", Color(0.80, 0.86, 0.95))
 	d.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	hb.add_child(d)
+
+	# 文件大小：优先索引 size；旧索引没有则读文件
+	var sz_bytes: int = int(e.get("size", 0))
+	var file_path := str(e.get("file", ""))
+	if sz_bytes <= 0 and file_path != "" and FileAccess.file_exists(file_path):
+		sz_bytes = FileAccess.get_file_as_bytes(file_path).size()
+	var sz := Label.new()
+	sz.text = _fmt_size(sz_bytes)
+	sz.custom_minimum_size = Vector2(96, 0)
+	sz.add_theme_font_size_override("font_size", int(round(18.0 * _s)))
+	sz.add_theme_color_override("font_color", Color(0.60, 0.72, 0.88))
+	sz.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hb.add_child(sz)
 
 	var mode: Label = Label.new()
 	mode.text = str(e.get("mode", ""))

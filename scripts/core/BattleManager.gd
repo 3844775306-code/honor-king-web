@@ -8,6 +8,7 @@ const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
 const AIDebugPanelScript = preload("res://scripts/ui/AIDebugPanel.gd")
+const PauseOverlayScript = preload("res://scripts/ui/PauseOverlay.gd")
 const AIDebugFormatScript = preload("res://scripts/debug/AIDebugFormat.gd")
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
@@ -220,6 +221,14 @@ func _ready():
 	_ai_dbg = AIDebugPanelScript.new()
 	_ai_dbg.visible = false
 	_dbg_cl.add_child(_ai_dbg)
+	# 单机 P 暂停覆盖层（联机不暂停，避免不同步）
+	if NetSession.mode == NetSession.Mode.NONE:
+		var _pause_cl := CanvasLayer.new()
+		_pause_cl.name = "PauseLayer"
+		_pause_cl.layer = 290
+		add_child(_pause_cl)
+		var _po = PauseOverlayScript.new()
+		_pause_cl.add_child(_po)
 	Config.reset_player_team()
 	# 选人/加载阶段沿用大厅氛围音乐（真正开局 _start_game_body 会淡出；直接从本场景启动也有音乐）
 	SfxManager.start_menu_music()
