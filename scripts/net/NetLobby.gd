@@ -1171,6 +1171,9 @@ func _show_room() -> void:
 	_addr_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_addr_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lcol.add_child(_addr_lab)
+	var _conn_hint := _mk_label("连不上？确认两台设备在同一 Wi-Fi/热点；关闭手机 VPN；iOS 首次需在 设置→隐私→本地网络 允许本 App；浏览器网页版客户端与原生主机协议不同，请用 App 连接。", _fs(UiKit.FS_XS), COL_DIM)
+	_conn_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lcol.add_child(_conn_hint)
 
 	_head_lab = _mk_label("", _fs(UiKit.FS_LG), COL_OK)
 	_head_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1281,37 +1284,61 @@ func _show_room() -> void:
 	rcol.add_child(_leave_btn)
 
 
-## 房间地址文本：房主显示本机局域网 IPv4:端口；客户端显示已连接地址
+## 房间地址文本：房主列出所有网卡 IPv4（标注 Wi-Fi/热点/VPN，便于选对地址）；客户端显示已连接地址
 func _room_address_text() -> String:
 	var port: int = int(NetSession.host_port)
 	if NetSession.mode == NetSession.Mode.HOST:
-		var ip := _lan_ipv4()
-		if ip == "":
-			return "房间地址：本机 IP 未识别（请确认已连 Wi-Fi/热点），端口 %d" % port
-		return "房间地址：%s:%d（同一 Wi-Fi/热点下的手机填这个）" % [ip, port]
+		var lines := PackedStringArray()
+		for it in _lan_ifaces():
+			lines.append("  %s %s%s" % [str(it[0]), str(it[1]), str(it[2])])
+		if lines.is_empty():
+			return "房间地址：未识别到局域网 IPv4（请先连 Wi-Fi/热点），端口 %d" % port
+		return "房间地址（端口 %d）：\n%s" % [port, "\n".join(lines)]
 	if NetSession.mode == NetSession.Mode.CLIENT:
 		return "已连接主机：%s:%d" % [str(NetSession.join_address), port]
 	return ""
 
 
-## 本机局域网 IPv4（优先 192.168/10./172.16-31），找不到返回空串
-func _lan_ipv4() -> String:
-	var fallback := ""
-	for ip in IP.get_local_addresses():
-		var a := str(ip)
-		if a.find(":") >= 0:
-			continue    # IPv6 跳过
-		if a.begins_with("127.") or a.begins_with("169.254."):
+## 所有本机网卡的 IPv4：[接口名, IP, 备注]
+func _lan_ifaces() -> Array:
+	var out: Array = []
+	for iface in IP.get_local_interfaces():
+		var friendly := str(iface.get("friendly", ""))
+		var nm := friendly if friendly != "" else str(iface.get("name", "if"))
+		var addrs = iface.get("addresses", [])
+		if not (addrs is Array):
 			continue
-		if a.begins_with("192.168.") or a.begins_with("10."):
-			return a
-		if a.begins_with("172."):
-			var seg := a.split(".")
-			if seg.size() > 1 and int(seg[1]) >= 16 and int(seg[1]) <= 31:
-				return a
-		if fallback == "":
-			fallback = a
-	return fallback
+		for a in addrs:
+			var ip := str(a)
+			if ip.find(":") >= 0:
+				continue    # IPv6
+			if ip.begins_with("127.") or ip.begins_with("169.254."):
+				continue
+			if nm.to_lower().find("loopback") >= 0 or nm.find("回环") >= 0:
+				continue
+			var show_nm := nm
+			if show_nm.length() > 18:
+				show_nm = show_nm.substr(0, 16) + "…"
+			out.append([show_nm, ip, _iface_hint(nm)])
+	return out
+
+
+func _iface_hint(nm: String) -> String:
+	var l := nm.to_lower()
+	if l.find("utun") >= 0 or l.find("tun") >= 0 or l.find("tap") >= 0 \
+			or l.find("ppp") >= 0 or l.find("pdp_ip") >= 0 or l.find("ipsec") >= 0 \
+			or l.find("wg") >= 0 or l.find("clash") >= 0 or l.find("vpn") >= 0:
+		return "（VPN，其他设备通常连不上）"
+	if l.find("蓝牙") >= 0 or l.find("bluetooth") >= 0:
+		return "（蓝牙，通常不可用）"
+	if l.find("wlan") >= 0 or l.find("wi-fi") >= 0 or l.find("wifi") >= 0 or l.find("无线") >= 0 \
+			or l.find("en0") >= 0 or l.find("以太网") >= 0 or l.find("ethernet") >= 0:
+		return "（Wi-Fi）"
+	if l.find("热点") >= 0 or l.find("hotspot") >= 0 or l.find("bridge") >= 0 or l.find("softap") >= 0:
+		return "（热点）"
+	if l.find("蜂窝") >= 0 or l.find("cellular") >= 0:
+		return "（蜂窝）"
+	return ""
 
 
 func _refresh_room_local() -> void:
@@ -3504,7 +3531,7 @@ func _on_lobby_state(state: Dictionary) -> void:
 func _on_connect_failed(msg: String) -> void:
 	_set_menu_enabled(true)
 	if _ui == UIState.MENU:
-		_status_text("连接失败：" + msg, COL_ERR)
+		_status_text("连接失败：" + msg + "（检查：同一 Wi-Fi/热点、主机端口开放、关闭 VPN；iOS 需允许本地网络权限；网页版客户端需连 WS 主机）", COL_ERR)
 
 
 func _on_host_gone() -> void:
