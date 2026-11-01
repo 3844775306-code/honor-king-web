@@ -9,6 +9,7 @@ const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")   # 三端共享动画 clip 映射
+const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -1103,7 +1104,7 @@ func _apply_frame(t: float) -> void:
 			var node_b = _bullet_nodes.get(bid2)
 			if node_b == null:
 				var col_b := Color(float(ra2[4]), float(ra2[5]), float(ra2[6]))
-				node_b = _make_bullet(col_b, maxf(0.08, float(ra2[7])))
+				node_b = _make_bullet(ra2, col_b, maxf(0.08, float(ra2[7])))
 				_bullet_nodes[bid2] = node_b
 			node_b.visible = true
 			node_b.position = Vector3(bx, 1.15, bz)
@@ -1553,7 +1554,15 @@ func _find_bullet_frame(t: float) -> int:
 	return clampi(lo, 0, _bullets.size() - 1)
 
 
-func _make_bullet(col: Color, radius: float) -> Node3D:
+func _make_bullet(row: Array, col: Color, radius: float) -> Node3D:
+	# 三端共享：录像带 kind/vkind（row[8]/row[9]）→ 与 host/联机同形弹体；旧录像回退发光球
+	var kind := int(row[8]) if row.size() > 8 else -1
+	if kind >= 0:
+		var team := int(row[3]) if row.size() > 3 else 0
+		var vk := int(row[9]) if row.size() > 9 else 0
+		var node := ProjectilePresenter.make(kind, team, vk, radius)
+		if node != null:
+			return node
 	var mi := MeshInstance3D.new()
 	var sm := SphereMesh.new()
 	sm.radius = radius * 1.6

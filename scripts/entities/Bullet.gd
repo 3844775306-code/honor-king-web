@@ -8,6 +8,8 @@ var source: GameEntity = null
 var is_magic: bool = false
 var life_time: float = 10.0
 var radius: float = 0.2
+# 线性技能子弹：命中判定半径（线性技能专用，>=radius；<=0 表示沿用 radius）
+var hit_radius: float = -1.0
 var pierce:bool =false
 # 元流之子·万物为流贯穿强普：逐目标额外伤害（80+20%额外AD，每次命中衰减至70%）与已命中计数
 var yuanliu_strong: bool = false
@@ -75,19 +77,8 @@ func _ready():
 		_build_unified_visual()
 		return
 	# 根据发射源选择弹道模型
-	var model_path = "res://model/dragon/bullet/weapon-ammo-boulder.glb"  # 默认
-	if source:
-		if source is Turret:
-			model_path = ""   # 防御塔：不加载模型，用下面的发光能量球回退分支
-		elif source is Hero:
-			# 远程英雄统一用弓箭弹道
-			if source.attack_range > 400:
-				model_path = "res://model/turret/bullet/weapon-ammo-bullet.glb"
-		elif source is Minion:
-			if source.display_name == "ranged":
-				model_path = "res://model/range/weapon-arrow.glb"
-			elif source.display_name == "siege":
-				model_path = "res://model/seige/cannon-ball.glb"
+	# 根据发射源选择弹体模型（三端共享：ProjectilePresenter）
+	var model_path: String = ProjectilePresenter.model_path_for(source)
 	var model = load(model_path) if model_path != "" else null
 	if model:
 		visual_mesh = model.instantiate()
@@ -96,7 +87,7 @@ func _ready():
 	else:
 		if source is Turret:
 			# 防御塔能量球：核心亮球 + 两层加色光晕（unshaded 下 emission 不生效，亮度靠加色叠层）
-			visual_mesh = MeshFactory.create_energy_orb(radius * 0.6, Color(1.0, 0.88, 0.55))
+			visual_mesh = ProjectilePresenter.tower_orb(radius)
 			_recursive_set_shadow(visual_mesh, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 			add_child(visual_mesh)
 		else:
@@ -116,33 +107,30 @@ func _ready():
 	# 英雄和防御塔普攻子弹放大2倍
 	if (source is Hero ) or (source is Turret):
 		if visual_mesh:
-			visual_mesh.scale = Vector3(3, 3, 3)
+			visual_mesh.scale = Vector3.ONE * ProjectilePresenter.source_scale(source)
 
 		# 后羿R：自定义太阳火箭模型
 		if is_houyi_ult:
 			if visual_mesh:
 				visual_mesh.queue_free()
-			var arrow_root = Node3D.new()
-			arrow_root.name = "HouyiUltArrow"
-			var body = MeshFactory.create_sphere(0.4, Color(1.0, 0.65, 0.0), true)
-			body.scale = Vector3(0.5, 0.5, 2.5)
-			arrow_root.add_child(body)
-			var ring = MeshFactory.create_torus_ring(0.35, 0.5, Color(1.0, 0.3, 0.0), false, 1.0, true)
-			ring.rotation.x = deg_to_rad(90)
-			arrow_root.add_child(ring)
-			var glow = MeshFactory.create_sphere(0.55, Color(1.0, 0.5, 0.0), true, 0.25)
-			arrow_root.add_child(glow)
-			visual_mesh = arrow_root
+			# 三端共享：后羿R 太阳火箭
+			visual_mesh = ProjectilePresenter.houyi_ult_arrow()
 			add_child(visual_mesh)
 	# P0：英雄来源弹道统一挂元素色拖尾（移动端 8 粒子，超并发预算时 Vfx 内部自动丢弃）
 	if source is Hero and visual_mesh:
-		Vfx.attach_trail(self, Vfx.color_for_hero(source.display_name), 0.20, 0.30, 8)
+		ProjectilePresenter.attach_hero_trail(self, str(source.display_name))
+	# 线性技能弹（模型路径）：整体放大，判定见 hit_radius
+	if linear_dir != Vector3.ZERO and int(skill_id) != 0 and visual_mesh and is_instance_valid(visual_mesh):
+		visual_mesh.scale *= 1.5
 	# 不添加碰撞体，使用手动距离检测
 
 ## 统一程序化弹体：核心形态 + 双色光晕 + 元素拖尾 + 出手弹跳（判定/速度完全不变）
 func _build_unified_visual() -> void:
 	var spec := BulletVisual.spec_for(self)
 	var base: float = float(spec.get("size_mult", 1.0))
+	# 线性技能弹：视觉整体放大（判定同步放大，见 set_linear/hit_radius）
+	if linear_dir != Vector3.ZERO and int(skill_id) != 0:
+		base *= 1.7
 	# 箭矢类（弓兵实体箭 / 后羿箭）需要俯仰跟随弹道，球体光效不需要
 	var shape := int(spec["shape"])
 	_pitch_visual = shape == BulletVisual.SHAPE_BOLT or shape == BulletVisual.SHAPE_ARROW
@@ -184,8 +172,23 @@ func set_linear(dir: Vector3, distance: float):
 	linear_dir = dir.normalized()
 	max_distance = distance
 	traveled = 0.0
+	# 线性技能弹判定半径放大：直线技能更好命中（视觉同步在 _ready 放大；AoE 半径仍用 radius）
+	hit_radius = maxf(radius * 2.6, 0.55)
 func set_goal(pos):
 	goal = pos
+
+# 鲁班七号2技能：只有「身边」的小兵/野怪可被命中；离鲁班超过3米的非英雄目标直接穿过。
+# 英雄不受距离限制（全图炮的核心用途）。
+func _luban_w_can_hit(entity) -> bool:
+	if not luban_w_knockback:
+		return true
+	if entity is Hero:
+		return true
+	if not (entity is Minion or entity is JungleMonster):
+		return false
+	if source == null or not is_instance_valid(source):
+		return false
+	return source.global_position.distance_to(entity.global_position) <= 3.0
 # 弹体朝向：偏航跟随飞行方向；箭矢类（BOLT/ARROW）再加俯仰，箭头才不会平飞
 func _aim_visual(dir: Vector3) -> void:
 	if visual_mesh == null or not is_instance_valid(visual_mesh):
@@ -296,7 +299,10 @@ func _physics_process(delta):
 			if entity in attacked:continue
 			# 后羿R：仅命中英雄，穿过后排小兵/野怪/塔
 			if is_houyi_ult and not (entity is Hero):continue
-			var dist = global_position.distance_to(entity.global_position) - radius - entity.body_radius
+			# 鲁班W：远处小兵/野怪不被命中，飞过去只打英雄
+			if not _luban_w_can_hit(entity):continue
+			var hr: float = radius if hit_radius <= 0.0 else hit_radius
+			var dist = global_position.distance_to(entity.global_position) - hr - entity.body_radius
 			if dist <= 0.4:
 				damage_range=radius
 				target = entity
@@ -671,6 +677,8 @@ func on_hit():
 			if entity == source or not is_instance_valid(entity): continue
 			if entity.team == team: continue
 			if entity in attacked: continue
+			# 鲁班W的溅射同样遵守「3米内才可命中非英雄」
+			if not _luban_w_can_hit(entity): continue
 			var dist = global_position.distance_to(entity.global_position) - radius - entity.body_radius
 			if dist <= damage_range:
 				if entity is Turret and skill_id >=0:

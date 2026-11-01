@@ -23,6 +23,7 @@ const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd") 
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")                   # 三端共享动画 clip 映射
+const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -919,7 +920,7 @@ func _obtain_bullet(team: int, kind: int) -> Dictionary:
 		m = pool.pop_back()
 		m.visible = true
 	else:
-		m = _make_bullet_visual(kind)
+		m = _make_bullet_visual(kind, team)
 		_vis_root.add_child(m)
 	return {"m": m, "x": 0.0, "y": 0.0, "z": 0.0,
 		"px": 0.0, "py": 0.0, "pz": 0.0,
@@ -930,77 +931,15 @@ func _obtain_bullet(team: int, kind: int) -> Dictionary:
 # 按 kind 还原 host 真模型（kind 0→弹石 / 1→弹丸×3 / 2→弓箭 / 3→炮弹 / 4→后羿R 太阳火箭自组）。
 # kind>=1000 为定制视觉（v7 idx7 vkind，host 换过默认弹体的技能弹），派发到 _make_bullet_bespoke。
 # 路径缺失时回退旧圆柱（保留队伍色近似），与 host Bullet.gd 的回退球体同一思路。
-func _make_bullet_visual(kind: int) -> Node3D:
-	if kind >= 1000:
-		return _make_bullet_bespoke(kind - 1000)
-	if kind == 4:
-		# 后羿R：自组太阳火箭（同 host Bullet.gd is_houyi_ult 分支）；放平到水平并朝速度向
-		var root := Node3D.new()
-		root.name = "HouyiUltArrow"
-		var body := MeshFactory.create_sphere(0.4, Color(1.0, 0.65, 0.0), true)
-		body.scale = Vector3(0.5, 0.5, 2.5)
-		root.add_child(body)
-		var ring := MeshFactory.create_torus_ring(0.35, 0.5, Color(1.0, 0.3, 0.0), false, 1.0, true)
-		ring.rotation.x = deg_to_rad(90)
-		root.add_child(ring)
-		var glow := MeshFactory.create_sphere(0.55, Color(1.0, 0.5, 0.0), true, 0.25)
-		root.add_child(glow)
-		root.rotation.x = deg_to_rad(90)   # 竖直伸长 → 水平飞行
-		return root
-	if kind == 5:
-		# 防御塔能量球：核心亮球 + 加色光晕（细光束由 _on_tower_laser 单独绘制）
-		return MeshFactory.create_energy_orb(0.34, Color(1.0, 0.88, 0.55))
-	var model := NetModels.bullet(kind)
-	if model != null:
-		return model
-	# 回退：旧圆柱（host 回退球体同思路；尺寸按 kind 粗略近似）
-	var m := MeshInstance3D.new()
-	var cy := CylinderMesh.new()
-	var col := COL_ALLY_DIM
-	cy.top_radius = 0.08
-	cy.bottom_radius = 0.08
-	cy.height = 0.9
-	if kind >= 2:
-		col = Color(1.0, 0.55, 0.15)
-		cy.top_radius = 0.14
-		cy.bottom_radius = 0.14
-		cy.height = 1.6
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = col
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.emission_enabled = true
-	mat.emission = col
-	m.mesh = cy
-	m.material_override = mat
-	m.rotation.x = PI * 0.5
-	return m
+func _make_bullet_visual(kind: int, team: int = 0) -> Node3D:
+	# 三端共享：kind 0..3 模型档 / 4 后羿R / 5 塔能量球 / 1000+vkind 定制档，全部走 ProjectilePresenter
+	return ProjectilePresenter.make(kind, team)
 
 
-# 定制档子弹视觉（vkind 与 NetSession._bullet_vkind 对齐；host 已把默认弹体换成专属形，client 逐档复刻）。
+
 func _make_bullet_bespoke(vkind: int) -> Node3D:
-	if vkind >= BulletVisual.VKIND_BASE and vkind < 1000:
-		# 普攻/塔/兵统一程序化弹体：与 host Bullet.gd 同一构建器，形状/尺寸/配色完全一致
-		return BulletVisual.build_from_vkind(vkind)
-	if vkind == 1:
-		# 小乔Q 绽放之舞回旋扇：粉色扁圆盘（top/bottom 1.2、高 0.15，emission 粉，同 SkillDataBase 硬编码）
-		var root := Node3D.new()
-		root.name = "XiaoQiaoFan"
-		var disc := MeshInstance3D.new()
-		var cy := CylinderMesh.new()
-		cy.top_radius = 1.2
-		cy.bottom_radius = 1.2
-		cy.height = 0.15
-		disc.mesh = cy
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = Color(1.0, 0.5, 0.7)
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.emission_enabled = true
-		mat.emission = Color(1.0, 0.4, 0.6, 0.6)
-		disc.material_override = mat
-		root.add_child(disc)
-		return root
-	# 未收录档兜底：紫色小球
-	return MeshFactory.create_sphere(0.3, Color(0.7, 0.2, 1.0), true)
+	return ProjectilePresenter.make_bespoke(vkind)
+
 
 
 func _release_bullet(b: Dictionary) -> void:
