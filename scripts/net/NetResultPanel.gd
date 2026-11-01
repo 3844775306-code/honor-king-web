@@ -24,7 +24,14 @@ func _on_result(p: Dictionary) -> void:
 	if defer:
 		return
 	var rows: Array = p.get("rows", []) if p.get("rows", []) is Array else []
+	var is_replay: bool = bool(p.get("replay", false))
 	var pteam := int(p.get("player_team", Config.player_team))
+	# 联机 payload 的 player_team 是 host 视角；客户端红方必须按自己接管的阵营重排
+	# “我方/敌方”，否则会把蓝方 host 视角当成我方。
+	if not is_replay:
+		var own_team := int(NetSession.current_manifest().get("team", -1))
+		if own_team == 0 or own_team == 1:
+			pteam = own_team
 	var heroes: Array = []
 	var mine = null
 	# 联机结算行来自 host，所有真人行的 mine 都是 true；不能按行里的 mine 取最后一个人。
@@ -44,7 +51,6 @@ func _on_result(p: Dictionary) -> void:
 			mine = v
 	if mine == null and not heroes.is_empty():
 		mine = heroes[0]
-	var is_replay: bool = bool(p.get("replay", false))
 	var model := {
 		"heroes": heroes,
 		"hero": mine,
