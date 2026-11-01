@@ -2879,13 +2879,6 @@ func _update_ui() -> void:
 
 ## 旧录像/旧采样没有 chip 字段时，从完整快照反推两行胶囊
 func _chip_from_snapshot(snap: Dictionary) -> Dictionary:
-	var st_cn := ""
-	match str(snap.get("state", "")):
-		"PUSH": st_cn = "推线"
-		"FARM": st_cn = "打野" if str(snap.get("lane", "")) == "野区" else "补刀"
-		"RETREAT": st_cn = "撤退"
-		"RECALL", "RECALL_SAFE": st_cn = "回城"
-		"AVOID": st_cn = "躲避"
 	var it_cn := ""
 	match str(snap.get("intent", "")):
 		"push": it_cn = "推线"
@@ -2898,32 +2891,26 @@ func _chip_from_snapshot(snap: Dictionary) -> Dictionary:
 		"recall": it_cn = "回城"
 		"rotate": it_cn = "支援"
 		"avoid": it_cn = "躲技能"
-	var p1: Array = []
-	if str(snap.get("lane", "")) != "": p1.append(str(snap.get("lane", "")))
-	if st_cn != "": p1.append(st_cn)
-	if str(snap.get("intent_target", "")) != "": p1.append("→ " + str(snap.get("intent_target", "")))
-	var p2: Array = []
-	var p: Dictionary = snap.get("perception", {})
-	var enemies: int = int(p.get("enemies12", 0))
-	var hpm: float = maxf(1.0, float(snap.get("hp_max", 1.0)))
-	var hpr: float = float(snap.get("hp", 0)) / hpm
-	var threat := "低"
-	if enemies >= 2 or (enemies >= 1 and hpr <= 0.5):
-		threat = "高"
-	elif enemies == 1:
-		threat = "中"
-	p2.append("威胁:" + threat)
-	if it_cn != "": p2.append("意图:" + it_cn)
-	var task := ""
-	match str(snap.get("state", "")):
-		"PUSH": task = "推线"
-		"FARM": task = "刷野" if str(snap.get("lane", "")) == "野区" else "补刀"
-		"RETREAT": task = "撤退"
-		"RECALL", "RECALL_SAFE": task = "回城"
-		"AVOID": task = "躲避"
-	if task == "": task = "待命"
-	p2.append("任务:" + task)
-	return {"line1": " · ".join(p1), "line2": " | ".join(p2), "r": 0.52, "g": 0.78, "b": 1.0}
+	var p1: Array = ["分路:" + str(snap.get("lane", ""))]
+	if str(snap.get("intent_target", "")) != "":
+		p1.append("目标:" + str(snap.get("intent_target", "")))
+	var line1 := " · ".join(p1)
+	var th: Dictionary = snap.get("threat", {})
+	var threat_txt := "?"
+	if not th.is_empty():
+		var et: float = float(th.get("enemy", 0.0))
+		var at: float = float(th.get("ally", 0.0))
+		var bal: float = at - et
+		var lvl := "低"
+		if et >= 1.2 or bal <= -1.0:
+			lvl = "高"
+		elif et >= 0.35:
+			lvl = "中"
+		threat_txt = "敌%.2f/我%.2f(%s)" % [et, at, lvl]
+	var p2: Array = ["威胁:" + threat_txt]
+	if it_cn != "":
+		p2.append("意图:" + it_cn)
+	return {"line1": line1, "line2": " · ".join(p2), "r": 0.52, "g": 0.78, "b": 1.0}
 
 
 ## 回放血条 AI 胶囊：取当前时间之前最近一帧 ai_frames，按 name+team 注入 HeroInfoControl

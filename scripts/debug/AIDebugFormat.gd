@@ -43,6 +43,10 @@ static func hero(s: Dictionary) -> String:
 		str(s.get("brain", ""))])
 	var st: Dictionary = s.get("strategy", {})
 	lines.append("  策略: 分路[%s]  打野[%s]" % [str(st.get("lane", "")), str(st.get("jungle", ""))])
+	var th: Dictionary = s.get("threat", {})
+	if not th.is_empty():
+		lines.append("  威胁模型: 敌%.2f  我%.2f  差%.2f" % [
+			float(th.get("enemy", 0.0)), float(th.get("ally", 0.0)), float(th.get("balance", 0.0))])
 	var logs: Array = s.get("log", [])
 	if not logs.is_empty():
 		var start: int = maxi(0, logs.size() - 8)

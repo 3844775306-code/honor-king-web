@@ -2,7 +2,7 @@
 # 只负责「打谁 / 去哪 / 放什么技能」：结论写入 hero.manual_target / hero.move_target / _start_casting()，
 # 移动、寻路、普攻、施法由 Hero/GameEntity 用与玩家相同的原语执行。
 # 分层：AiPerception 感知 → SkillTactics/SummonerTactics/ItemActiveTactics 战术
-#      → LaneStrategy / JungleStrategy 阶段策略（0-4min）→ TeamTactics 团队分配（4min+，由 BattleManager 驱动）
+#      → TeamTactics 团队任务 → TaskExecutor 统一执行（本地策略已合并）
 #      → HeroBrain 英雄特判。计时与阈值见 AiConfig。
 class_name HeroAI
 extends Node
@@ -30,9 +30,7 @@ var patrol_angle: float = 0.0
 var _is_natural_jungler: bool = false
 var decide_score: float = 0.0
 
-# --- 新AI决策系统 ---
-var lane_strategy: LaneStrategy = null
-var jungle_strategy: JungleStrategy = null
+# --- 团队任务 / 本地行为 ---
 var is_dragon_rally: bool = false
 var dragon_rally_pos: Vector3 = Vector3.ZERO
 
@@ -85,9 +83,6 @@ func _ready():
 	skill_tactics.brain = brain   # 技能层走英雄特判钩子（后羿大招/刘禅拆塔），不再硬编码名字
 	recommended_items = _get_recommended_items()
 	_assign_lane()
-	# 初始化新AI策略模块
-	lane_strategy = LaneStrategy.new(hero, perception, lane)
-	jungle_strategy = JungleStrategy.new(hero, perception)
 
 func _assign_lane():
 	match hero.role:
@@ -104,11 +99,6 @@ func _assign_lane():
 	state = State.FARM if lane == AiConfig.Lane.JUNGLE else State.PUSH
 	hero.manual_target = null
 	hero.move_target = hero.global_position
-	# 重置策略模块
-	if _is_natural_jungler and jungle_strategy:
-		jungle_strategy = JungleStrategy.new(hero, perception)
-	elif not _is_natural_jungler and lane_strategy:
-		lane_strategy = LaneStrategy.new(hero, perception, lane)
 	is_dragon_rally = false
 
 
@@ -807,27 +797,66 @@ func _nearest_desc(e) -> String:
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
 
 
-## 胶囊威胁指标：高/中/低（塔下、残血、多敌会升级）
+## 胶囊威胁指标：直接取 ThreatModel 的敌方/我方威胁值（血量×距离×视野衰减）
 func _chip_threat() -> String:
-	var en: int = perception.count_enemy_heroes_near(12.0)
-	var hpr: float = float(hero.health) / maxf(1.0, float(hero.actual_max_health))
-	if bool(hero.get("under_tower_attack")) or _is_under_enemy_tower(hero):
-		if en > 0:
-			return "高(塔下)"
-	if hpr <= 0.3 and en > 0:
-		return "高(残血)"
-	var ne = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO)
-	var nd: float = 999.0
-	if ne != null and is_instance_valid(ne):
-		nd = hero.global_position.distance_to(ne.global_position)
-	if en >= 2 or (en >= 1 and nd <= 8.0) or (en >= 1 and hpr <= 0.5):
-		return "高"
-	if en == 1 or (ne != null and nd <= 16.0):
-		return "中"
-	return "低"
+	if threat_model == null:
+		return "0.00/0.00(低)"
+	var et: float = threat_model.enemy_threat()
+	var at: float = threat_model.ally_threat()
+	var bal: float = at - et
+	var lvl := "低"
+	if et >= 1.2 or bal <= -1.0:
+		lvl = "高"
+	elif et >= 0.35:
+		lvl = "中"
+	return "敌%.2f/我%.2f(%s)" % [et, at, lvl]
 
 
-## 胶囊当前任务：优先团队任务，其次防守/龙团/回城，最后按状态兜底
+## 胶囊换血层：TradePlanner 当前状态
+func _chip_trade() -> String:
+	if trade_planner == null:
+		return "待机"
+	if trade_planner.active_target != null and is_instance_valid(trade_planner.active_target):
+		return "对拼中"
+	if trade_planner.exit_timer > 0.0:
+		return "退出"
+	if trade_planner.cooldown > 0.0:
+		return "冷却"
+	return "待机"
+
+
+## 胶囊执行动作：与团队任务区分，粒度到“下一步要干什么”（避免和任务重复）
+func _chip_action() -> String:
+	if hero.is_recalling:
+		return "回城"
+	if hero.is_teleporting:
+		return "支援"
+	if _chase_target != null and is_instance_valid(_chase_target):
+		return "追击"
+	var mt = hero.manual_target
+	if mt != null and is_instance_valid(mt):
+		var d: float = hero.global_position.distance_to(mt.global_position)
+		var reach: float = hero.attack_range * 0.01 + float(mt.get("body_radius") if mt.get("body_radius") != null else 1.0)
+		if d <= reach + 1.0:
+			return "攻击"
+		return "接近"
+	match state:
+		State.RETREAT: return "撤离"
+		State.AVOID: return "躲技能"
+		State.RECALL, State.RECALL_SAFE: return "回城"
+		State.FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
+		State.PUSH:
+			var mn = perception.find_nearest_enemy_minion(AiConfig.PUSH_TARGET_RANGE)
+			if mn != null and is_instance_valid(mn):
+				return "清兵"
+			var tr = perception.find_nearest_enemy_turret(AiConfig.PUSH_TARGET_RANGE)
+			if tr != null and is_instance_valid(tr):
+				return "点塔"
+			return "赶路"
+	return "待命"
+
+
+## 胶囊当前任务：只保留团队任务/目标级任务，本地行为交给“意图”字段，避免重复
 func _chip_task() -> String:
 	if team_task != null and is_instance_valid(team_task) and team_task.is_active():
 		return team_task.label()
@@ -839,66 +868,47 @@ func _chip_task() -> String:
 		return "回城"
 	if hero.is_teleporting:
 		return "支援"
-	if hero.manual_target != null and is_instance_valid(hero.manual_target):
-		return "交战"
-	match state:
-		State.PUSH: return "推线"
-		State.FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
-		State.RETREAT: return "撤退"
-		State.RECALL, State.RECALL_SAFE: return "回城"
-		State.AVOID: return "躲避"
-	return "待命"
+	return ""
 
 
-## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
+## AI 决策胶囊（两行；按现有架构分层：任务/目标 + 威胁模型/执行意图/换血状态）
 func debug_chip_info() -> Dictionary:
 	var now := Time.get_ticks_msec() * 0.001
 	if now < _chip_next_t and not _chip_cache.is_empty():
 		return _chip_cache
 	_chip_next_t = now + 0.25
-	var st_cn := ""
-	match state:
-		State.PUSH: st_cn = "推线"
-		State.FARM: st_cn = "打野" if lane == AiConfig.Lane.JUNGLE else "补刀"
-		State.RETREAT: st_cn = "撤退"
-		State.RECALL, State.RECALL_SAFE: st_cn = "回城"
-		State.AVOID: st_cn = "躲避"
-	var intent_cn := ""
-	match _debug_intent():
-		"push": intent_cn = "推线"
-		"farm": intent_cn = "补刀"
-		"jungle": intent_cn = "刷野"
-		"chase": intent_cn = "追击"
-		"fight": intent_cn = "对拼"
-		"kill": intent_cn = "收割"
-		"retreat": intent_cn = "撤退"
-		"recall": intent_cn = "回城"
-		"rotate": intent_cn = "支援"
-		"avoid": intent_cn = "躲技能"
-		_: intent_cn = _debug_intent()
 	var p1: Array = []
-	p1.append(_debug_lane())
-	if st_cn != "": p1.append(st_cn)
-	if state == State.FARM and lane == AiConfig.Lane.JUNGLE and jungle_strategy != null:
-		match int(jungle_strategy.current_phase):
-			0: p1.append("发育路野区")
-			1: p1.append("对抗路野区")
-			2: p1.append("蹭线")
+	p1.append("分路:" + _debug_lane())
+	var task := _chip_task()
+	if task != "":
+		p1.append("任务:" + task)
+	var tgt := ""
 	if hero.manual_target != null and is_instance_valid(hero.manual_target):
-		p1.append("→ " + _safe_name(hero.manual_target))
+		tgt = _safe_name(hero.manual_target)
+	elif team_task != null and is_instance_valid(team_task) and team_task.target_hero != null and is_instance_valid(team_task.target_hero):
+		tgt = _safe_name(team_task.target_hero)
+	elif _chase_target != null and is_instance_valid(_chase_target):
+		tgt = _safe_name(_chase_target)
+	if tgt != "":
+		p1.append("目标:" + tgt)
 	var line1 := " · ".join(p1)
-	var p2: Array = []
-	p2.append("威胁:" + _chip_threat())
-	p2.append("意图:" + intent_cn)
-	p2.append("任务:" + _chip_task())
-	var line2 := " | ".join(p2)
+	var threat_txt := _chip_threat()
+	var act := _chip_action()
+	# 任务与动作相同时只保留任务，避免同一词出现两次
+	if act == task:
+		act = ""
+	var p2: Array = ["威胁:" + threat_txt]
+	if act != "":
+		p2.append("意图:" + act)
+	var trade := _chip_trade()
+	if trade != "待机":
+		p2.append("换血:" + trade)
+	var line2 := " · ".join(p2)
 	var col := Color(0.52, 0.78, 1.0)
-	match state:
-		State.PUSH: col = Color(0.45, 0.90, 1.0)
-		State.FARM: col = Color(0.72, 0.58, 1.0)
-		State.RETREAT: col = Color(1.0, 0.46, 0.38)
-		State.RECALL, State.RECALL_SAFE: col = Color(0.56, 0.70, 1.0)
-		State.AVOID: col = Color(0.95, 0.78, 0.36)
+	if threat_txt.ends_with("(高)"):
+		col = Color(1.0, 0.46, 0.38)
+	elif threat_txt.ends_with("(中)"):
+		col = Color(1.0, 0.78, 0.34)
 	_chip_cache = {"line1": line1, "line2": line2, "r": col.r, "g": col.g, "b": col.b}
 	return _chip_cache
 
@@ -917,11 +927,7 @@ func debug_snapshot() -> Dictionary:
 	if brain != null:
 		brain_path = str(brain.get_script().resource_path.get_file().get_basename())
 	var lane_txt := ""
-	if lane_strategy != null:
-		lane_txt = "bush=(%.1f,%.1f) pending=%d" % [lane_strategy.default_bush_pos.x, lane_strategy.default_bush_pos.z, int(lane_strategy.pending_lane)]
 	var jungle_txt := ""
-	if jungle_strategy != null:
-		jungle_txt = "phase=%d idx=%d assigned=%d" % [int(jungle_strategy.current_phase), int(jungle_strategy._phase_index), int(jungle_strategy.assigned_lane)]
 	return {
 		"name": hero.display_name, "role": hero.role, "team": int(hero.team),
 		"state": _state_name(state), "lane": _debug_lane(),
@@ -958,6 +964,11 @@ func debug_snapshot() -> Dictionary:
 		"items": {"last": str(item_tactics.last_action)},
 		"summoner": {"last": str(summoner_tactics.last_action)},
 		"brain": brain_path,
+		"threat": {
+			"enemy": snappedf(threat_model.enemy_threat(), 0.01) if threat_model != null else 0.0,
+			"ally": snappedf(threat_model.ally_threat(), 0.01) if threat_model != null else 0.0,
+			"balance": snappedf(threat_model.threat_balance(), 0.01) if threat_model != null else 0.0,
+		},
 		"strategy": {"lane": lane_txt, "jungle": jungle_txt},
 		"chip": debug_chip_info(),
 		"log": _dbg_log.duplicate(),
@@ -978,31 +989,23 @@ func _decide():
 	if _handle_high_defense():
 		return
 
-	# P1: 本线防御塔防御（外塔/内塔）
-	if _handle_lane_turret_defense():
-		return
-
-	# 敌方大禹治疗鼎：在交战范围内就顺手拆掉（否则残血敌人会被持续奶回来）
-	var enemy_pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
-	if enemy_pot:
-		hero.manual_target = enemy_pot
-		state = State.PUSH
-		return
-
-	# 泉水养伤：在自家泉水范围内血/蓝没回到阈值前不出门（原来只要血量>2000 就走，等于半血出门）
+	# 泉水养伤 / 低血回城：优先于本线塔防御；只低于高地水晶防御。
 	if hero.is_in_own_fountain() and not _fully_recovered():
 		state = State.RECALL_SAFE
 		return
-
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
 		state = State.RECALL_SAFE
 		return
 
-	# 撤退：低血 + 有敌方英雄压近 + 没站在己方塔下 → 退守（不再主动接战）
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
-			and not _is_under_own_tower() \
-			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
-		state = State.RETREAT
+	# 本线防御塔防御（外塔/内塔）
+	if _handle_lane_turret_defense():
+		return
+
+	# 敌方大禹治疗鼎：在交战范围内就顺手拆掉
+	var enemy_pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
+	if enemy_pot:
+		hero.manual_target = enemy_pot
+		state = State.PUSH
 		return
 
 	# 主动换血：满足威胁/血量/技能/控制条件才进场；进场后由 TradePlanner 控制退出。
@@ -1030,76 +1033,40 @@ func _decide():
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt := bm.game_time if bm else 0.0
 
-	# 团队主线任务：团队层只给任务，英雄层负责翻译成走位/目标。
+	# 团队任务与本地行为统一由 TaskExecutor 输出，不再有 LaneStrategy/JungleStrategy 两套入口。
 	if team_task != null and team_task.is_expired(gt):
 		team_task = null
 		is_dragon_rally = false
+	var behavior: Dictionary = {}
 	if team_task != null:
-		var tr := task_executor.execute(team_task, gt)
-		if not tr.is_empty():
-			if tr.has("lane"):
-				lane = int(tr.get("lane", lane))
-				if lane_strategy:
-					lane_strategy.pending_lane = lane
-			if tr.has("manual_target"):
-				hero.manual_target = tr.get("manual_target")
-			if tr.has("move_target"):
-				hero.move_target = tr.get("move_target")
-			state = State.RETREAT if str(tr.get("state", "push")) == "retreat" else State.PUSH
-			# 推线任务仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
-			if team_task.type != TeamTask.Type.PUSH_LANE:
-				return
-
-	# 同步分路到策略模块
-	if not _is_natural_jungler:
-		if lane_strategy:
-			lane_strategy.lane = lane
-	else:
-		if jungle_strategy and lane != AiConfig.Lane.JUNGLE:
-			jungle_strategy.assigned_lane = lane
-
-	if gt < AiConfig.EARLY_GAME_END:
-		# === 0-4分钟：早期对线 ===
-		if _is_natural_jungler:
-			if jungle_strategy:
-				jungle_strategy.update_time(gt)
-				jungle_strategy.decide()
-			state = State.FARM
-		else:
-			if lane_strategy:
-				lane_strategy.update_time(gt)
-				lane_strategy.decide()
-				# 中路换线同步回HeroAI
-				if lane != lane_strategy.lane:
-					lane = lane_strategy.lane
-			state = State.PUSH
-	else:
-		# === 4分钟+：团队分推（分路由 BattleManager 统一分配） ===
-
-		# 打龙集合检查
+		behavior = task_executor.execute(team_task, gt)
+	if behavior.is_empty():
+		# 打龙集合兜底（旧入口仍可能在任务外设置）
 		if is_dragon_rally:
 			if not _is_dragon_alive():
-				print("[HeroAI] t=%.0f %s 龙已死，取消打龙集合" % [(get_tree().get_first_node_in_group("battle_manager") as BattleManager).game_time if get_tree().get_first_node_in_group("battle_manager") else 0.0, hero.display_name])
 				is_dragon_rally = false
 				_assign_lane()
 			else:
 				state = State.PUSH
 				_dragon_rally_behavior()
 				return
-
-		# 正常分路行为
 		if _is_natural_jungler:
-			if jungle_strategy:
-				jungle_strategy.update_time(gt)
-				jungle_strategy.decide()
+			behavior = task_executor.local_jungle(Vector3.ZERO)
 			state = State.FARM
 		else:
-			if lane_strategy:
-				lane_strategy.update_time(gt)
-				lane_strategy.decide()
-				if lane != lane_strategy.lane:
-					lane = lane_strategy.lane
+			behavior = task_executor.local_lane(lane)
 			state = State.PUSH
+	if behavior.is_empty():
+		return
+	if behavior.has("lane"):
+		lane = int(behavior.get("lane", lane))
+	if behavior.has("manual_target"):
+		hero.manual_target = behavior.get("manual_target")
+	if behavior.has("move_target"):
+		hero.move_target = behavior.get("move_target")
+	state = State.RETREAT if str(behavior.get("state", "push")) == "retreat" else (
+		State.FARM if _is_natural_jungler and team_task == null else State.PUSH)
+	return
 
 
 # 由团队指挥官下发的结构化主线任务
@@ -1114,10 +1081,6 @@ func assign_team_task(task: TeamTask) -> void:
 		is_dragon_rally = false
 	if task.lane >= 0:
 		lane = task.lane
-		if _is_natural_jungler and jungle_strategy:
-			jungle_strategy.pending_lane = task.lane
-		elif not _is_natural_jungler and lane_strategy:
-			lane_strategy.pending_lane = task.lane
 
 
 func task_feedback() -> Dictionary:
@@ -1146,10 +1109,7 @@ func apply_team_lane(new_lane: int) -> void:
 				dragon_rally_pos = bt.team_tactics.dragon_pos_by_team.get(hero.team, Vector3.ZERO)
 	elif new_lane >= 0:
 		is_dragon_rally = false
-		if _is_natural_jungler and jungle_strategy:
-			jungle_strategy.pending_lane = new_lane
-		elif not _is_natural_jungler and lane_strategy:
-			lane_strategy.pending_lane = new_lane
+		lane = new_lane
 
 # ==================== 视野之灵交互 ====================
 # 友方 AI：未领奖的视野之灵在附近时主动走过去触碰（10 金币）。
@@ -1346,11 +1306,16 @@ func _is_under_own_tower() -> bool:
 
 
 func _retreat_from_turret(turret: Turret) -> void:
-	# 沿英雄→塔的直线方向退到塔范围外
-	var to_hero := (hero.global_position - turret.global_position).normalized()
-	var safe_dist := turret.attack_range * 0.01 + 1.0  # 塔攻击范围 + 安全距离
-	hero.move_target = turret.global_position + to_hero * safe_dist
+	# 退出塔范围时不能直接撞墙：先找可站立出口，再走 A* 航点。
+	var to_hero := (hero.global_position - turret.global_position)
+	to_hero.y = 0.0
+	if to_hero.length() < 0.01:
+		to_hero = Vector3.BACK
+	var safe_dist := turret.attack_range * 0.01 + 1.2
+	var exit_pos := turret.global_position + to_hero.normalized() * safe_dist
+	exit_pos = PathFinder.nearest_walkable_world(exit_pos, to_hero)
 	hero.manual_target = null
+	_follow_safe_route(exit_pos)
 
 
 func _dodge_threats() -> bool:
