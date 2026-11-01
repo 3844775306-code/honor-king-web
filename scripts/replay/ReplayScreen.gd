@@ -469,8 +469,8 @@ func _build_ui() -> void:
 		UiKit.flat(0.9, 14, 1, Color(0.45, 0.62, 1.0, 0.35), Color(0.05, 0.07, 0.11, 0.94), 14.0, 12.0))
 	bar.anchor_left = 0.5
 	bar.anchor_right = 0.5
-	bar.offset_left = -720.0
-	bar.offset_right = 720.0
+	bar.offset_left = -680.0
+	bar.offset_right = 680.0
 	bar.offset_top = 14.0
 	bar.offset_bottom = 128.0
 	root.add_child(bar)

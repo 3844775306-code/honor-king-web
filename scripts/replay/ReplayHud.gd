@@ -28,8 +28,7 @@ func _vp() -> Vector2:
 
 func _minimap_rect() -> Rect2:
 	_s = UiKit.scale()
-	var w := MM_W * _s
-	return Rect2(24.0 * _s, _vp().y - 70.0 * _s - w, w, w)
+	return Rect2(40.0 + UiKit.safe_left(), 40.0 + UiKit.safe_top(), 450.0, 450.0)
 
 
 func _roster_rect() -> Rect2:
@@ -75,7 +74,7 @@ func _draw() -> void:
 func _draw_info() -> void:
 	var vp := _vp()
 	var w := 560.0 * _s
-	var rect := Rect2(24.0 * _s, 22.0 * _s, w, 84.0 * _s)
+	var rect := Rect2(vp.x - 24.0 * _s - w, 22.0 * _s, w, 84.0 * _s)
 	draw_style_box(UiKit.flat(0.72, 12, 1, Color(0.45, 0.62, 1.0, 0.24), Color(0.03, 0.045, 0.075, 0.92), 10.0, 8.0), rect)
 	var fs := int(round(21.0 * _s))
 	var x := rect.position.x + 14.0 * _s
@@ -120,7 +119,7 @@ func _ensure_static_tex(rect: Rect2) -> ImageTexture:
 	var key: int = walls.size() * 1000 + bushes.size()
 	if _static_tex != null and _static_key == key:
 		return _static_tex
-	var n := 192
+	var n := 256
 	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
 	for py in range(n):
 		for px in range(n):
@@ -267,7 +266,8 @@ func _draw_attrs(idx: int) -> void:
 	if idx < 0 or idx >= heroes.size():
 		return
 	var h: Dictionary = heroes[idx]
-	var rect := Rect2(24.0 * _s, 118.0 * _s, 300.0 * _s, 214.0 * _s)
+	var mm := _minimap_rect()
+	var rect := Rect2(mm.position.x, mm.position.y + mm.size.y + 14.0 * _s, 300.0 * _s, 214.0 * _s)
 	draw_style_box(UiKit.flat(0.72, 12, 1, Color(0.45, 0.62, 1.0, 0.26), Color(0.03, 0.045, 0.075, 0.92), 8.0, 8.0), rect)
 	var fs := int(round(16.0 * _s))
 	var cap := "主视角 · %s（Esc 回自由镜头）" % str(h.get("name", ""))
