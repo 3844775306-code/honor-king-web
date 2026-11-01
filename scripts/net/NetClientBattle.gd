@@ -3701,7 +3701,7 @@ func _apply_map_if_ready() -> void:
 	if payload.is_empty():
 		return
 	var bushes: Array = payload.get("bushes", [])
-	var walls: Array = payload.get("walls", [])
+	var walls: Array = NetSession.decode_walls(payload.get("walls", []))
 	var camps: Array = payload.get("camps", [])
 	if bushes.is_empty() and walls.is_empty() and camps.is_empty():
 		return
@@ -6113,6 +6113,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 

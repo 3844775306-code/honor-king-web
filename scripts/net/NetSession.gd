@@ -265,6 +265,9 @@ func _setup_peer() -> void:
 				return
 			# 统一用 WebSocket 主机：桌面/手机原生开 WS 服务，网页/iOS 浏览器客户端也能直接连
 			var peer := WebSocketMultiplayerPeer.new()
+			# 大包（静态地图布局 ~72KB：765 段墙）必须抬缓冲，默认 64KB 会整包丢弃 → 客户端看不到墙/草丛
+			peer.inbound_buffer_size = 8 * 1024 * 1024
+			peer.outbound_buffer_size = 8 * 1024 * 1024
 			var err := peer.create_server(host_port)
 			if err != OK:
 				printerr("[Net] 主机创建失败(WS) err=", err)
@@ -279,6 +282,8 @@ func _setup_peer() -> void:
 		Mode.CLIENT:
 			# 统一 WebSocket 客户端：网页/原生都连 ws://host:port（网页版地址可用 ?host=ip:port 覆盖）
 			var ws := WebSocketMultiplayerPeer.new()
+			ws.inbound_buffer_size = 8 * 1024 * 1024
+			ws.outbound_buffer_size = 8 * 1024 * 1024
 			var err := ws.create_client(_web_ws_url())
 			if err != OK:
 				printerr("[Net] 客户端创建失败(WS) err=", err)
@@ -2318,20 +2323,24 @@ func _collect_map_payload(bm: Node) -> Dictionary:
 	if bush_arr != null:
 		for p in bush_arr:
 			bushes.append([float(p.x), float(p.z)])
-	var walls: Array = []
+	var walls := PackedFloat32Array()
 	for w in get_tree().get_nodes_in_group("walls"):
 		if is_instance_valid(w):
-			# 第 4 位：是否高地外周高规格墙体；第 5/6 位：是否外周连续城墙及墙段长度
-			var is_hq: int = 1 if w.get("hq") == true else 0
-			var is_outer: int = 1 if w.get("outer") == true else 0
+			# 每段墙 10 个 float（stride=10）：x,z,yaw,hq,outer,outer_len,continuous_len,pillar,open_end,thick
+			# 用 PackedFloat32Array 而不是 Array[Array]：765 段墙从 ~56KB 变 ~31KB，避免超过 WS 默认 64KB 单包上限
+			var is_hq: float = 1.0 if w.get("hq") == true else 0.0
+			var is_outer: float = 1.0 if w.get("outer") == true else 0.0
 			var outer_len: float = float(w.get("outer_len")) if w.get("outer_len") != null else 2.0
-			# 第 7/8/9/10 位：连续墙长度 / 端柱 / 开放端 / 厚度倍率（客户端复刻 host 同款程序化石墙，
-			# 含位置哈希种子、厚度缩放与连续墙装饰柱）
-			walls.append([w.global_position.x, w.global_position.z, w.rotation.y, is_hq, is_outer, outer_len,
-				float(w.get("continuous_len")) if w.get("continuous_len") != null else 0.0,
-				1 if w.get("pillar") == true else 0,
-				1 if w.get("open_end") == true else 0,
-				float(w.get("thick")) if w.get("thick") != null else 1.0])
+			walls.append(float(w.global_position.x))
+			walls.append(float(w.global_position.z))
+			walls.append(float(w.rotation.y))
+			walls.append(is_hq)
+			walls.append(is_outer)
+			walls.append(outer_len)
+			walls.append(float(w.get("continuous_len")) if w.get("continuous_len") != null else 0.0)
+			walls.append(1.0 if w.get("pillar") == true else 0.0)
+			walls.append(1.0 if w.get("open_end") == true else 0.0)
+			walls.append(float(w.get("thick")) if w.get("thick") != null else 1.0)
 	var packs: Array = []
 	for hp in get_tree().get_nodes_in_group("health_packs"):
 		if is_instance_valid(hp) and hp.get("available") != null:
@@ -2346,6 +2355,23 @@ func _collect_map_payload(bm: Node) -> Dictionary:
 
 func get_map_payload() -> Dictionary:
 	return _map_payload
+
+
+## 地图墙体载荷解码：兼容新 PackedFloat32Array（stride=10）与旧 Array[Array] 两种格式
+static func decode_walls(raw) -> Array:
+	var out: Array = []
+	if raw is PackedFloat32Array:
+		var pf := raw as PackedFloat32Array
+		var i := 0
+		while i + 9 < pf.size():
+			out.append([pf[i], pf[i + 1], pf[i + 2], pf[i + 3], pf[i + 4],
+				pf[i + 5], pf[i + 6], pf[i + 7], pf[i + 8], pf[i + 9]])
+			i += 10
+	elif raw is Array:
+		for row in (raw as Array):
+			if row is Array and (row as Array).size() >= 3:
+				out.append(row)
+	return out
 
 
 @rpc("any_peer", "reliable", "call_remote")
@@ -2873,3 +2899,6 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
+
+
+

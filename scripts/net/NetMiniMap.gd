@@ -582,7 +582,7 @@ func _cache_static_map() -> void:
 	for b in payload.get("bushes", []):
 		if b.size() >= 2:
 			_static_bushes.append(_world_to_minimap(Vector3(float(b[0]), 0.0, float(b[1]))))
-	for w in payload.get("walls", []):
+	for w in NetSession.decode_walls(payload.get("walls", [])):
 		if w.size() >= 3:
 			var th := float(w[2])
 			_static_walls.append({"p": _world_to_minimap(Vector3(float(w[0]), 0.0, float(w[1]))), "a": atan2(cos(th), sin(th))})
