@@ -555,6 +555,8 @@ func _update_world_hud(t: float) -> void:
 		fake.teleport_timer = float(st.get("tp", 0.0))
 		fake.is_teleporting = int(st.get("is_tp", 0)) == 1 or fake.teleport_timer > 0.0
 		fake.is_mvp = int(st.get("mvp", 0)) == 1
+		# 被动条/附魔/层数等：优先用录像里录下的状态条（与单机 status_entries_of 同源）
+		info.external_statuses = _decode_statuses(st.get("st", []))
 		_apply_markers(fake, str(st.get("markers", "")))
 		fake.exp = int(float(st.get("exp", 0)))
 		fake.exp_to_next = int(maxf(1.0, float(st.get("exp_to_next", 200))))
@@ -1034,6 +1036,7 @@ func _apply_frame(t: float) -> void:
 			"tp": float(row_a[44]) / 100.0 if row_a.size() > 44 else 0.0,
 			"is_recall": int(row_a[45]) if row_a.size() > 45 else 0,
 			"is_tp": int(row_a[46]) if row_a.size() > 46 else 0,
+			"st": (row_a[48] if row_a.size() > 48 and row_a[48] is Array else []),
 			"pos": Vector3(x, 0.0, z), "alive": alive, "invis": invis,
 		}
 		_update_recall_fx(i, Vector3(x, 0.0, z), alive, _hero_state[i])
@@ -1050,13 +1053,17 @@ func _apply_frame(t: float) -> void:
 		var lbeam2 = node2.get("beam")
 		if lbeam2 != null and is_instance_valid(lbeam2):
 			var has_a: int = int(ra[4]) if ra.size() > 4 else 0
-			var has_b: int = int(rb[4]) if rb.size() > 4 else has_a
-			if hpv > 0.5 and (has_a == 1 or has_b == 1):
+			var has_b: int = int(rb[4]) if rb.size() > 4 else 0
+			# 与单机一致：当前采样帧没有目标就立即隐藏（不再等下一帧也变 0 才隐藏）
+			if hpv > 0.5 and has_a == 1:
 				var tx_a: float = float(ra[2]) if ra.size() > 2 else 0.0
 				var tz_a: float = float(ra[3]) if ra.size() > 3 else 0.0
 				var tx_b: float = float(rb[2]) if rb.size() > 2 else tx_a
 				var tz_b: float = float(rb[3]) if rb.size() > 3 else tz_a
-				var tgt_p := Vector3(lerpf(tx_a, tx_b, k) / 100.0, 1.0, lerpf(tz_a, tz_b, k) / 100.0)
+				# 目标切换/瞬移时不做跨目标插值（否则光束会扫过一段不存在的轨迹），直接贴当前帧
+				var _jump: float = Vector2(tx_b - tx_a, tz_b - tz_a).length() / 100.0
+				var _k: float = k if (has_b == 1 and _jump < 6.0) else 0.0
+				var tgt_p := Vector3(lerpf(tx_a, tx_b, _k) / 100.0, 1.0, lerpf(tz_a, tz_b, _k) / 100.0)
 				var _tier := str((_turrets[i] as Dictionary).get("type", "")) if i < _turrets.size() else "outer"
 				var _src_h := 3.30 if _tier == "crystal" else 3.45
 				var src_p: Vector3 = (node2["root"] as Node3D).position + Vector3.UP * _src_h
@@ -1455,6 +1462,25 @@ func _json_unsafe(v):
 		return arr
 	return v
 
+
+## 录像状态条解码：[label, ratio, [r,g,b], segments, value, pulse] → HeroInfoControl 用的字典
+func _decode_statuses(arr) -> Array:
+	var out: Array = []
+	if not (arr is Array):
+		return out
+	for s in (arr as Array):
+		if not (s is Array) or (s as Array).size() < 6:
+			continue
+		var c: Array = (s as Array)[2] if ((s as Array)[2] is Array) else [1.0, 1.0, 1.0]
+		out.append({
+			"label": str((s as Array)[0]),
+			"ratio": clampf(float((s as Array)[1]), 0.0, 1.0),
+			"color": Color(float(c[0]), float(c[1]), float(c[2])),
+			"segments": int((s as Array)[3]),
+			"value": str((s as Array)[4]),
+			"pulse": int((s as Array)[5]) == 1,
+		})
+	return out
 
 ## 回放：按 buff 帧里各英雄的 red/blue 键开关地面光环（与单机/联机一致）
 func _apply_buff_rings(fr: Dictionary) -> void:
@@ -3155,6 +3181,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 

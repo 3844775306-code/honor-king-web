@@ -352,6 +352,11 @@ func play_feed(actor: String, actor_team: int, desc: String, victim: String, vic
 		return
 	var key := _resolve_key(actor, actor_team, desc, victim, victim_team)
 	if key != "":
+		# 战报语音（推塔/丢塔/连杀等）也要写进录像音频事件；此前只有 play_announce 打点，
+		# play_feed 解析出的 tower_lost/my_push 等播报回放里完全不会出现。
+		var _rrec_feed = get_tree().get_first_node_in_group("replay_recorder")
+		if _rrec_feed != null:
+			_rrec_feed.call("note_sfx", key, 0.0, true)
 		_play(key)
 		var sting := _sting_key_for(key)
 		if sting != "":
