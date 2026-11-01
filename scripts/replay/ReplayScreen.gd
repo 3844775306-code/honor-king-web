@@ -197,6 +197,11 @@ func _ready() -> void:
 	var meta: Dictionary = _doc.get("meta", {})
 	_me_team = int(meta.get("player_team", int(Config.player_team)))
 	Config.player_team = _me_team   # 回放视角=录像玩家阵营：警报/播报前缀按同一口径
+	# 回放默认锁定录像玩家英雄视角；读取英雄列表后即可用 meta.me（旧录像无 me 则保持自由镜头）
+	var _me_idx := int(meta.get("me", -1))
+	if _me_idx >= 0 and _me_idx < _heroes.size():
+		_follow_hero = _me_idx
+		_manual_follow = _me_idx
 	_duration = maxf(float(meta.get("duration", 0.0)), 1.0)
 	for ev in _events:
 		if str(ev.get("k", "")) == "k":
@@ -470,12 +475,7 @@ func _build_hud() -> void:
 	add_child(kcl)
 	_kfeed = NetKillFeedScript.new()
 	kcl.add_child(_kfeed)
-	# —— 回城指示（同联机 NetRecall）——
-	var rcl2 := CanvasLayer.new()
-	rcl2.layer = 70
-	add_child(rcl2)
-	_recall_view = NetRecallScript.new()
-	rcl2.add_child(_recall_view)
+	# —— 回城指示：与单机一致，由 HeroInfoControl 的状态进度条（回城）显示，不再自建圆形进度 ——
 	# —— T 团队决策面板（共享 TeamDecisionView）——
 	_tdv_layer = CanvasLayer.new()
 	_tdv_layer.layer = 101
@@ -518,6 +518,11 @@ func _update_world_hud(t: float) -> void:
 		fake.bt_timer = float(st.get("bt", 0.0))
 		fake.wd_timer = float(st.get("wd", 0.0))
 		fake.revive_timer = float(st.get("revive", 0.0))
+		# 回城/传送：与单机 HeroInfoControl.status_entries_of 同源，画出「回城」进度条
+		fake.recall_timer = float(st.get("recall", 0.0))
+		fake.is_recalling = int(st.get("is_recall", 0)) == 1 or fake.recall_timer > 0.0
+		fake.teleport_timer = float(st.get("tp", 0.0))
+		fake.is_teleporting = int(st.get("is_tp", 0)) == 1 or fake.teleport_timer > 0.0
 		fake.is_mvp = int(st.get("mvp", 0)) == 1
 		_apply_markers(fake, str(st.get("markers", "")))
 		fake.exp = int(float(st.get("exp", 0)))
@@ -1466,9 +1471,7 @@ func _update_replay_controls() -> void:
 		_pad.set_active_visible(i, false)
 	# 普攻轮盘读数（aa：伤害/攻速/强化/装备被动小字）
 	_pad.set_attack_state(det.get("aa", []))
-	# 回城进度
-	if _recall_view != null:
-		_recall_view.feed(int(det.get("recalling", 0)), float(det.get("recall_ratio", 0.0)))
+	# 回城进度：HeroInfoControl 状态条按 fake hero 的 is_recalling/recall_timer 自动绘制（同单机）
 	# 敌人索敌头像条：射程内敌方英雄（同单机规则）
 	_pad.set_enemy_picker(_replay_enemy_picker(fi, meta))
 	var ui_row := _ui_row_for(fi)
@@ -1735,6 +1738,15 @@ func _start_postmatch() -> void:
 	if _chat_box != null: _chat_box.visible = false
 	if _world != null: _world.visible = false
 	if _statics != null: _statics.visible = false
+	# 聚光灯舞台只保留随后搬入的己方 5 名英雄：先隐藏场景里所有其他 3D 对象
+	# （防御塔/水晶/小兵/野怪/子弹/塔基砖/遗留特效），避免它们出现在舞台背景。
+	for child in get_children():
+		if child == _cam:
+			continue
+		if child is Node3D:
+			(child as Node3D).visible = false
+	if _buff_view != null:
+		_buff_view.visible = false
 	for i in range(_hero_nodes.size()):
 		var root3 = _hero_nodes[i].get("root")
 		if root3 != null and is_instance_valid(root3):
@@ -2962,6 +2974,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 

@@ -507,8 +507,12 @@ const ATTR_NAME_C := Color(0.74, 0.8, 0.92)
 
 
 func _attr_txt(v: float, pct: bool) -> String:
+	# 调用方已经乘过 cfg.mult（pct 行 mult=100），这里不能再 ×100，否则暴击/吸血会放大 100 倍
 	if pct:
-		return "%.0f%%" % (v * 100.0)
+		var r := roundf(v * 10.0) / 10.0
+		if absf(r - roundf(r)) < 0.05:
+			return "%d%%" % int(roundf(r))
+		return "%.1f%%" % r
 	if absf(v) >= 100.0:
 		return "%d" % int(round(v))
 	return "%.1f" % v
@@ -628,3 +632,4 @@ func _draw_skills(follow: int) -> void:
 		if lv > 0:
 			UiKit.text(self, c + Vector2(r * 0.35, -r * 0.35), "Lv%d" % lv, int(round(12.0 * _s)),
 				Color(1.0, 0.88, 0.5))
+
