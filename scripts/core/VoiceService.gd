@@ -29,6 +29,11 @@ func _ready() -> void:
 	_ok = true
 	_voice = _pick_voice()
 	_fallback_blip = _voice == ""
+	if _voice == "":
+		# 有 TTS 能力但枚举不到音色：按不可用处理，走拟声
+		_ok = false
+	if OS.is_debug_build():
+		print("[VOICE] init ", diagnose())
 
 
 func _pick_voice() -> String:
@@ -78,9 +83,37 @@ func speak(text: String, speaker: String = "") -> void:
 		_utt += 1
 		if _utt > 900000:
 			_utt = 1
-		DisplayServer.tts_speak(clean, _voice, 80, pitch, rate, _utt, false)
+		DisplayServer.tts_speak(clean, _voice, 90, pitch, rate, _utt, false)
+		if OS.is_debug_build():
+			print("[VOICE] tts speak id=", _utt, " voice=", _voice, " zh=", _has_zh)
+		_verify_tts(_utt, clean, speaker)
 	else:
 		_blip_speak(clean, speaker)
+
+
+## 系统 TTS 可能静默失败（缺语音包/驱动问题）：0.2s 后还没在发声就补拟声，保证能听到
+func _verify_tts(my_utt: int, clean: String, speaker: String) -> void:
+	if not is_inside_tree():
+		return
+	await get_tree().create_timer(0.22).timeout
+	if my_utt != _utt:
+		return   # 已经被后续语音顶掉
+	if DisplayServer.has_method("tts_is_speaking") and DisplayServer.tts_is_speaking():
+		return
+	if OS.is_debug_build():
+		print("[VOICE] tts seems silent -> blip fallback")
+	_blip_speak(clean, speaker)
+
+
+func diagnose() -> Dictionary:
+	var speaking := false
+	if DisplayServer.has_method("tts_is_speaking"):
+		speaking = DisplayServer.tts_is_speaking()
+	return {
+		"enabled": enabled, "tts_ok": _ok, "has_zh": _has_zh, "voice": _voice, "lang": _lang,
+		"fallback": _fallback_blip, "tts_speaking": speaking,
+		"master_db": AudioServer.get_bus_volume_db(0), "master_mute": AudioServer.is_bus_mute(0),
+	}
 
 
 func stop() -> void:
@@ -97,8 +130,8 @@ func _blip_speak(clean: String, speaker: String) -> void:
 	_blip.stop()
 	var n := clampi(clean.length(), 2, 12)
 	var sr := 22050
-	var step := 0.072
-	var samples := int((float(n) * step + 0.08) * float(sr))
+	var step := 0.085
+	var samples := int((float(n) * step + 0.1) * float(sr))
 	if samples <= 0:
 		return
 	var buf := PackedByteArray()
@@ -108,10 +141,10 @@ func _blip_speak(clean: String, speaker: String) -> void:
 		base = 520.0
 	elif speaker != "":
 		base = 280.0 + float(int(abs(hash(speaker))) % 130)
-	var peak := 0.30
+	var peak := 0.55
 	for i in range(n):
 		var start := int(float(i) * step * float(sr))
-		var dur := int(0.052 * float(sr))
+		var dur := int(0.062 * float(sr))
 		var f: float = base * (1.0 + 0.18 * sin(float(i) * 1.9))
 		for s in range(dur):
 			var idx := start + s

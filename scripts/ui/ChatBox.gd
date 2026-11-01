@@ -53,6 +53,9 @@ func _build_widgets() -> void:
 			vs.set("enabled", not bool(vs.get("enabled")))
 			if not bool(vs.get("enabled")):
 				vs.call("stop")
+			else:
+				print("[VOICE] ", vs.call("diagnose"))
+				vs.call("speak", "语音播报已开启", "灵宝")
 		_refresh_voice_btn())
 	add_child(_voice_btn)
 	_close_btn = _mk_btn("✕", fs, UiKit.C_TEAM1)
