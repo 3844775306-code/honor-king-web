@@ -578,26 +578,18 @@ func _build_ui() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
 
-	var bar := Panel.new()
-	bar.mouse_filter = Control.MOUSE_FILTER_STOP
-	bar.add_theme_stylebox_override("panel",
-		UiKit.flat(0.9, 14, 1, Color(0.45, 0.62, 1.0, 0.35), Color(0.05, 0.07, 0.11, 0.94), 14.0, 12.0))
-	bar.anchor_left = 0.5
-	bar.anchor_right = 0.5
-	bar.anchor_top = 1.0
-	bar.anchor_bottom = 1.0
-	bar.offset_left = -680.0
-	bar.offset_right = 680.0
-	bar.offset_top = -128.0
-	bar.offset_bottom = -14.0
-	root.add_child(bar)
-
+	# 顶部中央：标题 + 进度条 + 时间（右上角留给与对局同位置的战况带，y154 留给战报）
 	_title = Label.new()
-	_title.position = Vector2(22, 8)
-	_title.size = Vector2(880, 34)
+	_title.anchor_left = 0.5
+	_title.anchor_right = 0.5
+	_title.offset_left = -620.0
+	_title.offset_right = 620.0
+	_title.offset_top = 8.0
+	_title.offset_bottom = 42.0
+	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_title.add_theme_font_size_override("font_size", int(round(22.0 * UiKit.scale())))
 	_title.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
-	bar.add_child(_title)
+	root.add_child(_title)
 	var meta: Dictionary = _doc.get("meta", {})
 	var me: int = int(meta.get("me", 0))
 	var my: Dictionary = _heroes[me] if me >= 0 and me < _heroes.size() else {}
@@ -606,8 +598,12 @@ func _build_ui() -> void:
 	_title.text = "%s · %s · %s" % [str(my.get("name", "")), str(meta.get("mode", "")), res]
 
 	_slider = HSlider.new()
-	_slider.position = Vector2(22, 52)
-	_slider.size = Vector2(880, 24)
+	_slider.anchor_left = 0.5
+	_slider.anchor_right = 0.5
+	_slider.offset_left = -620.0
+	_slider.offset_right = 620.0
+	_slider.offset_top = 50.0
+	_slider.offset_bottom = 74.0
 	_slider.min_value = 0.0
 	_slider.max_value = _duration
 	_slider.step = 0.05
@@ -619,69 +615,87 @@ func _build_ui() -> void:
 			_apply_frame(_t))
 	_slider.drag_started.connect(func() -> void: _dragging = true)
 	_slider.drag_ended.connect(func(_v: bool) -> void: _dragging = false)
-	bar.add_child(_slider)
+	root.add_child(_slider)
 
 	_ui_time = Label.new()
-	_ui_time.position = Vector2(930, 14)
-	_ui_time.size = Vector2(220, 30)
+	_ui_time.anchor_left = 0.5
+	_ui_time.anchor_right = 0.5
+	_ui_time.offset_left = 632.0
+	_ui_time.offset_right = 820.0
+	_ui_time.offset_top = 52.0
+	_ui_time.offset_bottom = 78.0
 	_ui_time.add_theme_font_size_override("font_size", int(round(20.0 * UiKit.scale())))
 	_ui_time.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
-	bar.add_child(_ui_time)
+	root.add_child(_ui_time)
 
+	# 播放控制：底部右侧辅助键带（与对局「回城 / 恢复 / 召唤师」同尺寸 220、离底 30、离右 420/660/900/1140）
 	_play_btn = _mk_btn("⏸ 暂停", Color(0.45, 0.7, 1.0))
-	_play_btn.custom_minimum_size = Vector2(112, 40)
-	_play_btn.position = Vector2(950, 66)
+	_anchor_br_btn(_play_btn, Vector2(420, 30), Vector2(220, 220))
 	_play_btn.pressed.connect(_toggle_play)
-	bar.add_child(_play_btn)
+	root.add_child(_play_btn)
 
 	_speed_btn = _mk_btn("1.0×", Color(0.55, 0.85, 0.75))
-	_speed_btn.custom_minimum_size = Vector2(112, 40)
-	_speed_btn.position = Vector2(1070, 66)
+	_anchor_br_btn(_speed_btn, Vector2(660, 30), Vector2(220, 220))
 	_speed_btn.pressed.connect(_cycle_speed)
-	bar.add_child(_speed_btn)
+	root.add_child(_speed_btn)
 
 	_hl_btn = _mk_btn("◆ 集锦", Color(1.0, 0.78, 0.4))
-	_hl_btn.custom_minimum_size = Vector2(112, 40)
-	_hl_btn.position = Vector2(1190, 66)
+	_anchor_br_btn(_hl_btn, Vector2(900, 30), Vector2(220, 220))
 	_hl_btn.pressed.connect(_toggle_highlight)
-	bar.add_child(_hl_btn)
+	root.add_child(_hl_btn)
 
 	var quit := _mk_btn("✕ 退出", Color(0.9, 0.55, 0.45))
-	quit.custom_minimum_size = Vector2(112, 40)
-	quit.position = Vector2(1310, 66)
+	_anchor_br_btn(quit, Vector2(1140, 30), Vector2(220, 220))
 	quit.pressed.connect(_back_to_lobby)
-	bar.add_child(quit)
+	root.add_child(quit)
 
-	# 击杀播报
+	# 击杀播报：与对局同位置（顶部居中、宽 620、top 154）
 	_feed = VBoxContainer.new()
 	_feed.anchor_left = 0.5
 	_feed.anchor_right = 0.5
-	_feed.offset_left = -420.0
-	_feed.offset_right = 420.0
-	_feed.offset_top = 150.0
+	_feed.offset_left = -310.0
+	_feed.offset_right = 310.0
+	_feed.offset_top = 154.0
 	_feed.add_theme_constant_override("separation", 2)
 	root.add_child(_feed)
 
+	# 快捷键提示：顶部中央（标题/进度条下方，避开右上战况带与 y154 战报；底部让给播放键带）
 	var hint := Label.new()
-	hint.anchor_left = 0.0
-	hint.anchor_top = 1.0
-	hint.anchor_bottom = 1.0
-	hint.offset_left = 24.0
-	hint.offset_top = -168.0
-	hint.offset_right = 1500.0
-	hint.offset_bottom = -136.0
-	hint.add_theme_font_size_override("font_size", int(round(16.0 * UiKit.scale())))
+	hint.anchor_left = 0.5
+	hint.anchor_right = 0.5
+	hint.anchor_top = 0.0
+	hint.anchor_bottom = 0.0
+	hint.offset_left = -400.0
+	hint.offset_right = 400.0
+	hint.offset_top = 78.0
+	hint.offset_bottom = 104.0
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hint.add_theme_font_size_override("font_size", int(round(15.0 * UiKit.scale())))
 	hint.add_theme_color_override("font_color", Color(0.62, 0.7, 0.82))
 	_hint_label = hint
 	hint.text = HINT_TEXT
 	root.add_child(hint)
 
 
+## 右下锚点（同 TouchController._anchor_br：离右/离底偏移 + 簇内缩进 + 安全区）
+func _anchor_br_btn(c: Control, from_br: Vector2, sz: Vector2) -> void:
+	var off := from_br + Vector2(80.0, 20.0) + Vector2(UiKit.safe_right(), UiKit.safe_bottom())
+	c.anchor_left = 1.0
+	c.anchor_top = 1.0
+	c.anchor_right = 1.0
+	c.anchor_bottom = 1.0
+	c.offset_left = -off.x - sz.x
+	c.offset_top = -off.y - sz.y
+	c.offset_right = -off.x
+	c.offset_bottom = -off.y
+
+
 func _mk_btn(text: String, accent: Color) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(124, 40)
-	b.add_theme_font_size_override("font_size", int(round(17.0 * UiKit.scale())))
+	b.add_theme_font_size_override("font_size", int(round(24.0 * UiKit.scale())))
 	b.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
 	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", accent, false))
 	b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", accent, false))

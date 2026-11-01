@@ -34,9 +34,11 @@ func _minimap_rect() -> Rect2:
 func _roster_rect() -> Rect2:
 	_s = UiKit.scale()
 	var w := ROSTER_W * _s
-	var h := (ROW_H * 10.0 + 46.0) * _s
 	var vp := _vp()
-	return Rect2(vp.x - 24.0 * _s - w, vp.y * 0.5 - h * 0.5, w, h)
+	# 左侧：紧贴属性面板下方（属性面板：小地图 450 + 10 起，高 214×s），高度吃满剩余空间
+	var top := 40.0 + UiKit.safe_top() + 450.0 + 10.0 + 214.0 * _s + 12.0
+	var h := minf((ROW_H * 10.0 + 46.0) * _s, vp.y - top - 16.0)
+	return Rect2(40.0 + UiKit.safe_left(), top, w, h)
 
 
 ## 命中测试：返回 {type:"map", x, z} / {type:"hero", idx} / {}
@@ -48,8 +50,10 @@ func hit(pos: Vector2) -> Dictionary:
 		return {"type": "map", "x": (fx - 0.5) * 120.0, "z": (fz - 0.5) * 120.0}
 	var rr := _roster_rect()
 	if rr.has_point(pos):
+		var list0: Array = st.get("heroes", [])
+		var rh0: float = (rr.size.y - 46.0 * _s - 6.0 * _s) / maxf(1.0, float(list0.size()))
 		var rel: float = pos.y - rr.position.y - 46.0 * _s - 6.0 * _s
-		var idx := int(rel / (ROW_H * _s))
+		var idx := int(rel / maxf(1.0, rh0))
 		var list: Array = st.get("heroes", [])
 		if idx >= 0 and idx < list.size():
 			return {"type": "hero", "idx": idx}
@@ -95,40 +99,89 @@ func _draw_death_overlay() -> void:
 
 
 func _draw_info() -> void:
+	# 与对局顶部战况带同位置/同尺寸（host：右上 x=W-781..W-371 / y=6..196，时间条 250×44）
 	var vp := _vp()
-	var w := 560.0 * _s
-	var rect := Rect2(vp.x - 24.0 * _s - w, 22.0 * _s, w, 84.0 * _s)
-	draw_style_box(UiKit.flat(0.72, 12, 1, Color(0.45, 0.62, 1.0, 0.24), Color(0.03, 0.045, 0.075, 0.92), 10.0, 8.0), rect)
-	var fs := int(round(21.0 * _s))
-	var x := rect.position.x + 14.0 * _s
-	var y := rect.position.y + 26.0 * _s
+	var W: float = size.x if size.x > 1.0 else vp.x
+	var left := W - 781.0
+	var bg := UiKit.flat(0.62, 0, 0, Color.TRANSPARENT, Color(0, 0, 0, 0.62), 0.0)
+	draw_style_box(bg, Rect2(left, 6.0, 410.0, 190.0))
+	draw_style_box(bg, Rect2(W - 776.0, 8.0, 250.0, 44.0))
+	var f: Font = UiKit.font()
+	var tsec: float = float(st.get("t", 0.0))
+	var gs := int(round(24.0 * _s))
+	var gd := f.get_ascent(gs) + f.get_descent(gs)
+	draw_string(f, Vector2(W - 776.0, 8.0 + (44.0 - gd) * 0.5 + f.get_ascent(gs)),
+		"%02d:%02d" % [int(tsec) / 60, int(tsec) % 60], HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
+	# FPS（同 host：时间条下方 120×24）
+	var fps_now := Engine.get_frames_per_second()
+	var fs := 14.0 * _s
+	var fd := f.get_ascent(int(fs)) + f.get_descent(int(fs))
+	var fps_col := Color(1.0, 0.42, 0.38) if fps_now < 30 else (Color(1.0, 0.82, 0.35) if fps_now < 50 else Color(0.55, 0.95, 0.65))
+	draw_string(f, Vector2(W - 776.0, 56.0 + (24.0 - fd) * 0.5 + f.get_ascent(int(fs))),
+		"FPS %d" % fps_now, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(fs), fps_col)
+	# K / D / A：跟随英雄（无跟随则本机）
+	var heroes: Array = st.get("heroes", [])
+	var fi: int = int(st.get("follow", -1))
+	var me: int = int((_doc_meta()).get("me", 0)) if _doc_meta().size() > 0 else 0
+	var ki: int = fi if fi >= 0 and fi < heroes.size() else me
+	if ki >= 0 and ki < heroes.size():
+		var hk: Dictionary = heroes[ki]
+		var ks := int(round(20.0 * _s))
+		var kd := f.get_ascent(ks) + f.get_descent(ks)
+		draw_string(f, Vector2(W - 773.0, 12.0 + (36.0 - kd) * 0.5 + f.get_ascent(ks)),
+			"K/D/A: %d/%d/%d" % [int(hk.get("k", 0)), int(hk.get("d", 0)), int(hk.get("a", 0))],
+			HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, Color.WHITE)
+	# 经济比分（同 host：居中于 W-576，蓝经济 / 蓝击杀 / vs / 红击杀 / 红经济）
 	var kills: Array = [0, 0]
-	var towers: Array = [0, 0]
-	for h in st.get("heroes", []):
+	var gold: Array = st.get("gold", [0, 0])
+	for h in heroes:
 		var tm: int = int(h.get("team", 0))
 		if tm < 2:
 			kills[tm] += int(h.get("k", 0))
+	var sz := int(round(24.0 * _s))
+	var segs: Array = [
+		[_fmt_gold_r(int(gold[0])), Color(0.0, 0.886, 1.0)],
+		["%d " % int(kills[0]), Color.WHITE],
+		["vs", Color.WHITE],
+		[" %d " % int(kills[1]), Color.WHITE],
+		[_fmt_gold_r(int(gold[1])), Color(1.0, 0.33, 0.264)],
+	]
+	var total := 0.0
+	for g in segs:
+		total += f.get_string_size(str(g[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
+	var bx := W - 576.0 - total * 0.5
+	var base := 82.0 + f.get_ascent(sz)
+	for g in segs:
+		var txt: String = str(g[0])
+		draw_string(f, Vector2(bx, base), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, g[1])
+		bx += f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
+	# 第三行：双方剩余防御塔（对局信息带同槽位）
+	var towers: Array = [0, 0]
 	for tt in st.get("turrets", []):
 		var tm2: int = int(tt.get("team", 0))
 		if tm2 < 2 and int(tt.get("alive", 0)) == 1:
 			towers[tm2] += 1
-	var tsec: float = float(st.get("t", 0.0))
-	UiKit.text(self, Vector2(x, y), "%02d:%02d" % [int(tsec) / 60, int(tsec) % 60], fs, Color(0.95, 0.98, 1.0))
-	var gold: Array = st.get("gold", [0, 0])
-	var gd: int = int(gold[1]) - int(gold[0])
-	UiKit.text(self, Vector2(x + 120.0 * _s, y), "比分 %d : %d" % [kills[0], kills[1]], fs,
-		Color(0.6, 0.85, 1.0))
-	UiKit.text(self, Vector2(x + 300.0 * _s, y), "塔 %d : %d" % [towers[0], towers[1]], fs,
-		Color(0.85, 0.9, 1.0))
-	var fs2 := int(round(17.0 * _s))
-	UiKit.text(self, Vector2(x, y + 30.0 * _s), "经济差 %s%d" % ["+" if gd >= 0 else "", gd], fs2,
-		Color(1.0, 0.86, 0.45) if gd >= 0 else Color(1.0, 0.52, 0.45))
-	var mode := str(st.get("mode", ""))
-	UiKit.text(self, Vector2(x + 220.0 * _s, y + 30.0 * _s), "%s · %s" % [mode, str(st.get("hero", ""))], fs2,
-		Color(0.62, 0.7, 0.85))
+	var vs2 := int(round(20.0 * _s))
+	var vd := f.get_ascent(vs2) + f.get_descent(vs2)
+	draw_string(f, Vector2(left, 148.0 + (38.0 - vd) * 0.5 + f.get_ascent(vs2)),
+		"防御塔 我方 %d : %d 敌方" % [int(towers[0]), int(towers[1])],
+		HORIZONTAL_ALIGNMENT_CENTER, 410.0, vs2, Color(0.72, 0.76, 0.85))
 
 
-# ---------------- 小地图 ----------------
+func _doc_meta() -> Dictionary:
+	var scr = get_parent()
+	while scr != null:
+		if scr.get("_doc") != null:
+			return scr.get("_doc").get("meta", {})
+		scr = scr.get_parent()
+	return {}
+
+
+func _fmt_gold_r(v: int) -> String:
+	if v >= 1000:
+		return "%.1fk" % (v / 1000.0)
+	return str(v)
+
 
 func _world_to_mm(w: Vector3, rect: Rect2) -> Vector2:
 	var fx: float = clampf((w.x / 120.0) + 0.5, 0.0, 1.0)
@@ -318,10 +371,11 @@ func _draw_roster() -> void:
 		"英雄信息（点击头像切主视角）", int(round(15.0 * _s)), Color(0.75, 0.85, 0.98))
 	var heroes: Array = st.get("heroes", [])
 	var follow: int = int(st.get("follow", -1))
+	var rh: float = (rect.size.y - 46.0 * _s - 6.0 * _s) / maxf(1.0, float(heroes.size()))
 	for i in range(heroes.size()):
 		var h: Dictionary = heroes[i]
-		var row := Rect2(rect.position.x + 6.0 * _s, rect.position.y + (46.0 + ROW_H * float(i)) * _s + 6.0 * _s,
-			rect.size.x - 12.0 * _s, (ROW_H - 4.0) * _s)
+		var row := Rect2(rect.position.x + 6.0 * _s, rect.position.y + 46.0 * _s + 6.0 * _s + rh * float(i),
+			rect.size.x - 12.0 * _s, maxf(30.0, rh - 4.0 * _s))
 		var team: int = int(h.get("team", 0))
 		var tcol: Color = Color(0.35, 0.85, 1.0) if Config.is_ally(team) else Color(1.0, 0.42, 0.36)
 		if i == follow:
@@ -369,7 +423,7 @@ func _draw_attrs(idx: int) -> void:
 		return
 	var h: Dictionary = heroes[idx]
 	var mm := _minimap_rect()
-	var rect := Rect2(mm.position.x, mm.position.y + mm.size.y + 14.0 * _s, 300.0 * _s, 214.0 * _s)
+	var rect := Rect2(mm.position.x, 40.0 + UiKit.safe_top() + 450.0 + 10.0, 300.0 * _s, 214.0 * _s)
 	draw_style_box(UiKit.flat(0.72, 12, 1, Color(0.45, 0.62, 1.0, 0.26), Color(0.03, 0.045, 0.075, 0.92), 8.0, 8.0), rect)
 	var fs := int(round(16.0 * _s))
 	var cap := "主视角 · %s（Esc 回自由镜头）" % str(h.get("name", ""))
@@ -390,7 +444,7 @@ func _draw_attrs(idx: int) -> void:
 		y += 26.0 * _s
 
 
-# ---------------- 主视角：技能按钮冷却 ----------------
+# ---------------- 主视角：技能按钮冷却（对局同款扇形） ----------------
 
 func _draw_skills(follow: int) -> void:
 	if follow < 0:
