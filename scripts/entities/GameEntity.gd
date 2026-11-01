@@ -1318,17 +1318,10 @@ func _update_debug_path_visual():
 			_fmat.albedo_color = path_color
 			_fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			_fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_fmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			_fmat.emission_enabled = true
 			_fmat.emission = path_color * 0.12
-			var _fimm := ImmediateMesh.new()
-			_fimm.surface_begin(Mesh.PRIMITIVE_TRIANGLES, _fmat)
-			_add_path_ribbon(_fimm, _fp[0], _fp[1], 0.30)
-			_fimm.surface_end()
-			var _fmi := MeshInstance3D.new()
-			_fmi.mesh = _fimm
-			_fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			parent.add_child(_fmi)
-			_debug_path_nodes.append(_fmi)
+			_add_path_box(parent, _fp[0], _fp[1], 0.34, _fmat)
 			return
 		# 无移动目标：脚边暗红圆环
 		var fail_mesh = TorusMesh.new()
@@ -1355,6 +1348,7 @@ func _update_debug_path_visual():
 	line_mat.albedo_color = path_color
 	line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	line_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	line_mat.emission_enabled = true
 	line_mat.emission = path_color * 0.10
 	var pts: Array[Vector3] = [global_position + Vector3(0, DEBUG_PATH_Y, 0)]
@@ -1366,16 +1360,10 @@ func _update_debug_path_visual():
 			has_segment = true
 			break
 	if has_segment:
-		var imm = ImmediateMesh.new()
-		imm.surface_begin(Mesh.PRIMITIVE_TRIANGLES, line_mat)
+		# ImmediateMesh 在部分相机/裁剪下整条 ribbon 不显示（只剩终点环），改用逐段 BoxMesh：
+		# 每个线段一个薄盒子，AABB/材质/朝向都由 MeshInstance 正常计算，稳定可见。
 		for i in range(pts.size() - 1):
-			_add_path_ribbon(imm, pts[i], pts[i + 1], 0.32)
-		imm.surface_end()
-		var line_mi = MeshInstance3D.new()
-		line_mi.mesh = imm
-		line_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(line_mi)
-		_debug_path_nodes.append(line_mi)
+			_add_path_box(parent, pts[i], pts[i + 1], 0.34, line_mat)
 	# 终点：贴地金铜色圆环（代替高亮黄球）
 	if _nav_index < _nav_path.size():
 		var end_mesh = TorusMesh.new()
@@ -1396,6 +1384,25 @@ func _update_debug_path_visual():
 		end_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(end_mi)
 		_debug_path_nodes.append(end_mi)
+
+
+## 单段路径薄盒：替代 ImmediateMesh ribbon（避免整条折线被裁剪/不可见）
+func _add_path_box(parent: Node3D, a: Vector3, b: Vector3, width: float, mat: Material) -> void:
+	var d := b - a
+	d.y = 0.0
+	var ln := d.length()
+	if ln < 0.05:
+		return
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(width, 0.05, ln + 0.02)
+	mi.mesh = bm
+	mi.material_override = mat
+	mi.position = (a + b) * 0.5
+	mi.rotation.y = atan2(d.x, d.z)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	_debug_path_nodes.append(mi)
 
 
 func _add_path_ribbon(imm: ImmediateMesh, a: Vector3, b: Vector3, width: float) -> bool:
