@@ -742,7 +742,13 @@ func _skill_id_of(sk: Skill) -> String:
 	if sk == null:
 		return ""
 	for sid in SkillDatabase.skills:
-		if SkillDatabase.skills[sid] == sk:
+		var base: Skill = SkillDatabase.skills[sid]
+		if base == null:
+			continue
+		if base == sk:
+			return str(sid)
+		# Hero 使用的是 SkillDatabase 的 duplicate()，不是同一个对象；按技能名+类型匹配回 id
+		if str(base.skill_name) == str(sk.skill_name) and int(base.type) == int(sk.type):
 			return str(sid)
 	return ""
 

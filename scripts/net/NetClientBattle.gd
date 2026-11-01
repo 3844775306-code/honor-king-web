@@ -2,6 +2,7 @@ extends Node3D
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const NetModels = preload("res://scripts/net/NetModels.gd")
+const MinionModelScript = preload("res://scripts/entities/MinionModel.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetMiniMapScript = preload("res://scripts/net/NetMiniMap.gd")
@@ -1665,36 +1666,127 @@ func _proc_death(v: Dictionary) -> void:
 		tw.tween_property(mdl, "position:y", base.y - 0.12, 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 
-# 无骨骼模型的普攻动作（有 AnimationPlayer 的兵种走原有 clip 逻辑）
+# 无骨骼模型的普攻动作（与 host Minion._model_lunge/_siege_recoil 同参数）
 func _proc_recoil(v: Dictionary, yaw: float) -> void:
 	var mdl: Node3D = v.get("model", null)
-	var nn: Node3D = v.node
-	if mdl != null and is_instance_valid(mdl):
-		var pivot: Node3D = mdl.get_node_or_null("ModelPivot")
-		if pivot != null:
-			# 程序化甲士：普攻前刺（攻城车仍走整模型后坐）
-			var kind := str(mdl.get_meta("minion_model_kind", ""))
-			if kind == "siege":
-				var base := pivot.position
-				var tw := pivot.create_tween()
-				tw.tween_property(pivot, "position:z", base.z - 0.20, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-				tw.tween_property(pivot, "position:z", base.z, 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-			else:
-				var b := pivot.position
-				var tw := pivot.create_tween()
-				tw.tween_property(pivot, "position:z", b.z + 0.16, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-				tw.parallel().tween_property(pivot, "rotation:x", -0.10, 0.10)
-				tw.tween_interval(0.03)
-				tw.tween_property(pivot, "position:z", b.z, 0.20).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-				tw.parallel().tween_property(pivot, "rotation:x", 0.0, 0.20)
-		else:
-			var base := mdl.position
-			var tw := mdl.create_tween()
-			tw.tween_property(mdl, "position:z", base.z - 0.45, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-			tw.tween_property(mdl, "position:z", base.z, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	if nn != null and is_instance_valid(nn):
-		var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
-		Vfx.cast_glow(nn.global_position + Vector3.UP * 0.8 + fwd * 0.7, Color(1.0, 0.72, 0.35), 0.5, 0.18)
+	if mdl == null or not is_instance_valid(mdl):
+		return
+	var kind := str(v.get("name", mdl.get_meta("minion_model_kind", "")))
+	var pivot: Node3D = mdl.get_node_or_null("ModelPivot")
+	if kind == "siege":
+		_siege_recoil_client(mdl, pivot, yaw)
+		_fire_ammo_client(mdl)
+		return
+	if pivot == null:
+		return
+	var old: Tween = pivot.get_meta("atk_tween", null)
+	if old != null and old.is_valid():
+		old.kill()
+	# 兵种手感：远程拉弓后弹射、超级兵重砸、龙兵俯冲冲撞、近战兵刺击
+	var p := {"back": 0.12, "fwd": 0.36, "up": 0.18, "down": 0.18, "twist": 0.26, "dip": 0.05,
+		"windup": 0.09, "strike": 0.10, "settle": 0.30}
+	if kind == "ranged":
+		p = {"back": 0.17, "fwd": 0.09, "up": 0.11, "down": 0.12, "twist": 0.15, "dip": 0.04,
+			"windup": 0.13, "strike": 0.07, "settle": 0.26}
+	elif kind == "super":
+		p = {"back": 0.19, "fwd": 0.52, "up": 0.32, "down": 0.36, "twist": 0.46, "dip": 0.11,
+			"windup": 0.13, "strike": 0.12, "settle": 0.36}
+	elif kind in ["dragon", "storm", "shadow_dragon"]:
+		p = {"back": 0.13, "fwd": 0.38, "up": 0.12, "down": 0.24, "twist": 0.0, "dip": 0.06,
+			"windup": 0.10, "strike": 0.12, "settle": 0.30}
+	var base_pos := pivot.position
+	var base_rot := pivot.rotation
+	var base_scl := pivot.scale
+	var seed_v := absi(mdl.get_instance_id() % 89)
+	var rnd := float(seed_v) / 89.0
+	var side_dir: float = 1.0 if (seed_v % 2 == 0) else -1.0
+	var back := float(p.back) * (0.85 + 0.30 * rnd)
+	var fwd := float(p.fwd) * (0.90 + 0.20 * rnd)
+	var up := float(p.up) * (0.85 + 0.30 * rnd)
+	var down := float(p.down) * (0.85 + 0.30 * rnd)
+	var twist := float(p.twist) * (0.80 + 0.40 * rnd)
+	var dip := float(p.dip) * (0.85 + 0.30 * rnd)
+	var windup := float(p.windup) * (0.85 + 0.30 * rnd)
+	var strike := float(p.strike) * (0.85 + 0.30 * rnd)
+	var settle := float(p.settle) * (0.90 + 0.20 * rnd)
+	var swing := 0.0
+	var roll := 0.0
+	if kind in ["melee", "super"]:
+		var heavy: float = 1.6 if kind == "super" else 1.0
+		swing = (0.16 + 0.12 * rnd) * side_dir * heavy
+		roll = (0.10 + 0.08 * rnd) * side_dir * heavy
+	elif kind in ["dragon", "storm", "shadow_dragon"]:
+		swing = 0.06 * side_dir
+	var hop: float = up * 0.22 if kind in ["melee", "super"] else 0.0
+	var tw := create_tween()
+	pivot.set_meta("atk_tween", tw)
+	tw.tween_property(pivot, "position:z", base_pos.z - back, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x + up, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y + twist, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x - swing * 0.45, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z + roll * 0.4, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y - dip * 0.35, windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 1.05, base_scl.y * 0.93, base_scl.z * 1.05), windup).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(pivot, "position:z", base_pos.z + fwd, strike).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x + swing, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y - dip + hop, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x - down, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y - twist * 1.5, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z - roll, strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 0.94, base_scl.y * 1.10, base_scl.z * 0.94), strike).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(pivot, "position:z", base_pos.z + fwd * 0.25, settle * 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x + swing * 0.3, settle * 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x + up * 0.2, settle * 0.45)
+	tw.parallel().tween_property(pivot, "scale", Vector3(base_scl.x * 1.02, base_scl.y * 0.97, base_scl.z * 1.02), settle * 0.45)
+	tw.tween_property(pivot, "position:z", base_pos.z, settle * 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:x", base_pos.x, settle * 0.55).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(pivot, "position:y", base_pos.y, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:x", base_rot.x, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:y", base_rot.y, settle * 0.55)
+	tw.parallel().tween_property(pivot, "rotation:z", base_rot.z, settle * 0.55)
+	tw.parallel().tween_property(pivot, "scale", base_scl, settle * 0.55)
+	_fire_ammo_client(mdl)
+
+
+# 攻城车开炮后坐（与 host Minion._siege_recoil 同参数）
+func _siege_recoil_client(mdl: Node3D, pivot: Node3D, yaw: float) -> void:
+	var recoil_node: Node3D = pivot
+	var dist := 0.45
+	if recoil_node != null:
+		dist = 0.20
+	else:
+		recoil_node = mdl
+	var base := recoil_node.position
+	var base_rot := recoil_node.rotation
+	var tw := create_tween()
+	tw.tween_property(recoil_node, "position:z", base.z - dist, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(recoil_node, "rotation:x", base_rot.x - 0.075, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(recoil_node, "position:z", base.z, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(recoil_node, "rotation:x", base_rot.x, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
+	var mz := _minion_muzzle(mdl, str(mdl.get_meta("minion_model_kind", "")))
+	Vfx.muzzle(mz, fwd, Color(1.0, 0.72, 0.35), Color(1.0, 0.95, 0.8))
+	Vfx.cast_glow(mz + fwd * 0.22, Color(1.0, 0.55, 0.2), 0.65, 0.2)
+
+
+func _minion_muzzle(mdl: Node3D, kind: String) -> Vector3:
+	var local: Vector3 = MinionModelScript.muzzle_local(kind)
+	var pivot: Node3D = mdl.get_node_or_null("ModelPivot")
+	var base: Node3D = pivot if pivot != null else mdl
+	return base.global_transform * local
+
+
+func _fire_ammo_client(mdl: Node3D) -> void:
+	if mdl == null or not is_instance_valid(mdl):
+		return
+	var ammo := mdl.get_node_or_null("ModelPivot/Ammo") as MeshInstance3D
+	if ammo == null or not is_instance_valid(ammo):
+		return
+	ammo.visible = false
+	var t := get_tree().create_timer(0.8)
+	t.timeout.connect(func() -> void:
+		if is_instance_valid(ammo):
+			ammo.visible = true)
 
 
 # 防御塔激光（host RPC）：细光束从塔顶连到目标，能量球本体走普通弹体快照（kind=5）
@@ -4299,6 +4391,8 @@ func _update_skill_pad() -> void:
 			cost = maxf(cost - pw * float(slv - 1), 0.0)
 		var st := {
 			"name": str(sk.get("name", "")),
+			"sid": str(sk.get("sid", "")),
+			"hero": str(_manifest.get("hero_name", "")),
 			"level": slv,
 			"max_level": 6 if i < 2 else 3,
 			"cd": cd_cur, "cdmax": total,

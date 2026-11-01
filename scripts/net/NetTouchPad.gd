@@ -337,6 +337,9 @@ func set_skill_state(i: int, st: Dictionary) -> void:
 	var nm := str(st.get("name", ""))
 	if b.display_name != nm:
 		b.display_name = nm
+	b.art_hero = str(st.get("hero", ""))
+	var sid := str(st.get("sid", ""))
+	b.art_skill = SkillDatabase.get_skill(sid) if sid != "" else null
 	b.max_level = int(st.get("max_level", 0))
 	b.skill_level = int(st.get("level", 0))
 	var total := maxf(float(st.get("cdmax", 0.0)), 0.001)
