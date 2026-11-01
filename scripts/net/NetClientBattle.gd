@@ -2095,8 +2095,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 		NET_HERO:
 			var hm := NetModels.hero(name)
 			if hm != null:
-				# 英雄模型总×3（NetModels 基线 2.0 ×1.5 = 3.0，与主机 Hero._load_hero_model 对齐）
-				hm.scale = hm.scale * 1.5
+				# NetModels.hero 内部已是 HeroModel 根 + 模型×3.0，与主机 _load_hero_model 同结构
 				node.add_child(hm)
 				model_ref = hm
 				# 红/蓝 buff 脚下光环（与单机 Hero.buff_ring_red/blue 同款）→ 放到 view 里按快照开关
@@ -2970,7 +2969,8 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 	# 主机 HeroInfoControl 颜色：敌方红 / 本窗口玩家绿 / 队友青（host 以 is_ai 区分，我们以是否 self 区分）
 	var bar_col := Color(1.0, 0.33, 0.264)
 	if Config.is_ally(int(v.team)):
-		bar_col = Color(0.0, 0.886, 0.431) if nid == _self_net else Color(0.0, 0.886, 1.0)
+		# 自己英雄恒为绿色（同 host HUD.gd），其余友方青色
+		bar_col = Color(0.33, 0.95, 0.42, 1.0) if nid == _self_net else Color(0.0, 0.886, 1.0)
 	return {"kind": "hero", "nid": nid, "cx": sp.x, "cy": sp.y,
 		"name": str(v.get("name", "")), "pname": str(v.get("pname", "")), "level": int(v.get("level", 1)),
 		"hp": float(v.hp), "maxhp": float(v.maxhp), "hp_col": bar_col,
@@ -5181,15 +5181,12 @@ class Hud:
 
 	# —— P2 世界血条绘制（复刻主机 HUD / HeroInfoControl / HealthBarControl）——
 	func _team_color(t: int) -> Color:
-		match t:
-			0:
-				return Color(0.0, 0.886, 1.0)
-			1:
-				return Color(1.0, 0.33, 0.264)
-			2:
-				return Color(0.0, 0.886, 0.431)
-			_:
-				return Color(0.945, 0.925, 0.251)
+		# 血条颜色按「本机阵营」相对上色：红方客户端自己的塔/兵也必须是友方色
+		if t == 0 or t == 1:
+			return Color(0.0, 0.886, 1.0) if Config.is_ally(t) else Color(1.0, 0.33, 0.264)
+		if t == 2:
+			return Color(0.0, 0.886, 0.431)
+		return Color(0.945, 0.925, 0.251)
 
 	# 经验等级圈（血条左端，几何/配色同主机 HeroInfoControl._draw_level_ring）
 	func _draw_level_ring(c: Vector2, r: float, level_text: String, exp_ratio: float) -> void:
