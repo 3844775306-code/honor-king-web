@@ -231,6 +231,7 @@ var _cam_dist := 36.0
 # 开局镜头拉近（同 host BattleManager._begin_intro）：从高远机位插值回固定跟随位
 const CAM_INTRO_DUR := 2.8
 var _cam_intro_t := -1.0   # <0 = 尚未开始；>=0 运镜已进行秒数
+var _intro_loading = null  # 进场加载层：战场同步+接管+运镜就绪后才淡出
 var _mouse_screen := Vector2()
 var _pending_skill := -1
 var _ret_point := Vector3.ZERO   # 鼠标在地面的交点（画准星）
@@ -395,14 +396,20 @@ func _ready() -> void:
 	# 若 NetSession 已缓存 manifest，直接补接管自己在大厅锁定的英雄。
 	if not NetSession._manifest.is_empty():
 		_on_takeover(NetSession._manifest)
-	# 进场加载界面（与单机/主机一致）：在 HUD 全部建好后再盖一层
-	var ld := LoadingScreen.new()
-	ld.setup([], "对局加载中", "联机对局 · 等待同步战场", 2.4)
-	add_child(ld)
+	# 进场加载界面（与单机/主机一致）：在 HUD 全部建好后再盖一层。
+	# 关键：不按固定 2.4s 自动消失 —— 主机 manifest/首帧快照可能晚到 1s+，
+	# 提前揭开会让镜头先停在地图中央再飞向英雄（用户看到的「跳中心顿一秒」）。
+	# 改为 manual_progress：等战场同步 + 接管 + 入场运镜真正开始后再淡出。
+	_intro_loading = LoadingScreen.new()
+	_intro_loading.setup([], "对局加载中", "联机对局 · 等待同步战场", 2.4)
+	_intro_loading.manual_progress = true
+	_intro_loading.set_progress(0.06)
+	add_child(_intro_loading)
 
 func _process(delta: float) -> void:
 	if _hud == null:
 		return
+	_tick_intro_loading()
 	if not _map_applied:
 		_apply_map_if_ready()
 	if _tdv != null and _tdv.visible:
@@ -3660,6 +3667,31 @@ func _apply_map_if_ready() -> void:
 	# _update_epic_rings / _update_jungle_rings 逐只显示（此前的常显黄圈是多余表现）
 	print("[NetClient] 静态地图已应用 bushes=", bushes.size(), " walls=", walls.size(), " camps=", camps.size())
 
+# 进场加载层进度：地图同步 → 首帧快照 → 接管 → 入场运镜开始，才允许揭开
+var _intro_wait := 0.0
+func _tick_intro_loading() -> void:
+	if _intro_loading == null or not is_instance_valid(_intro_loading):
+		return
+	_intro_wait += get_process_delta_time()
+	var p := 0.10
+	if _map_applied:
+		p = 0.32
+	if _state == 1:
+		p = 0.55
+	if _owned:
+		p = 0.78
+	# 入场运镜真正开始（_cam_intro_t>=0）后再走满并淡出，画面直接从远景推近，不经过地图中心
+	if _owned and _cam_intro_t >= 0.0:
+		p = 1.0
+	# 观战/异常兜底：最长等 8s
+	if _intro_wait > 8.0:
+		p = 1.0
+	_intro_loading.set_progress(p)
+	if p >= 1.0:
+		_intro_loading.manual_progress = false
+		_intro_loading.set("_t", 99.0)
+		_intro_loading = null
+
 func _build_camera() -> void:
 	# 环境/灯光与 host 完全同源：天空盒 + 天空环境光 + ACES + 深度雾 + 暖阳光/冷补光
 	MapVisuals.setup_environment(self)
@@ -5950,6 +5982,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 
