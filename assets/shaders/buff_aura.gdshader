@@ -20,6 +20,10 @@ void vertex() {
 
 void fragment() {
 	float r = length(v_local);
+	// 方形 PlaneMesh 只保留圆内：角落直接丢弃，避免光环下方出现一块方形亮斑
+	if (r > 0.995) {
+		discard;
+	}
 	float ang = atan(v_local.y, v_local.x);
 	float t = TIME;
 	float blue = step(0.5, mode);
@@ -54,6 +58,8 @@ void fragment() {
 	a = clamp(a * intensity, 0.0, 1.0);
 
 	vec3 col = mix(aura_color.rgb, core_color.rgb, clamp(a * 1.4, 0.0, 1.0));
-	ALBEDO = col * (1.0 + a * 0.8);
+	// 预乘 alpha：additive 混合若忽略 ALPHA，正方形四角 (a=0) 也不会加亮 → 不再出现方形底
+	ALBEDO = col * a;
 	ALPHA = a;
 }
+
