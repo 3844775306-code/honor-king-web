@@ -381,9 +381,10 @@ func _build_actors() -> void:
 			mi.material_override = m
 			root.add_child(mi)
 		var lbeam: Node3D = Vfx.make_lock_beam(Vfx.team_color(int(t.get("team", 0))))
-		add_child(lbeam)
+		root.add_child(lbeam)   # 与主机同层级：挂塔根节点，塔隐藏/坍塌时光束一同消失
 		lbeam.visible = false
-		_turret_nodes.append({"root": root, "max": float(t.get("maxhp", 1)), "beam": lbeam})
+		_turret_nodes.append({"root": root, "max": float(t.get("maxhp", 1)), "beam": lbeam,
+			"shield": null, "shield_t0": 0.0})
 	_build_jungle()
 
 
@@ -1020,6 +1021,31 @@ func _apply_frame(t: float) -> void:
 				Vfx.aim_lock_beam(lbeam2, src_p, tgt_p, _t)
 			else:
 				lbeam2.visible = false
+		# —— 塔护盾：录像层记录开关/盾量，实体与单机/联机同款（TurretMesh.tower_shield_visual）——
+		var _sh_on: int = int(ra[5]) if ra.size() > 5 else 0
+		var _sh_a: float = float(ra[6]) / 10.0 if ra.size() > 6 else 0.0
+		var _sh_b: float = float(rb[6]) / 10.0 if rb.size() > 6 else _sh_a
+		var _sh_amt: float = lerpf(_sh_a, _sh_b, k)
+		var _sh_icon: int = int(ra[7]) if ra.size() > 7 else 0
+		var _sh_active: bool = _sh_on == 1 and _sh_amt > 0.0 and hpv > 0.5
+		var _shn = node2.get("shield")
+		if _sh_active:
+			if _shn == null or not is_instance_valid(_shn):
+				_shn = NetModels.tower_shield(int((_turrets[i] as Dictionary).get("team", 0)) if i < _turrets.size() else 0,
+					str((_turrets[i] as Dictionary).get("type", "")) == "crystal" if i < _turrets.size() else false)
+				node2["root"].add_child(_shn)
+				node2["shield"] = _shn
+				node2["shield_t0"] = _t
+			_shn.visible = true
+			var _gt: float = _t - float(node2.get("shield_t0", _t))
+			var _grow: float = minf(1.0, _gt * 6.0)
+			var _pulse: float = 1.0 + sin(_t * 2.4) * 0.012
+			var _ss: float = lerpf(0.80, 1.0, _grow) * _pulse
+			_shn.scale = Vector3(_ss, _ss, _ss)
+			_shn.rotation.y = _t * 0.22
+		elif _shn != null and is_instance_valid(_shn):
+			_shn.queue_free()
+			node2["shield"] = null
 		if hpv > 0.5:
 			node2["root"].visible = true
 		elif not bool(node2.get("collapsed", false)):
@@ -1035,12 +1061,14 @@ func _apply_frame(t: float) -> void:
 			node2["prev_hp"] = hpv
 			_hud_turrets.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0,
 				"team": int(td0.get("team", 0)), "type": str(td0.get("type", "outer")),
-				"alive": 1 if hpv > 0.5 else 0, "hp": hpv, "mx": maxf(1.0, float(node2["max"]))})
+				"alive": 1 if hpv > 0.5 else 0, "hp": hpv, "mx": maxf(1.0, float(node2["max"])),
+				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1})
 		if hpv > 0.5 and i < _turrets.size():
 			var td: Dictionary = _turrets[i]
 			_unit_world.append({"kind": "turret", "pos": Vector3(float(td.get("x", 0)) / 100.0, 0.0, float(td.get("z", 0)) / 100.0),
 				"hp": hpv, "max": maxf(1.0, float(node2["max"])), "team": int(td.get("team", 0)),
-				"name": str(td.get("type", "")), "sub": str(td.get("type", ""))})
+				"name": str(td.get("type", "")), "sub": str(td.get("type", "")),
+				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1})
 	# 小兵：相邻两帧按 id 插值（3Hz 采样也能走得顺）
 	var mi := _find_mini_frame(t)
 	var rows: Array = []      # [id, x, z, type, team]
@@ -2264,6 +2292,7 @@ func _make_bullet(row: Array, col: Color, radius: float) -> Node3D:
 		var flags := int(row[11]) if row.size() > 11 else 0
 		var node := ProjectilePresenter.make(kind, team, vk, radius, flags)
 		if node != null:
+			add_child(node)   # 必须挂进场景树，否则回放里永远看不到子弹（之前漏了这一步）
 			return node
 	var mi := MeshInstance3D.new()
 	var sm := SphereMesh.new()
@@ -2974,6 +3003,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 
