@@ -21,6 +21,8 @@ const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
+const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
+const AnimMap = preload("res://scripts/presentation/AnimMap.gd")                   # 三端共享动画 clip 映射
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -1652,19 +1654,9 @@ func _setup_anim_loops(ap: AnimationPlayer) -> void:
 # 按关键字在 AnimationPlayer 里找第一个匹配 clip（各模型命名不统一：英雄 attack-melee-left /
 # holding-*-shoot，小兵 CharacterArmature|Punch，野怪 Attack）。取最短匹配避免抓到变体名。
 func _clip_hint(ap: AnimationPlayer, hints: Array) -> String:
-	var best := ""
-	for nm in ap.get_animation_list():
-		var low := String(nm).to_lower()
-		for h in hints:
-			if low.find(str(h)) >= 0:
-				if best == "" or String(nm).length() < best.length():
-					best = String(nm)
-				break
-	return best
+	# 三端统一：动画 clip 关键字匹配走 AnimMap.hint
+	return AnimMap.hint(ap, hints)
 
-
-# 无骨骼动画模型的开火表现（攻城车）：模型沿本地 -Z 后坐再回位 + 炮口闪光
-# 无骨骼模型死亡：停掉行走起伏，侧倒/坠地（与 host Minion._proc_death 同观感）
 func _proc_death(v: Dictionary) -> void:
 	var mdl: Node3D = v.get("model", null)
 	var nn: Node3D = v.node
@@ -1888,7 +1880,7 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 	var clip := ""
 	match act:
 		NetSession.ACT_DIE:
-			clip = _clip_hint(ap, ["death", "die"])
+			clip = ActorPresenter.clip(ap, "die", str(v.get("name", "")))
 			if clip == "":
 				clip = str(v.get("atk_clip", ""))
 		NetSession.ACT_CAST_SPRINT:
@@ -1896,7 +1888,7 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 		NetSession.ACT_CAST_INTERACT:
 			clip = _clip_hint(ap, ["interact"])
 		NetSession.ACT_CAST_MELEE:
-			clip = "attack-melee-right" if ap.has_animation("attack-melee-right") else _clip_hint(ap, ["attack-melee", "attack", "punch"])
+			clip = AnimMap.clip(ap, "attack_melee_right", str(v.get("name", "")))
 		NetSession.ACT_CAST_BOTH_SHOOT:
 			clip = "holding-both-shoot" if ap.has_animation("holding-both-shoot") else _clip_hint(ap, ["holding", "shoot"])
 		_:
@@ -1906,12 +1898,14 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 			elif act == NetSession.ACT_ATTACK_SHOOT:
 				clip = "holding-both-shoot" if str(v.get("name", "")) in ["后羿", "孙尚香", "元流之子"] else "holding-right-shoot"
 				if not ap.has_animation(clip):
+					clip = ActorPresenter.clip(ap, "attack_shoot", str(v.get("name", "")))
+				if clip == "" or not ap.has_animation(clip):
 					clip = str(v.get("atk_clip", ""))
 			else:
-				# 近战普攻左右交替（host 用 _melee_anim_flip 交替）
+				# 近战普攻左右交替（host 用 _melee_anim_flip 交替；clip 选择走 AnimMap）
 				v.melee_flip = not bool(v.get("melee_flip", false))
-				clip = "attack-melee-left" if bool(v.melee_flip) else "attack-melee-right"
-				if not ap.has_animation(clip):
+				clip = AnimMap.melee(ap, bool(v.melee_flip), str(v.get("name", "")))
+				if clip == "":
 					clip = str(v.get("atk_clip", ""))
 	if clip == "" or not ap.has_animation(clip):
 		return
@@ -2161,23 +2155,13 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	$Entities.add_child(node)
 	# 行走质感：客户端同样用步频起伏（dust=false，粒子只在 host 生成，避免双端预算翻倍）
 	if model_ref != null:
-		# 与 host 各类型 _walk_opts 逐参数对齐（含脚步扬尘 dust_size；龙兵与 host 一样不出尘）
-		var wopts := {"stride": 1.6, "bob": 0.045, "sway": 0.03, "lean": 0.045, "dust_size": 0.26}   # 野怪
+		# 三端共享行走参数（ActorPresenter，与 host Minion/Hero/JungleMonster 同一份表）
+		var _kind := "jungle"
 		if typ == NET_HERO:
-			wopts = {"stride": 1.9, "bob": 0.055, "sway": 0.028, "lean": 0.075, "dust_size": 0.24}
+			_kind = "hero"
 		elif typ == NET_MINION:
-			if name in ["dragon", "storm", "shadow_dragon"]:
-				wopts = {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
-					"wings": [model_ref.get_node_or_null("ModelPivot/WingL"),
-						model_ref.get_node_or_null("ModelPivot/WingR")]}
-			elif name == "siege":
-				wopts = {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
-			else:
-				wopts = {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust_size": 0.18,
-					"legs": [model_ref.get_node_or_null("ModelPivot/LegL"),
-						model_ref.get_node_or_null("ModelPivot/LegR")],
-					"leg_swing": 0.52 if name == "super" else 0.62}
-		WalkFeel.attach(node, model_ref, wopts)
+			_kind = "minion"
+		WalkFeel.attach(node, model_ref, ActorPresenter.walk_opts(_kind, name, model_ref))
 	# 自己英雄不再额外加竖直光柱（与单机一致，仅保留脚下队伍环）
 	var view := {"node": node, "type": typ, "team": team, "name": name,
 		"hp": 0.0, "maxhp": 1.0, "bar_off": head_off, "target": null, "set": false,

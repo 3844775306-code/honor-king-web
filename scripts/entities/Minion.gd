@@ -1,6 +1,7 @@
 class_name Minion
 extends GameEntity
 
+const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")
 const NetModels = preload("res://scripts/net/NetModels.gd")   # 兵线体型归一化常量（与客户端共用）
 const MinionModelScript = preload("res://scripts/entities/MinionModel.gd")
 
@@ -15,6 +16,7 @@ var _ammo_node: MeshInstance3D = null   # 模型上膛的箭（弓兵/攻城车�
 var _death_anim_started: bool = false
 var _wp_idx_cached: int = -1      # 路点到达半径缓存（塔位路点会被塔基推挤，半径需放宽）
 var _wp_reach: float = 1.0
+var teleport_channel_protected := false   # 被选为传送落点：传送引导期间不攻击/不移动/免伤
 
 func _ready():
 	add_to_group("minions")
@@ -92,20 +94,9 @@ func bar_anchor_height() -> float:
 
 # 行走质感按体型调整：龙兵双翼扇动 + 更大起伏
 func _walk_opts() -> Dictionary:
-	if display_name in ["dragon", "storm", "shadow_dragon"]:
-		return {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
-			"wings": [visual.get_node_or_null("ModelPivot/WingL"), visual.get_node_or_null("ModelPivot/WingR")]}
-	if display_name == "siege":
-		return {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
-	# 甲士：双腿绕髋关节前后摆 + 步频起伏，避免“贴地滑行”
-	var swing := 0.52 if display_name == "super" else 0.62
-	return {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust_size": 0.18,
-		"legs": [visual.get_node_or_null("ModelPivot/LegL"), visual.get_node_or_null("ModelPivot/LegR")],
-		"leg_swing": swing}
+	# 三端共享行走参数（ActorPresenter）：甲士双腿摆动 / 攻城车低起伏 / 龙兵扇翼，host 与联机/回放同源
+	return ActorPresenter.walk_opts("minion", display_name, visual)
 
-
-# 无骨骼模型的普攻：蓄力(后拉+抬身) → 出手(前冲+压身+拧腰) → 收势回位
-# 只动 ModelPivot（WalkFeel 动的是 visual 根节点），两者互不覆盖
 func _model_lunge() -> void:
 	if visual == null or not is_instance_valid(visual):
 		return
@@ -262,8 +253,26 @@ func _fire_ammo() -> void:
 		if is_instance_valid(_ammo_node) and health > 0.0:
 			_ammo_node.visible = true)
 
+## 传送锚点状态：被选中的小兵在引导期间站定、停手并免疫伤害
+func set_teleport_channel_protected(on: bool) -> void:
+	if teleport_channel_protected == on:
+		return
+	teleport_channel_protected = on
+	# 同时关闭碰撞推挤，否则其他单位仍能把它挤离落点
+	can_move = not on
+	if on:
+		current_target = null
+		attack_timer = 0.0
+		velocity = Vector3.ZERO
+		_play_anim("idle")
+
+
 func _physics_process(delta):
 	if health <= 0: return
+	if teleport_channel_protected:
+		current_target = null
+		velocity = Vector3.ZERO
+		return
 	# 攻击冷却
 	if attack_timer > 0:
 		attack_timer -= delta
@@ -435,6 +444,9 @@ func _is_on_lane_or_high_ground(pos: Vector3) -> bool:
 	return false
 
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false,skill_id:int=0,pen: float = 0.0, is_crit_forced: int = -1):
+	# 传送锚点引导期间免疫一切伤害（含真伤/塔伤/AoE）
+	if teleport_channel_protected:
+		return
 	if source:
 		if source is Minion:
 			amount*= 1.25

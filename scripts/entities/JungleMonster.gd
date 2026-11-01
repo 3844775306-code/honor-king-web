@@ -1,5 +1,6 @@
 class_name JungleMonster
 extends GameEntity
+const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")
 const MonsterMesh = preload("res://scripts/entities/MonsterMesh.gd")
 
 var buff_type: String = ""
@@ -19,6 +20,11 @@ var activity_radius: float = 4.0
 var activity_ring_center: Vector3 = Vector3.ZERO   # 活动范围圈的世界圆心（营地/巢穴，固定不动）
 var activity_ring_radius: float = 0.0              # 圈显示半径（0 = 用 activity_radius）
 var last_player_hit_time: float = -9999.0          # 玩家英雄最近一次打这只怪的游戏时间
+# 脱战回归：出活动圈 / 无目标 连续 3 秒 → 回营地中心，每秒回 20% 生命，期间不索敌
+const LEASH_GRACE: float = 3.0
+const LEASH_REGEN_PCT: float = 0.20
+var _leash_out_timer: float = 0.0      # 连续在圈外时间
+var _no_target_timer: float = 0.0      # 连续无目标时间
 var _ring_center_set := false
 var _ring_is_red := false
 var search_radius: float = 8.0
@@ -51,6 +57,9 @@ func _ready():
 	collision_mask = 1
 	can_move = false
 	spawn_pos = global_position
+	# 营地圆心 = 出生点（活动圈/回营都以它为基准，不再等"玩家打它时才定格"）
+	activity_ring_center = global_position
+	_ring_center_set = true
 	
 
 func get_hit_flash_root() -> Node3D:
@@ -58,6 +67,11 @@ func get_hit_flash_root() -> Node3D:
 
 func setup(config: Dictionary):
 	super.setup(config)
+	returning = false
+	provoked = false
+	current_target = null
+	_leash_out_timer = 0.0
+	_no_target_timer = 0.0
 	base_health= max_health
 	base_attack = attack
 	# 未配置魔抗时野怪默认150（史诗龙由配置指定，不再强制覆写）
@@ -93,7 +107,7 @@ func _create_visual():
 	_attack_anim_t = -1.0
 	_death_t = -1.0
 	# 行走质感：野怪步频起伏（体型越大振幅略大）
-	WalkFeel.attach(self, _visual_root, {"stride": 1.6, "bob": 0.045, "sway": 0.03, "lean": 0.045, "dust_size": 0.26})
+	WalkFeel.attach(self, _visual_root, ActorPresenter.walk_opts("jungle", str(display_name), _visual_root))
 	anim_player = _find_anim_player(_visual_root)
 	if anim_player:
 		_play_anim("idle")
@@ -258,6 +272,9 @@ func _update_activity_ring() -> void:
 
 func _physics_process(delta):
 	if is_dead or health <= 0: return
+	# 空间之灵：主动攻击正在传送的敌方英雄（召唤师传送/大禹传送）
+	if display_name == "spatial_spirit":
+		_try_aggro_teleporting_hero()
 	# 硬控期间禁止一切行动
 	if froze_timer>0 or knockup_timer>0 or stun_timer>0 or suppress_timer>0:return
 	if attack_timer > 0:
@@ -289,7 +306,27 @@ func _physics_process(delta):
 			_finish_cast()
 		return
 
-	# 搜索敌人（仅当被激怒且未返回）；目标丢失时才重新搜，不覆盖已锁定的攻击者
+	# —— 脱战计时：连续 3 秒出活动圈 或 连续 3 秒无目标 → 回营地中心回血 ——
+	var camp := _camp_center()
+	var has_target: bool = current_target != null and is_instance_valid(current_target) and current_target.health > 0
+	if global_position.distance_to(camp) > _camp_radius():
+		_leash_out_timer += delta
+	else:
+		_leash_out_timer = 0.0
+	if has_target:
+		_no_target_timer = 0.0
+	else:
+		_no_target_timer += delta
+	if not returning:
+		var go_home: bool = _leash_out_timer >= LEASH_GRACE
+		if not go_home and _no_target_timer >= LEASH_GRACE and global_position.distance_to(camp) > 1.0:
+			go_home = true
+		if go_home:
+			returning = true
+			provoked = false
+			current_target = null
+
+	# 搜索敌人（仅当被激怒且未回营；回营途中不再主动找目标）
 	if provoked and not returning:
 		auto_search_timer -= delta
 		if auto_search_timer <= 0:
@@ -297,19 +334,32 @@ func _physics_process(delta):
 			if current_target == null or not is_instance_valid(current_target) or current_target.health <= 0:
 				_find_target()
 
+	# 回营途中：走向营地中心 + 每秒 20% 最大生命回血，不攻击不索敌
+	if returning:
+		_apply_healing(max_health * LEASH_REGEN_PCT * delta)
+		var back: Vector3 = camp - global_position
+		if back.length() < 0.6:
+			returning = false
+			provoked = false
+			current_target = null
+			_leash_out_timer = 0.0
+			_no_target_timer = 0.0
+			global_position = camp
+			_play_anim("idle")
+		else:
+			var bdir := _avoid_walls(back.normalized(), delta, camp)
+			global_position += bdir.normalized() * maxf(_chase_speed_m(), 1.0) * delta
+			rotation.y = atan2(bdir.x, bdir.z)
+			_play_anim("walk")
+		return
+
 	# 处理当前目标
-	if current_target and is_instance_valid(current_target) and current_target.health > 0:
+	if has_target:
 		var dist_to_target = global_position.distance_to(current_target.global_position)
-		var dist_to_spawn = global_position.distance_to(spawn_pos)
 		if dist_to_target <= attack_range*0.01:
-			# 够得到就先打（在追击上限边缘也照样反击）
+			# 够得到就先打
 			if attack_timer <= 0:
 				_perform_attack()
-		elif dist_to_spawn > _leash_radius():
-			# 追出营地过远，脱战回营
-			current_target = null
-			returning = true
-			provoked = false
 		else:
 			# 向目标移动
 			var dir = (current_target.global_position - global_position).normalized()
@@ -320,22 +370,6 @@ func _physics_process(delta):
 	else:
 		current_target = null
 		_play_anim("idle")
-		# 回血：每秒10%最大生命
-		_apply_healing(max_health * 0.1 * delta)
-	# 返回出生点
-	if returning:
-		var dir = (spawn_pos - global_position)
-		if dir.length() < 0.5:
-			returning = false
-			provoked = false
-			global_position = spawn_pos
-			_play_anim("idle")
-		else:
-			# 移动回出生点
-			dir = _avoid_walls(dir.normalized(), delta, spawn_pos)
-			global_position += dir.normalized() * 2.0 * delta
-			rotation.y = atan2(dir.x, dir.z)
-			_play_anim("walk")
 
 
 # ==================== 史诗龙技能系统 ====================
@@ -549,9 +583,49 @@ func _leash_radius() -> float:
 	return maxf(activity_radius + 5.0, search_radius)
 
 
+# 营地中心（活动圈圆心）/ 活动圈半径：回营用
+func _camp_center() -> Vector3:
+	return activity_ring_center if _ring_center_set else spawn_pos
+
+
+func _camp_radius() -> float:
+	# 活动圈半径：优先用正在显示的那个圈，否则用营地配置半径
+	if activity_ring_radius > 0.0:
+		return activity_ring_radius
+	return maxf(activity_radius, 1.0)
+
+
 # 追击移速（m/s）：营地配置没给 move_speed（=0），旧逻辑写死 1.0 m/s，追人太慢形同不还手
 func _chase_speed_m() -> float:
 	return maxf(move_speed, 300.0) * 0.01
+
+
+# 空间之灵：传送中的英雄会被它主动锁定，不再等被攻击后才反击。
+# 只在自身脱战追击范围内生效；传送结束后目标仍会按普通仇恨继续追击/攻击。
+func _try_aggro_teleporting_hero() -> void:
+	if is_dead or health <= 0:
+		return
+	var best: Hero = null
+	var best_dist: float = _leash_radius()
+	for h in get_tree().get_nodes_in_group("heroes"):
+		if not (h is Hero) or h.team == team or h.health <= 0:
+			continue
+		if h.collision_layer == 0 or h.is_invisible_to_enemy() or h.is_untargetable_by_enemies():
+			continue
+		if not (h.is_teleporting or h.dayu_teleport_channeling):
+			continue
+		var dist: float = global_position.distance_to(h.global_position)
+		if dist <= best_dist:
+			best_dist = dist
+			best = h
+	if best == null:
+		return
+	provoked = true
+	returning = false
+	current_target = best
+	auto_search_timer = 0.0
+	_leash_out_timer = 0.0
+	_no_target_timer = 0.0
 
 
 func _find_target():

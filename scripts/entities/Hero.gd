@@ -1,5 +1,6 @@
 class_name Hero
 extends GameEntity
+const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
 # 泉水回复节拍（秒/跳）；每跳回 10% 最大生命与法力，等于原来的 20%/秒
@@ -1258,7 +1259,7 @@ func _create_visual():
 	# 角色可读性：rim 边缘光 + 脚下接地软阴影（仅 material_overlay / 独立子节点，不改原材质）
 	UnitVisuals.attach_hero(self, team, visual_mesh)
 	# 行走质感：步频起伏 + 左右摆 + 前倾 + 步点扬尘（只动模型，不改位移/碰撞）
-	WalkFeel.attach(self, visual_mesh, {"stride": 1.9, "bob": 0.055, "sway": 0.028, "lean": 0.075, "dust_size": 0.24})
+	WalkFeel.attach(self, visual_mesh, ActorPresenter.walk_opts("hero", display_name, visual_mesh))
 
 	var col = CollisionShape3D.new()
 	col.shape = SphereShape3D.new()

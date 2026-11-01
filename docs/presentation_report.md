@@ -1,0 +1,28 @@
+# 三端表现对齐报告
+
+- 生成时间：2026-11-01 12:17
+- 生成方式：`python scripts/dev/ui_parity_audit.py`
+- 数据源：`scripts/dev/presentation_features.json`（正则探测，命中即视为该端具备）
+
+## 未接受缺口：3 项
+
+1. 单机缺：子弹表现单一来源(ProjectilePresenter)（projectile_shared）
+2. 联机缺：子弹表现单一来源(ProjectilePresenter)（projectile_shared）
+3. 回放缺：子弹表现单一来源(ProjectilePresenter)（projectile_shared）
+
+## 全量清单
+
+| 功能 | 目标端 | 单机 | 联机 | 回放 |
+|---|---|---|---|---|
+| 行走参数单一来源(ActorPresenter) | 单机/联机 | ✅ | ✅ | — |
+| 动画 clip 映射单一来源(AnimMap) | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 模型缩放/材质来源 | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 子弹表现单一来源(ProjectilePresenter) | 单机/联机/回放 | ❌ 缺 | ❌ 缺 | ❌ 缺 |
+| 子弹命中特效事件 | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 技能特效统一走 Vfx | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 签名技能特效表(SpellFxTable) | 单机/联机 | ✅ | ✅ | — |
+| 受击反馈(闪白/硬直) | 单机/联机 | ✅ | ✅ | — |
+| 死亡表现 | 单机/联机/回放 | ✅ | ✅ | ✅ |
+| 施法动作事件(cast) | 单机/联机/回放 | ✅ | ✅ | ✅ |
+
+> 接受 = 设计性差异（如观战端无商店/触控），不计为缺口。

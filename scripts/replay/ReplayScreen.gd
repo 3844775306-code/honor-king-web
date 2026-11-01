@@ -8,6 +8,7 @@ const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
+const AnimMap = preload("res://scripts/presentation/AnimMap.gd")   # 三端共享动画 clip 映射
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -1642,15 +1643,8 @@ func _setup_idle_walk(ap: AnimationPlayer) -> void:
 
 
 func _clip_hint(ap: AnimationPlayer, hints: Array) -> String:
-	if ap == null:
-		return ""
-	for clip in ap.get_animation_list():
-		var low := str(clip).to_lower()
-		for h in hints:
-			if low.find(str(h)) >= 0:
-				return str(clip)
-	return ""
-
+	# 三端统一：回放同样走 AnimMap.hint（与 host / 联机同一份 clip 映射）
+	return AnimMap.hint(ap, hints)
 
 func _set_bar(fill: MeshInstance3D, ratio: float) -> void:
 	var w: float = float(fill.get_meta("w", 1.5))
