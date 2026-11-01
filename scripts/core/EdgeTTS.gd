@@ -24,6 +24,7 @@ var _buf := PackedByteArray()
 var _elapsed := 0.0
 var _sent := false
 var _retried_unsafe := false
+var _ignored_pkts := 0
 const DIAG_PATH := "user://voice_diag.log"
 const DIAG_FALLBACK := "res://voice_diag.log"
 
@@ -81,6 +82,7 @@ func synth(req_id: int, text: String, voice: String, pitch_pct: int = 0, rate_pc
 	_elapsed = 0.0
 	_sent = false
 	_retried_unsafe = false
+	_ignored_pkts = 0
 	if not _connect(false):
 		_fail()
 		return
@@ -143,13 +145,20 @@ func _process(delta: float) -> void:
 					# 协议：前 2 字节是「大端」头长度（不是小端！用 decode_u16 会错位，把头部当音频放出杂音）
 					var hlen: int = (int(pkt[0]) << 8) | int(pkt[1])
 					if hlen > 0 and hlen < 4096 and pkt.size() > 2 + hlen:
-						if _buf.size() == 0:
-							var hdr := pkt.slice(2, 2 + mini(hlen, 80)).get_string_from_utf8()
-							var head_hex := ""
-							for bi in range(mini(2 + hlen + 8, pkt.size())):
-								head_hex += "%02X" % int(pkt[bi])
-							diag("first_audio hlen=%d hdr=%s head=%s" % [hlen, hdr.replace("\r\n", "|"), head_hex])
-						_buf.append_array(pkt.slice(2 + hlen))
+						var hdr := pkt.slice(2, 2 + mini(hlen, 120)).get_string_from_utf8()
+						# Edge 会混发 audio.metadata（JSON）包：不能拼进 MP3，否则音频全成噪音
+						var is_audio := hdr.find("Path:audio") >= 0 and hdr.find("metadata") < 0
+						if not is_audio:
+							_ignored_pkts += 1
+							if _buf.size() == 0 and _ignored_pkts <= 2:
+								diag("skip pkt hdr=" + hdr.replace("\r\n", "|"))
+						else:
+							if _buf.size() == 0:
+								var head_hex := ""
+								for bi in range(mini(2 + hlen + 8, pkt.size())):
+									head_hex += "%02X" % int(pkt[bi])
+								diag("first_audio hlen=%d hdr=%s head=%s" % [hlen, hdr.replace("\r\n", "|"), head_hex])
+							_buf.append_array(pkt.slice(2 + hlen))
 		WebSocketPeer.STATE_CLOSED:
 			_fail()
 
@@ -165,7 +174,7 @@ func _finish() -> void:
 		ok = true
 	elif _buf.size() >= 2 and _buf[0] == 0xFF and (_buf[1] & 0xE0) == 0xE0:
 		ok = true
-	diag("finish bytes=%d mp3_valid=%s" % [_buf.size(), str(ok)])
+	diag("finish bytes=%d mp3_valid=%s ignored_pkts=%d" % [_buf.size(), str(ok), _ignored_pkts])
 	if not ok:
 		var hex := ""
 		for bi in range(mini(16, _buf.size())):
@@ -219,7 +228,7 @@ func _edge_date() -> String:
 func _config_msg() -> String:
 	var ts := _edge_date()
 	return ("X-Timestamp:%s\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
-		+ "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"true\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n") % ts
+		+ "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n") % ts
 
 
 func _ssml_msg() -> String:
