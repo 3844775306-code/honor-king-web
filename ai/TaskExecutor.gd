@@ -34,52 +34,7 @@ func execute(task: TeamTask, now: float) -> Dictionary:
 			return _push_tower_task(task)
 		TeamTask.Type.INVADE_JUNGLE:
 			return _invade_task(task)
-		TeamTask.Type.JUNGLE_FARM:
-			return _jungle_farm(task.target_pos)
-		TeamTask.Type.CLEAR_WAVE:
-			return _clear_wave(task.target_pos)
-		TeamTask.Type.AMBUSH:
-			return _ambush_task(task)
-		TeamTask.Type.RECALL:
-			return {"move_target": task.target_pos, "manual_target": null, "state": "retreat"}
 	return {}
-
-
-func local_lane(lane: int) -> Dictionary:
-	return _lane_behavior(lane, Vector3.ZERO)
-
-
-func local_clear_wave() -> Dictionary:
-	return _clear_wave(Vector3.ZERO)
-
-
-func _clear_wave(center: Vector3) -> Dictionary:
-	var best: Minion = null
-	var best_d := 20.0 if center == Vector3.ZERO else 24.0
-	for e in hero.get_tree().get_nodes_in_group("minions"):
-		if not (e is Minion) or int((e as Minion).team) == int(hero.team) or (e as Minion).health <= 0:
-			continue
-		if not TowerCombat.can_attack_under_tower(hero, e):
-			continue
-		var from := hero.global_position if center == Vector3.ZERO else center
-		var d := from.distance_to((e as Node3D).global_position)
-		if d < best_d:
-			best_d = d
-			best = e as Minion
-	if best != null:
-		return {"move_target": (best as Node3D).global_position, "manual_target": best, "state": "push"}
-	return {}
-
-
-func _ambush_task(task: TeamTask) -> Dictionary:
-	var enemy := perception.find_nearest_enemy_hero(6.0)
-	if enemy != null:
-		return {"move_target": Vector3.ZERO, "manual_target": enemy, "state": "push"}
-	return {"move_target": task.target_pos, "manual_target": null, "state": "push"}
-
-
-func local_jungle(target_pos: Vector3) -> Dictionary:
-	return _jungle_farm(target_pos)
 
 
 func _push_tower_task(task: TeamTask) -> Dictionary:
@@ -112,114 +67,28 @@ func _invade_task(task: TeamTask) -> Dictionary:
 
 
 func _push_task(task: TeamTask) -> Dictionary:
-	return _lane_behavior(task.lane, task.target_pos)
-
-
-# 统一本地推线：先补兵，有兵线掩护且塔可摸时再推塔；不再依赖 LaneStrategy。
-func _lane_behavior(lane: int, preferred_tower: Vector3) -> Dictionary:
-	var best_minion: Minion = null
-	var best_hp := INF
-	for e in hero.get_tree().get_nodes_in_group("minions"):
-		if not (e is Minion) or int((e as Minion).team) == int(hero.team) or (e as Minion).health <= 0:
-			continue
-		if hero.global_position.distance_to((e as Node3D).global_position) > 12.0:
-			continue
-		if not TowerCombat.can_attack_under_tower(hero, e):
-			continue
-		if (e as Minion).health < best_hp:
-			best_hp = (e as Minion).health
-			best_minion = e as Minion
-	if best_minion != null:
-		return {"move_target": Vector3.ZERO, "manual_target": best_minion, "state": "push"}
-	# 没兵可补时，才考虑附近敌方英雄；塔下目标交给 TowerCombat 评估手长/越塔次数。
-	var enemy_hero := perception.find_nearest_enemy_hero(9.0)
-	if enemy_hero != null and hero.health > hero.actual_max_health * 0.38 \
-			and TowerCombat.can_attack_under_tower(hero, enemy_hero):
-		return {"move_target": Vector3.ZERO, "manual_target": enemy_hero, "state": "push"}
+	if task.lane == AiConfig.Lane.JUNGLE:
+		return {"lane": task.lane, "state": "push"}
+	# 推线任务：只有在“有己方兵线 + 敌方英雄不在附近 + 塔在攻击距离内”时才主动摸塔；
+	# 否则交给 LaneStrategy 清兵/靠近，避免团队任务把 AI 直接送进塔。
 	var tower: Turret = null
-	if preferred_tower != Vector3.ZERO:
-		var best_d := 8.0
-		for e in hero.get_tree().get_nodes_in_group("turrets"):
-			if e is Turret and int((e as Turret).team) != int(hero.team) and (e as Turret).health > 0:
-				var d := preferred_tower.distance_to((e as Node3D).global_position)
-				if d < best_d:
-					best_d = d
-					tower = e as Turret
-	else:
-		tower = _nearest_enemy_tower_in_lane(lane)
-	if tower != null and _friendly_wave_hp_near(tower) > 1000.0 and perception.find_nearest_enemy_hero(8.0) == null:
+	var best_d := 9999.0
+	for t in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (t is Turret) or int((t as Turret).team) == int(hero.team) or (t as Turret).health <= 0:
+			continue
+		var d := task.target_pos.distance_to((t as Turret).global_position) if task.target_pos != Vector3.ZERO else 0.0
+		if task.target_pos == Vector3.ZERO:
+			d = hero.global_position.distance_to((t as Turret).global_position)
+		if d < best_d:
+			best_d = d
+			tower = t as Turret
+	var enemy_near := perception.find_nearest_enemy_hero(8.0)
+	if tower != null and enemy_near == null and _has_minion_cover(tower):
 		var reach := hero.attack_range * AiConfig.ATTACK_RANGE_FACTOR + 3.0
 		if hero.global_position.distance_to(tower.global_position) <= reach:
 			return {"move_target": Vector3.ZERO, "manual_target": tower, "state": "push"}
-		return {"move_target": tower.global_position, "manual_target": null, "state": "push"}
-	var goal := preferred_tower if preferred_tower != Vector3.ZERO else _friendly_forward_minion(lane)
-	if goal == Vector3.ZERO:
-		goal = _lane_default_pos(lane)
-	return {"move_target": goal, "manual_target": null, "state": "push"}
-
-
-func _friendly_forward_minion(lane: int) -> Vector3:
-	var own_crystal := Vector3(-53, 0, 53) if int(hero.team) == Config.Team.PLAYER else Vector3(53, 0, -53)
-	var best := Vector3.ZERO
-	var best_d := -INF
-	for e in hero.get_tree().get_nodes_in_group("minions"):
-		if not (e is Minion) or int((e as Minion).team) != int(hero.team) or (e as Minion).health <= 0:
-			continue
-		var d: float = own_crystal.distance_to((e as Node3D).global_position)
-		if d > best_d:
-			best_d = d
-			best = (e as Node3D).global_position
-	return best
-
-
-func _nearest_enemy_tower_in_lane(lane: int) -> Turret:
-	var best: Turret = null
-	var best_d := INF
-	for e in hero.get_tree().get_nodes_in_group("turrets"):
-		if not (e is Turret) or int((e as Turret).team) == int(hero.team) or (e as Turret).health <= 0:
-			continue
-		var s := (e as Node3D).global_position.x + (e as Node3D).global_position.z
-		var ln := AiConfig.Lane.FARM if s > 0.0 else (AiConfig.Lane.CLASH if s < 0.0 else AiConfig.Lane.MID)
-		if ln != lane:
-			continue
-		var d := hero.global_position.distance_to((e as Node3D).global_position)
-		if d < best_d:
-			best_d = d
-			best = e as Turret
-	return best
-
-
-func _friendly_wave_hp_near(tower: Turret) -> float:
-	var hp := 0.0
-	for m in hero.get_tree().get_nodes_in_group("minions"):
-		if m is Minion and int((m as Minion).team) == int(hero.team) and (m as Minion).health > 0:
-			if tower.global_position.distance_to((m as Node3D).global_position) <= AiConfig.TOWER_ATTACK_RANGE:
-				hp += (m as Minion).health
-	return hp
-
-
-func _lane_default_pos(lane: int) -> Vector3:
-	match lane:
-		AiConfig.Lane.FARM: return Vector3(30, 0, 30)
-		AiConfig.Lane.MID: return Vector3(0, 0, 0)
-		AiConfig.Lane.CLASH: return Vector3(-30, 0, -30)
-	return Vector3.ZERO
-
-
-func _jungle_farm(target_pos: Vector3) -> Dictionary:
-	var best = null
-	var best_d := 30.0
-	for e in hero.get_tree().get_nodes_in_group("jungle_monsters"):
-		if e is JungleMonster and (e as JungleMonster).health > 0:
-			var d := hero.global_position.distance_to((e as Node3D).global_position)
-			if d < best_d and (target_pos == Vector3.ZERO or target_pos.distance_to((e as Node3D).global_position) <= 35.0):
-				best_d = d
-				best = e
-	if best != null:
-		if hero.global_position.distance_to((best as Node3D).global_position) <= hero.attack_range * AiConfig.ATTACK_RANGE_FACTOR + 1.0:
-			return {"move_target": Vector3.ZERO, "manual_target": best, "state": "push"}
-		return {"move_target": (best as Node3D).global_position, "manual_target": null, "state": "push"}
-	return {"move_target": target_pos if target_pos != Vector3.ZERO else Vector3(0, 0, 0), "manual_target": null, "state": "push"}
+	# 没形成安全推塔窗口：继续交给 LaneStrategy 处理兵线
+	return {"lane": task.lane, "state": "push"}
 
 
 func _defend_task(task: TeamTask) -> Dictionary:

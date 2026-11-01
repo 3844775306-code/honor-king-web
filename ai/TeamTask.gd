@@ -13,10 +13,6 @@ enum Type {
 	RETREAT,
 	PUSH_TOWER,
 	INVADE_JUNGLE,
-	JUNGLE_FARM,
-	CLEAR_WAVE,
-	AMBUSH,
-	RECALL,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, EXPIRED, REASSIGNED }
@@ -79,12 +75,8 @@ func label() -> String:
 		Type.DEFEND_LANE: return "守塔"
 		Type.OBJECTIVE: return "争夺资源"
 		Type.GANK: return "抓人"
-		Type.PEEL: return "支援"
+		Type.PEEL: return "保排"
 		Type.RETREAT: return "撤退"
 		Type.PUSH_TOWER: return "抱团推塔"
 		Type.INVADE_JUNGLE: return "反野"
-		Type.JUNGLE_FARM: return "刷野"
-		Type.CLEAR_WAVE: return "清线"
-		Type.AMBUSH: return "蹲人"
-		Type.RECALL: return "回城"
 	return "待命"

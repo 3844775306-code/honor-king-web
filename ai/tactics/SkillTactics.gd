@@ -37,8 +37,6 @@ func update(delta: float) -> void:
 # 尝试最佳连招 → 单技能评分 依次回退
 # combos: Array[Dictionary] = [{name, skills:[idx,...], priority:0.8}]
 func try_best_combo(target: GameEntity, combos: Array) -> bool:
-	if target == null or not is_instance_valid(target) or target.health <= 0.0:
-		return false
 	if _turret_blocked(target):
 		return false
 	if skill_feed_timer > 0:
@@ -139,8 +137,6 @@ func _clear_combo() -> void:
 
 # 选择最佳技能对目标使用（替代随机选择）
 func use_best_skill(target: GameEntity, delta: float = 0.0) -> bool:
-	if target == null or not is_instance_valid(target) or target.health <= 0.0:
-		return false
 	if _turret_blocked(target):
 		return false
 
@@ -164,36 +160,6 @@ func use_best_skill(target: GameEntity, delta: float = 0.0) -> bool:
 
 
 # 强制使用某个技能（英雄特判用）
-## 追击/逃跑专用：只放有伤害的远程技能，不放控制、治疗、位移类技能。
-func use_ranged_damage_skill(target: GameEntity) -> bool:
-	if target == null or not is_instance_valid(target) or target.health <= 0.0:
-		return false
-	if _turret_blocked(target):
-		return false
-	if skill_feed_timer > 0:
-		return false
-	var candidates := []
-	for i in range(hero.skills.size()):
-		if hero.skills[i] == null or hero.skill_levels[i] <= 0 or hero.skill_cooldowns[i] > 0:
-			continue
-		var sk: Skill = hero.skills[i]
-		if sk.damage <= 0.0 or sk.cast_range <= 0.0 or sk.type == 4:
-			continue
-		if hero.mana < sk.mana_cost:
-			continue
-		if hero.global_position.distance_to(target.global_position) > sk.cast_range + 1.0:
-			continue
-		if not _can_use_skill_on(i, target):
-			continue
-		candidates.append({"index": i, "skill": sk, "score": _score_skill(sk, i)})
-	if candidates.is_empty():
-		return false
-	candidates.sort_custom(func(a, b): return a.score > b.score)
-	skill_feed_timer = AiConfig.SKILL_FEED_COOLDOWN
-	hero._start_casting(candidates[0].index, candidates[0].skill, _aim_pos(target))
-	return true
-
-
 func force_cast(skill_index: int, target_pos: Vector3) -> bool:
 	if skill_index >= hero.skills.size():
 		return false
@@ -221,11 +187,6 @@ func _get_candidates(target: GameEntity = null) -> Array:
 		if not _can_use_skill_on(i, target):
 			continue
 		var sk: Skill = hero.skills[i]
-		# 不对射程外目标空放技能；self-cast 技能没有目标时不会走到这里。
-		if target != null and sk.cast_range > 0.0:
-			var reach := sk.cast_range + 1.0
-			if hero.global_position.distance_to(target.global_position) > reach:
-				continue
 		var score := _score_skill(sk, i)
 		result.append({"index": i, "skill": sk, "score": score})
 	return result

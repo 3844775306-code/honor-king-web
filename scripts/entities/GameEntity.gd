@@ -1247,13 +1247,6 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		desired = global_position + move_dir.normalized() * 30.0
 
 	desired.y = 0
-	# 短距离且直线可走：直接移动，不做 A*；长距离或被墙阻挡才走缓存路径。
-	if self is Hero and (self as Hero).is_ai and destination != Vector3.ZERO \
-			and global_position.distance_to(destination) <= 12.0 and _ai_line_clear(global_position, destination):
-		_nav_path = PackedVector3Array()
-		_nav_index = 0
-		_nav_target = destination
-		return move_dir
 	# 目标偏移超过阈值时重新计算路径
 	var target_moved = desired.distance_squared_to(_nav_target) > 4.0
 	if target_moved or _nav_path.is_empty():
@@ -1312,22 +1305,7 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		to_waypoint = waypoint - global_position
 		to_waypoint.y = 0
 	return to_waypoint.normalized()
-func _ai_line_clear(from: Vector3, to: Vector3) -> bool:
-	if not PathFinder.initialized or PathFinder.astar == null:
-		return false
-	var total := from.distance_to(to)
-	if total <= 0.1:
-		return true
-	var steps := maxi(1, int(ceil(total)))
-	for k in range(1, steps + 1):
-		var p := from.lerp(to, float(k) / float(steps))
-		var cell := PathFinder._world_to_cell(p)
-		if not PathFinder._is_in_bounds(cell) or PathFinder.astar.is_point_solid(cell):
-			return false
-	return true
-
-
-# A*路径调试可视化：用折线显示当前导航路径（默认开启，F4开关）
+	# A*路径调试可视化：用折线显示当前导航路径（默认开启，F4开关）
 func _update_debug_path_visual():
 	# 清除旧可视化节点
 	for s in _debug_path_nodes:

@@ -200,5 +200,17 @@ func _has_cc(target: Hero) -> bool:
 
 
 func _is_under_enemy_tower(target: Hero) -> bool:
-	# 手长可在塔外消耗；越塔则估算塔伤次数，>2 次放弃。
-	return not TowerCombat.can_attack_under_tower(hero, target)
+	for t in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (t is Turret) or t.health <= 0 or int(t.team) == int(hero.team):
+			continue
+		if target.global_position.distance_to((t as Turret).global_position) > AiConfig.TOWER_ATTACK_RANGE:
+			continue
+		# 有己方兵线掩护才允许在塔边换血
+		var cover := 0.0
+		for m in hero.get_tree().get_nodes_in_group("minions"):
+			if m is Minion and m.health > 0 and int(m.team) == int(hero.team) \
+					and (t as Turret).global_position.distance_to((m as Minion).global_position) <= AiConfig.TOWER_ATTACK_RANGE:
+				cover += (m as Minion).health
+		if cover < 500.0:
+			return true
+	return false

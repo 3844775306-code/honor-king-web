@@ -5821,7 +5821,6 @@ func _process(delta):
 		stats_timer = 1.0
 		_update_team_stats()
 		if team_tactics != null:
-			team_tactics.update_wave_memory(game_time)
 			team_tactics.update_tasks(game_time)
 		_apply_natural_experience()
 		_apply_natural_gold()
@@ -5857,7 +5856,7 @@ func _process(delta):
 		_refresh_mvp()
 	_update_shadow_paths(delta)
 	_update_shadow_path_fades(delta)
-	# 4分钟后团队任务协调；0–4分钟由HeroAI的本地行为（TaskExecutor）执行
+	# 集中式团队分推协调（4分钟后，每60s分配一次）
 	if game_time >= 240 and team_tactics:
 		team_tactics_timer -= delta
 		var urgent := team_tactics.consume_replan_request()
