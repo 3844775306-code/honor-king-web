@@ -1864,6 +1864,8 @@ func _show_select(state: Dictionary) -> void:
 	elif _tab_role == _lane_role:
 		_tab_role = ""
 	_adopt_self_choice(state, data)
+	# 进入选人页：已锁定/已选英雄时直接进入立绘阶段（同单机按 sel_player_picked 初始化）
+	_pick_stage = _sel_hero == ""
 	_stack.add_child(_build_stage_bar(data, state))
 	_stack.add_child(_build_select_main(data))
 	_stack.add_child(_build_select_bottom())
