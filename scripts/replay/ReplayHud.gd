@@ -62,6 +62,9 @@ func hit(pos: Vector2) -> Dictionary:
 	if mr.has_point(pos):
 		var fx: float = clampf((pos.x - mr.position.x) / mr.size.x, 0.0, 1.0)
 		var fz: float = clampf((pos.y - mr.position.y) / mr.size.y, 0.0, 1.0)
+		if int(st.get("me_team", 0)) == 1:
+			fx = 1.0 - fx
+			fz = 1.0 - fz
 		return {"type": "map", "x": (fx - 0.5) * 120.0, "z": (fz - 0.5) * 120.0}
 	var rr := _roster_rect()
 	if rr.has_point(pos):
@@ -214,6 +217,10 @@ func _fmt_gold_r(v: int) -> String:
 func _world_to_mm(w: Vector3, rect: Rect2) -> Vector2:
 	var fx: float = clampf((w.x / 120.0) + 0.5, 0.0, 1.0)
 	var fz: float = clampf((w.z / 120.0) + 0.5, 0.0, 1.0)
+	# 红方回放：小地图整体旋转 180°，与单机 Minimap._flip180 一致
+	if int(st.get("me_team", 0)) == 1:
+		fx = 1.0 - fx
+		fz = 1.0 - fz
 	return rect.position + Vector2(fx * rect.size.x, fz * rect.size.y)
 
 
@@ -260,7 +267,12 @@ func _draw_minimap() -> void:
 	draw_rect(inner, Color(0.03, 0.05, 0.04, 1.0))
 	var tex := _ensure_static_tex(inner)
 	if tex != null:
-		draw_texture_rect(tex, inner, false)
+		if int(st.get("me_team", 0)) == 1:
+			draw_set_transform(inner.position + inner.size * 0.5, PI, Vector2.ONE)
+			draw_texture_rect(tex, Rect2(-inner.size * 0.5, inner.size), false)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		else:
+			draw_texture_rect(tex, inner, false)
 	# 血包：有录像状态时按状态/存在性画，旧录像回退固定点位
 	if bool(st.get("health_data", false)):
 		for hrow in st.get("health_packs", []):

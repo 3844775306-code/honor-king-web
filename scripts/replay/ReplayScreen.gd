@@ -3393,7 +3393,7 @@ func _pan_cam_drag(screen: Vector2) -> void:
 		_cam_target += (g_prev as Vector3) - (g_cur as Vector3)
 	else:
 		# 射线打不到地面（极端俯角/屏幕外）时用相机朝向估算平移
-		var yaw := deg_to_rad(_cam_yaw)
+		var yaw := deg_to_rad(_cam_yaw) + (PI if _me_team == 1 else 0.0)
 		var right := Vector3(cos(yaw), 0.0, -sin(yaw))
 		var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
 		var k := maxf(0.08, _cam_dist * 0.0018)
@@ -3431,21 +3431,24 @@ func _update_camera() -> void:
 	if _cam == null:
 		return
 	var sh := _shake_vec(get_process_delta_time())
+	# 红方回放：整机位绕 Y 轴 180°（同单机 BattleManager：出生在右下、操作方向一致）
+	var flip_yaw := PI if _me_team == 1 else 0.0
+	var follow_off := Vector3(0.0, 12.0, 8.0).rotated(Vector3.UP, flip_yaw)
 	# 小地图拖动：相机只平移，高度/俯角保持单机跟随镜头的固定偏移（不会自动变高）
 	if _mm_drag:
-		_cam.global_position = _mm_target + Vector3(0.0, 12.0, 8.0) + sh
-		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.global_position = _mm_target + follow_off + sh
+		_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
 		_cam.fov = 70.0
 		return
 	# 主视角：完全照搬单机对局镜头（固定偏移 (0,12,8)、俯角 -60°、fov70、指数平滑 + 远距吸附）
 	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
-		var tgt: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 12.0, 8.0) + Vector3.UP * 4.2
+		var tgt: Vector3 = _hero_pos[_follow_hero] + follow_off + Vector3.UP * 4.2
 		var dlt: float = get_process_delta_time()
 		if _cam.global_position.distance_to(tgt) > 25.0:
 			_cam.global_position = tgt
 		else:
 			_cam.global_position = _cam.global_position.lerp(tgt, 1.0 - exp(-12.0 * dlt)) + sh
-		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
 		_cam.fov = 70.0
 		return
 	# 手动跟随优先；否则击杀镜头短暂跟拍；都没有时保持自由视角
@@ -3458,7 +3461,7 @@ func _update_camera() -> void:
 			_cam_target = _cam_target.lerp(_hero_pos[_kill_cam_idx], clampf(get_process_delta_time() * 6.0, 0.0, 1.0))
 		_cam_dist = lerpf(_cam_dist, 34.0, 0.05)
 	var pitch := deg_to_rad(_cam_pitch)
-	var yaw := deg_to_rad(_cam_yaw)
+	var yaw := deg_to_rad(_cam_yaw) + flip_yaw
 	var offset := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * _cam_dist
 	_cam.position = _cam_target + offset + sh
 	_cam.look_at(_cam_target, Vector3.UP)
