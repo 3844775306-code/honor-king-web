@@ -91,6 +91,22 @@ func _refresh() -> void:
 		_body.add_child(_row(e))
 
 
+## 录像所属玩家阵营：优先索引记录的 player_team；旧索引缺失时回退读录像 meta / 英雄列表
+static func _team_of_entry(e: Dictionary) -> int:
+	var mt: int = int(e.get("player_team", -1))
+	if mt == 0 or mt == 1:
+		return mt
+	var doc: Dictionary = Repo.load_replay(str(e.get("file", "")))
+	var meta: Dictionary = doc.get("meta", {})
+	mt = int(meta.get("player_team", -1))
+	if mt == 0 or mt == 1:
+		return mt
+	var mi: int = int(meta.get("me", -1))
+	var hs: Array = doc.get("heroes", [])
+	if mi >= 0 and mi < hs.size():
+		return int((hs[mi] as Dictionary).get("team", int(Config.player_team)))
+	return int(Config.player_team)
+
 func _row(e: Dictionary) -> Control:
 	var row := Panel.new()
 	row.custom_minimum_size = Vector2(0, 62)
@@ -104,7 +120,9 @@ func _row(e: Dictionary) -> Control:
 	row.add_child(hb)
 
 	var win: int = int(e.get("winner", -1))
-	var res_txt: String = "胜利" if win == int(Config.player_team) else ("失败" if win >= 0 else "录像")
+	# 胜负必须按「这盘录像自己的玩家阵营」判断，不能用当前大厅的 Config.player_team
+	var my_team: int = _team_of_entry(e)
+	var res_txt: String = "胜利" if win == my_team else ("失败" if win >= 0 else "录像")
 	if int(e.get("partial", 0)) == 1:
 		res_txt = "中途退出"
 	var hero := Label.new()
@@ -183,3 +201,4 @@ func _btn(text: String, accent: Color) -> Button:
 	b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", accent, false))
 	b.focus_mode = Control.FOCUS_NONE
 	return b
+

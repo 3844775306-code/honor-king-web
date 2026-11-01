@@ -193,11 +193,21 @@ func _ready() -> void:
 	var _combined: Array = (_doc.get("events", []) as Array).duplicate()
 	_combined.append_array(_popups_data)
 	_combined.append_array(_doc.get("audio", []))
+	# 聊天事件此前只存进 _chat_events 供 seek 回填，没有并入主事件流，播放时永远不会触发
+	_combined.append_array(_chat_events)
 	_combined.sort_custom(func(a, b) -> bool: return int(a.get("t", 0)) < int(b.get("t", 0)))
 	_events = _combined
 	_map = _doc.get("map", {})
 	var meta: Dictionary = _doc.get("meta", {})
-	_me_team = int(meta.get("player_team", int(Config.player_team)))
+	# 录像玩家阵营：优先 meta.player_team；旧录像缺失时用 meta.me 对应英雄的 team 回推，
+	# 最后才退全局 Config.player_team（否则红方玩家的胜负会被当成蓝方判反）
+	var _mt_raw: int = int(meta.get("player_team", -1))
+	var _me_idx0: int = int(meta.get("me", -1))
+	if (_mt_raw != 0 and _mt_raw != 1) and _me_idx0 >= 0 and _me_idx0 < _heroes.size():
+		_mt_raw = int((_heroes[_me_idx0] as Dictionary).get("team", int(Config.player_team)))
+	if _mt_raw != 0 and _mt_raw != 1:
+		_mt_raw = int(Config.player_team)
+	_me_team = _mt_raw
 	Config.player_team = _me_team   # 回放视角=录像玩家阵营：警报/播报前缀按同一口径
 	# 回放默认锁定录像玩家英雄视角；读取英雄列表后即可用 meta.me（旧录像无 me 则保持自由镜头）
 	var _me_idx := int(meta.get("me", -1))
@@ -2874,6 +2884,9 @@ func _rebuild_feed(t: float) -> void:
 	_ev_ptr = start + 1
 	for i in range(maxi(0, start - 4), start + 1):
 		if i >= 0 and i < _events.size():
+			# chat 已由上面的最近 4 条单独回填，避免 seek 后重复插入
+			if str(_events[i].get("k", "")) == "chat":
+				continue
 			_push_event(_events[i])
 
 
