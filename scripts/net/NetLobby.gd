@@ -1518,7 +1518,8 @@ func _random_lane_hero() -> String:
 	return str(pool[randi() % pool.size()])
 
 
-# host：按「全局唯一 + 本队一职一人」挑展示用英雄（我方 AI 不占房主分路，同单机语义）
+# host：按「全局唯一 + 本队一职一人」挑展示用英雄。
+# 本队所有真人在房间确认的分路 = 预留职责，AI 补位绝不抢这些职责（蓝/红各自判断）。
 func _draft_pick_hero(team: int) -> String:
 	var used := {}
 	var roles := {}
@@ -1532,17 +1533,24 @@ func _draft_pick_hero(team: int) -> String:
 		used[str(picks[pid].get("hero", ""))] = true
 		if int(picks[pid].get("team", 0)) == int(team):
 			roles[str(picks[pid].get("role", ""))] = true   # 双方职责各自独立
+	# 还没轮到的真人也要保留其房间分路对应的职责，AI 不能提前占掉
+	for pid in NetSession.lobby_ready:
+		if NetSession._peer_camp(int(pid)) != int(team):
+			continue
+		var lane := str((NetSession.lobby_ready[pid] as Dictionary).get("lane", ""))
+		if lane != "":
+			roles[str(HeroPickData.lane_role(lane))] = true
 	var pool: Array = []
 	var fallback: Array = []
 	for hn in HeroPickData.HERO_ROLE:
 		var h2 := str(hn)
 		if used.has(h2):
 			continue
-		fallback.append(h2)
 		var role := str(HeroPickData.HERO_ROLE[h2])
-		if roles.has(role) or (team == _local_camp() and role == _lane_role):
+		if roles.has(role):
 			continue
 		pool.append(h2)
+		fallback.append(h2)
 	if pool.is_empty():
 		pool = fallback
 	if pool.is_empty():
@@ -1648,11 +1656,33 @@ func _host_draft_tick(delta: float) -> void:
 		_host_draft_advance()
 
 
+func _draft_used_heroes() -> Dictionary:
+	var used := {}
+	for k in _draft_picks:
+		used[str(_draft_picks[k])] = true
+	var picks: Dictionary = NetSession.get_picks()
+	for pid in picks:
+		used[str((picks[pid] as Dictionary).get("hero", ""))] = true
+	return used
+
+
 func _host_auto_pick(pid: int) -> void:
 	var mine := pid == _self_peer()
 	var hero := ""
 	if mine:
 		hero = _sel_hero if _hero_pickable(_sel_hero) else _random_lane_hero()
+	if hero == "":
+		# 真人超时兜底也必须遵守其房间分路，不能由 host 改成别的职责
+		var team := NetSession._peer_camp(pid)
+		var ready_row = NetSession.lobby_ready.get(pid, {})
+		var lane := str((ready_row as Dictionary).get("lane", "")) if ready_row is Dictionary else ""
+		var want_role := str(HeroPickData.lane_role(lane)) if lane != "" else ""
+		if want_role != "":
+			var used: Dictionary = _draft_used_heroes()
+			for hn in HeroPickData.HERO_ROLE:
+				if str(HeroPickData.HERO_ROLE[hn]) == want_role and not used.has(str(hn)):
+					hero = str(hn)
+					break
 	if hero == "":
 		hero = _draft_pick_hero(NetSession._peer_camp(pid))
 	if hero == "":
