@@ -37,6 +37,17 @@ const LINES_OVEREXTEND := ["别一个人推太深", "回来，别单走", "一�
 const LINES_SUPPORT := ["我保护你，往前打", "我给你奶，顶住", "跟着我，别怕"]
 const LINES_KILL_AHEAD := ["这波赚了，推塔", "拿到了，继续压", "漂亮，趁势推进"]
 const LINES_KILL_ENEMY := ["这仇记下了", "等会还回来", "别得意"]
+# 按 AI 当前真实行为意图说话（说什么=接下来做什么）
+const LINES_INTENT_PUSH := ["清线推塔，别断兵线", "我把这波线推过去", "推完这波就参团", "兵线压过去，跟我"]
+const LINES_INTENT_FARM := ["我先把这波线清了", "补两波发育", "等我刷完这组", "别打架，我先发育"]
+const LINES_INTENT_JUNGLE := ["我刷完这组就抓", "野区清一圈", "红开，马上到", "等我刷完就 gank"]
+const LINES_INTENT_CHASE := ["我追一下，能杀", "别跑，我到了", "他残血，我追"]
+const LINES_INTENT_KILL := ["能杀，我上", "别抢，我收", "他跑不掉了"]
+const LINES_INTENT_RETREAT := ["我血不够，先撤", "打不了，我退了", "别追，我先走"]
+const LINES_INTENT_RECALL := ["我回城补一下", "回城买装备，马上来", "我先回，别等我"]
+const LINES_INTENT_DEFEND := ["塔要掉了，我回防", "守塔，别出去", "我回去守家"]
+const LINES_INTENT_ROTATE := ["我游走一下", "去帮一波，等我", "我过去了，别开团"]
+const LINES_INTENT_AVOID := ["先避一下", "别在塔下打", "绕一下再打"]
 
 var typing := false              # 正在打字：UiManager 据此屏蔽走位/技能输入
 
@@ -57,6 +68,9 @@ var _player_last := {"kills": 0, "dead": false, "low": false, "low_cd": 0.0, "de
 var _recent_lines: Array = []
 var _last_minute := -1
 var _minute_idx := 0
+var _intent_t := 0.0
+var _last_intent := {}
+var _intent_said := {}
 
 
 func _ready() -> void:
@@ -279,6 +293,11 @@ func _tick_ai(delta: float) -> void:
 		_ambient_t = 0.0
 		_ambient_next = randf_range(AMBIENT_MIN, AMBIENT_MAX)
 		_ambient_line()
+	# 行为意图变化：AI 说一句和它接下来要做的事一致的话
+	_intent_t += delta
+	if _intent_t >= 2.5:
+		_intent_t = 0.0
+		_announce_intent()
 	# 整分钟：随机一位 AI 英雄说一句「结合局势」的高质量台词（优先大模型）
 	if _bm != null and is_instance_valid(_bm):
 		var minute := int(float(_bm.get("game_time")) / 60.0)
@@ -293,6 +312,13 @@ func _ambient_line() -> void:
 	if speakers.is_empty():
 		return
 	var h = speakers[randi() % speakers.size()]
+	# 优先说和它当前行为一致的话（清线/刷野/追击/回城/守塔…）
+	var it := _ai_intent(h)
+	if not it.is_empty() and randf() < 0.65:
+		var il := _intent_line(h, it)
+		if il != "":
+			_say(h, il)
+			return
 	# 70% 优先说与当前局势相关的话（残血/龙/推塔/人数差/玩家状态）
 	if randf() < 0.7:
 		var ctx := _contextual_line(h)
@@ -309,6 +335,103 @@ func _ambient_line() -> void:
 		elif diff <= -5:
 			pool = LINES_BEHIND
 	_say(h, str(pool[randi() % pool.size()]))
+
+
+## AI 当前真实意图（来自 HeroAI.behavior_intent）
+func _ai_intent(h) -> Dictionary:
+	if h == null or not is_instance_valid(h):
+		return {}
+	for c in h.get_children():
+		if c.get_script() != null and str(c.get_script().resource_path).ends_with("HeroAI.gd"):
+			if c.has_method("behavior_intent"):
+				var it = c.call("behavior_intent")
+				if it is Dictionary:
+					return it
+	return {}
+
+
+func _intent_text(it: Dictionary) -> String:
+	var kind := str(it.get("kind", ""))
+	var tgt := str(it.get("target", ""))
+	match kind:
+		"push":
+			return "带线推进"
+		"farm":
+			return "清线发育"
+		"jungle":
+			return "刷野"
+		"chase":
+			return "追击" + (tgt if tgt != "" else "敌人")
+		"kill":
+			return "收残血" + (tgt if tgt != "" else "")
+		"retreat":
+			return "残血撤退"
+		"recall":
+			return "回城补状态"
+		"defend":
+			return "回防守塔"
+		"rotate":
+			return "游走支援"
+		"avoid":
+			return "避战绕后"
+		"fight":
+			return "正面接战"
+		"dead":
+			return "等待复活"
+	return "带线"
+
+
+func _intent_line(h, it: Dictionary) -> String:
+	var pool: Array = []
+	match str(it.get("kind", "")):
+		"push":
+			pool = LINES_INTENT_PUSH
+		"farm":
+			pool = LINES_INTENT_FARM
+		"jungle":
+			pool = LINES_INTENT_JUNGLE
+		"chase":
+			pool = LINES_INTENT_CHASE
+		"kill":
+			pool = LINES_INTENT_KILL
+		"retreat":
+			pool = LINES_INTENT_RETREAT
+		"recall":
+			pool = LINES_INTENT_RECALL
+		"defend":
+			pool = LINES_INTENT_DEFEND
+		"rotate":
+			pool = LINES_INTENT_ROTATE
+		"avoid":
+			pool = LINES_INTENT_AVOID
+	if pool.is_empty():
+		return ""
+	return _pick(pool)
+
+
+## 意图变化时播报（同一英雄 14s 内最多一句，避免刷屏）
+func _announce_intent() -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	for h in _ai_speakers():
+		var it := _ai_intent(h)
+		if it.is_empty():
+			continue
+		var kind := str(it.get("kind", ""))
+		if kind in ["dead", "fight"]:
+			continue
+		var id := int(h.get_instance_id())
+		if str(_last_intent.get(id, "")) == kind:
+			continue
+		_last_intent[id] = kind
+		if now - float(_intent_said.get(id, -99.0)) < 14.0:
+			continue
+		if randf() > 0.55:
+			continue
+		var line := _intent_line(h, it)
+		if line == "":
+			continue
+		_intent_said[id] = now
+		_say(h, line)
 
 
 ## 读取当前局势：塔数、龙、金币差、双方站位人数、玩家状态、自身血量
@@ -517,6 +640,7 @@ func _minute_system_prompt(h, st: Dictionary) -> String:
 	return ("你是手机 MOBA《王者荣耀》对局中的 AI 队友，操控英雄「%s」（%s，性格%s）。"
 		+ "现在第 %d 分钟，请主动在队伍频道说一句 8~20 字的中文，像真人玩家："
 		+ "结合当前局势给队友一个具体建议或一句带情绪的话（催推进/提醒撤退/约龙/护人/吐槽都行），"
+		+ "必须和你接下来真正要做的事一致（例如准备回城就说回城、要去追人就说追人、要去刷野就说刷野）。"
 		+ "不要复述数字、不要自我介绍、不要自称 AI 或模型，不要引号、括号、换行，只输出这一句话。") % [
 		str(h.display_name), str(h.role), _persona_of(h), int(st.get("minute", 0))]
 
@@ -529,10 +653,11 @@ func _minute_user_prompt(h, st: Dictionary) -> String:
 		obj_txt = "暴君已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "暴君快刷新"
 	var player_txt := "玩家已阵亡" if bool(st.get("player_dead", false)) else ("玩家血量偏低" if float(st.get("player_hp", 1.0)) < 0.3 else "玩家状态正常")
 	var lines := "、".join(_recent_lines.slice(maxi(0, _recent_lines.size() - 3)))
-	return ("局势：我方塔%d/敌方塔%d，金币差%+d，%s，%s；你自己血量%d%%，身边敌人%d个。最近说过：%s。请换一种说法，别重复。") % [
+	var intent_txt := _intent_text(_ai_intent(h))
+	return ("局势：我方塔%d/敌方塔%d，金币差%+d，%s，%s；你自己血量%d%%，身边敌人%d个。你接下来打算：%s。最近说过：%s。请换一种说法，别重复。") % [
 		int(st.get("my_towers", 0)), int(st.get("foe_towers", 0)), int(st.get("gold_diff", 0)),
 		player_txt, obj_txt, int(round(float(st.get("self_hp", 1.0)) * 100.0)),
-		int(st.get("near_enemies", 0)), lines if lines != "" else "无"]
+		int(st.get("near_enemies", 0)), intent_txt, lines if lines != "" else "无"]
 
 
 func _sanitize_llm_line(raw: String) -> String:
@@ -556,6 +681,11 @@ func _sanitize_llm_line(raw: String) -> String:
 
 
 func _fallback_minute_line(h) -> String:
+	var it := _ai_intent(h)
+	if not it.is_empty():
+		var il := _intent_line(h, it)
+		if il != "":
+			return il
 	var ctx := _contextual_line(h)
 	if ctx != "":
 		return ctx

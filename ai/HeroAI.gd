@@ -63,6 +63,60 @@ func _ready():
 	lane_strategy = LaneStrategy.new(hero, perception, lane)
 	jungle_strategy = JungleStrategy.new(hero, perception)
 
+## 当前行为意图（供聊天/语音：让 AI 说的话和它接下来真正要做的事一致）
+func behavior_intent() -> Dictionary:
+	var out := {"kind": "push", "lane": lane_cn(), "target": "", "dist": 0.0, "low": false}
+	if not is_instance_valid(hero) or hero.is_dead:
+		out["kind"] = "dead"
+		return out
+	out["low"] = hero.health < hero.actual_max_health * 0.4
+	if hero.is_teleporting:
+		out["kind"] = "rotate"
+		return out
+	if hero.is_recalling:
+		out["kind"] = "recall"
+		return out
+	if state == State.RETREAT:
+		out["kind"] = "retreat"
+		return out
+	if state == State.RECALL_SAFE or state == State.RECALL:
+		out["kind"] = "recall"
+		return out
+	if state == State.AVOID:
+		out["kind"] = "avoid"
+		return out
+	var t = hero.manual_target
+	if t != null and is_instance_valid(t) and float(t.health) > 0.0:
+		var dist: float = hero.global_position.distance_to(t.global_position)
+		out["target"] = str(t.display_name)
+		out["dist"] = dist
+		var ratio: float = float(t.health) / maxf(1.0, float(t.actual_max_health))
+		if ratio <= 0.3:
+			out["kind"] = "kill"
+		elif dist > hero.attack_range * 0.01 + 1.0:
+			out["kind"] = "chase"
+		else:
+			out["kind"] = "fight"
+		return out
+	if state == State.FARM:
+		out["kind"] = "jungle" if lane == AiConfig.Lane.JUNGLE else "farm"
+		return out
+	out["kind"] = "push"
+	return out
+
+
+func lane_cn() -> String:
+	match lane:
+		AiConfig.Lane.FARM:
+			return "下路"
+		AiConfig.Lane.MID:
+			return "中路"
+		AiConfig.Lane.CLASH:
+			return "上路"
+		_:
+			return "野区"
+
+
 func _assign_lane():
 	match hero.role:
 		"射手": lane = AiConfig.Lane.FARM
