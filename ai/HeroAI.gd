@@ -277,11 +277,15 @@ func _try_chase_dash(target: GameEntity) -> bool:
 	if dir.length() < 0.1:
 		return false
 	dir = dir.normalized()
-	var end: Vector3 = hero.global_position + dir * float(d["len"])
+	# 落点做墙面修正：dash_move_to 不受碰撞约束，不修正会穿墙/卡在墙里
+	var end: Vector3 = hero.clamp_dash_landing(dir, float(d["len"]))
+	var real_len: float = hero.global_position.distance_to(end)
+	if real_len < float(d["len"]) * 0.6:
+		return false                      # 墙挡住大半位移，不值得交技能
 	if _dash_landing_in_enemy_turret(end):
 		return false
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，免得突进被移动逻辑覆盖
-	hero._start_casting(int(d["index"]), d["skill"] as Skill, target.global_position)
+	hero._start_casting(int(d["index"]), d["skill"] as Skill, end)
 	return true
 
 
@@ -308,7 +312,11 @@ func _try_escape_dash() -> bool:
 	if dir.length() < 0.1:
 		dir = Vector3(0.0, 0.0, 1.0)
 	dir = dir.normalized()
-	var end: Vector3 = hero.global_position + dir * float(d["len"])
+	# 逃跑落点同样做墙面修正：贴着墙位移否则会把自己塞进墙角
+	var end: Vector3 = hero.clamp_dash_landing(dir, float(d["len"]))
+	var real_len: float = hero.global_position.distance_to(end)
+	if real_len < float(d["len"]) * 0.6:
+		return false                      # 前方被墙堵住，位移意义不大
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，保证撤退位移真正生效
 	hero._start_casting(int(d["index"]), d["skill"] as Skill, end)
 	return true
@@ -1172,4 +1180,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-

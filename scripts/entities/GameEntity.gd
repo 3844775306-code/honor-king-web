@@ -43,6 +43,11 @@ var _nav_recalc_timer = 0.0
 var _stuck_timer: float = 0.0
 var _stuck_pos: Vector3 = Vector3.ZERO
 var _stuck_recovery_dir: Vector3 = Vector3.ZERO
+# 净进展看门狗：贴墙滑行会让「移动 0.3m」重置卡墙计时，改用「1.2 秒内是否真的更靠近目的地」判定
+var _net_timer: float = 0.0
+var _net_dist: float = -1.0
+var _net_travel: float = 0.0
+var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
 static var debug_show_path: bool = false
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
@@ -1153,6 +1158,35 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		_stuck_recovery_dir = Vector3.ZERO
 	else:
 		_stuck_timer += delta
+	# 净进展看门狗：贴着墙来回滑行时每帧都能挪一点，会把上面的 0.3m 重置一直触发、
+	# 永远进不了贴墙恢复。改成每 1.2 秒检查一次「是否真的更靠近目的地」。
+	# 注意要同时要求「这段时间总位移很小」才判定卡墙：追击移动靶时距离可能保持不变，
+	# 但只要人在跑就不算卡住，否则会误触发侧滑/清路径，反而把 AI 晃成抽筋。
+	if destination != Vector3.ZERO:
+		if _net_dist < 0.0:
+			_net_dist = global_position.distance_to(destination)
+			_net_timer = 0.0
+			_net_travel = 0.0
+			_net_prev = global_position
+		_net_travel += global_position.distance_to(_net_prev)
+		_net_prev = global_position
+		_net_timer += delta
+		if _net_timer >= 1.2:
+			var cur_d: float = global_position.distance_to(destination)
+			# 既没有靠近目的地、又几乎没走动 → 真的被墙卡住
+			if _net_dist - cur_d < 0.5 and _net_travel < 1.5:
+				_stuck_timer = maxf(_stuck_timer, 1.6)
+				_stuck_recovery_dir = Vector3.ZERO   # 让下面立刻重新选侧向
+				_nav_target = Vector3.ZERO           # 作废旧路径，下次重算
+				_nav_path = PackedVector3Array()
+				_nav_index = 0
+			_net_dist = cur_d
+			_net_timer = 0.0
+			_net_travel = 0.0
+	else:
+		_net_dist = -1.0
+		_net_timer = 0.0
+		_net_travel = 0.0
 	# 卡墙超过1.5秒：进入贴墙滑行恢复
 	if _stuck_timer > 1.5 and _stuck_recovery_dir.length() < 0.01:
 		# 尝试垂直于原移动方向的左右两侧

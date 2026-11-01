@@ -4604,7 +4604,9 @@ func _finish_casting():
 			# 位移距离：优先 self_displacement；标成 cast_range 的技能（如夏侯惇大招）用它兜底，
 			# 否则 AI/玩家放出来会原地不动（预览圈却显示有位移距离）
 			var disp_len: float = skill.self_displacement if skill.self_displacement > 0.0 else skill.cast_range
-			var dash_end: Vector3 = global_position + dir * disp_len
+			# 落点做墙面修正：dash_move_to 是 Tween 直接改坐标、不受碰撞约束，
+			# 不修正会直接穿墙/卡在墙里（AI 追击、逃跑尤其明显）
+			var dash_end: Vector3 = clamp_dash_landing(dir, disp_len)
 			dash_end.y = 0.5
 			dash_move_to(dash_end, 0.16, "sprint")
 		6:  # 护盾
