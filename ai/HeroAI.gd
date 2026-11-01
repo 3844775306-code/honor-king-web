@@ -1058,7 +1058,10 @@ func _decide():
 			behavior = task_executor.local_jungle(Vector3.ZERO)
 			state = State.FARM
 		else:
-			behavior = task_executor.local_lane(lane)
+			# 清线：最近敌方兵线优先，20m 内还有就继续清；没有才回推线。
+			behavior = task_executor.local_clear_wave()
+			if behavior.is_empty():
+				behavior = task_executor.local_lane(lane)
 			state = State.PUSH
 	if behavior.is_empty():
 		return

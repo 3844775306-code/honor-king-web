@@ -5821,6 +5821,7 @@ func _process(delta):
 		stats_timer = 1.0
 		_update_team_stats()
 		if team_tactics != null:
+			team_tactics.update_wave_memory(game_time)
 			team_tactics.update_tasks(game_time)
 		_apply_natural_experience()
 		_apply_natural_gold()

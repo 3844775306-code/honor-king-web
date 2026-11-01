@@ -36,11 +36,46 @@ func execute(task: TeamTask, now: float) -> Dictionary:
 			return _invade_task(task)
 		TeamTask.Type.JUNGLE_FARM:
 			return _jungle_farm(task.target_pos)
+		TeamTask.Type.CLEAR_WAVE:
+			return _clear_wave(task.target_pos)
+		TeamTask.Type.AMBUSH:
+			return _ambush_task(task)
+		TeamTask.Type.RECALL:
+			return {"move_target": task.target_pos, "manual_target": null, "state": "retreat"}
 	return {}
 
 
 func local_lane(lane: int) -> Dictionary:
 	return _lane_behavior(lane, Vector3.ZERO)
+
+
+func local_clear_wave() -> Dictionary:
+	return _clear_wave(Vector3.ZERO)
+
+
+func _clear_wave(center: Vector3) -> Dictionary:
+	var best: Minion = null
+	var best_d := 20.0 if center == Vector3.ZERO else 24.0
+	for e in hero.get_tree().get_nodes_in_group("minions"):
+		if not (e is Minion) or int((e as Minion).team) == int(hero.team) or (e as Minion).health <= 0:
+			continue
+		if not TowerCombat.can_attack_under_tower(hero, e):
+			continue
+		var from := hero.global_position if center == Vector3.ZERO else center
+		var d := from.distance_to((e as Node3D).global_position)
+		if d < best_d:
+			best_d = d
+			best = e as Minion
+	if best != null:
+		return {"move_target": (best as Node3D).global_position, "manual_target": best, "state": "push"}
+	return {}
+
+
+func _ambush_task(task: TeamTask) -> Dictionary:
+	var enemy := perception.find_nearest_enemy_hero(6.0)
+	if enemy != null:
+		return {"move_target": Vector3.ZERO, "manual_target": enemy, "state": "push"}
+	return {"move_target": task.target_pos, "manual_target": null, "state": "push"}
 
 
 func local_jungle(target_pos: Vector3) -> Dictionary:
