@@ -314,6 +314,7 @@ var _pm_right := Vector3.ZERO
 var _pm_env: WorldEnvironment = null
 var _pm_key: DirectionalLight3D = null
 var _pm_self_name := ""
+var _pm_player_node: Node3D = null
 # —— 施法预览（按住技能钮/键盘 type0 按住瞄准时显示；世界空间贴地，复刻主机 Hero 预览三件套）——
 var _pv_range: MeshInstance3D = null   # 自身施法范围圈（type0/1 用）
 var _pv_aoe: MeshInstance3D = null     # AoE 实心填充圆 / type0 瞄准小标记
@@ -3784,10 +3785,14 @@ func _start_post_match(p: Dictionary) -> void:
 		if nd.get_parent() != null:
 			nd.get_parent().remove_child(nd)
 		_pm_stage_root.add_child(nd)
+		if i == 0:
+			_pm_player_node = nd
 		var slot: Vector3 = _pm_stage + slots[i]
 		nd.global_position = slot
-		var face: Vector3 = (-_pm_inward)
-		nd.rotation.y = atan2(face.x, face.z)
+		nd.scale = Vector3.ONE
+		nd.visible = true
+		# 面向镜头：相机在 stage + inward*d，英雄朝 +inward 才是正脸（同 host）
+		nd.rotation.y = atan2(_pm_inward.x, _pm_inward.z)
 		nd.visible = true
 		if v.get("ap") != null and v.ap is AnimationPlayer and str(v.get("idle_clip", "")) != "":
 			(v.ap as AnimationPlayer).play(str(v.idle_clip))
@@ -3810,6 +3815,18 @@ func _start_post_match(p: Dictionary) -> void:
 	if entries.is_empty():
 		_pm_finish_and_show()
 		return
+	# MVP：队内对战评分最高者；奖牌按评分门槛（同 host _enter_post_match）
+	var _best_i := 0
+	var _best_r := -1.0
+	for i in range(entries.size()):
+		var _rr := _pm_rating(_row_by_name(str(entries[i]["hero"])))
+		entries[i]["rating"] = _rr
+		entries[i]["medal"] = _pm_medal_by_rating(_rr)
+		if _rr > _best_r:
+			_best_r = _rr
+			_best_i = i
+	for i in range(entries.size()):
+		entries[i]["mvp"] = (i == _best_i)
 	# 3) 背景压黑 + 主光（与 host 同色温），聚光灯
 	_pm_env = WorldEnvironment.new()
 	var env := Environment.new()
@@ -3831,9 +3848,13 @@ func _start_post_match(p: Dictionary) -> void:
 		_pm_add_spotlight(Vector3(entries[i]["world"]), i == 0)
 	# 4) 镜头：从大厅上方推到舞台正面（与 host 同机位公式）
 	if _cam != null and is_instance_valid(_cam):
-		var look: Vector3 = _pm_stage
-		var cam_end: Vector3 = _pm_stage - _pm_inward * 9.0 + Vector3(0.0, 6.0, 0.0)
+		var look: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
+		var cam_end: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
 		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		# 主光：与镜头同侧、略俯视，正面照亮 5 人（同 host）
+		if _pm_key != null and is_instance_valid(_pm_key):
+			var light_dir: Vector3 = (-_pm_inward + Vector3(0.0, -0.85, 0.0)).normalized()
+			_pm_key.global_rotation = Basis.looking_at(light_dir, Vector3.UP).get_euler()
 		_cam.global_position = cam_end + Vector3(0.0, 26.0, 0.0)
 		_cam.rotation = rot
 	# 5) 演出层 + 铭牌（PostMatchView：与单机同一份实现）
@@ -3846,15 +3867,19 @@ func _start_post_match(p: Dictionary) -> void:
 	_pm_view.set_stage(won, entries)
 	_pm_view.advance.connect(_on_pm_advance)
 	_pm_view.finished.connect(_on_pm_finished)
-	# 镜头推进
+	# 镜头推进（host：1.1s SINE 到 stage + inward*6.2 + (0,3.9,0)）
 	if _cam != null and is_instance_valid(_cam):
-		var look2: Vector3 = _pm_stage
-		var cam_end2: Vector3 = _pm_stage - _pm_inward * 9.0 + Vector3(0.0, 6.0, 0.0)
+		var look2: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
+		var cam_end2: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
 		var rot2: Vector3 = Basis.looking_at((look2 - cam_end2).normalized(), Vector3.UP).get_euler()
 		var tw := _pm_view.create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(_cam, "global_position", cam_end2, 1.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(_cam, "rotation", rot2, 1.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_cam, "global_position", cam_end2, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_cam, "rotation", rot2, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.finished.connect(func():
+			if _cam != null and is_instance_valid(_cam):
+				_cam.global_position = cam_end2
+				_cam.rotation = rot2)
 
 
 func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
@@ -3867,9 +3892,25 @@ func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
 	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
 	sl.spot_range = 18.0
 	sl.spot_angle = 32.0
+	sl.light_energy = 4.5 if is_player else 3.2
 	sl.light_color = col
-	sl.light_energy = 3.2 if is_player else 2.4
 	root.add_child(sl)
+	# 地面光圈（unshaded 薄圆盘；同 host，不放体积光柱）
+	var disc := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 1.25
+	cm.bottom_radius = 1.25
+	cm.height = 0.02
+	cm.radial_segments = 40
+	disc.mesh = cm
+	disc.position = Vector3(0.0, 0.02, 0.0)
+	var dm := StandardMaterial3D.new()
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	dm.albedo_color = Color(col.r, col.g, col.b, 0.34 if is_player else 0.22)
+	disc.material_override = dm
+	root.add_child(disc)
 
 
 # 奖牌：与 host/结算页同口径（评分 ≥78 金 / ≥64 银 / ≥52 铜）
@@ -3886,7 +3927,7 @@ func _pm_medal(row: Dictionary) -> int:
 	return -1
 
 
-# 与 host ResultsPanel/_pm_rating 同权重的队伍内归一化评分
+# 与 host BattleManager._pm_rating 完全同权重的队伍内归一化评分
 func _pm_rating(r: Dictionary) -> float:
 	var mx_k := 1
 	var mx_dmg := 1.0
@@ -3904,18 +3945,52 @@ func _pm_rating(r: Dictionary) -> float:
 		mx_taken = maxf(mx_taken, float(o.get("taken", 0)))
 		tot_k += int(o.get("k", 0))
 		mx_d = maxi(mx_d, int(o.get("d", 0)))
-	var k := float(r.get("k", 0)) / float(mx_k)
-	var dmg := float(r.get("dmg", 0)) / mx_dmg
-	var gold := float(r.get("gold", 0)) / float(mx_gold)
-	var taken := float(r.get("taken", 0)) / mx_taken
-	var kp := float(r.get("k", 0) + r.get("a", 0)) / float(maxi(1, tot_k))
-	var surv := 1.0 - float(r.get("d", 0)) / float(maxi(1, mx_d))
-	return clampf((k * 0.30 + dmg * 0.26 + gold * 0.18 + taken * 0.10 + kp * 0.10 + surv * 0.06) * 100.0, 0.0, 100.0)
+	# host：击杀 .15 / 助攻 .10 / 死亡 .05 / 经济 .15 / 输出 .25 / 承伤 .10 / 参与 .20
+	var kill_score := float(r.get("k", 0)) / float(mx_k) * 100.0
+	var assist_score := float(r.get("a", 0)) / float(maxi(1, tot_k)) * 100.0
+	var death_score := maxf(0.0, 1.0 - float(r.get("d", 0)) / float(maxi(1, mx_d))) * 100.0
+	var gold_score := float(r.get("gold", 0)) / float(mx_gold) * 100.0
+	var dmg_score := float(r.get("dmg", 0)) / mx_dmg * 100.0
+	var taken_score := float(r.get("taken", 0)) / mx_taken * 100.0
+	var part := float(int(r.get("k", 0)) + int(r.get("a", 0))) / float(maxi(1, tot_k)) * 100.0
+	return clampf(kill_score * 0.15 + assist_score * 0.10 + death_score * 0.05
+		+ gold_score * 0.15 + dmg_score * 0.25 + taken_score * 0.10 + part * 0.20, 0.0, 100.0)
+
+
+func _row_by_name(nm: String) -> Dictionary:
+	for o in _rows_of(_pm_payload):
+		if str((o as Dictionary).get("name", "")) == nm:
+			return o
+	return {}
+
+
+func _pm_medal_by_rating(rr: float) -> int:
+	if rr >= 78.0:
+		return 0
+	if rr >= 64.0:
+		return 1
+	if rr >= 52.0:
+		return 2
+	return -1
 
 
 func _on_pm_advance() -> void:
 	if _pm_view == null:
 		return
+	# 镜头后撤到玩家左侧三分之一、队友仍在画面（同 host 机位公式）
+	if _cam != null and is_instance_valid(_cam) and _pm_player_node != null and is_instance_valid(_pm_player_node):
+		var pp: Vector3 = _pm_player_node.global_position
+		var look: Vector3 = pp - _pm_right * 5.8 + Vector3(0.0, 1.45, 0.0)
+		var cam_end: Vector3 = pp + _pm_inward * 9.6 - _pm_right * 5.8 + Vector3(0.0, 5.6, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		var tw2 := _pm_view.create_tween()
+		tw2.set_parallel(true)
+		tw2.tween_property(_cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw2.tween_property(_cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw2.finished.connect(func():
+			if _cam != null and is_instance_valid(_cam):
+				_cam.global_position = cam_end
+				_cam.rotation = rot)
 	var row := _my_result_row(_pm_payload)
 	var hero_name := str(row.get("name", _manifest.get("hero_name", "")))
 	var nick := str(row.get("nick", ""))
@@ -3962,7 +4037,15 @@ func _pm_finish_and_show() -> void:
 		_pm_layer.queue_free()
 	_pm_layer = null
 	if _pm_stage_root != null and is_instance_valid(_pm_stage_root):
-		_pm_stage_root.visible = false   # 英雄节点保留，避免视图字典里的 node 变悬空
+		# 英雄节点搬回 Entities（避免视图字典里的 node 悬空），再释放舞台/灯光
+		var ents3 := get_node_or_null("Entities")
+		for v in _views.values():
+			var nd3 = v.get("node")
+			if nd3 != null and is_instance_valid(nd3) and nd3.get_parent() == _pm_stage_root:
+				if ents3 != null:
+					_pm_stage_root.remove_child(nd3)
+					ents3.add_child(nd3)
+		_pm_stage_root.queue_free()
 	for cl in _pm_hidden_layers:
 		if is_instance_valid(cl):
 			cl.visible = true
@@ -3972,6 +4055,12 @@ func _pm_finish_and_show() -> void:
 	var ents2 := get_node_or_null("Entities")
 	if ents2 != null:
 		ents2.visible = true
+	if _pm_key != null and is_instance_valid(_pm_key):
+		_pm_key.queue_free()
+	_pm_key = null
+	if _pm_env != null and is_instance_valid(_pm_env):
+		_pm_env.queue_free()
+	_pm_env = null
 	get_tree().paused = false
 	if _go != null:
 		_go.show_deferred()

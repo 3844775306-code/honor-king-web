@@ -2096,6 +2096,8 @@ func _build_result_payload(bm: Node) -> Dictionary:
 				"taken": int(h.damage_taken_from_heroes), "heal": int(h.healing_done),
 				"cc": int(round(h.cc_duration_dealt * 10.0)), "turret": int(h.turret_damage),
 				"equip": (h.equipment_slots.duplicate() if h.equipment_slots is Array else []),
+				"nick": str(h.player_name),          # 英雄卡显示「英雄名 · 昵称」
+				"tgold": int(h.total_gold_earned),   # 总经济（团队经济/评分口径）
 			})
 	return {
 		"winner": int(bm.get("winner")),
