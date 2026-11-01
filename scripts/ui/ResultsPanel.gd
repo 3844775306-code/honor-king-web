@@ -627,10 +627,10 @@ func _create_hero_card(hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	if is_mvp:
 		nm_row.add_child(_tag_label("MVP", GOLD_COLOR, Color(0.15, 0.1, 0.0)))
 	var who_mark = ""
-	if hero == _m_hero():
-		who_mark = "玩家"
-	elif hero.is_ai:
+	if hero.is_ai:
 		who_mark = "AI"
+	else:
+		who_mark = "玩家"   # 真人（含联机其他玩家）一律标玩家，不再误标 AI
 	if who_mark != "":
 		if who_mark == "玩家":
 			nm_row.add_child(_tag_label(who_mark, Color(0.12, 0.42, 0.8, 0.95), Color(0.92, 0.98, 1.0), 0, true))
@@ -642,6 +642,14 @@ func _create_hero_card(hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	_apply_label_style(role_lbl, UiKit.FS_XS, Color(0.68, 0.74, 0.85))
 	nm_row.add_child(role_lbl)
 	info_col.add_child(nm_row)
+	# 英雄昵称（联机/回放取玩家昵称，单机 AI 取分配昵称）
+	var nick_txt := str(hero.player_name)
+	if nick_txt != "" and nick_txt != str(hero.display_name):
+		var nick_lbl := Label.new()
+		nick_lbl.text = nick_txt
+		nick_lbl.clip_text = true
+		_apply_label_style(nick_lbl, UiKit.FS_XS, Color(0.62, 0.70, 0.82))
+		info_col.add_child(nick_lbl)
 
 	var kda_line = Label.new()
 	var kd = float(hero.kills + hero.assists) / max(1.0, float(hero.deaths))
@@ -1708,10 +1716,3 @@ class RingGauge extends Control:
 			Color(0.70, 0.78, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		UiKit.text(self, c + Vector2(-size.x * 0.5, s1 * 0.36 + s2 * 2.9), "敌 " + txt_b, s2,
 			Color(col_b.r, col_b.g, col_b.b, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)
-
-
-
-
-
-
-

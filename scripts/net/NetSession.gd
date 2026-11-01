@@ -2454,6 +2454,16 @@ func _rpc_death_recap(payload: Dictionary) -> void:
 # ---------- P3f：结算（host game_over 翻转广播一次；client 全英雄两列记分 + 胜负大字） ----------
 signal net_game_over(payload: Dictionary)
 
+## 是否是真人操控的英雄：host 本机英雄 is_ai=false；联机队友/对手的 Hero 在 host 上由 AI 代操（is_ai=true），
+## 但 _assign_peer 里登记了 peer_id → 仍算真人，结算不能标 AI。
+func is_human_hero(h) -> bool:
+	if h == null:
+		return false
+	if not bool(h.get("is_ai")):
+		return true
+	return _assign_peer.has(h.get_instance_id())
+
+
 func _build_result_payload(bm: Node) -> Dictionary:
 	var rows: Array = []
 	# 与 BattleHistory 同一套 rows 结构（含承伤/治疗/控制/推塔/补刀/装备），客户端结算与对战纪录都直接展示
@@ -2471,7 +2481,7 @@ func _build_result_payload(bm: Node) -> Dictionary:
 				"name": h.display_name, "team": h.team, "lv": h.level,
 				"k": h.kills, "d": h.deaths, "a": h.assists,
 				"gold": int(h.gold), "dmg": float(h.damage_dealt_to_heroes),
-				"mvp": h.is_mvp, "mine": not h.is_ai,
+				"mvp": h.is_mvp, "mine": is_human_hero(h), "ai": not is_human_hero(h),
 				"role": str(h.role), "lh": int(h.last_hits), "jungle": int(h.jungle_gold),
 				"taken": float(h.damage_taken_from_heroes), "heal": float(h.healing_done),
 				"cc": int(round(h.cc_duration_dealt * 10.0)), "turret": float(h.turret_damage),

@@ -162,7 +162,7 @@ func _try_start() -> void:
 		_hero_meta.append({
 			"name": str(h.display_name),
 			"team": int(h.team),
-			"ai": bool(h.is_ai),
+			"ai": not (NetSession.is_human_hero(h) if NetSession.has_method("is_human_hero") else not bool(h.is_ai)),
 			"nick": str(h.player_name),
 			"sd": _sd,
 			"role": str(h.role),
