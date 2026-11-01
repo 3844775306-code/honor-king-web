@@ -1540,7 +1540,12 @@ func _draft_done() -> bool:
 func _draft_is_my_turn() -> bool:
 	if not _draft_active() or _draft_turn.size() < 2:
 		return false
-	return int(_draft_turn[0]) == _local_camp() and int(_draft_turn[1]) == _my_seat - 1
+	# 以 NetSession.camp_seat_of 的权威席位为准，而不是 UI 缓存的 _my_seat：
+	# 客户端进入选人页时若 seats 尚未同步，_my_seat 会残留 6，导致 host 已轮到本机、中央仍显示等待。
+	var my_seat := NetSession.camp_seat_of(_self_peer())
+	if my_seat < 0:
+		return false
+	return int(_draft_turn[0]) == int(NetSession._peer_camp(_self_peer())) and int(_draft_turn[1]) == my_seat
 
 
 # 某阵营第 seat 席（0-based）对应的真人 peer；-1 = AI 补位
