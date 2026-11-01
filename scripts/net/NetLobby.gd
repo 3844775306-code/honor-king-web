@@ -38,6 +38,7 @@ const SEL_DRAFT_ORDER := [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2], [1, 2], [1, 3]
 const SEL_DRAFT_TURN_TIME := 20.0
 const AUTO_START_DELAY := 5.0   # 全员锁定 → 5 秒倒计时（同单机 BattleManager.PICK_COUNTDOWN）
 const ROUTE_DELAY := 2.0        # 加载层最短显示时长（同单机加载界面 2 秒等待），之后才切场景
+const ROUTE_CLIENT_HOLD := 2.0  # 客户端额外停留：加载层走满后再等 2s 才切战场，避免场景加载期镜头停在中心
 
 # --- 操作设置页（PlayerPrefs.opt_* / set_opt，键名与局内读取保持一致） ---
 const CTRL_KEYS := ["siege_keys", "target_prio", "auto_chase", "lock_portrait", "flash_dir",
@@ -99,6 +100,7 @@ var _auto_start_done := false       # host：已触发过自动开局（防重�
 var _loading: LoadingScreen = null  # 进入对局的加载层（复用单机 LoadingScreen）
 var _route_pending := ""            # 待切换场景路径（空 = 无）
 var _route_delay := 0.0             # 加载层剩余显示时间
+var _route_hold := 0.0              # 加载层满格后额外停留（客户端 2s）
 var _route_count := 0               # 已触发的切场景次数（探针/防重入）
 var _blocked_roles := {}     # 本机不可选的职责（他人已占）
 var _my_seat := 1            # 本机在场席位下标（1..5；>5 即旁观）
@@ -1406,6 +1408,12 @@ func _tick_route(delta: float) -> void:
 	if _loading != null and is_instance_valid(_loading):
 		_loading.set_progress(clampf(1.0 - maxf(_route_delay, 0.0) / ROUTE_DELAY, 0.0, 1.0))
 	if _route_delay > 0.0:
+		return
+	# 客户端：加载层满格后再停留 2s（此期间仍盖着加载界面），避免切场景初期镜头停在屏幕中央
+	if _route_hold > 0.0:
+		_route_hold = maxf(0.0, _route_hold - delta)
+		if _loading != null and is_instance_valid(_loading):
+			_loading.set_progress(1.0)
 		return
 	var path := _route_pending
 	_route_pending = ""
@@ -3435,3 +3443,4 @@ func _route_battle() -> void:
 
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
+	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
