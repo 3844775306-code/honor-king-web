@@ -1,6 +1,7 @@
 class_name Hero
 extends GameEntity
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")
+const WukongCloud = preload("res://scripts/fx/WukongCloud.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
 # 泉水回复节拍（秒/跳）；每跳回 10% 最大生命与法力，等于原来的 20%/秒
@@ -386,6 +387,8 @@ var wukong_cloud_timer: float = 0.0      # 腾空计时
 var wukong_cloud_speed: float = 0.0      # 当前飞行速度
 var wukong_cloud_target: Vector3 = Vector3.ZERO
 var wukong_last_z_time: float = -1.0
+var _wukong_cloud_vis: Node3D = null
+var _wukong_cloud_t := 0.0
 var wangzhaojun_aa_counter: int = 0        # 被动普攻计数器
 var wangzhaojun_shield_was_active: bool = false  # 护盾破裂检测
 var bt_timer:float = 0.0
@@ -519,10 +522,13 @@ func start_recall():
 			_start_wukong_cloud()
 			return
 		wukong_last_z_time = _now
-	# AI孙悟空：回城直接乘筋斗云
+	# AI孙悟空：回城直接乘筋斗云；已回自家泉水则留在泉里回满，不再反复起飞
 	if display_name == "孙悟空" and is_ai:
-		if not wukong_cloud_flying:
-			_start_wukong_cloud()
+		if wukong_cloud_flying:
+			return
+		if is_in_own_fountain():
+			return
+		_start_wukong_cloud()
 		return
 	if is_recalling: return
 	# 大禹：如果附近有戍鼎，传送到最远鼎（非回城）
@@ -695,6 +701,14 @@ func _start_wukong_cloud():
 	wukong_cloud_speed = 0.0
 	wukong_cloud_target = Vector3(-62, 0, 62) if team == Config.Team.PLAYER else Vector3(62, 0, -62)   # 落点=泉水圆心
 	bt_timer = 1.5  # 腾空+飞行初期霸体
+	# 筋斗云视觉：脚下云团 + 起飞爆发；飞行中随速度前倾/拉长、云絮拖尾
+	if _wukong_cloud_vis == null or not is_instance_valid(_wukong_cloud_vis):
+		_wukong_cloud_vis = WukongCloud.build()
+		add_child(_wukong_cloud_vis)
+		_wukong_cloud_vis.scale = Vector3(0.35, 0.35, 0.35)
+		var tw := create_tween()
+		tw.tween_property(_wukong_cloud_vis, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	WukongCloud.burst(global_position)
 	# 取消当前攻击/施法
 	casting_skill = false
 	current_target = null
@@ -706,8 +720,15 @@ func _end_wukong_cloud():
 	wukong_cloud_phase = 0
 	wukong_cloud_speed = 0.0
 	collision_layer = 1
-	# 落地：恢复Y坐标
+	# 落地：恢复Y坐标 + 云团收束爆发
 	global_position.y = 0.0
+	WukongCloud.burst(global_position)
+	if _wukong_cloud_vis != null and is_instance_valid(_wukong_cloud_vis):
+		var vis := _wukong_cloud_vis
+		_wukong_cloud_vis = null
+		var tw2 := create_tween()
+		tw2.tween_property(vis, "scale", Vector3(0.05, 0.05, 0.05), 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		tw2.tween_callback(vis.queue_free)
 
 func _get_furthest_tripod() -> Node:
 	var furthest = null
@@ -1864,6 +1885,9 @@ func _physics_process(delta):
 			if bm2: bm2.remove_teleport_line(self, dayu_teleport_target)
 	# 孙悟空：筋斗云飞行
 	if wukong_cloud_flying:
+		_wukong_cloud_t += delta
+		var _cdir := (wukong_cloud_target - global_position)
+		WukongCloud.tick(_wukong_cloud_vis, _cdir, wukong_cloud_speed, _wukong_cloud_t, wukong_cloud_phase == 1)
 		if wukong_cloud_phase == 0:
 			# 腾空阶段：0.5秒升空
 			wukong_cloud_timer -= delta

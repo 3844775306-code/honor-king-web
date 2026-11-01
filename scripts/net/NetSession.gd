@@ -1812,7 +1812,8 @@ func _pack_hero(e: Node) -> Array:
 		str(e.get("role")),     # idx22：职责（T 面板 [AI] 名字 (role) -> 分路）
 		_pack_assigned_lane(e), # idx23：战术分配的 lane（-1=未分配）
 		1 if bool(e.get("red_buff_active")) else 0,   # idx24：红 buff（客户端世界模型脚下红环）
-		1 if bool(e.get("blue_buff_active")) else 0]  # idx25：蓝 buff（脚下蓝环）
+		1 if bool(e.get("blue_buff_active")) else 0,  # idx25：蓝 buff（脚下蓝环）
+		e.global_position.y]   # idx26：世界高度（孙悟空筋斗云/腾空表现）
 
 
 func _maxmana_of(e: Node) -> float:

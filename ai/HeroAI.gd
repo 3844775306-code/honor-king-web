@@ -883,6 +883,19 @@ func _try_use_recover():
 
 # ==================== 安全回城 ====================
 func _recall_safe_behavior(delta):
+	# 孙悟空：飞行中/已在泉水由这里统一处理——必须血蓝全满才出泉，且不在泉里反复起飞
+	if hero.display_name == "孙悟空":
+		if hero.wukong_cloud_flying:
+			return
+		if hero.is_in_own_fountain():
+			if hero.is_recalling:
+				hero.cancel_recall()
+			hero.move_target = Vector3.ZERO
+			hero.manual_target = null
+			hero.current_target = null
+			if _fully_recovered():
+				_assign_lane()
+			return
 	# 英雄特判（孙悟空筋斗云飞行中/已在泉水）→ 本英雄自行处理
 	if brain.handle_recall_safe():
 		return
@@ -911,6 +924,13 @@ func _recall_safe_behavior(delta):
 
 # 泉水养伤是否完成：血量（有蓝英雄再加蓝量）都回到 HEALTH_RECOVERED 才算满
 func _fully_recovered() -> bool:
+	# 孙悟空：回城后必须状态回满（血/蓝 100%）才离开泉水，避免半血出门再被打回城
+	if hero.display_name == "孙悟空":
+		if hero.health < hero.actual_max_health - 0.5:
+			return false
+		if hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max - 0.5:
+			return false
+		return true
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECOVERED:
 		return false
 	# 张飞不消耗/回复普通蓝，蓝条由狂意值回写，泉水永远回不满；只看血量即可离泉

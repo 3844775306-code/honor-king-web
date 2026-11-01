@@ -21,6 +21,7 @@ const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
 const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
+const WukongCloudScript = preload("res://scripts/fx/WukongCloud.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
@@ -414,6 +415,7 @@ func _process(delta: float) -> void:
 			if not cr0.visible and _last_snap_time >= float(cr[1]):
 				cr0.visible = true
 	_update_tower_locks(delta)
+	_update_wukong_clouds(delta)
 	_mouse_screen = get_viewport().get_mouse_position()
 	if _death_tint != null:
 		_death_tint.visible = _owned and int(_own.get("alive", 1)) == 0
@@ -472,6 +474,9 @@ func _process(delta: float) -> void:
 		if tb > ta:
 			f = clampf((_rtime - ta) / (tb - ta), 0.0, 1.0)
 		v.node.global_position = pa.lerp(pb, f)
+		# 筋斗云/腾空：水平位置插值，垂直高度直接取最新快照（避免历史只存 x/z 被压回地面）
+		if v.get("target") is Vector3:
+			v.node.global_position.y = (v.get("target") as Vector3).y
 	# P0-C：本机操控英雄改用「输入积分 + 快照校正」取代插值滞后（其它实体仍是上面的插值）
 	_tick_self_prediction(delta)
 	# #44 英雄动画：idle/walk 本地按位移切、attack 由 events 触发（须在平滑更新后取位移）
@@ -716,6 +721,8 @@ func _on_snapshot(snap: Array) -> void:
 			v.type = typ
 			v.team = team
 			if typ == NET_HERO:
+				if ent.size() > 26:
+					pos.y = float(ent[26])   # 筋斗云/腾空高度
 				v.pname = str(ent[17]) if ent.size() > 17 else ""
 				v.mvp = int(ent[18]) == 1 if ent.size() > 18 else false
 				v.status = ent[19] if ent.size() > 19 else []
@@ -1850,6 +1857,31 @@ func _on_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void:
 
 
 # 防御塔锁定光束：host 每 0.15s 刷新目标点，客户端逐帧插值 → 视觉上一直锁定
+## 孙悟空筋斗云：英雄世界高度 >0.5 时脚下生成云团；落地/换人自动收回（与主视觉同源）
+func _update_wukong_clouds(delta: float) -> void:
+	for nid in _views:
+		var v: Dictionary = _views[nid]
+		if int(v.get("type", -1)) not in [NET_HERO]:
+			continue
+		var nm := str(v.get("name", ""))
+		var nd = v.get("node")
+		if nd == null or not is_instance_valid(nd):
+			continue
+		var y := float((v.get("target") as Vector3).y) if v.get("target") is Vector3 else 0.0
+		var want: bool = nm == "孙悟空" and y > 0.45 and int(v.get("hp", 0.0)) > 0.0
+		var cl = v.get("wcloud")
+		if want and (cl == null or not is_instance_valid(cl)):
+			cl = WukongCloudScript.build()
+			nd.add_child(cl)
+			v["wcloud"] = cl
+		if cl != null and is_instance_valid(cl):
+			cl.visible = want
+			if want:
+				var rot := float(nd.rotation.y)
+				var dir := Vector3(sin(rot), 0.0, cos(rot))
+				WukongCloudScript.tick(cl, dir, 10.0, Time.get_ticks_msec() * 0.001, true)
+
+
 func _on_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void:
 	var key: String = "%d_%d" % [int(from.x * 10.0), int(from.z * 10.0)]
 	if not active:
