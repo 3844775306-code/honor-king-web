@@ -143,9 +143,11 @@ var _mm_target := Vector3.ZERO
 var _mm_was_follow := -1
 var _statics: Node3D = null
 var _cam: Camera3D = null
+const FOLLOW_PITCH := -60.0
+const FOLLOW_DIST := 18.7   # sin(60°)*18.7≈16.2 ≈ 跟随镜头抬高(12+4.2)
 var _cam_yaw := 0.0
-var _cam_pitch := -55.0
-var _cam_dist := 62.0
+var _cam_pitch := FOLLOW_PITCH
+var _cam_dist := FOLLOW_DIST
 var _cam_target := Vector3.ZERO
 var _t := 0.0
 var _playing := true
@@ -3398,18 +3400,24 @@ func _select_follow(idx: int) -> void:
 	_manual_follow = idx
 	_spectate_origin = -1
 	_kill_cam_t = 0.0
-	_cam_pitch = -60.0
-	_cam_dist = 52.0
+	_cam_pitch = FOLLOW_PITCH
+	_cam_dist = FOLLOW_DIST
 	if _hint_label != null:
 		_hint_label.text = "正在跟随：%s（Esc 回自由镜头 / 点小地图跳转）" % str((_heroes[idx] as Dictionary).get("name", ""))
 
 
 func _clear_follow() -> void:
+	# 退出跟随后自由镜头留在当前英雄位置，高度/俯角与跟随镜头一致，避免镜头突然拔高到全图视角
+	var keep_pos: Vector3 = _cam_target
+	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
+		keep_pos = _hero_pos[_follow_hero]
+	elif _manual_follow >= 0 and _manual_follow < _hero_pos.size():
+		keep_pos = _hero_pos[_manual_follow]
 	_follow_hero = -1
 	_manual_follow = -1
-	_cam_pitch = -60.0
-	_cam_dist = 62.0
-	_cam_target = Vector3.ZERO
+	_cam_pitch = FOLLOW_PITCH
+	_cam_dist = FOLLOW_DIST
+	_cam_target = keep_pos
 
 
 func _cycle_follow() -> void:
@@ -3485,8 +3493,8 @@ func _cycle_follow_prev() -> void:
 
 func _reset_camera() -> void:
 	_cam_yaw = 0.0
-	_cam_pitch = -55.0
-	_cam_dist = 62.0
+	_cam_pitch = FOLLOW_PITCH
+	_cam_dist = FOLLOW_DIST
 	_kill_cam_t = 0.0
 	_cam_drag = false
 
@@ -3695,6 +3703,12 @@ func _begin_cam_drag(screen: Vector2) -> void:
 	# 跟随状态下拖动屏幕：先把自由视角目标放到当前英雄，再退出跟随，避免镜头跳回原点
 	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
 		_cam_target = _hero_pos[_follow_hero]
+		_cam_pitch = FOLLOW_PITCH
+		_cam_dist = FOLLOW_DIST
+	elif _manual_follow >= 0 and _manual_follow < _hero_pos.size():
+		_cam_target = _hero_pos[_manual_follow]
+		_cam_pitch = FOLLOW_PITCH
+		_cam_dist = FOLLOW_DIST
 	_follow_hero = -1
 	_manual_follow = -1
 
@@ -3770,15 +3784,29 @@ func _update_camera() -> void:
 		_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
 		_cam.fov = 70.0
 		return
-	# 手动跟随优先；否则击杀镜头短暂跟拍；都没有时保持自由视角
+	# 手动跟随优先；否则击杀镜头短暂跟拍；两者都完全复用主视角固定高度，避免镜头突然拔高
 	if _manual_follow >= 0 and _manual_follow < _hero_pos.size():
-		_cam_target = _cam_target.lerp(_hero_pos[_manual_follow], clampf(get_process_delta_time() * 8.0, 0.0, 1.0))
-		_cam_dist = lerpf(_cam_dist, 30.0, 0.05)
+		var mtgt: Vector3 = _hero_pos[_manual_follow] + follow_off + Vector3.UP * 4.2
+		var mdlt: float = get_process_delta_time()
+		if _cam.global_position.distance_to(mtgt) > 25.0:
+			_cam.global_position = mtgt
+		else:
+			_cam.global_position = _cam.global_position.lerp(mtgt, 1.0 - exp(-12.0 * mdlt)) + sh
+		_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
+		_cam.fov = 70.0
+		return
 	elif _kill_cam_t > 0.0:
 		_kill_cam_t = maxf(0.0, _kill_cam_t - get_process_delta_time())
 		if _kill_cam_idx >= 0 and _kill_cam_idx < _hero_pos.size():
-			_cam_target = _cam_target.lerp(_hero_pos[_kill_cam_idx], clampf(get_process_delta_time() * 6.0, 0.0, 1.0))
-		_cam_dist = lerpf(_cam_dist, 34.0, 0.05)
+			var ktgt: Vector3 = _hero_pos[_kill_cam_idx] + follow_off + Vector3.UP * 4.2
+			var kdlt: float = get_process_delta_time()
+			if _cam.global_position.distance_to(ktgt) > 25.0:
+				_cam.global_position = ktgt
+			else:
+				_cam.global_position = _cam.global_position.lerp(ktgt, 1.0 - exp(-10.0 * kdlt)) + sh
+			_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
+			_cam.fov = 70.0
+			return
 	var pitch := deg_to_rad(_cam_pitch)
 	var yaw := deg_to_rad(_cam_yaw) + flip_yaw
 	var offset := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * _cam_dist
