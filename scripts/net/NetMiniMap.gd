@@ -312,11 +312,11 @@ func _draw() -> void:
 		if float(v4.get("hp", 0.0)) <= 0.0:
 			continue
 		var hpos := _world_to_minimap(_view_pos(v4))
-		var hcol := enemy_col if int(v4.get("team", 9)) == TEAM_ENEMY else ally_col
+		var hcol := ally_col if int(v4.get("team", 9)) == player_team else enemy_col
 		var hpr := _hp_ratio(float(v4.get("hp", 0.0)), float(v4.get("maxhp", 1.0)))
 		var rot := float(v4.get("rot", 0.0))
 		# 血环颜色按阵营固定（我方绿 / 敌方红），与单机 Minimap.gd 完全一致
-		var hring: Color = enemy_ring_col if int(v4.get("team", 9)) == TEAM_ENEMY else ally_ring_col
+		var hring: Color = ally_ring_col if int(v4.get("team", 9)) == player_team else enemy_ring_col
 		MinimapDraw.draw_hero(self, hpos, Vector2(sin(rot), cos(rot)), hcol, hpr, nid4 == self_net, false, 0.0, str(v4.get("name", "")), hring)
 
 	# —— 自己回城黄线 ——
