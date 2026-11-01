@@ -2842,9 +2842,18 @@ func _push_event(ev: Dictionary) -> void:
 		return
 	if kind0 == "chat":
 		var ct: float = float(ev.get("t", 0)) / 1000.0
-		if _playing and absf(ct - _t) < 0.9 and _chat_box != null:
-			_chat_box.call("_on_message", str(ev.get("n", "")), int(ev.get("tm", 0)),
-				str(ev.get("txt", "")), int(ev.get("me", 0)) == 1)
+		if _playing and absf(ct - _t) < 0.9:
+			var speaker := str(ev.get("n", ""))
+			if _chat_box != null:
+				_chat_box.call("_on_message", speaker, int(ev.get("tm", 0)),
+					str(ev.get("txt", "")), int(ev.get("me", 0)) == 1)
+			var is_ai: bool = int(ev.get("ai", 0)) == 1
+			if not is_ai and not ev.has("ai"):
+				is_ai = _chat_speaker_is_ai(speaker)   # 兼容旧录像
+			if is_ai:
+				var vs = get_node_or_null("/root/VoiceService")
+				if vs != null and vs.has_method("speak"):
+					vs.call("speak", str(ev.get("txt", "")), speaker)
 		return
 	if kind0 == "feed":
 		var evt4: float = float(ev.get("t", 0)) / 1000.0
@@ -3061,6 +3070,13 @@ func _hero_ar_of(nm: String) -> float:
 		if str((m as Dictionary).get("name", "")) == nm:
 			return float((m as Dictionary).get("ar", 0.0))
 	return 0.0
+
+
+func _chat_speaker_is_ai(nm: String) -> bool:
+	for h in _heroes:
+		if (h is Dictionary) and str(h.get("name", "")) == nm and bool(h.get("ai", false)):
+			return true
+	return false
 
 
 func _hero_name(idx: int) -> String:

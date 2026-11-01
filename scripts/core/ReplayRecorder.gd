@@ -674,8 +674,12 @@ func _on_chat_message(from_name: String, team: int, text: String, is_self: bool)
 	if _saved or not _started:
 		return
 	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	var is_ai := false
+	if is_instance_valid(ChatService) and ChatService.has_method("_is_ai_speaker_name"):
+		is_ai = bool(ChatService.call("_is_ai_speaker_name", from_name))
 	_chat_events.append({"t": int(round(gt * 1000.0)), "k": "chat", "n": str(from_name),
-		"tm": int(team), "txt": str(text), "me": 1 if is_self else 0})
+		"tm": int(team), "txt": str(text), "me": 1 if is_self else 0,
+		"ai": 1 if is_ai else 0})
 
 
 static func _pack_statuses(h) -> Array:
