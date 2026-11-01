@@ -24,6 +24,19 @@ const LINES_KILL := ["漂亮", "这波我拿的", "走位可以", "继续压他"
 const LINES_DIED := ["我被抓了", "有人蹲我", "完了，我死了", "别追了"]
 const LINES_ENEMY_TAUNT := ["就这？", "谢谢人头", "别来了"]
 const LINES_REPLY := ["收到", "明白", "好嘞", "马上", "OK"]
+const LINES_LOW_HP := ["我没血了，先撤", "我残血，回城补一下", "打不了了，我退了"]
+const LINES_PLAYER_LOW := ["你血少了，先退一下", "别硬打，回城补状态", "你没状态，我来顶"]
+const LINES_OBJ_SOON := ["龙快刷了，提前占位置", "准备抢龙，别站太远", "龙要刷新了，抱团"]
+const LINES_OBJ_UP := ["龙出来了，去看看", "主宰刷新了，抱团", "大龙有了，别单走"]
+const LINES_TOWER_PUSH := ["他们塔快掉了，推", "趁现在推塔", "点塔，别追人"]
+const LINES_DEFEND := ["塔要掉了，回防", "先守塔，别出去", "回防，家要没了"]
+const LINES_NUMBERS := ["别去，他们人多", "对面抱团了，小心", "人少，先撤"]
+const LINES_OUTNUMBER := ["可以打，他们人少", "他们分开了，抓单", "上，我们人多"]
+const LINES_DEAD_WAIT := ["别急，等你复活", "我们先稳一下，等你", "复活了再打"]
+const LINES_OVEREXTEND := ["别一个人推太深", "回来，别单走", "一个人别过河"]
+const LINES_SUPPORT := ["我保护你，往前打", "我给你奶，顶住", "跟着我，别怕"]
+const LINES_KILL_AHEAD := ["这波赚了，推塔", "拿到了，继续压", "漂亮，趁势推进"]
+const LINES_KILL_ENEMY := ["这仇记下了", "等会还回来", "别得意"]
 
 var typing := false              # 正在打字：UiManager 据此屏蔽走位/技能输入
 
@@ -40,6 +53,8 @@ var _pending: Array = []         # [{t, hero, text}]
 var _voice_thread: Thread = null
 var _voice_done := false
 var _voice_lines: Array = []
+var _player_last := {"kills": 0, "dead": false, "low": false, "low_cd": 0.0, "dead_said": false}
+var _recent_lines: Array = []
 
 
 func _ready() -> void:
@@ -209,6 +224,7 @@ func _post(from_name: String, team: int, text: String, is_self: bool) -> void:
 # ---------------- 内部：AI 聊天 ----------------
 
 func _scan_ai() -> void:
+	_scan_player_reactions()
 	var heroes := get_tree().get_nodes_in_group("heroes")
 	var human_ids := {}
 	if is_instance_valid(NetSession):
@@ -231,8 +247,9 @@ func _scan_ai() -> void:
 		var pd: int = int(prev[1])
 		_stat[id] = [k, d]
 		if k > pk and _can_speak(h):
+			var ctx_k := _contextual_line(h)
 			if int(h.team) == Config.player_team:
-				_say_later(h, str(LINES_KILL[randi() % LINES_KILL.size()]), randf_range(0.3, 1.0))
+				_say_later(h, ctx_k if ctx_k != "" else str(LINES_KILL[randi() % LINES_KILL.size()]), randf_range(0.3, 1.0))
 			else:
 				_say_later(h, str(LINES_ENEMY_TAUNT[randi() % LINES_ENEMY_TAUNT.size()]), randf_range(0.3, 1.0))
 		if d > pd and _can_speak(h) and int(h.team) == Config.player_team:
@@ -267,6 +284,12 @@ func _ambient_line() -> void:
 	if speakers.is_empty():
 		return
 	var h = speakers[randi() % speakers.size()]
+	# 70% 优先说与当前局势相关的话（残血/龙/推塔/人数差/玩家状态）
+	if randf() < 0.7:
+		var ctx := _contextual_line(h)
+		if ctx != "":
+			_say(h, ctx)
+			return
 	var pool: Array = LINES_AMBIENT
 	if int(h.team) != Config.player_team:
 		pool = LINES_ENEMY
@@ -277,6 +300,179 @@ func _ambient_line() -> void:
 		elif diff <= -5:
 			pool = LINES_BEHIND
 	_say(h, str(pool[randi() % pool.size()]))
+
+
+## 读取当前局势：塔数、龙、金币差、双方站位人数、玩家状态、自身血量
+func _situation(h) -> Dictionary:
+	var st := {
+		"minute": 0, "kill_diff": 0, "my_towers": 0, "foe_towers": 0,
+		"my_tower_hp_min": 1.0, "foe_tower_hp_min": 1.0,
+		"player_dead": false, "player_hp": 1.0, "player_near_allies": 0, "player_near_enemies": 0,
+		"player_deep": false, "near_allies": 0, "near_enemies": 0,
+		"gold_diff": 0, "obj": "", "obj_t": 999.0, "self_hp": 1.0,
+	}
+	if h == null or not is_instance_valid(h):
+		return st
+	st.self_hp = float(h.health) / maxf(1.0, float(h.actual_max_health))
+	if _bm == null or not is_instance_valid(_bm):
+		return st
+	st.minute = int(float(_bm.get("game_time")) / 60.0)
+	st.kill_diff = _kill_diff()
+	# 塔
+	for t in get_tree().get_nodes_in_group("turrets"):
+		if not is_instance_valid(t) or float(t.health) <= 0.0:
+			continue
+		var tt := int(t.team)
+		var ratio: float = float(t.health) / maxf(1.0, float(t.max_health))
+		if tt == Config.player_team:
+			st.my_towers += 1
+			st.my_tower_hp_min = minf(st.my_tower_hp_min, ratio)
+		else:
+			st.foe_towers += 1
+			st.foe_tower_hp_min = minf(st.foe_tower_hp_min, ratio)
+	# 玩家 & 站位
+	var ph = _bm.get("hero")
+	if ph != null and is_instance_valid(ph):
+		st.player_dead = float(ph.health) <= 0.0
+		st.player_hp = float(ph.health) / maxf(1.0, float(ph.actual_max_health))
+		var pp: Vector3 = ph.global_position
+		for a in get_tree().get_nodes_in_group("heroes"):
+			if not is_instance_valid(a) or a == ph:
+				continue
+			if pp.distance_to(a.global_position) <= 16.0:
+				if int(a.team) == Config.player_team:
+					st.player_near_allies += 1
+				else:
+					st.player_near_enemies += 1
+		# 深入敌方半场：沿对角推进，超过 55 且身边没队友
+		st.player_deep = (pp.x + pp.z) * (1.0 if Config.player_team == 0 else -1.0) > 110.0 and st.player_near_allies == 0
+	if h != null and is_instance_valid(h):
+		for a in get_tree().get_nodes_in_group("heroes"):
+			if not is_instance_valid(a) or a == h:
+				continue
+			if h.global_position.distance_to(a.global_position) <= 16.0:
+				if int(a.team) == int(h.team):
+					st.near_allies += 1
+				else:
+					st.near_enemies += 1
+	st.gold_diff = int(float(_bm.get("team_player_gold"))) - int(float(_bm.get("team_enemy_gold")))
+	# 大龙/主宰
+	var ty_t: float = float(_bm.get("tyrant_timer")) if _bm.get("tyrant_timer") != null else 999.0
+	var dr_t: float = float(_bm.get("dragon_timer")) if _bm.get("dragon_timer") != null else 999.0
+	# 大龙 4 分钟才刷；开局计时器为 0 时不要误报
+	if int(st.minute) >= 3:
+		if bool(_bm.get("tyrant_alive")):
+			st.obj = "tyrant"
+		elif bool(_bm.get("dragon_alive")):
+			st.obj = "dragon"
+		elif ty_t > 0.0 and ty_t <= 45.0:
+			st.obj = "tyrant"; st.obj_t = ty_t
+		elif dr_t > 0.0 and dr_t <= 45.0:
+			st.obj = "dragon"; st.obj_t = dr_t
+	return st
+
+
+## 按局势挑一句最贴合当前情况的台词；没有合适情景返回 ""
+func _contextual_line(h) -> String:
+	var st := _situation(h)
+	if not st.is_empty():
+		if float(st.self_hp) < 0.25 and int(st.near_enemies) > 0:
+			return _pick(LINES_LOW_HP)
+		if bool(st.player_dead):
+			return _pick(LINES_DEAD_WAIT)
+		if float(st.player_hp) < 0.26 and not bool(st.player_dead):
+			return _pick(LINES_PLAYER_LOW)
+		if bool(st.player_deep):
+			return _pick(LINES_OVEREXTEND)
+		if int(st.player_near_enemies) >= 2 and int(st.player_near_allies) <= 1:
+			return _pick(LINES_NUMBERS)
+		if int(st.player_near_allies) >= 2 and int(st.player_near_enemies) == 1:
+			return _pick(LINES_OUTNUMBER)
+		if str(st.obj) != "":
+			if float(st.obj_t) > 0.0:
+				return _pick(LINES_OBJ_SOON)
+			return _pick(LINES_OBJ_UP)
+		if float(st.foe_tower_hp_min) < 0.22 and int(st.near_enemies) == 0:
+			return _pick(LINES_TOWER_PUSH)
+		if float(st.my_tower_hp_min) < 0.22:
+			return _pick(LINES_DEFEND)
+		if int(st.near_allies) == 0 and int(st.near_enemies) >= 2:
+			return _pick(LINES_NUMBERS)
+		if int(st.kill_diff) >= 8:
+			return _pick(LINES_AHEAD)
+		if int(st.kill_diff) <= -8:
+			return _pick(LINES_BEHIND)
+		if int(st.near_allies) >= 1 and int(st.self_hp) < 0.5:
+			return _pick(LINES_SUPPORT)
+	return ""
+
+
+func _pick(pool: Array) -> String:
+	if pool.is_empty():
+		return ""
+	# 避免短时间重复同一句
+	var fresh: Array = []
+	for x in pool:
+		if not _recent_lines.has(x):
+			fresh.append(x)
+	var use: Array = fresh if not fresh.is_empty() else pool
+	var line := str(use[randi() % use.size()])
+	_recent_lines.append(line)
+	if _recent_lines.size() > 8:
+		_recent_lines.pop_front()
+	return line
+
+
+## 玩家状态变化（被蹲/残血/阵亡/拿人头）时，AI 队友或对手补一句
+func _scan_player_reactions() -> void:
+	if _bm == null or not is_instance_valid(_bm):
+		return
+	var ph = _bm.get("hero")
+	if ph == null or not is_instance_valid(ph):
+		return
+	var pk := int(ph.kills)
+	var dead: bool = float(ph.health) <= 0.0
+	var hp_ratio: float = float(ph.health) / maxf(1.0, float(ph.actual_max_health))
+	var speakers := _ai_speakers()
+	if speakers.is_empty():
+		return
+	# 玩家拿人头：队友夸一句（对方阵营则嘴硬）
+	if pk > int(_player_last.get("kills", 0)) and _can_speak(ph):
+		var ally_h = null
+		for a in speakers:
+			if is_instance_valid(a) and int(a.team) == Config.player_team:
+				ally_h = a
+				break
+		if ally_h != null:
+			_say_later(ally_h, _pick(LINES_KILL_AHEAD), randf_range(0.3, 0.8))
+		else:
+			var foe_h = speakers[randi() % speakers.size()]
+			if int(foe_h.team) != Config.player_team:
+				_say_later(foe_h, _pick(LINES_KILL_ENEMY), randf_range(0.4, 1.0))
+	_player_last["kills"] = pk
+	# 玩家阵亡：队友劝稳
+	if dead and not bool(_player_last.get("dead", false)):
+		var ally2 = null
+		for a in speakers:
+			if is_instance_valid(a) and int(a.team) == Config.player_team:
+				ally2 = a
+				break
+		if ally2 != null:
+			_say_later(ally2, _pick(LINES_DEAD_WAIT), randf_range(0.6, 1.6))
+	# 玩家残血警告（20 秒冷却一次）
+	var now := Time.get_ticks_msec() / 1000.0
+	_player_last["low_cd"] = maxf(0.0, float(_player_last.get("low_cd", 0.0)) - 1.0)
+	if hp_ratio < 0.28 and not dead and not bool(_player_last.get("low", false)) 			and float(_player_last.get("low_cd", 0.0)) <= 0.0:
+		_player_last["low_cd"] = 20.0
+		var ally3 = null
+		for a in speakers:
+			if is_instance_valid(a) and int(a.team) == Config.player_team:
+				ally3 = a
+				break
+		if ally3 != null:
+			_say_later(ally3, _pick(LINES_PLAYER_LOW), randf_range(0.5, 1.2))
+	_player_last["low"] = hp_ratio < 0.28
+	_player_last["dead"] = dead
 
 
 func _reply_to_player(text: String) -> void:
@@ -323,12 +519,24 @@ func _llm_system_prompt(h) -> String:
 		else:
 			foe += int(x.kills)
 	var stance := "我方人头领先" if diff > 0 else ("我方人头落后" if diff < 0 else "双方人头持平")
+	# 把具体局势塞进提示词，让回复贴合当前局面（塔/龙/玩家状态/金币差）
+	var st := _situation(h)
+	var obj_txt := ""
+	if str(st.get("obj", "")) == "tyrant":
+		obj_txt = "主宰已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "主宰即将刷新"
+	elif str(st.get("obj", "")) == "dragon":
+		obj_txt = "暴君已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "暴君即将刷新"
+	var player_txt := "玩家已阵亡（等你复活）" if bool(st.get("player_dead", false)) else (
+		"玩家血量偏低" if float(st.get("player_hp", 1.0)) < 0.3 else "玩家状态正常")
+	var sit := "我方塔%d座/敌方塔%d座，金币差%+d，%s，%s" % [
+		int(st.get("my_towers", 0)), int(st.get("foe_towers", 0)), int(st.get("gold_diff", 0)),
+		player_txt, obj_txt if obj_txt != "" else "暂无大型资源"]
 	return ("你是手机 MOBA 游戏《王者荣耀》里的 AI 队友，本局操控英雄「%s」，%s。"
 		+ "玩家在队伍频道发言，你要用一句中文口语回他：8~20 字，像真人玩家，"
-		+ "可以给战术建议或带点情绪，不要自称 AI/模型，不要输出引号、括号或换行，只输出这一句话。"
-		+ "当前第 %d 分钟，%s（我方 %d 杀，敌方 %d 杀）。") % [
+		+ "可以结合当前局势给战术建议或带点情绪，不要自称 AI/模型，不要输出引号、括号或换行，只输出这一句话。"
+		+ "当前第 %d 分钟，%s（我方 %d 杀，敌方 %d 杀）。局势：%s。") % [
 		str(h.display_name), "队友" if int(h.team) == Config.player_team else "对手",
-		mins, stance, mine, foe]
+		mins, stance, mine, foe, sit]
 
 
 func _llm_user_prompt(text: String) -> String:
