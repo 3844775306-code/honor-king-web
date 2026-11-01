@@ -4601,8 +4601,10 @@ func _finish_casting():
 			
 			var dir = (pos - global_position).normalized()
 			if dir.length() < 0.1: dir = Vector3.FORWARD
-			
-			var dash_end: Vector3 = global_position + dir * skill.self_displacement
+			# 位移距离：优先 self_displacement；标成 cast_range 的技能（如夏侯惇大招）用它兜底，
+			# 否则 AI/玩家放出来会原地不动（预览圈却显示有位移距离）
+			var disp_len: float = skill.self_displacement if skill.self_displacement > 0.0 else skill.cast_range
+			var dash_end: Vector3 = global_position + dir * disp_len
 			dash_end.y = 0.5
 			dash_move_to(dash_end, 0.16, "sprint")
 		6:  # 护盾

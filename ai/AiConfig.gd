@@ -127,6 +127,24 @@ const DODGE_RANGE: float = 8.0               # 检测弹道的范围
 const DODGE_MARGIN: float = 1.5              # 弹道碰撞安全边距
 const DODGE_CHANCE: float = 0.6              # 躲避概率（0-1）
 
+# ==================== 位移类技能（追击 / 逃跑） ====================
+# AI 以前只会直线走位，位移技能（type=4）几乎只靠连招顺带放。
+# 现在追击够不到时用位移贴脸、被贴身且血量偏低时用位移拉开。
+const DASH_CHASE_MAX_RANGE: float = 14.0     # 追击时愿意用位移技能的最大距离
+const DASH_CHASE_SLACK: float = 1.5          # 突进后仍够不到目标的余量（不够就不浪费）
+const DASH_ESCAPE_THREAT: float = 8.0        # 敌方英雄贴近该距离才考虑位移逃跑
+const DASH_ESCAPE_HP_RATIO: float = 0.55     # 自身生命低于该比例才用位移逃命
+
+# ==================== 残血追击（收人头） ====================
+# 电脑 AI 见到「附近唯一一个血量比自己还少的残血敌人」时会主动追击，
+# 即使自身血量不高也追；追到敌人躲进防御塔、距离过远或对方回血/队友赶到才放弃。
+const CHASE_START_RANGE: float = 18.0        # 发现并开始追击的最大距离
+const CHASE_ABORT_RANGE: float = 24.0        # 追击中拉开到该距离即放弃
+const CHASE_HP_RATIO: float = 0.40           # 目标残血判定：目标当前/最大生命比例上限
+const CHASE_MIN_SELF_RATIO: float = 0.12     # 自身生命低于该比例不追（避免纯送）
+const CHASE_MAX_TIME: float = 12.0           # 单次追击最长时长（秒）
+const CHASE_ALLY_GUARD: float = 12.0         # 目标附近还有别的敌人英雄在该距离内则不追（防一打多）
+
 # ==================== 赶路位移（AI 用位移技能加速转线/回线/刷野） ====================
 const TRAVEL_DASH_MIN_DIST: float = 9.0       # 距目标(move_target)超过该值才考虑位移赶路
 const TRAVEL_DASH_ENEMY_GUARD: float = 15.0   # 该距离内有可见敌方英雄时不赶路（位移留给接战/逃生）

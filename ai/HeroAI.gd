@@ -39,6 +39,10 @@ var _last_target_ref: GameEntity = null
 var _is_dodging: bool = false
 var _defending_high_turret: Turret = null
 
+# --- 残血追击（收人头）：附近唯一的残血敌人，即使自身血量不高也追 ---
+var _chase_target: Hero = null
+var _chase_time: float = 0.0
+
 func _ready():
 	if get_parent() is Hero:
 		hero = get_parent() as Hero
@@ -227,6 +231,90 @@ func _dash_landing_in_enemy_turret(end: Vector3) -> bool:
 	return false
 
 
+# ==================== 位移类技能：追击贴脸 / 逃跑拉开 ====================
+## 取一个当前可用的位移技能（type=4）
+func _pick_dash_skill() -> Dictionary:
+	for i in range(mini(3, hero.skills.size())):
+		if hero.skill_levels[i] <= 0:
+			continue
+		if hero.skill_cooldowns[i] > 0.0:
+			continue
+		var sk: Skill = hero.skills[i]
+		if sk == null or sk.type != 4:
+			continue
+		if hero.mana < sk.mana_cost:
+			continue
+		# 与 Hero 执行同口径：优先 self_displacement，没有就用 cast_range
+		var dash_len: float = sk.self_displacement if sk.self_displacement > 0.0 else sk.cast_range
+		if dash_len <= 0.5:
+			continue
+		# 英雄前置门槛（兰陵王需隐身等）不满足时不选，避免反复白试
+		if hero.skill_prereq_blocked(i):
+			continue
+		return {"index": i, "skill": sk, "len": dash_len}
+	return {}
+
+
+## 追击：目标在普攻距离外时，用位移技能突进贴脸（落点不进军敌塔）
+func _try_chase_dash(target: GameEntity) -> bool:
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	if hero.is_recalling:
+		return false
+	var dist: float = hero.global_position.distance_to(target.global_position)
+	var aa: float = hero.attack_range * 0.01
+	if dist <= aa + 0.6:
+		return false                      # 已经在普攻距离内，不浪费位移
+	if dist > AiConfig.DASH_CHASE_MAX_RANGE:
+		return false
+	var d := _pick_dash_skill()
+	if d.is_empty():
+		return false
+	if dist > float(d["len"]) + aa + AiConfig.DASH_CHASE_SLACK:
+		return false                      # 突进后还够不到，不追
+	var dir: Vector3 = target.global_position - hero.global_position
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return false
+	dir = dir.normalized()
+	var end: Vector3 = hero.global_position + dir * float(d["len"])
+	if _dash_landing_in_enemy_turret(end):
+		return false
+	hero.move_target = Vector3.ZERO      # 清掉走路指令，免得突进被移动逻辑覆盖
+	hero._start_casting(int(d["index"]), d["skill"] as Skill, target.global_position)
+	return true
+
+
+## 逃跑：被敌方英雄贴身且血量偏低，朝最近己方防御塔方向位移拉开
+func _try_escape_dash() -> bool:
+	if hero.is_recalling:
+		return false
+	if hero.health > hero.actual_max_health * AiConfig.DASH_ESCAPE_HP_RATIO:
+		return false
+	var threat: Hero = perception.find_nearest_enemy_hero(AiConfig.DASH_ESCAPE_THREAT)
+	if threat == null:
+		return false
+	var d := _pick_dash_skill()
+	if d.is_empty():
+		return false
+	var dir: Vector3 = hero.global_position - threat.global_position
+	dir.y = 0.0
+	var turret: Turret = perception.find_nearest_friendly_turret(30.0)
+	if turret != null and is_instance_valid(turret):
+		var to_t: Vector3 = turret.global_position - hero.global_position
+		to_t.y = 0.0
+		if to_t.length() > 1.0:
+			dir = to_t
+	if dir.length() < 0.1:
+		dir = Vector3(0.0, 0.0, 1.0)
+	dir = dir.normalized()
+	var end: Vector3 = hero.global_position + dir * float(d["len"])
+	hero.move_target = Vector3.ZERO      # 清掉走路指令，保证撤退位移真正生效
+	hero._start_casting(int(d["index"]), d["skill"] as Skill, end)
+	return true
+
+
+
 # ==================== 主循环 ====================
 func _process(delta):
 	# --- 塔攻击检测 ---
@@ -250,6 +338,11 @@ func _process(delta):
 
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
 	skill_tactics.update_combo(delta)
+
+	# --- 残血追击：附近只有一个血量比自己还低的残血敌人时，无视自身血量偏低也要追 ---
+	# 追到「对方躲进防御塔 / 距离过远 / 对方回血或队友赶到」才放弃（见 _update_finish_chase）
+	if _update_finish_chase(delta):
+		return
 
 	# --- 复活/泉水检测 ---
 	var spawn = Vector3(-60, 0, 60) if hero.team == Config.Team.PLAYER else Vector3(60, 0, -60)
@@ -319,7 +412,9 @@ func _process(delta):
 	# --- 近身目标技能 ---
 	if hero.manual_target and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0:
 		var skill_dist := hero.global_position.distance_to(hero.manual_target.global_position)
-		if skill_dist < AiConfig.SKILL_USE_RANGE:
+		# 追英雄时先考虑位移贴脸（够不到才用，已在普攻距离内不会浪费）
+		var used_dash: bool = hero.manual_target is Hero and _try_chase_dash(hero.manual_target)
+		if not used_dash and skill_dist < AiConfig.SKILL_USE_RANGE:
 			_try_use_skills(hero.manual_target)
 	else:
 		hero.manual_target = null
@@ -558,6 +653,9 @@ func _move_to_friendly_turret() -> void:
 # 撤退行为：清目标、往最近的己方塔靠（不主动接战，避免半血边打边退）
 func _retreat_behavior() -> void:
 	hero.manual_target = null
+	# 被贴身且血量偏低：先用位移拉开，再往己方塔撤
+	if _try_escape_dash():
+		return
 	_move_to_friendly_turret()
 
 
@@ -620,6 +718,87 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if target.global_position.distance_to(entity.global_position) < AiConfig.FRIENDLY_TURRET_CLOSE:
 			return true
 	return false
+
+
+# ==================== 残血追击（收人头） ====================
+# 每帧调用；返回 true = 本帧处于追击状态（_process 直接 return，不再跑常规决策）
+func _update_finish_chase(delta: float) -> bool:
+	if _chase_target != null and (not is_instance_valid(_chase_target) or _chase_target.health <= 0):
+		_chase_target = null
+		_chase_time = 0.0
+	if _chase_target != null:
+		var dist := hero.global_position.distance_to(_chase_target.global_position)
+		var t_ratio := _chase_target.health / maxf(_chase_target.actual_max_health, 1.0)
+		var give_up := dist > AiConfig.CHASE_ABORT_RANGE \
+			or _is_under_enemy_tower(_chase_target) \
+			or _chase_time > AiConfig.CHASE_MAX_TIME \
+			or _chase_target.health >= hero.health \
+			or t_ratio > AiConfig.CHASE_HP_RATIO + 0.15 \
+			or _enemy_reinforced(_chase_target)
+		if give_up:
+			_chase_target = null
+			_chase_time = 0.0
+	if _chase_target == null:
+		_chase_target = _pick_finish_target()
+		if _chase_target == null:
+			return false
+	_chase_time += delta
+	# Hero 自身带 AI 追击：manual_target 在射程外会自动朝目标移动（move_target 必须清空，否则优先于追击）
+	hero.manual_target = _chase_target
+	hero.move_target = Vector3.ZERO
+	state = State.PUSH
+	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
+	if _try_chase_dash(_chase_target):
+		return true
+	if hero.global_position.distance_to(_chase_target.global_position) < AiConfig.SKILL_USE_RANGE:
+		_try_use_skills(_chase_target)
+	return true
+
+
+## 附近唯一的「血量比自己还少」的残血敌人（不在塔下、没有敌人增援）才值得追
+func _pick_finish_target() -> Hero:
+	if hero.health < hero.actual_max_health * AiConfig.CHASE_MIN_SELF_RATIO:
+		return null
+	var best: Hero = null
+	var count := 0
+	for entity in hero.get_tree().get_nodes_in_group("heroes"):
+		if not (entity is Hero) or entity == hero:
+			continue
+		var eh := entity as Hero
+		if eh.team == hero.team or eh.health <= 0:
+			continue
+		if eh.is_untargetable_by_enemies():
+			continue
+		if hero.global_position.distance_to(eh.global_position) > AiConfig.CHASE_START_RANGE:
+			continue
+		if _is_under_enemy_tower(eh):
+			continue
+		if _enemy_reinforced(eh):
+			continue
+		var ratio := eh.health / maxf(eh.actual_max_health, 1.0)
+		if ratio > AiConfig.CHASE_HP_RATIO:
+			continue
+		if eh.health >= hero.health:
+			continue
+		best = eh
+		count += 1
+	if count != 1:
+		return null
+	return best
+
+
+## 目标身边（CHASE_ALLY_GUARD 内）还有别的敌方英雄 → 视为有增援，不追
+func _enemy_reinforced(target: Hero) -> bool:
+	for entity in hero.get_tree().get_nodes_in_group("heroes"):
+		if not (entity is Hero) or entity == target or entity == hero:
+			continue
+		var eh := entity as Hero
+		if eh.team == hero.team or eh.health <= 0:
+			continue
+		if eh.global_position.distance_to(target.global_position) <= AiConfig.CHASE_ALLY_GUARD:
+			return true
+	return false
+
 
 
 # 塔下我方小兵总血量
@@ -993,3 +1172,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+

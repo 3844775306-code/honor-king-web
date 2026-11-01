@@ -166,6 +166,8 @@ func force_cast(skill_index: int, target_pos: Vector3) -> bool:
 func _get_candidates(target: GameEntity = null) -> Array:
 	var result := []
 	for i in range(hero.skills.size()):
+		if hero.skills[i] == null:      # 空技能槽（如未配第 4 技能）：直接跳过，避免空引用崩溃
+			continue
 		if hero.skill_levels[i] <= 0:
 			continue
 		if hero.skill_cooldowns[i] > 0:
