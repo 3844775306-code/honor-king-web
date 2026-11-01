@@ -87,6 +87,7 @@ var _tgt_panel = null
 var _rview = null
 var _rview_layer: CanvasLayer = null
 var _last_hero_rows: Array = []
+var _flash_cache := {}   # 单位血条受伤闪橙：key -> {hp,t,amt}
 var _rb_cache := {}
 var _det_cache := {}      # hero idx -> 操作盘/HUD 细节（aa/sx/sa/summoner/recall）
 var _tt_cache: Array = []
@@ -1059,16 +1060,20 @@ func _apply_frame(t: float) -> void:
 			if hpv > 0.5 and prev_hp - hpv >= 30.0:
 				_mm_pings.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0, "t0": _t})
 			node2["prev_hp"] = hpv
+			var _uf: Array = _unit_flash("t%d" % i, hpv, maxf(0.001, get_process_delta_time()))
 			_hud_turrets.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0,
 				"team": int(td0.get("team", 0)), "type": str(td0.get("type", "outer")),
 				"alive": 1 if hpv > 0.5 else 0, "hp": hpv, "mx": maxf(1.0, float(node2["max"])),
-				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1})
+				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1,
+				"flash_t": _uf[0], "flash_amt": _uf[1]})
 		if hpv > 0.5 and i < _turrets.size():
 			var td: Dictionary = _turrets[i]
+			var _uf2: Array = _unit_flash("t%d" % i, hpv, maxf(0.001, get_process_delta_time()))
 			_unit_world.append({"kind": "turret", "pos": Vector3(float(td.get("x", 0)) / 100.0, 0.0, float(td.get("z", 0)) / 100.0),
 				"hp": hpv, "max": maxf(1.0, float(node2["max"])), "team": int(td.get("team", 0)),
 				"name": str(td.get("type", "")), "sub": str(td.get("type", "")),
-				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1})
+				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1,
+				"flash_t": _uf2[0], "flash_amt": _uf2[1]})
 	# 小兵：相邻两帧按 id 插值（3Hz 采样也能走得顺）
 	var mi := _find_mini_frame(t)
 	var rows: Array = []      # [id, x, z, type, team]
@@ -1107,9 +1112,11 @@ func _apply_frame(t: float) -> void:
 			node3.visible = true
 			node3.set_meta("dying", false)
 			_hud_minions.append({"wx": float(r[1]), "wz": float(r[2]), "team": int(r[4])})
+			var _mf: Array = _unit_flash("m%d" % int(r[0]), float(r[5]), maxf(0.001, get_process_delta_time()))
 			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
 				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
-				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)]})
+				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)],
+				"flash_t": _mf[0], "flash_amt": _mf[1]})
 			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
 			var nowp: Vector3 = Vector3(float(r[1]), 0.0, float(r[2]))
 			var prevp: Vector3 = node3.get_meta("prev", nowp)
@@ -1196,11 +1203,13 @@ func _apply_frame(t: float) -> void:
 				jroot.position.y = -minf(0.4, jage * 1.0)
 				if jage > 1.0:
 					jroot.visible = false
+			var _jf: Array = _unit_flash("j%d" % ji2, jhp, maxf(0.001, get_process_delta_time()))
 			if jroot.visible:
 				_unit_world.append({"kind": "jungle", "pos": jroot.position,
 					"hp": jhp, "max": maxf(1.0, float(jnode["max"])), "team": 2,
 					"name": str(_jungle_meta[ji2].get("name", "")) if ji2 < _jungle_meta.size() else "",
-					"sub": str(_jungle_meta[ji2].get("name", "")) if ji2 < _jungle_meta.size() else ""})
+					"sub": str(_jungle_meta[ji2].get("name", "")) if ji2 < _jungle_meta.size() else "",
+					"flash_t": _jf[0], "flash_amt": _jf[1]})
 				jroot.position = Vector3(
 					lerpf(float(jra[1]), float(jrb2[1]) if jrb2.size() > 1 else float(jra[1]), jk) / 100.0,
 					0.0,
@@ -1543,7 +1552,7 @@ func _ui_row_for(idx: int) -> Dictionary:
 				_det_cache[idx] = (row as Array)[4]
 			if fr.get("tt", []) is Array and not (fr.get("tt", []) as Array).is_empty():
 				_tt_cache = fr.get("tt", [])
-			return {"gold": int((row as Array)[1]), "tgt": (row as Array)[2], "rb": rb}
+			return {"gold": int((row as Array)[1]), "tgt": (row as Array)[2], "rb": rb, "tgold": (int((row as Array)[5]) if (row as Array).size() > 5 else -1), "equips": (row as Array)[6] if (row as Array).size() > 6 else []}
 	return {}
 
 
@@ -1928,15 +1937,38 @@ func _toggle_global_panel() -> void:
 		var hs: Dictionary = _hero_state[i] if i < _hero_state.size() and _hero_state[i] is Dictionary else {}
 		var ui := _ui_row_for(i)
 		var mx: float = maxf(1.0, float(hs.get("mx", 1.0)))
+		# 装备/总经济：优先用 2Hz ui 采样（新录像），旧录像回退到终局 final 行
+		var eq_ids: Array = []
+		var ui_eq = ui.get("equips", [])
+		if ui_eq is Array and not (ui_eq as Array).is_empty():
+			eq_ids = ui_eq
+		else:
+			for fr in _final_rows:
+				if (fr as Array).size() > 14 and int((fr as Array)[0]) == i:
+					eq_ids = (fr as Array)[14] if (fr as Array)[14] is Array else []
+					break
+		var equips: Array = []
+		for iid in eq_ids:
+			var it2: Dictionary = ItemDatabase.get_item(str(iid))
+			equips.append([str(it2.get("name", iid)), int(it2.get("tier", 1)), str(iid)])
+		# 总经济：新录像 ui 采样带 tgold；旧录像回退终局 final[5]；再退当前金币
+		var tgold: int = int(ui.get("tgold", -1))
+		if tgold < 0:
+			for fr2 in _final_rows:
+				if (fr2 as Array).size() > 5 and int((fr2 as Array)[0]) == i:
+					tgold = int((fr2 as Array)[5])
+					break
+		if tgold < 0:
+			tgold = int(ui.get("gold", 0))
 		rows.append({
 			"name": str(meta.get("name", "")), "hero": str(meta.get("name", "")),
 			"team": int(meta.get("team", 0)), "level": int(hs.get("lvl", 1)),
 			"own": i == int(_follow_hero), "hp_ratio": clampf(float(hs.get("hp", 0.0)) / mx, 0.0, 1.0),
 			"k": int(hs.get("k", 0)), "d": int(hs.get("d", 0)), "a": int(hs.get("a", 0)),
-			"gold": int(ui.get("gold", 0)), "is_ai": bool(meta.get("ai", true)),
+			"gold": tgold, "is_ai": bool(meta.get("ai", true)),
 			"role": str(meta.get("role", "")), "dead": int(hs.get("alive", 1)) == 0,
 			"respawn": float(hs.get("revive", 0.0)),
-			"chips": [], "skills": [], "lane": -1, "mark": 0, "equips": [],
+			"chips": [], "skills": [], "lane": -1, "mark": 0, "equips": equips, "equip_ids": eq_ids,
 		})
 	_rview.set_rows(rows, "attr")
 	_rview.visible = true
@@ -2265,6 +2297,21 @@ func _update_replay_wukong_cloud(i: int, nm: String, y: float, x: float, z: floa
 			var last: Vector3 = nd.get("last", Vector3(x, 0, z))
 			var d := Vector3(x - last.x, 0.0, z - last.z)
 			WukongCloudScript.tick(cl, d, 10.0, _t, true)
+
+
+## 单位血条闪橙（同 WorldBarPainter 的 flash_t/flash_amt）：掉血瞬间 0.5s 渐变橙段
+func _unit_flash(key: String, hp: float, dt: float) -> Array:
+	var e: Dictionary = _flash_cache.get(key, {})
+	var prev: float = float(e.get("hp", hp))
+	var ft: float = float(e.get("t", 0.0))
+	var fa: float = float(e.get("amt", 0.0))
+	if hp < prev - 0.5:
+		fa = prev - hp
+		ft = 0.5
+	elif ft > 0.0:
+		ft = maxf(0.0, ft - dt)
+	_flash_cache[key] = {"hp": hp, "t": ft, "amt": fa}
+	return [ft, fa]
 
 
 func _find_bullet_frame(t: float) -> int:
@@ -3003,6 +3050,9 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
+
+
 
 
 
