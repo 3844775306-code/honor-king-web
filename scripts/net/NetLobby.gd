@@ -36,8 +36,8 @@ const PAGE_PAD_Y := 40          # 页面上下内边距
 # 顺序选人（与单机 BattleManager 同款蛇形 10 步：[team, seat]，team0=我方）
 const SEL_DRAFT_ORDER := [[0, 0], [1, 0], [1, 1], [0, 1], [0, 2], [1, 2], [1, 3], [0, 3], [0, 4], [1, 4]]
 const SEL_DRAFT_TURN_TIME := 20.0
-const AUTO_START_DELAY := 1.4   # 全员锁定 → 自动开局前的停顿（给「全员就绪」反馈）
-const ROUTE_DELAY := 0.45       # 加载层最短显示时长，之后才切场景
+const AUTO_START_DELAY := 5.0   # 全员锁定 → 5 秒倒计时（同单机 BattleManager.PICK_COUNTDOWN）
+const ROUTE_DELAY := 2.0        # 加载层最短显示时长（同单机加载界面 2 秒等待），之后才切场景
 
 # --- 操作设置页（PlayerPrefs.opt_* / set_opt，键名与局内读取保持一致） ---
 const CTRL_KEYS := ["siege_keys", "target_prio", "auto_chase", "lock_portrait", "flash_dir",
@@ -1171,22 +1171,37 @@ func _process(delta: float) -> void:
 # ---------- 全员就绪 → 自动开局（host 权威；无需任何人点按钮） ----------
 
 func _tick_auto_start(delta: float) -> void:
-	if _role != 0 or _auto_start_done:
+	if _auto_start_done:
 		return
-	if not NetSession._all_active_picked() or (_draft_step >= 0 and not _draft_done()):
-		_auto_start_wait = -1.0   # 未锁齐 / 顺序选人未走完 / 有人解锁 → 取消待开局计时
+	var ready := false
+	if _role == 0:
+		ready = NetSession._all_active_picked() and (_draft_step < 0 or _draft_done())
+	else:
+		# 客机：顺序选人走完 + 10 手选满 → 本地同步同一段 5 秒倒计时（开局由 host 广播相位触发切场景）
+		ready = _draft_done() and _draft_picks.size() >= 10
+	if not ready:
+		_auto_start_wait = -1.0
+		if _role != 0 and _stage_sub != null and not _draft_active():
+			_stage_sub.text = "等待房主开始对局…" if _draft_done() else _stage_sub.text
 		return
 	if _auto_start_wait < 0.0:
-		_auto_start_wait = AUTO_START_DELAY   # 刚锁齐：起计时并给「全员就绪」反馈
+		_auto_start_wait = AUTO_START_DELAY
 	var left := _auto_start_wait
 	_auto_start_wait -= delta
+	var secs: int = maxi(0, int(ceil(maxf(left, 0.0))))
 	if _auto_start_lab != null:
-		_auto_start_lab.text = "全员已就绪 · %.1fs 后进入对局…" % maxf(left, 0.0)
+		_auto_start_lab.text = "双方阵容已定 · %d 秒后进入对局…" % secs
 		_auto_start_lab.add_theme_color_override("font_color", COL_OK)
+	# 顶部倒计时环大字（同单机选人结束倒计时 5→1）
+	if _countdown_lab != null:
+		_countdown_lab.text = str(maxi(secs, 1))
+	if _stage_sub != null and secs > 0:
+		_stage_sub.text = "全员就绪 · 倒计时 %d 秒" % secs
 	if _auto_start_wait > 0.0:
 		return
 	_auto_start_done = true   # 防重入：本局只触发一次
-	NetSession.start_match()
+	if _role == 0:
+		NetSession.start_match()
 
 
 # ---------- 进入对局：加载层（复用 LoadingScreen）→ 延迟切场景 ----------
@@ -1201,7 +1216,7 @@ func _show_loading_then(path: String) -> void:
 		_loading.manual_progress = true
 		_loading.hold_full = true
 		_loading.process_mode = Node.PROCESS_MODE_ALWAYS
-		_loading.setup(_loading_heroes(), "进入对局", "王者峡谷 · 5v5", 0.4)
+		_loading.setup(_loading_heroes(), "进入对局", "王者峡谷 · 5v5", 2.0)
 		add_child(_loading)
 	_loading.visible = true
 	_loading.set_progress(0.0)
@@ -1370,6 +1385,9 @@ func _draft_sub_text() -> String:
 
 
 func _tick_draft_ui() -> void:
+	# 开局 5 秒倒计时期间：标题/副行/环内数字由 _tick_auto_start 接管，别被选人页刷新覆盖
+	if _auto_start_wait >= 0.0:
+		return
 	if _stage_title != null:
 		_stage_title.text = _draft_title_text()
 	if _stage_sub != null:
@@ -1956,12 +1974,12 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	if hero != "":
 		accent = HeroPickData.ROLE_COLORS.get(role, accent)
 	var p := PanelContainer.new()
-	p.custom_minimum_size = Vector2(196, 136)
+	p.custom_minimum_size = Vector2(236, 142)
 	p.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD if mine else accent, mine, 0.72))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	p.add_child(row)
-	row.add_child(SelectArt.Avatar.new(hero, accent, 44))
+	row.add_child(SelectArt.Avatar.new(hero, accent, 48))
 	var v := VBoxContainer.new()
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	v.add_theme_constant_override("separation", 1)
@@ -1974,16 +1992,20 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	v.add_child(head)
 
+	# 昵称行（同单机席位卡：「我 · 昵称」/「队友 1 · 昵称」/「对手 1 · 昵称」）
 	var nick := str(seat.get("name", ""))
 	if nick == "":
 		nick = "AI %d" % idx
-	var pname := _mk_label(nick, _fs(UiKit.FS_XS),
+	var nick_line := ("我 · %s" % nick) if mine else (("对手 %d · %s" % [idx, nick]) if enemy else ("队友 %d · %s" % [idx, nick]))
+	var pname := _mk_label(nick_line, _fs(UiKit.FS_XS),
 		UiKit.C_GOLD if mine else (Color(1.0, 0.62, 0.58) if enemy else UiKit.C_TEAM0.lightened(0.45)))
 	pname.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	pname.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	v.add_child(pname)
 
-	var hero_lab := _mk_label(hero if hero != "" else "待选", _fs(UiKit.FS_SM),
+	# 英雄名行（头像旁第二行，选中后显示真实英雄名；未选显示待选/选择中）
+	var hero_line := hero if hero != "" else ("选择中" if mine else "待选")
+	var hero_lab := _mk_label(hero_line, _fs(UiKit.FS_SM),
 		UiKit.C_GOLD if mine else (COL_TEXT if hero != "" else COL_DIM))
 	hero_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	hero_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
