@@ -22,7 +22,7 @@ const PRIO_BTN_SIZE := 165.0
 
 # 技能扇形（同 TouchController：圆弧圆心=普攻中心，半径 560，角度 70/35/0°，键 260）
 const SKILL_SIZE := 260.0
-const UPGRADE_SIZE := 120.0
+const UPGRADE_SIZE := 176.0
 const FAN_RADIUS := 560.0
 const SKILL_FAN_ANGLES_DEG := [70.0, 35.0, 0.0]
 # 第4技能按钮（兰陵王·隐身）圆心（同 TouchController 字面量）

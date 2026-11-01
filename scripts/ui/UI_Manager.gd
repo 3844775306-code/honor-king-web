@@ -135,6 +135,7 @@ var rec_option_row: Control = null     # 多件素材都能买时的自选购买
 var rec_option_btns: Array = []
 var rec_option_sig: String = ""
 var settings_btn: Button = null              # 推荐装下面的「设置」按钮
+var _settings_btn_h := 36.0                  # 移动端加大后的按钮高度
 var settings_panel: Control = null
 var surrender_status_label: Label = null
 var surrender_vote_running: bool = false
@@ -722,11 +723,14 @@ func _create_info_labels():
 	# 设置按钮：推荐装下面，点开调音量 / 发起投降
 	settings_btn = Button.new()
 	settings_btn.text = "设置"
+	var mobile_ui := Config.on_mobile()
+	var sw := 136.0 if mobile_ui else 92.0
+	_settings_btn_h = 58.0 if mobile_ui else 36.0
 	settings_btn.anchor_left = 1.0; settings_btn.anchor_top = 0.0; settings_btn.anchor_right = 1.0
-	settings_btn.offset_left = -104.0; settings_btn.offset_top = 308
-	settings_btn.offset_right = -12.0; settings_btn.offset_bottom = 344
+	settings_btn.offset_left = -12.0 - sw; settings_btn.offset_top = 308
+	settings_btn.offset_right = -12.0; settings_btn.offset_bottom = 308.0 + _settings_btn_h
 	settings_btn.add_theme_font_override("font", UiKit.font())
-	settings_btn.add_theme_font_size_override("font_size", 16)
+	settings_btn.add_theme_font_size_override("font_size", 24 if mobile_ui else 16)
 	settings_btn.add_theme_color_override("font_color", UiKit.C_TEXT)
 	settings_btn.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, false))
 	settings_btn.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, false))
@@ -2101,7 +2105,7 @@ func _sync_rec_options(opts: Array, gold: int) -> void:
 		if rows > 0:
 			st_top = REC_OPTION_TOP + float(rows) * (REC_OPTION_H + 8.0) + 8.0
 		settings_btn.offset_top = st_top
-		settings_btn.offset_bottom = st_top + 36.0
+		settings_btn.offset_bottom = st_top + _settings_btn_h
 
 # ==================== 设置面板（音量 / 投降） ====================
 func _master_volume_pct() -> float:

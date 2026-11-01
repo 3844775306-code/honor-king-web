@@ -163,7 +163,7 @@ const COL_ENEMY := Color(0.95, 0.32, 0.30)
 const HUD_BASE := Vector2(1600.0, 900.0)
 
 # 接管相机：复刻主机固定俯视镜头（BattleManager：fov70 / -70°俯角 / 自英雄偏移(0,8,5.33)=原(0,12,8)÷1.5 画面放大1.5倍）
-const CAM_FOLLOW_OFF := Vector3(0.0, 12.0, 8.0)   # 同主机：初始跟随偏移（还原镜头，无放大）
+const CAM_FOLLOW_OFF := Vector3(0.0, 12.0, 6.93)   # 同主机：固定俯角下让英雄居中
 const CAM_FP_EYE := Vector3(0.0, 2.4, 0.0)    # 第一人称眼高（同主机；英雄模型总×3 后约头顶 2/3）
 const MM_GAZE_MS := 1200                       # 小地图轻点跳转保持毫秒（主机单击仅一帧，放宽防误触无感）
 # 普攻拖拽选敌阈值（与 Hero._handle_attack_wheel_input 同义）
@@ -337,6 +337,7 @@ func _ready() -> void:
 	_build_buff_row()
 	_build_yuanliu_switch()
 	_build_settings()
+	_build_roster_hit()
 	_build_roster_panel()
 	_build_shop_panel()
 	_build_rec_bar()
@@ -1962,22 +1963,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 						model_ref.get_node_or_null("ModelPivot/LegR")],
 					"leg_swing": 0.52 if name == "super" else 0.62}
 		WalkFeel.attach(node, model_ref, wopts)
-	# 自己高亮：淡蓝竖直光柱（从头顶向上）
-	if nid == _self_net and typ == NET_HERO:
-		var mark := MeshInstance3D.new()
-		var cy := CylinderMesh.new()
-		cy.top_radius = 0.18
-		cy.bottom_radius = 0.18
-		cy.height = 4.0
-		var mmat := StandardMaterial3D.new()
-		mmat.albedo_color = Color(0.3, 0.9, 1.0, 0.3)
-		mmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mmat.emission_enabled = true
-		mmat.emission = Color(0.2, 0.8, 1.0)
-		mark.mesh = cy
-		mark.material_override = mmat
-		mark.position = Vector3(0.0, head_off + 0.3, 0.0)
-		node.add_child(mark)
+	# 自己英雄不再额外加竖直光柱（与单机一致，仅保留脚下队伍环）
 	var view := {"node": node, "type": typ, "team": team, "name": name,
 		"hp": 0.0, "maxhp": 1.0, "bar_off": head_off, "target": null, "set": false,
 		"level": 1, "mana": 0.0, "maxmana": 1.0, "shield": 0.0,
@@ -2372,6 +2358,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		if k.echo:
 			return
 		if not _owned:
+			# 未接管/观战也能看全局英雄面板（同 host：C/T 随时可开）
+			if k.pressed and k.physical_keycode == KEY_C:
+				_toggle_roster("attr")
+			elif k.pressed and k.physical_keycode == KEY_T:
+				_toggle_roster("team")
+			elif k.pressed and k.physical_keycode == KEY_ESCAPE and _rp and _rp.visible:
+				_rp.hide_panel()
 			return
 		if not k.pressed:
 			# 松开 1/2/3：结束 type0「按住瞄准-松手施放」（_pending_skill 在按住期驱动准星）
@@ -3503,6 +3496,27 @@ func _build_yuanliu_switch() -> void:
 	cl.add_child(_ys)
 
 # —— P3c 属性(C)/队伍(T)面板：host _rpc_roster，模态盖过触摸层(101) ——
+# 顶右侧战况带点击区：与 host 版式一致（右锚 -781..-371 / top 6..196），点开属性（全局英雄）面板
+func _build_roster_hit() -> void:
+	var cl := CanvasLayer.new()
+	cl.layer = 45   # 高于 HUD(20)/战报(40)，低于小地图(80)/各模态面板
+	add_child(cl)
+	var hit := Button.new()
+	hit.name = "RosterBandHit"
+	hit.flat = true
+	hit.focus_mode = Control.FOCUS_NONE
+	hit.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	hit.anchor_left = 1.0
+	hit.anchor_right = 1.0
+	hit.offset_left = -781.0
+	hit.offset_right = -371.0
+	hit.offset_top = 6.0
+	hit.offset_bottom = 196.0
+	hit.tooltip_text = "查看全局英雄面板（同主机点战况带 / C 键）"
+	hit.pressed.connect(func(): _toggle_roster("attr"))
+	cl.add_child(hit)
+
+
 func _build_roster_panel() -> void:
 	var cl := CanvasLayer.new()
 	cl.layer = 101

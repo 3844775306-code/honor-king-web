@@ -15,6 +15,8 @@ var _intro_time: float = 0.0
 var _intro_start: Vector3 = Vector3.ZERO
 var _intro_end: Vector3 = Vector3.ZERO
 const INTRO_DURATION: float = 2.8
+# 固定俯角 -60° 的跟随机位：12/tan60°≈6.93，让镜头正对英雄脚下的地面点（英雄居中）
+const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 6.93)
 var selected_summoner: String = "flash"
 var selected_hero_type: String = ""
 var select_ui: CanvasLayer = null
@@ -5337,7 +5339,7 @@ func set_spectate_target(target: Hero) -> void:
 func _follow_camera_unit(unit: Hero, delta: float) -> void:
 	if not is_instance_valid(unit):
 		return
-	var follow_offset := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
+	var follow_offset := CAMERA_FOLLOW_OFFSET.rotated(Vector3.UP, cam_yaw)
 	if unit.display_name == "兰陵王" and unit.lanling_stealth_active:
 		follow_offset *= 1.25
 	var target: Vector3 = unit.global_position + follow_offset + cam_pan_offset
@@ -5354,7 +5356,7 @@ func _begin_intro() -> void:
 	intro_active = true
 	_intro_waiting = true
 	_intro_time = 0.0
-	var follow := Vector3(0, 12, 8).rotated(Vector3.UP, cam_yaw)
+	var follow := CAMERA_FOLLOW_OFFSET.rotated(Vector3.UP, cam_yaw)
 	_intro_end = hero.global_position + follow
 	# 起始机位沿同一俯视方向拉远、抬高；随后插值回正常跟随位
 	_intro_start = _intro_end + Vector3(0, 70, 130).rotated(Vector3.UP, cam_yaw)

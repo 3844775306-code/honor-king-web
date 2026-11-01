@@ -13,9 +13,13 @@ var _edit: LineEdit = null
 var _chat_btn: Button = null
 var _mic_btn: Button = null
 var _close_btn: Button = null
+var _mobile := false
+var _btn_size := Vector2(88, 42)
 
 
 func _ready() -> void:
+	_mobile = Config.on_mobile()
+	_btn_size = Vector2(132, 60) if _mobile else Vector2(88, 42)
 	name = "ChatBox"
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -27,7 +31,7 @@ func _ready() -> void:
 
 
 func _build_widgets() -> void:
-	var fs := int(round(17.0 * UiKit.scale()))
+	var fs := int(round((22.0 if _mobile else 17.0) * UiKit.scale()))
 	_chat_btn = _mk_btn("聊天", fs, UiKit.C_TEAM0)
 	_chat_btn.name = "ChatToggle"
 	_chat_btn.tooltip_text = "打开聊天输入（Enter 也可）"
@@ -48,7 +52,7 @@ func _build_widgets() -> void:
 	_edit.placeholder_text = "说点什么…（Enter 发送 / Esc 关闭）"
 	_edit.max_length = 40
 	_edit.visible = false
-	_edit.add_theme_font_size_override("font_size", int(round(20.0 * UiKit.scale())))
+	_edit.add_theme_font_size_override("font_size", int(round((24.0 if _mobile else 20.0) * UiKit.scale())))
 	_edit.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
 	_edit.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.45))
 	var st: StyleBoxFlat = UiKit.flat(0.60, 10, 2, Color(0.55, 0.78, 1.0, 0.85),
@@ -63,7 +67,7 @@ func _build_widgets() -> void:
 func _mk_btn(txt: String, fs: int, col: Color) -> Button:
 	var b := Button.new()
 	b.text = txt
-	b.custom_minimum_size = Vector2(88, 42)
+	b.custom_minimum_size = _btn_size
 	b.add_theme_font_size_override("font_size", fs)
 	b.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
 	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", col, false))
@@ -78,16 +82,18 @@ func _process(_delta: float) -> void:
 	if size != vp:
 		size = vp
 	# 输入行贴在消息区下面：聊天 / 输入框 / 语音 / 关闭
-	var row_y: float = vp.y - BOTTOM + 66.0
+	var row_y: float = vp.y - BOTTOM + (40.0 if _mobile else 66.0)
 	var x: float = MX
+	var step: float = _btn_size.x + 8.0
 	_chat_btn.position = Vector2(x, row_y)
-	x += 96.0
+	x += step
 	if _edit.visible:
 		_edit.position = Vector2(x, row_y - 2.0)
-		_edit.size = Vector2(clampf(vp.x * 0.30, 320.0, 640.0), 46.0)
+		_edit.size = Vector2(clampf(vp.x * (0.34 if _mobile else 0.30), 320.0, 640.0),
+			54.0 if _mobile else 46.0)
 		x += _edit.size.x + 8.0
 	_mic_btn.position = Vector2(x, row_y)
-	x += 96.0
+	x += step
 	_close_btn.position = Vector2(x, row_y)
 	# 消息老化
 	var t := Time.get_ticks_msec() / 1000.0

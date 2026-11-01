@@ -126,7 +126,7 @@ func _draw():
 
 ## 紧凑升级徽章：小金色圆盘 + 细金环 + 柔和呼吸光，不再用 72px 大加号压满触摸键
 func _draw_compact_badge(center: Vector2, radius: float, p: float) -> void:
-	var r := radius * (0.42 + p * 0.03)
+	var r := radius * (0.52 + p * 0.03)
 	var gold := Color(1.0, 0.84, 0.30, 0.98) if not glow else Color(1.0, 0.88, 0.42, 1.0)
 	if glow:
 		for gi in 3:

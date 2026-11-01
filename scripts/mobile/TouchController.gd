@@ -14,7 +14,7 @@ const SkillArt = preload("res://scripts/ui/SkillArt.gd")
 const SKILL_COUNT := 3
 # 触摸层按键整体尺寸：相比原版整体放大 2 倍（技能 / 普攻 / 升级 / 主动装 / 横带）
 const SKILL_SIZE := 260.0
-const UPGRADE_SIZE := 120.0
+const UPGRADE_SIZE := 176.0
 const ACTIVE_SIZE := 230.0
 
 # 敌人索敌头像条：攻击范围内敌人 ≥2 时，沿技能扇形「外侧」同圆心弧线排布（点击锁定普攻/技能目标）
@@ -124,6 +124,8 @@ var _recover_button: SkillTouchButton     # 恢复按钮（按下即时回血、
 var _extra_skill_button: SkillTouchButton  # 第4技能按钮(真实第4技能槽英雄=兰陵王隐身才显示)
 var _picker_root: Control = null           # 敌人索敌头像条容器
 var _picker_buttons: Array = []            # 复用的头像按钮池（_EnemyAvatar）
+var _picker_tap_ms := 0                     # 兜底命中防重复触发（触摸+模拟鼠标可能成对到达）
+var _picker_tap_id := 0
 
 var _move_mode_btn: MoveModeToggle        # 桌面 WASD 移动模式切换（手机端隐藏）
 
@@ -184,6 +186,19 @@ func _ready():
 	_build_ui()
 	_update_visibility()
 
+func _input(event):
+	# 锁敌头像优先于世界点击：在 _input 阶段按头像矩形命中，避免被全屏容器/世界点击抢走。
+	if not touch_active or hero == null or not is_instance_valid(hero):
+		return
+	if _gameplay_root and not _gameplay_root.visible:
+		return
+	if event is InputEventScreenTouch and event.pressed and _try_tap_enemy_picker(event.position):
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT \
+			and _try_tap_enemy_picker(event.position):
+		get_viewport().set_input_as_handled()
+
 func _unhandled_input(event):
 	# F2：桌面调试切换触摸层（移动端不受影响）
 	if event is InputEventKey and event.pressed and event.keycode == KEY_F2:
@@ -240,8 +255,25 @@ func set_hero(h: Hero):
 
 # ---------------- 敌人索敌头像条（技能扇形外侧弧线） ----------------
 
-# 每帧扫描玩家攻击范围内的敌人：≥2 个才出现头像；按距离排序取前 PICKER_MAX 个，
+# 每帧扫描玩家攻击范围内的敌人：范围内有敌方英雄就出现头像；按距离排序取前 PICKER_MAX 个，
 # 沿与技能扇同圆心、更大半径的弧线布点；高亮 = 当前锁定目标（Hero.manual_target）。
+func _try_tap_enemy_picker(pos: Vector2) -> bool:
+	if _picker_root == null or not _picker_root.visible:
+		return false
+	for av in _picker_buttons:
+		if av.visible and av.get_global_rect().has_point(pos):
+			if not is_instance_valid(av.entity):
+				return false
+			var now := Time.get_ticks_msec()
+			var eid: int = av.entity.get_instance_id()
+			if now - _picker_tap_ms < 300 and eid == _picker_tap_id:
+				return true   # 触摸与模拟鼠标成对到达：只切换一次
+			_picker_tap_ms = now
+			_picker_tap_id = eid
+			_on_enemy_picker_tapped(av.entity)
+			return true
+	return false
+
 func _update_enemy_picker():
 	if _picker_root == null:
 		return
@@ -289,7 +321,7 @@ func _update_enemy_picker():
 		av.hero_name = str(ent.display_name)
 		av.kind = "hero"   # 锁敌条只锁英雄
 		av.dead = false
-		av.locked = (hero.manual_target == ent)
+		av.locked = (hero.locked_target == ent)
 		av.queue_redraw()
 
 
@@ -299,12 +331,11 @@ func _on_enemy_picker_tapped(ent) -> void:
 		return
 	if not (ent is Hero):
 		return   # 只允许锁定英雄
-	if hero.manual_target == ent:
-		hero.manual_target = null
+	if hero.locked_target == ent:
+		hero.set_locked_target(null)
 	else:
-		hero.manual_target = ent
-		if hero.current_target == null:
-			hero.current_target = ent
+		hero.set_locked_target(ent)   # 单独记录锁敌目标（内部同步 manual_target）
+		hero.current_target = ent     # 锁敌头像就是当前目标，技能/普攻共用
 	_update_enemy_picker()
 
 # 每帧把当前普攻伤害与攻击速度（次/秒）推送到普攻键上显示；
@@ -327,6 +358,7 @@ func _update_skill_detail():
 			or not hero or not is_instance_valid(hero):
 		if _detail_index >= 0:
 			_hide_skill_detail()
+		_reset_skill_hold_timers()
 		return
 	# 收集当前按住的候选（0..2=英雄技能，3=召唤师）
 	var held: Array = []
@@ -338,6 +370,8 @@ func _update_skill_detail():
 	if held.is_empty():
 		if _detail_index >= 0:
 			_hide_skill_detail()
+		# 松开后必须清掉起始时刻，否则下一次按下会沿用旧时间戳、瞬间弹详情
+		_reset_skill_hold_timers()
 		return
 	# 未被按住的按钮清除计时（重新按下从头计时）
 	for i in range(_hold_start.size()):
@@ -645,6 +679,11 @@ func _fmt_fx_num(x: float) -> String:
 	var xr := roundf(x * 100.0) / 100.0
 	return str(xr)
 
+func _reset_skill_hold_timers() -> void:
+	for i in range(_hold_start.size()):
+		_hold_start[i] = -1.0
+
+
 func _hide_skill_detail():
 	if _skill_detail_panel:
 		_skill_detail_panel.visible = false
@@ -900,6 +939,7 @@ func _build_ui():
 	# 按下点须落在此中心半径 ACTIVATE_RADIUS 内才会启动摇杆（激活圆以外不抢占输入）。
 	var joy = preload("res://scripts/mobile/VirtualJoystick.gd").new()
 	var joy_home := Vector2(330, 300)
+	joy.set_meta("layout_key", "joystick")
 	# 边长 = 2×激活半径 = 600。写成字面量（与 JoystickPad.ACTIVATE_RADIUS=300 保持同步），
 	# 不跨文件调用任何新常量/新方法——编辑器对 class_name 脚本的类缓存可能滞后，跨文件引用
 	# 会先后触发 "Cannot find member" 分析期错误与 "Nonexistent function" 运行期错误
@@ -915,6 +955,7 @@ func _build_ui():
 	joy.offset_top = -(sb + joy_home.y + joy_side * 0.5)
 	joy.offset_right = sl + joy_home.x + joy_side * 0.5
 	joy.offset_bottom = -(sb + joy_home.y - joy_side * 0.5)
+	_register_layout(joy)
 	_gameplay_root.add_child(joy)
 	_joystick = joy
 
@@ -930,6 +971,7 @@ func _build_ui():
 	var atk := AttackWheelButton.new()
 	atk.label_text = "普攻"
 	atk.color = Color(0.9, 0.4, 0.3, 0.85)
+	atk.set_meta("layout_key", "attack")
 	_anchor_br(atk, ATTACK_POS, Vector2(ATTACK_SIZE, ATTACK_SIZE))
 	atk.pressed_changed.connect(_on_attack_pressed_changed)
 	atk.released.connect(_on_attack_released)
@@ -948,6 +990,7 @@ func _build_ui():
 	tower_btn.hold_to_act = false
 	tower_btn.emit_activated_on_press = true
 	tower_btn.activated.connect(func(): _priority_press_pending = ATTACK_PRIORITY_TOWER)
+	tower_btn.set_meta("layout_key", "tower")
 	_anchor_br(tower_btn, Vector2(40, 395), Vector2(165, 165))
 	_gameplay_root.add_child(tower_btn)
 	_tower_button = tower_btn
@@ -960,6 +1003,7 @@ func _build_ui():
 	minion_btn.hold_to_act = false
 	minion_btn.emit_activated_on_press = true
 	minion_btn.activated.connect(func(): _priority_press_pending = ATTACK_PRIORITY_MINION)
+	minion_btn.set_meta("layout_key", "minion")
 	_anchor_br(minion_btn, Vector2(215, 395), Vector2(165, 165))
 	_gameplay_root.add_child(minion_btn)
 	_minion_button = minion_btn
@@ -980,6 +1024,7 @@ func _build_ui():
 		b.skill_index = i
 		b.color = skill_colors[i]
 		b.name_below = true   # 技能名画在按钮下方，中央不显示 1/2/3
+		b.set_meta("layout_key", "skill_%d" % (i + 1))
 		_anchor_br(b, fb, Vector2(SKILL_SIZE, SKILL_SIZE))
 		b.pressed_changed.connect(_on_skill_pressed_changed)
 		b.released.connect(_on_skill_released)
@@ -1006,6 +1051,7 @@ func _build_ui():
 	ex_btn.color = Color(0.72, 0.45, 1.0, 0.85)
 	ex_btn.name_below = true
 	var ex_center := Vector2(1050, 406)
+	ex_btn.set_meta("layout_key", "skill_4")
 	_anchor_br(ex_btn, ex_center - Vector2(SKILL_SIZE, SKILL_SIZE) * 0.5, Vector2(SKILL_SIZE, SKILL_SIZE))
 	ex_btn.pressed_changed.connect(_on_skill_pressed_changed)
 	ex_btn.released.connect(_on_skill_released)
@@ -1013,10 +1059,11 @@ func _build_ui():
 	_gameplay_root.add_child(ex_btn)
 	_extra_skill_button = ex_btn
 
-	# 敌人索敌头像条：攻击范围内多个敌人时，沿技能扇形外侧同圆心弧线排布，点按锁定目标
+	# 敌人索敌头像条：攻击范围内有敌方英雄时，沿技能扇形外侧同圆心弧线排布，点按锁定目标
 	_picker_root = Control.new()
 	_picker_root.name = "EnemyPicker"
 	_picker_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# 头像子控件自身可点；漏分发时 _input 里的矩形命中兜底会接住。
 	_picker_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_picker_root.visible = false
 	_gameplay_root.add_child(_picker_root)
@@ -1036,6 +1083,7 @@ func _build_ui():
 	sum.color = Color(0.7, 0.35, 1.0, 0.85)
 	sum.pressed_changed.connect(_on_summoner_pressed_changed)
 	sum.released.connect(_on_summoner_released)
+	sum.set_meta("layout_key", "summoner")
 	_anchor_br(sum, Vector2(420, ROW_FROM_BOTTOM), Vector2(220, 220))
 	_gameplay_root.add_child(sum)
 	_summoner_button = sum
@@ -1051,6 +1099,7 @@ func _build_ui():
 	recv.pressed_changed.connect(func(_idx: int, pressed: bool):
 		if pressed:
 			_recover_press_pending = true)
+	recv.set_meta("layout_key", "recover")
 	_anchor_br(recv, Vector2(660, ROW_FROM_BOTTOM), Vector2(220, 220))
 	_gameplay_root.add_child(recv)
 	_recover_button = recv
@@ -1064,6 +1113,7 @@ func _build_ui():
 	rec.hold_to_act = false
 	rec.emit_activated_on_press = true
 	rec.activated.connect(func(): _recall_press_pending = true)
+	rec.set_meta("layout_key", "recall")
 	_anchor_br(rec, Vector2(900, ROW_FROM_BOTTOM), Vector2(220, 220))
 	_gameplay_root.add_child(rec)
 
@@ -1079,6 +1129,7 @@ func _build_ui():
 		ab.pressed_changed.connect(func(_idx: int, pressed: bool):
 			if pressed:
 				_on_active_pressed(slot_i))
+		ab.set_meta("layout_key", "equip_%d" % (i + 1))
 		_anchor_br(ab, equip_pos[i], Vector2(ACTIVE_SIZE, ACTIVE_SIZE))
 		_gameplay_root.add_child(ab)
 		_active_equip_buttons.append(ab)
@@ -1096,6 +1147,9 @@ func _build_ui():
 	_create_skill_detail_panel()
 
 func _on_skill_pressed_changed(index: int, pressed: bool):
+	# 每次手势从按下这一刻重新计时，不能沿用上一次长按留下的 _hold_start
+	if index >= 0 and index < _hold_start.size():
+		_hold_start[index] = -1.0
 	if pressed:
 		_skill_press_pending[index] = true
 		_skill_release_pending[index] = {}  # 新手势：清除上一回的松开信息
@@ -1113,6 +1167,7 @@ func _on_skill_released(index: int, final_drag: Vector2, cancelled: bool, releas
 
 # 召唤师按钮按下：清除上一回的松手施放信息（新手势从零开始）
 func _on_summoner_pressed_changed(_index: int, pressed: bool):
+	_hold_start[3] = -1.0
 	if pressed:
 		_summoner_release_pending = {}
 
@@ -1374,6 +1429,7 @@ func _anchor_br(ctrl: Control, from_br: Vector2, size: Vector2, inset: Vector2 =
 	ctrl.offset_top = -from_br.y - size.y
 	ctrl.offset_right = -from_br.x
 	ctrl.offset_bottom = -from_br.y
+	_register_layout(ctrl)
 
 func _anchor_tl(ctrl: Control, from_tl: Vector2, size: Vector2):
 	ctrl.anchor_left = 0.0
@@ -1384,6 +1440,257 @@ func _anchor_tl(ctrl: Control, from_tl: Vector2, size: Vector2):
 	ctrl.offset_top = from_tl.y
 	ctrl.offset_right = from_tl.x + size.x
 	ctrl.offset_bottom = from_tl.y + size.y
+	_register_layout(ctrl)
+
+# ==================== 键位自定义布局（拖动调位置 / ＋－ 调大小） ====================
+# 每个可自定义控件在创建时带 meta "layout_key"，_anchor_* 结束时登记默认位置；
+# 进入编辑模式后可直接拖动按钮，保存到 PlayerPrefs.btn_layout，下次对局自动套用。
+const LAYOUT_SCALE_MIN := 0.55
+const LAYOUT_SCALE_MAX := 1.70
+const LAYOUT_LABELS := {
+	"joystick": "摇杆", "attack": "普攻", "tower": "推塔", "minion": "小兵",
+	"skill_1": "1技能", "skill_2": "2技能", "skill_3": "3技能", "skill_4": "4技能",
+	"summoner": "召唤师技能", "recover": "恢复", "recall": "回城",
+	"equip_1": "主动装1", "equip_2": "主动装2",
+}
+var _layout_btns: Array = []
+var _edit_root: Control = null
+var _edit_sel: Control = null
+var _edit_box: Panel = null
+var _edit_hint: Label = null
+var _edit_drag_last := Vector2.ZERO
+var _edit_drag_moved := 0.0
+var _edit_was_paused := false
+
+## 登记默认可自定义按钮，并套用已保存的偏移/缩放
+func _register_layout(ctrl: Control) -> void:
+	var key: String = str(ctrl.get_meta("layout_key", ""))
+	if key == "":
+		return
+	ctrl.set_meta("layout_def", [ctrl.offset_left, ctrl.offset_top, ctrl.offset_right, ctrl.offset_bottom])
+	if not _layout_btns.has(ctrl):
+		_layout_btns.append(ctrl)
+	var lay: Dictionary = PlayerPrefs.get_btn_layout()
+	_apply_layout_one(ctrl, lay.get(key, {}))
+
+func _apply_layout_one(ctrl: Control, e) -> void:
+	var entry: Dictionary = e if e is Dictionary else {}
+	var dx := float(entry.get("x", 0.0))
+	var dy := float(entry.get("y", 0.0))
+	var s := clampf(float(entry.get("s", 1.0)), LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX)
+	if dx != 0.0 or dy != 0.0:
+		ctrl.offset_left += dx
+		ctrl.offset_right += dx
+		ctrl.offset_top += dy
+		ctrl.offset_bottom += dy
+	ctrl.pivot_offset = Vector2((ctrl.offset_right - ctrl.offset_left) * 0.5,
+		(ctrl.offset_bottom - ctrl.offset_top) * 0.5)
+	ctrl.scale = Vector2(s, s)
+
+## 回到默认位置后再套用已保存布局（取消编辑 / 重置时用）
+func apply_btn_layout() -> void:
+	var lay: Dictionary = PlayerPrefs.get_btn_layout()
+	for c in _layout_btns:
+		if not is_instance_valid(c):
+			continue
+		var ctrl := c as Control
+		var def = ctrl.get_meta("layout_def", [])
+		if def is Array and def.size() == 4:
+			ctrl.offset_left = float(def[0])
+			ctrl.offset_top = float(def[1])
+			ctrl.offset_right = float(def[2])
+			ctrl.offset_bottom = float(def[3])
+		_apply_layout_one(ctrl, lay.get(str(ctrl.get_meta("layout_key", "")), {}))
+
+## 进入键位编辑：暂停对局，按钮保持可见并可直接拖动
+func enter_layout_edit() -> void:
+	if _edit_root != null and is_instance_valid(_edit_root):
+		return
+	if touch_layer == null:
+		return
+	_edit_was_paused = get_tree().paused
+	get_tree().paused = true
+	_gameplay_root.visible = true
+	_edit_root = Control.new()
+	_edit_root.name = "LayoutEdit"
+	_edit_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_edit_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	_edit_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	touch_layer.add_child(_edit_root)
+	_edit_box = Panel.new()
+	_edit_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_edit_box.visible = false
+	_edit_box.add_theme_stylebox_override("panel", UiKit.flat(0.95, 8, 2,
+		Color(1.0, 0.85, 0.32, 0.95), Color(0.06, 0.07, 0.10, 0.0), 0.0, 6))
+	_edit_root.add_child(_edit_box)
+	_build_layout_bar()
+	_edit_root.gui_input.connect(_on_layout_edit_input)
+	var first = null
+	for c2 in _layout_btns:
+		if str(c2.get_meta("layout_key", "")) == "skill_1":
+			first = c2
+			break
+	if first == null and not _layout_btns.is_empty():
+		first = _layout_btns[0]
+	select_layout_button(first)
+
+func _build_layout_bar() -> void:
+	var bar := Panel.new()
+	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	bar.offset_left = -430.0
+	bar.offset_right = 430.0
+	bar.offset_top = 10.0
+	bar.offset_bottom = 118.0
+	bar.add_theme_stylebox_override("panel", UiKit.panel_style(0.96, 12.0))
+	_edit_root.add_child(bar)
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 14.0; vb.offset_right = -14.0
+	vb.offset_top = 8.0; vb.offset_bottom = -8.0
+	vb.add_theme_constant_override("separation", 6)
+	bar.add_child(vb)
+	_edit_hint = Label.new()
+	_edit_hint.text = "拖动按钮调整位置 · 点选后用 ＋/－ 调大小 · 保存后进入对局自动生效"
+	_edit_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_edit_hint.add_theme_font_override("font", UiKit.font())
+	_edit_hint.add_theme_font_size_override("font_size", 17)
+	_edit_hint.add_theme_color_override("font_color", UiKit.C_TEXT)
+	vb.add_child(_edit_hint)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	row.add_child(_layout_bar_btn("－ 缩小", UiKit.C_TEAM0, func(): _scale_layout_sel(-0.1)))
+	row.add_child(_layout_bar_btn("＋ 放大", UiKit.C_TEAM0, func(): _scale_layout_sel(0.1)))
+	row.add_child(_layout_bar_btn("保存", UiKit.C_GOLD, func(): _exit_layout_edit(true)))
+	row.add_child(_layout_bar_btn("重置", UiKit.C_DANGER, _reset_layout_edit))
+	row.add_child(_layout_bar_btn("取消", UiKit.C_PANEL_EDGE, func(): _exit_layout_edit(false)))
+
+func _layout_bar_btn(txt: String, col: Color, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = txt
+	b.custom_minimum_size = Vector2(150.0, 42.0)
+	b.add_theme_font_override("font", UiKit.font())
+	b.add_theme_font_size_override("font_size", 18)
+	b.add_theme_color_override("font_color", UiKit.C_TEXT)
+	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", col, false))
+	b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", col, false))
+	b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", col, false))
+	b.pressed.connect(cb)
+	return b
+
+## 选中按钮：金色描边框跟随（拖动/缩放都作用于当前选中项）
+func select_layout_button(ctrl: Control) -> void:
+	_edit_sel = ctrl
+	if _edit_box == null or not is_instance_valid(_edit_box):
+		return
+	if ctrl == null or not is_instance_valid(ctrl):
+		_edit_box.visible = false
+		return
+	var key := str(ctrl.get_meta("layout_key", ""))
+	if _edit_hint != null and is_instance_valid(_edit_hint):
+		_edit_hint.text = "已选中「%s」（%.0f%%）· 拖动调整位置 · ＋/－ 调大小" % [
+			str(LAYOUT_LABELS.get(key, key)), ctrl.scale.x * 100.0]
+	var p: Vector2 = ctrl.get_global_rect().position - _edit_root.get_global_rect().position
+	var sz: Vector2 = ctrl.get_global_rect().size
+	_edit_box.visible = true
+	_edit_box.position = p - Vector2(4, 4)
+	_edit_box.size = sz + Vector2(8, 8)
+
+func _on_layout_edit_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch or event is InputEventMouseButton:
+		var pressed: bool = event.pressed
+		var pos: Vector2 = event.position
+		if pressed:
+			var hit := _layout_hit(pos)
+			_edit_drag_last = pos
+			_edit_drag_moved = 0.0
+			if hit != null:
+				select_layout_button(hit)
+		else:
+			# 点空白处=取消选中；没拖动过的点按不改变布局
+			if _edit_drag_moved <= 2.0 and _layout_hit(pos) == null:
+				select_layout_button(null)
+			_edit_drag_moved = 0.0
+		return
+	if event is InputEventScreenDrag or event is InputEventMouseMotion:
+		if _edit_sel == null or not is_instance_valid(_edit_sel):
+			return
+		if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) == 0:
+			return
+		var d: Vector2 = event.position - _edit_drag_last
+		if d.length() < 0.01:
+			return
+		_edit_drag_last = event.position
+		_edit_drag_moved += d.length()
+		_edit_sel.offset_left += d.x
+		_edit_sel.offset_right += d.x
+		_edit_sel.offset_top += d.y
+		_edit_sel.offset_bottom += d.y
+		select_layout_button(_edit_sel)
+
+func _layout_hit(pos: Vector2) -> Control:
+	for i in range(_layout_btns.size() - 1, -1, -1):
+		var c = _layout_btns[i]
+		if not is_instance_valid(c):
+			continue
+		var ctrl := c as Control
+		if not ctrl.visible or not ctrl.is_inside_tree():
+			continue
+		if ctrl.get_global_rect().has_point(pos + _edit_root.get_global_rect().position):
+			return ctrl
+	return null
+
+func _scale_layout_sel(delta: float) -> void:
+	if _edit_sel == null or not is_instance_valid(_edit_sel):
+		return
+	var s := clampf(_edit_sel.scale.x + delta, LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX)
+	_edit_sel.scale = Vector2(s, s)
+	select_layout_button(_edit_sel)
+	if _edit_hint != null and is_instance_valid(_edit_hint):
+		_edit_hint.text = "当前大小 %.0f%% · 拖动按钮调位置 · 保存后生效" % (s * 100.0)
+
+func _reset_layout_edit() -> void:
+	PlayerPrefs.clear_btn_layout()
+	apply_btn_layout()
+	select_layout_button(_edit_sel)
+	if _edit_hint != null and is_instance_valid(_edit_hint):
+		_edit_hint.text = "已恢复默认布局"
+
+func _exit_layout_edit(save: bool) -> void:
+	if save:
+		var out: Dictionary = {}
+		for c in _layout_btns:
+			if not is_instance_valid(c):
+				continue
+			var ctrl := c as Control
+			var def = ctrl.get_meta("layout_def", [])
+			if not (def is Array and def.size() == 4):
+				continue
+			var dx: float = ctrl.offset_left - float(def[0])
+			var dy: float = ctrl.offset_top - float(def[1])
+			var s: float = clampf(ctrl.scale.x, LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX)
+			if absf(dx) < 0.5 and absf(dy) < 0.5 and absf(s - 1.0) < 0.01:
+				continue
+			out[str(ctrl.get_meta("layout_key", ""))] = {
+				"x": snappedf(dx, 0.5), "y": snappedf(dy, 0.5), "s": snappedf(s, 0.01),
+			}
+		PlayerPrefs.set_btn_layout(out)
+	else:
+		apply_btn_layout()
+	if _edit_root != null and is_instance_valid(_edit_root):
+		_edit_root.queue_free()
+	_edit_root = null
+	_edit_sel = null
+	_edit_box = null
+	_edit_hint = null
+	get_tree().paused = _edit_was_paused
+
+## 布局编辑中？
+func is_layout_editing() -> bool:
+	return _edit_root != null and is_instance_valid(_edit_root)
+
 
 # 详情卡头部技能缩略图：英雄技能走 SkillArt 元素纹样，召唤师技能走 IconArt 功能图标
 class _DetailSkillIcon extends Control:
