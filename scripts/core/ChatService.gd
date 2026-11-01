@@ -62,37 +62,37 @@ const LINES_DOING_ROTATE := ["我正在赶过去", "我在路上，到了就开"
 const LINES_DOING_AVOID := ["我正在绕后", "我在避战拉扯", "正在找位置"]
 const LINES_DOING_DEAD := ["我倒了，正在等复活", "我在看复活时间", "正在泉水等活"]
 const LINES_DOING_CAST := ["我正在放技能", "我在读条，别打断", "正在蓄力"]
-const HERO_ULT_LINES := {
-	"吕布": "方天画戟，天下无双！",
-	"亚瑟": "圣剑裁决！",
-	"马超": "枪出如龙！",
-	"铠": "以铠之名，恕你无罪！",
-	"不知火舞": "忍法，花蝶扇！",
-	"甄姬": "洛神降临！",
-	"狄仁杰": "以法律之名！",
-	"太乙真人": "起死回生！",
-	"东皇太一": "堕神契约！",
-	"李白": "十步杀一人，千里不留行！",
-	"兰陵王": "你的死期到了！",
-	"孙尚香": "究极弩炮！",
-	"马可波罗": "狂野之击！",
-	"张飞": "燕人张飞在此！",
-	"沈梦溪": "爆炸就是艺术！",
-	"安琪拉": "魔法，焚烧一切！",
-	"妲己": "女王崇拜！",
-	"小乔": "星华缭乱！",
-	"鲁班七号": "无敌鲨嘴炮！",
-	"夏侯惇": "不羁之刃！",
-	"后羿": "灼日之矢！",
-	"李元芳": "无间刃风！",
-	"元流之子": "万箭归流！",
-	"大禹": "鼎定山河！",
-	"王昭君": "冰封千里！",
-	"刘禅": "机关枪，开火！",
-	"孙悟空": "俺老孙来也！",
-	"英睿": "精准打击！",
+const HERO_VOICE_LINES := {
+	"亚瑟": ["永不背叛！", "命运所在，别无选择。", "圣剑选择我，因为他也爱好在朋友圈发五杀战绩。"],
+	"铠": ["以绝望挥剑，着逝者为铠。", "长城，让我忘记自己孤身一人。", "一个人可以被毁灭，但绝不会被打败。"],
+	"马超": ["战争因你所需而来，却不因你所欲而止。", "我的枪去而复返，你的生命有去无回。", "无需再忍。"],
+	"吕布": ["神挡杀神！", "我的貂蝉在哪里？", "从此刻开始，战场由我一人主宰。"],
+	"李白": ["大河之剑天上来！", "十步杀一人，千里不留行。", "今朝有酒今朝醉。"],
+	"孙悟空": ["俺老孙来也！", "取经？哼，那是当年的事了。", "一个跟头十万八千里。"],
+	"甄姬": ["果然，先爱上的那个人是输家。", "悲伤，逆流成河。", "浮萍一生，聚散无常。"],
+	"王昭君": ["凛冬已至。", "故乡的梅花开了吗？", "身躯冷冽，心却滚烫。"],
+	"孙尚香": ["来发子弹吗？满足你！", "大小姐驾到，通通闪开！", "除了我以外，好看的都该死。"],
+	"马可波罗": ["世界那么大，我想来看看。", "Let's go baby！", "摩擦摩擦，是魔鬼的步伐。"],
+	"东皇太一": ["日蚀亲临，如我之神迹！", "你大脑的进化如此不充分。"],
+	"不知火舞": ["忍法，花蝶扇！", "火焰，是我的舞台。", "来跳一支舞吧。"],
+	"狄仁杰": ["以法律之名！", "真相只有一个！", "证据确凿，你无从抵赖。"],
+	"太乙真人": ["起死回生！", "炼金术，才是真理。", "我的丹炉，能炼万物。"],
+	"兰陵王": ["隐身，是我的艺术。", "你的死期到了。", "黑暗，是我的主场。"],
+	"张飞": ["燕人张飞在此！", "吼——！", "谁敢与我一战！"],
+	"沈梦溪": ["喵！炸弹来了！", "爆炸就是艺术！", "点燃全场！"],
+	"安琪拉": ["魔法，焚烧一切！", "火烧屁屁咯！", "感受魔法的力量吧！"],
+	"妲己": ["请尽情吩咐妲己，主人～", "女王崇拜！", "没有心，就不会受伤。"],
+	"小乔": ["绽放吧！", "星华缭乱！", "小乔，要努力变强！"],
+	"鲁班七号": ["鲁班大师，智商二百五！", "无敌鲨嘴炮！", "来点科技的力量！"],
+	"夏侯惇": ["不羁之刃！", "独眼，也能看清战场！", "豪气，斩！"],
+	"后羿": ["灼日之矢！", "落日余晖！", "射落太阳！"],
+	"李元芳": ["密探，出动！", "无间刃风！", "密探的直觉，从不出错。"],
+	"元流之子": ["万箭归流！", "流，随我而动！", "万物，皆为流。"],
+	"大禹": ["治水，定九州！", "鼎定山河！", "洪水，听我号令！"],
+	"刘禅": ["暴走熊猫！", "机关枪，开火！", "看我的机关术！"],
+	"英睿": ["精准打击！", "看好了，这一击！", "数据不会说谎。"],
 }
-const HERO_ULT_FALLBACK := ["看我的！", "受死吧！", "这一击，定胜负！"]
+const HERO_VOICE_FALLBACK := ["看我的！", "受死吧！", "这一局，由我主宰！"]
 
 const VOICE_AMBIENT_BY_ROLE := {
 	"战士": ["跟我上！", "这波能打！", "我去开团！", "别退，顶住！"],
@@ -107,6 +107,7 @@ var _hero_voice_t := 0.0
 var _hero_voice_global_last := -99.0
 var _hero_voice_next := {}
 var _hero_ult_last := {}
+var _hero_line_last := {}
 
 
 
@@ -585,6 +586,22 @@ func _hero_voice_at(text: String, speaker: String, pos: Vector3) -> void:
 		vs.call("speak", text, speaker, db)
 
 
+## 英雄自己的台词池：优先不重复上一句（每个英雄单独记）
+func _hero_pick_line(hero_name: String, pool: Array) -> String:
+	if pool.is_empty():
+		return ""
+	var last := str(_hero_line_last.get(hero_name, ""))
+	var use: Array = []
+	for x in pool:
+		if str(x) != last:
+			use.append(x)
+	if use.is_empty():
+		use = pool
+	var line := str(use[randi() % use.size()])
+	_hero_line_last[hero_name] = line
+	return line
+
+
 ## 大招台词（由 Hero._finish_casting 的 3 技能调用；只播屏幕内）
 func hero_voice_ult(hero_name: String, pos: Vector3) -> void:
 	if not _hero_voice_active_battle():
@@ -596,9 +613,10 @@ func hero_voice_ult(hero_name: String, pos: Vector3) -> void:
 	if now - float(_hero_ult_last.get(id, -99.0)) < 1.5:
 		return
 	_hero_ult_last[id] = now
-	var line := str(HERO_ULT_LINES.get(hero_name, ""))
-	if line == "":
-		line = _pick(HERO_ULT_FALLBACK)
+	var pool: Array = HERO_VOICE_LINES.get(hero_name, [])
+	if pool.is_empty():
+		pool = HERO_VOICE_FALLBACK
+	var line := _hero_pick_line(hero_name, pool)
 	_hero_voice_at(line, hero_name, pos)
 
 
@@ -655,8 +673,10 @@ func _tick_hero_voice(delta: float) -> void:
 		if now < float(_hero_voice_next[key]):
 			continue
 		_hero_voice_next[key] = now + randf_range(35.0, 65.0)
-		var pool: Array = VOICE_AMBIENT_BY_ROLE.get(role, VOICE_AMBIENT_DEFAULT)
-		var text := _pick(pool)
+		var pool: Array = HERO_VOICE_LINES.get(nm, [])
+		if pool.is_empty():
+			pool = VOICE_AMBIENT_BY_ROLE.get(role, VOICE_AMBIENT_DEFAULT)
+		var text := _hero_pick_line(nm, pool)
 		_hero_voice_at(text, nm, pos)
 		_hero_voice_global_last = now
 		break
