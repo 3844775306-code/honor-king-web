@@ -2218,7 +2218,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				br_b.visible = false
 				node.add_child(br_b)
 				buff_rings = [br_r, br_b]
-				head_off = 3.6     # 锚点随血条下压（4.2 → 3.6，对应主机 Request B 微调 1.8→1.2 避 band）
+				head_off = 4.2     # 与主机 HeroInfoControl 锚点完全一致（body_radius 1.5*2 + 1.2）
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 2.6     # 兜底模型锚点随主机下压（3.2 → 2.6）
@@ -5916,6 +5916,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 

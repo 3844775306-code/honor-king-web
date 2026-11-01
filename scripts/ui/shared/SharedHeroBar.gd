@@ -15,9 +15,14 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 	var cx := float(r.cx)
 	# 主机 HUD：position = 锚点屏幕位 - custom_minimum_size/2（HeroInfoControl 高 320 → /2=160）
 	var top := float(r.cy) - 160.0
-	# 等级圆环已改画到血条左端（见下方），此处保留原竖向占位，与主机 HeroInfoControl 版面一致
-	# 名称（含血量行；字号×2=34，几何同主机 HeroInfoControl：环底距名字基线 34，按实际多行高度推进）
-	var top2 := top + 66.0
+	# —— 纵向版式与单机 HeroInfoControl._draw 完全同公式 ——
+	#   y=24 起：图标/状态行（有则占 44）→ 名字 → AI 决策胶囊（有则占 21）→ 血条
+	var _mks: Array = r.get("markers", [])
+	var _sts: Array = r.get("status", [])
+	var _icon_h := 0.0
+	if not _mks.is_empty() or not _sts.is_empty() or bool(r.get("hidden", false)):
+		_icon_h = 44.0
+	var top2 := top + 24.0 + _icon_h
 	# 血条上方同时显示英雄名称与玩家/AI 昵称
 	var disp_name := str(r.get("name", ""))
 	var nick_name := str(r.get("pname", ""))
@@ -27,7 +32,8 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 		disp_name = "?"
 	# 与 host HeroInfoControl 一致：名称 28（超宽降 22 并省略），血条上方只显示名字，不显示血量数字
 	var name_fs := 28.0
-	if f.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 28).x > 272.0:
+	# 与单机一致：控件净宽 520-8 才降号字（此前 272 让客户端过早缩字）
+	if f.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 28).x > 512.0:
 		name_fs = 22.0
 	var _nw := f.get_string_size(disp_name, HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs)).x
 	var _name_base := top2 + f.get_ascent(int(name_fs))
@@ -36,7 +42,12 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 	ci.draw_string(f, Vector2(cx - _nw * 0.5, _name_base), disp_name,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, int(name_fs), Color.WHITE)
 	# 血条 280×28（几何/配色/分层同主机 HeroInfoControl：双层投影 + 队伍色外框 + 上亮下暗空槽 + 5 段渐变 + 玻璃高光 + 残血拖尾）
-	var by := _name_base + f.get_descent(int(name_fs)) + 3.0
+	var by := _name_base + f.get_descent(int(name_fs)) + 1.0
+	# AI 决策胶囊：单机画在「名字与血条之间」占 21px，此处同样让位，避免血条贴住名字
+	var _ai0: Dictionary = r.get("ai_chip", {})
+	if not _ai0.is_empty() and str(_ai0.get("label", "")) != "":
+		by += 21.0
+	by += 2.0
 	var bw := 280.0
 	var bh := 28.0
 	var mhp := maxf(float(r.maxhp), 1.0)
@@ -57,14 +68,13 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 		_sh_hidden_badge(ci, Vector2(cx, by - 13.0), 11.0)
 
 	# 标记图标行（同 host HeroInfoControl._draw_icon_strip：名字上方一排专属图标+层数）
-	var _mks: Array = r.get("markers", [])
 	if not _mks.is_empty():
 		var _mk_rows: Array = []
 		for _m in _mks:
 			if _m is Array and (_m as Array).size() >= 2 and int(_m[1]) > 0:
 				_mk_rows.append({"name": str(_m[0]), "count": int(_m[1]), "type": ""})
 		if not _mk_rows.is_empty():
-			MarkerIconScript.draw_row(ci, cx, top2 - 36.0, _mk_rows, 15.0)
+			MarkerIconScript.draw_row(ci, cx, top + 24.0 + 22.0, _mk_rows, 15.0)
 	# AI 决策胶囊（同 host：分路·状态·野区阶段·目标，一行限宽）
 	var _ai: Dictionary = r.get("ai_chip", {})
 	if not _ai.is_empty() and str(_ai.get("label", "")) != "":
@@ -73,7 +83,7 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 		var _afs := 15
 		var _atw := f.get_string_size(_atxt, HORIZONTAL_ALIGNMENT_LEFT, -1, _afs).x
 		var _chip_w := minf(320.0, _atw + 26.0)
-		var _chip_y := top2 - 66.0
+		var _chip_y := _name_base + f.get_descent(int(name_fs)) + 1.0
 		var _cx0 := cx - _chip_w * 0.5
 		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, 20.0), Color(0.035, 0.05, 0.085, 0.86))
 		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, 20.0), Color(_acol.r, _acol.g, _acol.b, 0.45), false, 1.0)
@@ -164,7 +174,6 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 			ci.draw_rect(Rect2(bx, mby, mw, 1.5), Color(1, 1, 1, 0.45))
 		ci.draw_rect(Rect2(bx, mby, bw, mh), Color(0.35, 0.62, 1.0, 0.5), false, 1.0)
 	# 状态条（附魔/枪意/炸弹/剑意/回城/传送…）：与 host HeroInfoControl 同款 13px 行 + 1.5px 间隔
-	var _sts: Array = r.get("status", [])
 	if not _sts.is_empty():
 		var sy := by + bh + 3.0
 		if mana_max > 0.0:
@@ -269,3 +278,5 @@ static func _sh_mvp_badge(ci: CanvasItem, c: Vector2, r: float) -> void:
 	ci.draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.36, 0.19, 0.02, 0.85), 1.4)
 
 # 无兵线保护盾形图标（复刻 host WorldBarPainter._draw_shield_icon）
+
+
