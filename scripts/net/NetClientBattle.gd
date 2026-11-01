@@ -5387,7 +5387,8 @@ class Hud:
 		add_child(_bar_painter)
 
 	func _text(pos: Vector2, txt: String, sz: float, col: Color) -> void:
-		draw_string(_font, pos + Vector2(1.0, 1.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, Color(0, 0, 0, 0.6))
+		var ow := maxi(1, int(round(sz * 0.10)))
+		draw_string_outline(_font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, ow, Color(0, 0, 0, 0.72))
 		draw_string(_font, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, col)
 
 	func _draw() -> void:
@@ -5880,13 +5881,22 @@ class Hud:
 		# 与 host UI_Manager._create_info_labels 完全同一套右锚定坐标：
 		# 主面板 x=W-781..W-371 / y=6..196；计时条 W-776..W-526 / y=8..52；比分中心 W-576。
 		var panel_left := size.x - 781.0
-		var bg_style := UiKit.flat(0.62, 0, 0, Color.TRANSPARENT, Color(0, 0, 0, 0.62), 0.0)
+		# 与单机 UI_Manager._apply_panel_style 完全同参数：深色玻璃 + 1px 冷光边 + 圆角 + 投影
+		var bg_style := UiKit.flat(0.62, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0.62), 10.0, 6.0)
 		draw_style_box(bg_style, Rect2(panel_left, 6.0 + st, 410.0, 190.0))
 		draw_style_box(bg_style, Rect2(size.x - 776.0, 8.0 + st, 250.0, 44.0))
+		# 顶部玻璃反光：一条极淡的冷白高光，补足平面底板的廉价感
+		draw_line(Vector2(panel_left + 12.0, 8.0 + st), Vector2(panel_left + 398.0, 8.0 + st),
+			Color(0.72, 0.88, 1.0, 0.18), 1.0)
+		draw_line(Vector2(size.x - 764.0, 9.0 + st), Vector2(size.x - 538.0, 9.0 + st),
+			Color(0.72, 0.88, 1.0, 0.16), 1.0)
 		var gs := 24.0 * s
 		var gd := _font.get_ascent(gs) + _font.get_descent(gs)
 		var gy := 8.0 + st + (44.0 - gd) * 0.5 + _font.get_ascent(gs)
-		draw_string(_font, Vector2(size.x - 776.0, gy), "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60],
+		var time_txt := "%02d:%02d" % [int(game_time) / 60, int(game_time) % 60]
+		draw_string_outline(_font, Vector2(size.x - 776.0, gy), time_txt,
+				HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, 2, Color(0, 0, 0, 0.72))
+		draw_string(_font, Vector2(size.x - 776.0, gy), time_txt,
 				HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
 		# FPS：bg 内 (5,50) 120×24 居中，颜色与 host 一样按帧率变化
 		var fs := 14.0 * s
@@ -5894,13 +5904,19 @@ class Hud:
 		var fy := 6.0 + st + 50.0 + (24.0 - fd) * 0.5 + _font.get_ascent(fs)
 		var fps_now := Engine.get_frames_per_second()
 		var fps_col := Color(1.0, 0.42, 0.38) if fps_now < 30 else (Color(1.0, 0.82, 0.35) if fps_now < 50 else Color(0.55, 0.95, 0.65))
-		draw_string(_font, Vector2(size.x - 776.0, fy), "FPS %d" % fps_now,
+		var fps_txt := "FPS %d" % fps_now
+		draw_string_outline(_font, Vector2(size.x - 776.0, fy), fps_txt,
+				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, 1, Color(0, 0, 0, 0.65))
+		draw_string(_font, Vector2(size.x - 776.0, fy), fps_txt,
 				HORIZONTAL_ALIGNMENT_CENTER, 120.0, fs, fps_col)
 		if kda.size() >= 3:
 			var ks := 20.0 * s
 			var kd := _font.get_ascent(ks) + _font.get_descent(ks)
 			var ky := 12.0 + st + (36.0 - kd) * 0.5 + _font.get_ascent(ks)
-			draw_string(_font, Vector2(size.x - 773.0, ky), "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])],
+			var kda_txt := "K/D/A: %d/%d/%d" % [int(kda[0]), int(kda[1]), int(kda[2])]
+			draw_string_outline(_font, Vector2(size.x - 773.0, ky), kda_txt,
+					HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, 2, Color(0, 0, 0, 0.72))
+			draw_string(_font, Vector2(size.x - 773.0, ky), kda_txt,
 					HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, Color.WHITE)
 		var sz := 24.0 * s
 		var base := 82.0 + st + _font.get_ascent(sz)
@@ -5931,6 +5947,8 @@ class Hud:
 				vcol = Color(1.0, 0.33, 0.264)
 			else:
 				vtxt = "%s 已出完" % str(vg[0])
+			draw_string_outline(_font, Vector2(panel_left, vy), vtxt,
+				HORIZONTAL_ALIGNMENT_CENTER, 410.0, vs, 2, Color(0, 0, 0, 0.68))
 			draw_string(_font, Vector2(panel_left, vy), vtxt,
 				HORIZONTAL_ALIGNMENT_CENTER, 410.0, vs, vcol)
 		# 第二行在比分面板内居中（host 面板中心 = 屏幕右缘 -576）

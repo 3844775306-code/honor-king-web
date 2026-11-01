@@ -117,22 +117,27 @@ func _draw_info() -> void:
 	var vp := _vp()
 	var W: float = size.x if size.x > 1.0 else vp.x
 	var left := W - 781.0
-	var bg := UiKit.flat(0.62, 0, 0, Color.TRANSPARENT, Color(0, 0, 0, 0.62), 0.0)
+	# 与单机 UI_Manager._apply_panel_style / 客户端顶带同一套玻璃材质
+	var bg := UiKit.flat(0.62, 12, 1, UiKit.C_PANEL_EDGE, Color(0, 0, 0, 0.62), 10.0, 6.0)
 	draw_style_box(bg, Rect2(left, 6.0, 410.0, 190.0))
 	draw_style_box(bg, Rect2(W - 776.0, 8.0, 250.0, 44.0))
+	draw_line(Vector2(left + 12.0, 8.0), Vector2(left + 398.0, 8.0), Color(0.72, 0.88, 1.0, 0.18), 1.0)
+	draw_line(Vector2(W - 764.0, 9.0), Vector2(W - 538.0, 9.0), Color(0.72, 0.88, 1.0, 0.16), 1.0)
 	var f: Font = UiKit.font()
 	var tsec: float = float(st.get("t", 0.0))
 	var gs := int(round(24.0 * _s))
 	var gd := f.get_ascent(gs) + f.get_descent(gs)
-	draw_string(f, Vector2(W - 776.0, 8.0 + (44.0 - gd) * 0.5 + f.get_ascent(gs)),
-		"%02d:%02d" % [int(tsec) / 60, int(tsec) % 60], HORIZONTAL_ALIGNMENT_CENTER, 250.0, gs, Color.WHITE)
+	_rtxt(Vector2(W - 776.0, 8.0 + (44.0 - gd) * 0.5 + f.get_ascent(gs)),
+		"%02d:%02d" % [int(tsec) / 60, int(tsec) % 60], gs, Color.WHITE,
+		HORIZONTAL_ALIGNMENT_CENTER, 250.0, 2)
 	# FPS（同 host：时间条下方 120×24）
 	var fps_now := Engine.get_frames_per_second()
 	var fs := 14.0 * _s
 	var fd := f.get_ascent(int(fs)) + f.get_descent(int(fs))
 	var fps_col := Color(1.0, 0.42, 0.38) if fps_now < 30 else (Color(1.0, 0.82, 0.35) if fps_now < 50 else Color(0.55, 0.95, 0.65))
-	draw_string(f, Vector2(W - 776.0, 56.0 + (24.0 - fd) * 0.5 + f.get_ascent(int(fs))),
-		"FPS %d" % fps_now, HORIZONTAL_ALIGNMENT_CENTER, 120.0, int(fs), fps_col)
+	_rtxt(Vector2(W - 776.0, 56.0 + (24.0 - fd) * 0.5 + f.get_ascent(int(fs))),
+		"FPS %d" % fps_now, int(fs), fps_col,
+		HORIZONTAL_ALIGNMENT_CENTER, 120.0, 1)
 	# K / D / A：跟随英雄（无跟随则本机）
 	var heroes: Array = st.get("heroes", [])
 	var fi: int = int(st.get("follow", -1))
@@ -142,9 +147,9 @@ func _draw_info() -> void:
 		var hk: Dictionary = heroes[ki]
 		var ks := int(round(20.0 * _s))
 		var kd := f.get_ascent(ks) + f.get_descent(ks)
-		draw_string(f, Vector2(W - 773.0, 12.0 + (36.0 - kd) * 0.5 + f.get_ascent(ks)),
+		_rtxt(Vector2(W - 773.0, 12.0 + (36.0 - kd) * 0.5 + f.get_ascent(ks)),
 			"K/D/A: %d/%d/%d" % [int(hk.get("k", 0)), int(hk.get("d", 0)), int(hk.get("a", 0))],
-			HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, Color.WHITE)
+			ks, Color.WHITE, HORIZONTAL_ALIGNMENT_RIGHT, 394.0, 2)
 	# 经济比分（同 host：居中于 W-576，蓝经济 / 蓝击杀 / vs / 红击杀 / 红经济）
 	var kills: Array = [0, 0]
 	var gold: Array = st.get("gold", [0, 0])
@@ -167,7 +172,7 @@ func _draw_info() -> void:
 	var base := 82.0 + f.get_ascent(sz)
 	for g in segs:
 		var txt: String = str(g[0])
-		draw_string(f, Vector2(bx, base), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, g[1])
+		_rtxt(Vector2(bx, base), txt, sz, g[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 2)
 		bx += f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz).x
 	# 第三行：双方剩余防御塔（对局信息带同槽位）
 	var towers: Array = [0, 0]
@@ -177,9 +182,9 @@ func _draw_info() -> void:
 			towers[tm2] += 1
 	var vs2 := int(round(20.0 * _s))
 	var vd := f.get_ascent(vs2) + f.get_descent(vs2)
-	draw_string(f, Vector2(left, 148.0 + (38.0 - vd) * 0.5 + f.get_ascent(vs2)),
+	_rtxt(Vector2(left, 148.0 + (38.0 - vd) * 0.5 + f.get_ascent(vs2)),
 		"防御塔 我方 %d : %d 敌方" % [int(towers[0]), int(towers[1])],
-		HORIZONTAL_ALIGNMENT_CENTER, 410.0, vs2, Color(0.72, 0.76, 0.85))
+		vs2, Color(0.72, 0.76, 0.85), HORIZONTAL_ALIGNMENT_CENTER, 410.0, 2)
 
 
 func _doc_meta() -> Dictionary:
@@ -189,6 +194,15 @@ func _doc_meta() -> Dictionary:
 			return scr.get("_doc").get("meta", {})
 		scr = scr.get_parent()
 	return {}
+
+
+func _rtxt(pos: Vector2, txt: String, sz: int, col: Color,
+		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT, width: float = -1.0,
+		outline: int = 2) -> void:
+	var f: Font = UiKit.font()
+	if outline > 0:
+		draw_string_outline(f, pos, txt, align, width, sz, outline, Color(0, 0, 0, 0.72))
+	draw_string(f, pos, txt, align, width, sz, col)
 
 
 func _fmt_gold_r(v: int) -> String:
