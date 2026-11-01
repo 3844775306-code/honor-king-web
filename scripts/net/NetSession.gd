@@ -1142,6 +1142,7 @@ func _build_snapshot(bm: Node) -> Array:
 
 	# own 块：每个已接管真人的英雄动态状态（命名字典，客户端 HUD 直接读字段）
 	var own := {}
+	var _tt := _pack_team_tactics()   # T 团队决策面板数据（模式/龙/经济差/时长），随 own 下发
 	for pid in _assign_hero:
 		var h: Hero = _assign_hero[pid]
 		if not is_instance_valid(h):
@@ -1185,6 +1186,7 @@ func _build_snapshot(bm: Node) -> Array:
 			"sx": _pack_skill_icons(h),   # 触控技能键图标读数（4槽×编码数组，同 TouchController._update_skill_button_ui）
 			"aa": _pack_attack_aa(h),     # 普攻键伤害/攻速/强化+装备被动小字行（同 _push_attack_stats）
 			"kills": int(h.kills), "deaths": int(h.deaths), "assists": int(h.assists),   # 主界面个人 K/D/A（同 host kda_label）
+			"tt": _tt,   # T 团队决策：["模式名", 龙存活, 我方经济, 敌方经济, 对局时长]
 		}
 		# P3e 死亡跃迁 1→0：对该 pid 推一次死亡回放（受控时长 + 近7秒伤害聚合，host 同款逻辑）
 		var _pa := int(_prev_alive.get(pid, _al))
@@ -1554,6 +1556,35 @@ func _pack_hero_status(e: Node) -> Array:
 	return out
 
 
+func _pack_team_tactics() -> Array:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not is_instance_valid(bm):
+		return []
+	var tt = bm.get("team_tactics")
+	if tt == null:
+		return []
+	var mode := ""
+	var dragon := 0
+	if tt.has_method("get_mode_name"):
+		mode = str(tt.get_mode_name())
+	if tt.has_method("_is_dragon_alive"):
+		dragon = 1 if bool(tt._is_dragon_alive()) else 0
+	return [mode, dragon, int(bm.get("team_player_gold")), int(bm.get("team_enemy_gold")), float(bm.get("game_time"))]
+
+
+func _pack_assigned_lane(e: Node) -> int:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not is_instance_valid(bm):
+		return -1
+	var tt = bm.get("team_tactics")
+	if tt == null:
+		return -1
+	var asg = tt.get("assignments")
+	if asg is Dictionary:
+		return int(asg.get(e, -1))
+	return -1
+
+
 func _pack_hero_markers(e: Node) -> Array:
 	var out: Array = []
 	if e == null or not e.has_method("get_marker_sources"):
@@ -1622,7 +1653,9 @@ func _pack_hero(e: Node) -> Array:
 		1 if bool(e.get("is_mvp")) else 0,   # idx18：MVP 王冠（客户端世界血条右侧徽章）
 		_pack_hero_status(e),   # idx19：状态条（附魔/枪意/炸弹/剑意/回城/传送… 与单机 HeroInfoControl 同源）
 		_pack_hero_markers(e),  # idx20：标记图标行 [[name,count]]
-		_pack_ai_chip(e)]       # idx21：AI 决策胶囊 [label,r,g,b]（非 AI 为空）
+		_pack_ai_chip(e),       # idx21：AI 决策胶囊 [label,r,g,b]（非 AI 为空）
+		str(e.get("role")),     # idx22：职责（T 面板 [AI] 名字 (role) -> 分路）
+		_pack_assigned_lane(e)] # idx23：战术分配的 lane（-1=未分配）
 
 
 func _maxmana_of(e: Node) -> float:

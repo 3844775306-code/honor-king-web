@@ -20,6 +20,7 @@ const NetDeathRecapScript = preload("res://scripts/net/NetDeathRecap.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
+const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -292,6 +293,8 @@ var _vol_slider: HSlider = null
 var _surrender_lab: Label = null
 # —— P3c：属性 C / 队伍 T 面板（host _rpc_roster；CanvasLayer 101 盖过触摸层，模态）——
 var _rp: NetRosterPanelScript
+var _tdv: TeamDecisionViewScript = null
+var _tdv_layer: CanvasLayer = null
 # —— P3d：商店（host own.gold/equip/rec 喂入；CanvasLayer 102 盖过 C/T 面板）——
 var _sp: NetShopPanelScript
 # —— P3d+：主界面右上推荐带（own.rb 每帧喂入；CanvasLayer 65）——
@@ -356,6 +359,7 @@ func _ready() -> void:
 	_build_buff_row()
 	_build_yuanliu_switch()
 	_build_settings()
+	_build_team_decision()
 	_build_roster_hit()
 	_build_roster_panel()
 	_build_shop_panel()
@@ -388,6 +392,8 @@ func _process(delta: float) -> void:
 		return
 	if not _map_applied:
 		_apply_map_if_ready()
+	if _tdv != null and _tdv.visible:
+		_tdv.set_data(_team_decision_data())
 	_update_atk_ring()
 	_update_tower_rings()
 	_update_epic_rings()
@@ -688,6 +694,8 @@ func _on_snapshot(snap: Array) -> void:
 				v.status = ent[19] if ent.size() > 19 else []
 				v.markers = ent[20] if ent.size() > 20 else []          # 标记图标行（专属图标+层数）
 				v.ai_chip = ent[21] if ent.size() > 21 else []          # AI 决策胶囊 [label,r,g,b]
+				v.role = str(ent[22]) if ent.size() > 22 else ""        # 职责（T 面板）
+				v.lane_assigned = int(ent[23]) if ent.size() > 23 else -1  # 战术分路
 			if typ == NET_JUNGLE:
 				if hp < float(v.get("prev_hp", hp)) - 0.5:
 					v["hit_t"] = _last_snap_time
@@ -2568,9 +2576,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			if k.pressed and k.physical_keycode == KEY_C:
 				_toggle_roster("attr")
 			elif k.pressed and k.physical_keycode == KEY_T:
-				_toggle_roster("team")
+				_toggle_team_decision()
 			elif k.pressed and k.physical_keycode == KEY_ESCAPE and _rp and _rp.visible:
 				_rp.hide_panel()
+			elif k.pressed and k.physical_keycode == KEY_ESCAPE and _tdv != null and _tdv.visible:
+				_tdv.visible = false
 			return
 		if not k.pressed:
 			# 松开 1/2/3：结束 type0「按住瞄准-松手施放」（_pending_skill 在按住期驱动准星）
@@ -2609,10 +2619,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_C:
 				_toggle_roster("attr")   # P3c 属性面板
 			KEY_T:
-				_toggle_roster("team")   # P3c 队伍面板
+				_toggle_team_decision()   # 团队决策面板（同 host T）
 			KEY_ESCAPE:
 				if _rp and _rp.visible:
 					_rp.hide_panel()
+				elif _tdv != null and _tdv.visible:
+					_tdv.visible = false
 			KEY_Y:
 				# 桌面自由镜头回正（同 host BattleManager：Y 键清空 cam_pan_offset）
 				_cam_pan = Vector3.ZERO
@@ -3748,6 +3760,58 @@ func _build_roster_hit() -> void:
 	hit.tooltip_text = "查看全局英雄面板（同主机点战况带 / C 键）"
 	hit.pressed.connect(func(): _toggle_roster("attr"))
 	cl.add_child(hit)
+
+
+# T 团队决策面板（与单机同版面：时间/模式/经济/龙/双方分路计划，共享 TeamDecisionView）
+func _build_team_decision() -> void:
+	_tdv_layer = CanvasLayer.new()
+	_tdv_layer.layer = UiKit.LAYER_OVERLAY - 2
+	add_child(_tdv_layer)
+	_tdv = TeamDecisionViewScript.new()
+	_tdv_layer.add_child(_tdv)
+
+
+func _toggle_team_decision() -> void:
+	if _tdv == null:
+		return
+	if _tdv.visible:
+		_tdv.visible = false
+		return
+	_tdv.set_data(_team_decision_data())
+	_tdv.visible = true
+
+
+func _team_decision_data() -> Dictionary:
+	var tt: Array = _own.get("tt", [])
+	var out := {
+		"time": float(tt[4]) if tt.size() > 4 else 0.0,
+		"mode": str(tt[0]) if tt.size() > 0 else "—",
+		"dragon": bool(int(tt[1])) if tt.size() > 1 else false,
+		"gold_diff": (int(tt[2]) - int(tt[3])) if tt.size() > 3 else 0,
+		"allies": [], "foes": [],
+	}
+	for v in _views.values():
+		if int(v.get("type", -1)) != NET_HERO:
+			continue
+		if float(v.get("hp", 0.0)) <= 0.0:
+			continue
+		var team: int = int(v.get("team", -1))
+		var is_ally: bool = team == int(_manifest.get("team", TEAM_PLAYER))
+		var line := "[AI] %s (%s) -> %s" % [str(v.get("name", "")), str(v.get("role", "")), _lane_name(int(v.get("lane_assigned", -1)))]
+		if is_ally:
+			(out["allies"] as Array).append(line)
+		else:
+			(out["foes"] as Array).append(line)
+	return out
+
+
+func _lane_name(lane: int) -> String:
+	match lane:
+		0: return "发育路"
+		1: return "MID"
+		2: return "对抗路"
+		3: return "打龙"
+	return "未分配"
 
 
 func _build_roster_panel() -> void:

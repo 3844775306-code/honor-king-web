@@ -617,10 +617,10 @@
       ],
       "patterns": {
         "host": [
-          "toggle_hero_detail|hero_detail_panel"
+          "toggle_hero_detail|hero_detail_panel|RosterView"
         ],
         "net": [
-          "toggle_hero_detail|hero_detail_panel"
+          "RosterView"
         ]
       },
       "accepted": {
@@ -639,7 +639,7 @@
           "team_decision_panel"
         ],
         "net": [
-          "team_decision_panel"
+          "TeamDecisionView"
         ]
       },
       "accepted": {
