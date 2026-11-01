@@ -527,6 +527,7 @@ func _build_hud() -> void:
 
 
 func _update_world_hud(t: float) -> void:
+	var _hud_fi: int = _find_frame(t)
 	if _cam == null or _bars == null:
 		return
 	var vp := get_viewport().get_visible_rect().size
@@ -542,13 +543,13 @@ func _update_world_hud(t: float) -> void:
 		if not bool(st.get("alive", false)) or bool(st.get("invis", false)):
 			info.visible = false
 			continue
-		var _hprev: float = float(ui.get("prev_hp", fake.health))
 		fake.health = clampf(float(st.get("hp", 0)), 0.0, maxf(1.0, float(st.get("mx", 1))))
-		# 英雄血条受伤闪橙：HeroInfoControl 自身 _process 会检测；这里补一次显式触发，回放跳帧/拖动后也保证闪橙
-		if fake.health < _hprev - 0.5:
-			info.set("damage_flash_amount", _hprev - fake.health)
-			info.set("damage_flash_timer", 0.5)
-		ui["prev_hp"] = fake.health
+		# 闪橙只按录像采样帧的伤害触发；压住 HeroInfoControl 对“插值血量每帧微降”的连续触发
+		info.set("previous_health", fake.health)
+		var _hf: Array = _frame_flash("h%d" % i, _hud_fi, fake.health, maxf(0.001, get_process_delta_time()))
+		if _hf[0] > 0.0:
+			info.set("damage_flash_amount", _hf[1])
+			info.set("damage_flash_timer", _hf[0])
 		fake.max_health = maxf(1.0, float(st.get("mx", 1)))
 		fake.level = int(st.get("lvl", 1))
 		fake.actual_max_health = maxf(1.0, float(st.get("mx", 1)))
@@ -644,7 +645,7 @@ func _update_world_hud(t: float) -> void:
 		if _lag - hp < 1.0:
 			_lag = hp
 		_lag_cache[_uk] = _lag
-		var _fl: Array = _unit_flash(_uk, hp, maxf(0.001, get_process_delta_time()))
+		var _fl: Array = [float(u.get("flash_t", 0.0)), float(u.get("flash_amt", 0.0))]
 		rows.append({
 			"hp": hp, "max_hp": mx, "team": team_v, "team_color": team_col,
 			"pos": sp2 - Vector2(w, hh) * 0.5, "w": w, "h": hh,
@@ -1035,7 +1036,7 @@ func _apply_frame(t: float) -> void:
 			"ms": int(row_a[19]) if row_a.size() > 19 else 0,
 			"as": int(row_a[20]) if row_a.size() > 20 else 0,
 			"cds": _cds, "slevels": _lv, "yaw": float(row_a[3]) if row_a.size() > 3 else 0.0,
-			"flat_pen": float(row_a[45]) if row_a.size() > 45 else 0.0,
+			"flat_pen": float(row_a[47]) if row_a.size() > 47 else 0.0,
 			"shield": float(row_a[30]) / 10.0 if row_a.size() > 30 else 0.0,
 			"stun": float(row_a[31]) / 100.0 if row_a.size() > 31 else 0.0,
 			"knock": float(row_a[32]) / 100.0 if row_a.size() > 32 else 0.0,
@@ -1133,7 +1134,7 @@ func _apply_frame(t: float) -> void:
 				"flash_t": _uf[0], "flash_amt": _uf[1]})
 		if hpv > 0.5 and i < _turrets.size():
 			var td: Dictionary = _turrets[i]
-			var _uf2: Array = _unit_flash("t%d" % i, hpv, maxf(0.001, get_process_delta_time()))
+			var _uf2: Array = _frame_flash("t%d" % i, fi, float(ra[0]), maxf(0.001, get_process_delta_time()))
 			_unit_world.append({"kind": "turret", "pos": Vector3(float(td.get("x", 0)) / 100.0, 0.0, float(td.get("z", 0)) / 100.0),
 				"hp": hpv, "max": maxf(1.0, float(node2["max"])), "team": int(td.get("team", 0)),
 				"name": str(td.get("type", "")), "sub": str(td.get("type", "")),
@@ -1158,11 +1159,13 @@ func _apply_frame(t: float) -> void:
 			var x0: float = lerpf(float(ra[1]), float(rb2[1]) if rb2.size() > 1 else float(ra[1]), k2) / 100.0
 			var z0: float = lerpf(float(ra[2]), float(rb2[2]) if rb2.size() > 2 else float(ra[2]), k2) / 100.0
 			var hp0: float = lerpf(float(ra[3]), float(rb2[3]) if rb2.size() > 3 else float(ra[3]), k2)
+			var _mf: Array = _frame_flash("m%d" % id0, mi, float(ra[3]), maxf(0.001, get_process_delta_time()))
 			rows.append([id0, x0, z0, int(ra[5]), int(ra[4]), hp0,
 				float(ra[6]) if ra.size() > 6 else 1000.0,
 				float(ra[7]) if ra.size() > 7 else 0.0,
 				int(ra[8]) if ra.size() > 8 else 0,
-				float(ra[9]) if ra.size() > 9 else 0.0])
+				float(ra[9]) if ra.size() > 9 else 0.0,
+				_mf[0], _mf[1]])
 		var seen := {}
 		for r in rows:
 			var id: int = int(r[0])
@@ -1180,12 +1183,12 @@ func _apply_frame(t: float) -> void:
 			node3.visible = true
 			node3.set_meta("dying", false)
 			_hud_minions.append({"wx": float(r[1]), "wz": float(r[2]), "team": int(r[4])})
-			var _mf: Array = _unit_flash("m%d" % int(r[0]), float(r[5]), maxf(0.001, get_process_delta_time()))
 			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
 				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
 				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)],
 				"armor": float(r[9]) if r.size() > 9 else 0.0,
-				"flash_t": _mf[0], "flash_amt": _mf[1]})
+				"flash_t": float(r[10]) if r.size() > 10 else 0.0,
+				"flash_amt": float(r[11]) if r.size() > 11 else 0.0})
 			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
 			var nowp: Vector3 = Vector3(float(r[1]), 0.0, float(r[2]))
 			var prevp: Vector3 = node3.get_meta("prev", nowp)
@@ -1294,7 +1297,7 @@ func _apply_frame(t: float) -> void:
 				jroot.position.y = -minf(0.4, jage * 1.0)
 				if jage > 1.0:
 					jroot.visible = false
-			var _jf: Array = _unit_flash("j%d" % ji2, jhp, maxf(0.001, get_process_delta_time()))
+			var _jf: Array = _frame_flash("j%d" % ji2, ji, float(jra[3]), maxf(0.001, get_process_delta_time()))
 			if jroot.visible:
 				_unit_world.append({"kind": "jungle", "pos": jroot.position,
 					"hp": jhp, "max": maxf(1.0, float(jnode["max"])), "team": 2,
@@ -1350,7 +1353,9 @@ func _apply_frame(t: float) -> void:
 			var rb2: Array = bmap_b.get(bid2, ra2)
 			var bx: float = lerpf(float(ra2[1]), float(rb2[1]) if rb2.size() > 1 else float(ra2[1]), bk) / 100.0
 			var bz: float = lerpf(float(ra2[2]), float(rb2[2]) if rb2.size() > 2 else float(ra2[2]), bk) / 100.0
-			var by: float = float(ra2[10]) / 100.0 if ra2.size() > 10 else 1.15
+			var y_a: float = float(ra2[10]) / 100.0 if ra2.size() > 10 else 1.15
+			var y_b: float = float(rb2[10]) / 100.0 if rb2.size() > 10 else y_a
+			var by: float = lerpf(y_a, y_b, bk)   # 高度同样插值，避免 10Hz 阶梯式上下跳
 			seen_b[bid2] = true
 			var node_b = _bullet_nodes.get(bid2)
 			if node_b == null:
@@ -1359,16 +1364,16 @@ func _apply_frame(t: float) -> void:
 				_bullet_nodes[bid2] = node_b
 			node_b.visible = true
 			node_b.position = Vector3(bx, by, bz)
-			# 朝向：用广播帧的位移方向（箭矢/炮弹模型需要，host 同款）
-			var pdx: float = bx - float(last_pos.get(bid2, Vector2(bx, bz)).x) if last_pos.has(bid2) else 0.0
-			var pdz: float = bz - float(last_pos.get(bid2, Vector2(bx, bz)).y) if last_pos.has(bid2) else 0.0
+			# 朝向：用广播帧的真实位移（render-t 帧间位移在 10Hz 采样下会抖动/反向，导致轨迹看起来歪）
+			var pdx: float = (float(rb2[1]) - float(ra2[1])) / 100.0 if rb2.size() > 1 else 0.0
+			var pdz: float = (float(rb2[2]) - float(ra2[2])) / 100.0 if rb2.size() > 2 else 0.0
 			last_pos[bid2] = Vector2(bx, bz)
-			if absf(pdx) + absf(pdz) > 0.001:
+			if absf(pdx) + absf(pdz) > 0.0005:
 				node_b.rotation.y = atan2(pdx, pdz)
-				if node_b.has_meta("pitch") and ra2.size() > 10:
-					var py: float = (float(rb2[10]) - float(ra2[10])) / 100.0 if rb2.size() > 10 else 0.0
+				if node_b.has_meta("pitch"):
+					var py: float = (float(rb2[10]) - float(ra2[10])) / 100.0 if (rb2.size() > 10 and ra2.size() > 10) else 0.0
 					var hl := sqrt(pdx * pdx + pdz * pdz)
-					if hl > 0.001:
+					if hl > 0.0005:
 						node_b.rotation.x = -atan2(py, hl)
 		for bid3 in _bullet_nodes.keys():
 			if not seen_b.has(bid3):
@@ -2482,6 +2487,24 @@ func _replay_last_hit(team: int, hp: float, armor: float) -> bool:
 	return hp < dmg
 
 
+## 帧级闪橙：只在录像采样帧切换且该帧血量下降时触发（插值血量逐帧下降不能当受伤）
+func _frame_flash(key: String, frame_idx: int, frame_hp: float, dt: float) -> Array:
+	var e: Dictionary = _flash_cache.get(key, {})
+	var ft: float = maxf(0.0, float(e.get("t", 0.0)) - dt)
+	var fa: float = float(e.get("amt", 0.0))
+	if int(e.get("f", -1)) != frame_idx:
+		var prev_hp: float = float(e.get("hp", frame_hp))
+		if frame_hp < prev_hp - 0.5:
+			ft = 0.5
+			fa = prev_hp - frame_hp
+		e["f"] = frame_idx
+		e["hp"] = frame_hp
+	e["t"] = ft
+	e["amt"] = fa
+	_flash_cache[key] = e
+	return [ft, fa]
+
+
 func _unit_flash(key: String, hp: float, dt: float) -> Array:
 	var e: Dictionary = _flash_cache.get(key, {})
 	var prev: float = float(e.get("hp", hp))
@@ -2593,16 +2616,8 @@ func _model_top(root: Node3D) -> float:
 
 
 func _minion_walk_opts(kind: String, model: Node3D) -> Dictionary:
-	if kind in ["dragon", "storm", "shadow_dragon"]:
-		return {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
-			"wings": [model.get_node_or_null("ModelPivot/WingL"),
-				model.get_node_or_null("ModelPivot/WingR")]}
-	if kind == "siege":
-		return {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
-	var swing := 0.52 if kind == "super" else 0.62
-	return {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust_size": 0.18,
-		"legs": [model.get_node_or_null("ModelPivot/LegL"), model.get_node_or_null("ModelPivot/LegR")],
-		"leg_swing": swing}
+	# 与单机 Minion._walk_opts 完全同源：ActorPresenter 统一参数（步频/起伏/摆幅/腿翼枢轴）
+	return ActorPresenter.walk_opts("minion", kind, model)
 
 
 ## 小兵普攻动作：与单机 Minion._model_lunge / _siege_recoil 同参数的程序化版本
