@@ -67,6 +67,7 @@ var net_test := false
 var cli_mode := false   # 命令行直连（--net-host/--net-join），跳过大厅场景
 var phase := Phase.LOBBY  # host=当前阶段；client=最近收到的主机阶段
 var players := {}   # peer_id(int) -> { "name": String }
+var self_name := ""   # 本机昵称（建房/进房前由大厅设置，房间名单显示用）
 # 联机大厅准备状态：peer_id -> { "camp":int(0蓝/1红), "lane":String, "ready":bool }
 # 阵营确认 + 分路选择后 ready=true；房主必须等所有在线玩家 ready 才能开始选人/开局。
 var lobby_ready := {}
@@ -267,7 +268,7 @@ func _setup_peer() -> void:
 				mode = Mode.NONE
 				return
 			multiplayer.multiplayer_peer = peer
-			players[1] = { "name": "主机" if cli_mode else "房主" }
+			players[1] = { "name": _self_display_name() if _self_display_name() != "" else ("主机" if cli_mode else "房主") }
 			lobby_ready[1] = { "camp": 0, "lane": "", "ready": false }
 			multiplayer.peer_connected.connect(_on_peer_connected)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -341,7 +342,36 @@ func _on_peer_disconnected(id: int) -> void:
 
 func _on_connected_to_server() -> void:
 	print("[Net] 已连上主机")
+	var nm := _self_display_name()
+	if nm != "":
+		_rpc_register_name.rpc_id(1, nm)
 	_update_overlay()
+
+
+## 本机昵称：大厅进入房间前设置；没设置时回退到全局昵称存储
+func set_self_name(nm: String) -> void:
+	self_name = nm.strip_edges()
+
+
+func _self_display_name() -> String:
+	if self_name != "":
+		return self_name
+	return NameStore.player_name().strip_edges()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_register_name(nm: String) -> void:
+	if mode != Mode.HOST:
+		return
+	var pid := multiplayer.get_remote_sender_id()
+	if not players.has(pid):
+		return
+	var clean := nm.strip_edges().substr(0, 16)
+	if clean == "":
+		return
+	players[pid]["name"] = clean
+	print("[Net] 玩家昵称 peer=", pid, " → ", clean)
+	_broadcast_lobby_state()
 
 
 func _on_connection_failed() -> void:
@@ -2450,8 +2480,8 @@ func _nt_drive(delta: float) -> void:
 # ---------- 客户端观战棋盘（M1，非 headless 时显示） ----------
 
 func _ensure_overlay() -> void:
-	if _overlay_layer != null:
-		return
+	# 联机测试浮层已按需求移除（右上角不再显示 [联机测试] 棋盘/状态）
+	return
 	_overlay_layer = CanvasLayer.new()
 	_overlay_layer.layer = 60
 	add_child(_overlay_layer)
@@ -2470,6 +2500,7 @@ func _ensure_overlay() -> void:
 
 
 func _update_overlay() -> void:
+	return
 	if _spectate == null:
 		return
 	var txt := "[联机测试] "
@@ -2674,3 +2705,4 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
+

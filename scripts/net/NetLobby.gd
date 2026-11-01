@@ -793,6 +793,8 @@ func _create_host() -> void:
 	if _connecting:
 		return
 	var port := _read_port()
+	# 建房前把本机昵称交给 NetSession：房间名单里显示真实昵称而不是「房主/玩家N」
+	NetSession.set_self_name(_local_nickname())
 	var ok := NetSession.host_game(port)
 	if not ok:
 		_status_text("建房失败：本机已在房间中，或端口被占用", COL_ERR)
@@ -812,6 +814,8 @@ func _join_room() -> void:
 		return
 	_set_menu_enabled(false)
 	_status_text("正在连接 %s:%d …" % [addr, port], COL_SUB)
+	# 进房前把本机昵称交给 NetSession，连上后自动 RPC 注册到主机名单
+	NetSession.set_self_name(_local_nickname())
 	NetSession.join_game(addr, port)
 
 
@@ -3296,3 +3300,4 @@ func _route_battle() -> void:
 
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
+
