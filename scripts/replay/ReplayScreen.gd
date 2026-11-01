@@ -502,7 +502,13 @@ func _update_world_hud(t: float) -> void:
 		if not bool(st.get("alive", false)) or bool(st.get("invis", false)):
 			info.visible = false
 			continue
+		var _hprev: float = float(ui.get("prev_hp", fake.health))
 		fake.health = clampf(float(st.get("hp", 0)), 0.0, maxf(1.0, float(st.get("mx", 1))))
+		# 英雄血条受伤闪橙：HeroInfoControl 自身 _process 会检测；这里补一次显式触发，回放跳帧/拖动后也保证闪橙
+		if fake.health < _hprev - 0.5:
+			info.set("damage_flash_amount", _hprev - fake.health)
+			info.set("damage_flash_timer", 0.5)
+		ui["prev_hp"] = fake.health
 		fake.max_health = maxf(1.0, float(st.get("mx", 1)))
 		fake.level = int(st.get("lvl", 1))
 		fake.actual_max_health = maxf(1.0, float(st.get("mx", 1)))
