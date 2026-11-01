@@ -15,6 +15,16 @@ var _utt := 0
 var _last_text := ""
 var _last_ms := 0
 var _blip: AudioStreamPlayer = null
+var edge_enabled := true
+var _edge: Node = null
+var _edge_player: AudioStreamPlayer = null
+var _edge_busy := false
+var _edge_queue: Array = []
+var _edge_seq := 0
+var _edge_cur: Dictionary = {}
+var _edge_cache: Dictionary = {}
+var _edge_fail_streak := 0
+const EdgeScript = preload("res://scripts/core/EdgeTTS.gd")
 
 
 func _ready() -> void:
@@ -23,6 +33,15 @@ func _ready() -> void:
 	_blip.bus = "Master"
 	_blip.volume_db = 0.0
 	add_child(_blip)
+	_edge_player = AudioStreamPlayer.new()
+	_edge_player.name = "EdgeVoice"
+	_edge_player.bus = "Master"
+	add_child(_edge_player)
+	_edge = EdgeScript.new()
+	_edge.name = "EdgeTTS"
+	add_child(_edge)
+	_edge.connect("done", Callable(self, "_on_edge_done"))
+	_edge.connect("failed", Callable(self, "_on_edge_failed"))
 	_fallback_blip = true
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH):
 		return
@@ -85,10 +104,18 @@ func speak(text: String, speaker: String = "") -> void:
 		return
 	_last_text = clean
 	_last_ms = now
+	var emo := _emotion_params(clean, speaker)
+	if edge_enabled and _edge != null:
+		_request_edge(clean, speaker, emo)
+		return
+	_speak_local(clean, speaker, emo)
+
+
+## 本地 TTS / 拟声（Edge 不可用时的兜底）
+func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 	var clauses := _split_clauses(clean)
 	if clauses.is_empty():
 		return
-	var emo := _emotion_params(clean, speaker)
 	if _ok:
 		var ids: Array = []
 		for i in range(clauses.size()):
@@ -104,11 +131,93 @@ func speak(text: String, speaker: String = "") -> void:
 				clampf(pitch, 0.5, 2.0), clampf(rate, 0.5, 2.0), _utt, false)
 			ids.append(_utt)
 		if OS.is_debug_build():
-			print("[VOICE] tts clauses=", clauses.size(), " emo=", emo)
+			print("[VOICE] local tts clauses=", clauses.size(), " emo=", emo)
 		if not ids.is_empty():
 			_verify_tts(int(ids[ids.size() - 1]), clean, speaker)
 	else:
 		_blip_speak(clean, speaker, emo)
+
+
+## ---------------- Edge 在线神经语音 ----------------
+
+func _edge_voice(speaker: String) -> String:
+	if speaker == "灵宝":
+		return "zh-CN-XiaoyiNeural"
+	var pool := ["zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural",
+		"zh-CN-YunyangNeural", "zh-CN-XiaoyiNeural"]
+	return pool[int(abs(hash(speaker)) % pool.size())]
+
+
+func _edge_pct(v: float, lo: int, hi: int) -> int:
+	return clampi(int(round((v - 1.0) * 100.0)), lo, hi)
+
+
+func _request_edge(clean: String, speaker: String, emo: Dictionary) -> void:
+	var key := speaker + "|" + clean
+	if _edge_cache.has(key):
+		_play_edge(_edge_cache[key])
+		return
+	if _edge_busy:
+		if _edge_queue.size() < 4:
+			_edge_queue.append({"t": clean, "s": speaker, "e": emo})
+		return
+	var pitch_pct: int = _edge_pct(float(emo["pitch"]), -25, 45)
+	var rate_pct: int = _edge_pct(float(emo["rate"]), -25, 35)
+	var vol_pct: int = clampi(int(round(float(emo["volume"]))) - 88, -20, 20)
+	if speaker == "灵宝":
+		pitch_pct += 10
+		rate_pct += 4
+	_edge_busy = true
+	_edge_seq += 1
+	_edge_cur = {"key": key, "t": clean, "s": speaker, "e": emo}
+	_edge.call("synth", _edge_seq, clean, _edge_voice(speaker), pitch_pct, rate_pct, vol_pct)
+	if OS.is_debug_build():
+		print("[VOICE] edge request voice=", _edge_voice(speaker), " pitch=", pitch_pct, " rate=", rate_pct)
+
+
+func _on_edge_done(_id: int, stream: AudioStreamMP3) -> void:
+	_edge_fail_streak = 0
+	var key := str(_edge_cur.get("key", ""))
+	if key != "":
+		if _edge_cache.size() > 120:
+			_edge_cache.clear()
+		_edge_cache[key] = stream
+	_play_edge(stream)
+	_edge_next()
+
+
+func _on_edge_failed(_id: int) -> void:
+	_edge_fail_streak += 1
+	# 连续失败：本次会话回退本地 TTS/拟声，避免每条语音都等 8 秒超时
+	if _edge_fail_streak >= 2:
+		edge_enabled = false
+		if OS.is_debug_build():
+			print("[VOICE] edge unavailable -> local fallback for this session")
+	var t := str(_edge_cur.get("t", ""))
+	var sp := str(_edge_cur.get("s", ""))
+	var em: Dictionary = _edge_cur.get("e", {})
+	_edge_next()
+	if t != "":
+		_speak_local(t, sp, em)
+
+
+func _edge_next() -> void:
+	_edge_busy = false
+	_edge_cur = {}
+	if _edge_queue.is_empty():
+		return
+	var nx: Dictionary = _edge_queue.pop_front()
+	_request_edge(str(nx.get("t", "")), str(nx.get("s", "")), nx.get("e", {}))
+
+
+func _play_edge(stream: AudioStreamMP3) -> void:
+	if _edge_player == null or stream == null:
+		return
+	if _ok and DisplayServer.has_method("tts_stop"):
+		DisplayServer.tts_stop()
+	_blip.stop()
+	_edge_player.stream = stream
+	_edge_player.play()
 
 
 ## 标点/情绪 → 音高、语速、音量与句内曲线
@@ -227,6 +336,8 @@ func diagnose() -> Dictionary:
 	return {
 		"enabled": enabled, "tts_ok": _ok, "has_zh": _has_zh, "voice": _voice,
 		"pool": _voice_pool, "lang": _lang, "fallback": _fallback_blip, "tts_speaking": speaking,
+		"edge_enabled": edge_enabled, "edge_busy": _edge_busy, "edge_fail": _edge_fail_streak,
+		"edge_cache": _edge_cache.size(),
 		"master_db": AudioServer.get_bus_volume_db(0), "master_mute": AudioServer.is_bus_mute(0),
 	}
 
@@ -236,6 +347,12 @@ func stop() -> void:
 		DisplayServer.tts_stop()
 	if _blip != null:
 		_blip.stop()
+	if _edge_player != null:
+		_edge_player.stop()
+	if _edge != null:
+		_edge.call("abort")
+	_edge_busy = false
+	_edge_queue.clear()
 
 
 ## 拟声语音：带语调曲线（问句上挑/感叹更亮/省略号拖长）+ 颤音 + 轻微气声
