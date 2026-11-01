@@ -1513,15 +1513,50 @@ func _handle_high_defense() -> bool:
 	if dist > AiConfig.DEFEND_LANE_TURRET_RANGE:
 		return false
 	if dist <= AiConfig.FRIENDLY_TURRET_CLOSE:
-		# 已到塔边：直接接手塔的仇恨目标
-		var attacker = target.current_target
-		hero.manual_target = attacker if (attacker and is_instance_valid(attacker) and attacker.health > 0) else null
+		# 已到塔边：优先打正在拆塔的敌方小兵（塔的 current_target 可能是英雄/空），并清掉旧 move_target
+		var defender := _defense_target_for_turret(target)
+		hero.manual_target = defender if (defender != null and is_instance_valid(defender) and defender.health > 0) else null
+		if hero.manual_target != null:
+			hero.move_target = Vector3.ZERO
 	else:
 		# 还没到：先跑过去（只换目标不移动 = 原地补兵，等于没防守）
 		hero.manual_target = null
 		hero.move_target = target.global_position
 	state = State.PUSH
 	return true
+
+## 回防目标：优先塔当前仇敌；否则选塔附近最近的敌方小兵（拆塔主力），再退到敌方英雄
+func _defense_target_for_turret(turret: Turret) -> GameEntity:
+	if turret == null or not is_instance_valid(turret):
+		return null
+	var cur = turret.current_target
+	if cur != null and is_instance_valid(cur) and cur.health > 0.0 and cur.team != hero.team:
+		return cur
+	var tree := hero.get_tree()
+	if tree == null:
+		return null
+	var best_minion: GameEntity = null
+	var best_minion_d := 14.0
+	var best_hero: GameEntity = null
+	var best_hero_d := 14.0
+	for ent in tree.get_nodes_in_group("entities"):
+		if not (ent is GameEntity) or ent == hero or ent.health <= 0.0 or ent.team == hero.team:
+			continue
+		var d: float = ent.global_position.distance_to(turret.global_position)
+		if d > 14.0:
+			continue
+		if ent is Minion:
+			if d < best_minion_d:
+				best_minion_d = d
+				best_minion = ent
+		elif ent is Hero:
+			if d < best_hero_d:
+				best_hero_d = d
+				best_hero = ent
+	if best_minion != null:
+		return best_minion
+	return best_hero
+
 
 func _handle_lane_turret_defense() -> bool:
 	var turret := _get_lane_turret_under_attack(lane)
@@ -1537,9 +1572,12 @@ func _handle_lane_turret_defense() -> bool:
 		hero.move_target = turret.global_position
 		state = State.PUSH
 		return true
-	var attacker = turret.current_target
-	if attacker and is_instance_valid(attacker) and attacker.health > 0:
-		hero.manual_target = attacker
+	var defender := _defense_target_for_turret(turret)
+	if defender != null and is_instance_valid(defender) and defender.health > 0:
+		hero.manual_target = defender
+		hero.move_target = Vector3.ZERO   # 清掉“跑到塔中心”的旧移动指令，否则会压着目标不走、也不普攻
+	else:
+		hero.manual_target = null
 	state = State.PUSH
 	return true
 
