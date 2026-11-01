@@ -752,6 +752,9 @@ func _build_manifest(pid: int, h: Hero, nid: int) -> Dictionary:
 	for i in range(h.skills.size()):
 		var s = h.skills[i]
 		if s == null:
+			# 保留空槽位：客户端用 skills[3] 判断是否真的有第 4 技能，
+			# 不能把后面的恢复技能前移成第 4 格，否则所有英雄都会亮出 4 技能按钮。
+			sk.append(null)
 			continue
 		sk.append({
 			"sid": _skill_id_of(s),   # 技能 id：客户端第 4 技能按钮要用它取 SkillDatabase 里的图标纹样

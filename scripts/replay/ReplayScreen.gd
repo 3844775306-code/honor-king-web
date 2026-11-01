@@ -4,6 +4,7 @@ extends Node3D
 
 const Repo = preload("res://scripts/core/ReplayRecorder.gd")
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
+const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
@@ -80,6 +81,7 @@ var _play_btn: Button = null
 var _speed_btn: Button = null
 var _title: Label = null
 var _feed: VBoxContainer = null
+var _event_toasts: Array = []
 var _dragging := false
 const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5 秒 · N 下一击杀 · F 跟随英雄 · +/- 倍速 · 右键拖动旋转 · 滚轮缩放 · Esc 退出"
 
@@ -368,7 +370,7 @@ func _update_world_hud(t: float) -> void:
 		if not bool(st.get("alive", false)) or bool(st.get("invis", false)):
 			info.visible = false
 			continue
-		fake.health = float(st.get("hp", 0))
+		fake.health = clampf(float(st.get("hp", 0)), 0.0, maxf(1.0, float(st.get("mx", 1))))
 		fake.max_health = maxf(1.0, float(st.get("mx", 1)))
 		fake.level = int(st.get("lvl", 1))
 		fake.actual_max_health = maxf(1.0, float(st.get("mx", 1)))
@@ -695,6 +697,7 @@ func _process(delta: float) -> void:
 	_apply_frame(_t)
 	_auto_spectate()
 	_update_popups(delta)
+	_update_toasts()
 	_update_postfx(delta)
 	_update_ui()
 	_update_camera()
@@ -1299,30 +1302,26 @@ func _auto_spectate() -> void:
 	if st.is_empty():
 		return
 	if not bool(st.get("alive", false)):
-		if _spectate_origin < 0 or _spectate_origin != _follow_hero:
+		if _spectate_origin < 0:
 			_spectate_origin = _follow_hero
-		var src_pos: Vector3 = st.get("pos", Vector3.ZERO)
-		var best := -1
-		var best_d := 1e9
-		for i in range(_heroes.size()):
-			if i == _follow_hero:
+		# 英雄死亡 → 跳到“下一个还活着的英雄”（按名册顺序循环，不限于友方）
+		var n: int = _heroes.size()
+		for step in range(1, n + 1):
+			var ni: int = (_follow_hero + step) % n
+			if ni >= _hero_state.size():
 				continue
-			if i >= _hero_state.size():
-				continue
-			var si: Dictionary = _hero_state[i]
+			var si: Dictionary = _hero_state[ni]
 			if si.is_empty() or not bool(si.get("alive", false)):
 				continue
-			if str((_heroes[i] as Dictionary).get("team", "")) != str((_heroes[_follow_hero] as Dictionary).get("team", "")):
-				continue
-			var d: float = (si.get("pos", Vector3.ZERO) as Vector3).distance_to(src_pos)
-			if d < best_d:
-				best_d = d
-				best = i
-		if best >= 0 and best != _follow_hero:
-			_follow_hero = best
+			_follow_hero = ni
+			_manual_follow = ni
+			break
 	elif _spectate_origin >= 0 and _spectate_origin != _follow_hero:
-		_follow_hero = _spectate_origin
-		_spectate_origin = -1
+		var os: Dictionary = _hero_state[_spectate_origin] if _spectate_origin < _hero_state.size() else {}
+		if not os.is_empty() and bool(os.get("alive", false)):
+			_follow_hero = _spectate_origin
+			_manual_follow = _spectate_origin
+			_spectate_origin = -1
 
 
 func _update_recall_fx(i: int, pos: Vector3, alive: bool, st: Dictionary) -> void:
@@ -1637,18 +1636,55 @@ func _push_event(ev: Dictionary) -> void:
 		if absf(ev_t - _t) < 0.8:
 			_kill_cam_idx = int(ev.get("a", -1))
 			_kill_cam_t = 2.4
-	var lab := Label.new()
-	lab.text = "%s  %s" % [_fmt(float(ev.get("t", 0)) / 1000.0), txt]
-	lab.add_theme_font_size_override("font_size", int(round(19.0 * UiKit.scale())))
-	lab.add_theme_color_override("font_color", col)
-	lab.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	lab.add_theme_constant_override("outline_size", 3)
-	lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_feed.add_child(lab)
-	_feed_items.append({"label": lab, "t": _last_ev_time})
+	var hname := ""
+	if kind == "k" or kind == "d":
+		hname = _hero_name(int(ev.get("a", -1)))
+	_spawn_toast(txt, hname, col, _fmt(float(ev.get("t", 0)) / 1000.0))
 
 
 ## 技能出手特效：用录制下来的定位 + 最小技能参数，调与对局同一个 Vfx.play_spell
+## 关键事件提示卡：头像 + 事件文字 + 时间，圆角描边，淡入淡出自动回收
+func _spawn_toast(text: String, hero_name: String, accent: Color, tstr: String) -> void:
+	if _feed == null:
+		return
+	var toast := EventToast.new()
+	toast.hero_name = hero_name
+	toast.text = text
+	toast.time_text = tstr
+	toast.accent = accent
+	toast.custom_minimum_size = Vector2(380.0 * UiKit.scale(), 52.0 * UiKit.scale())
+	toast.modulate.a = 0.0
+	_feed.add_child(toast)
+	_event_toasts.append({"node": toast, "t0": _t})
+	var tw := create_tween()
+	tw.tween_property(toast, "modulate:a", 1.0, 0.16)
+
+
+func _update_toasts() -> void:
+	if _event_toasts.is_empty():
+		return
+	var alive: Array = []
+	for it in _event_toasts:
+		var node = it["node"]
+		if node == null or not is_instance_valid(node):
+			continue
+		var age: float = _t - float(it["t0"])
+		if age > 3.6:
+			node.queue_free()
+			continue
+		node.modulate.a = clampf(1.0 - (age - 2.9) / 0.7, 0.0, 1.0)
+		alive.append(it)
+	_event_toasts = alive
+
+
+func _clear_toasts() -> void:
+	for it in _event_toasts:
+		var node = it["node"]
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+	_event_toasts.clear()
+
+
 func _play_cast_fx(ev: Dictionary) -> void:
 	var nm := str(ev.get("n", ""))
 	var cp := Vector3(float(ev.get("cx", 0)) / 100.0, 0.0, float(ev.get("cz", 0)) / 100.0)
@@ -1731,6 +1767,7 @@ func _purge_feed() -> void:
 
 func _rebuild_feed(t: float) -> void:
 	_clear_popups()
+	_clear_toasts()
 	_feed_items.clear()
 	for it in _feed_items:
 		if is_instance_valid(it["label"]):
@@ -1967,3 +2004,26 @@ func _update_camera() -> void:
 	var offset := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * _cam_dist
 	_cam.position = _cam_target + offset + sh
 	_cam.look_at(_cam_target, Vector3.UP)
+
+
+## 关键事件卡片（回放专用，纯绘制，不走 Label）
+class EventToast extends Control:
+	var hero_name := ""
+	var text := ""
+	var time_text := ""
+	var accent := Color(1.0, 0.86, 0.45)
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+	func _draw() -> void:
+		var r := Rect2(Vector2.ZERO, size)
+		draw_style_box(UiKit.flat(0.85, 10, 1, Color(accent.r, accent.g, accent.b, 0.55),
+			Color(0.04, 0.055, 0.09, 0.92), 8.0, 6.0), r)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(4.0, size.y)), accent)
+		var tx := 16.0
+		if hero_name != "":
+			HeroArt.draw_portrait(self, Vector2(32.0, size.y * 0.5), 17.0, hero_name, accent, false)
+			tx = 58.0
+		UiKit.text(self, Vector2(tx, size.y * 0.5 + 7.0), text,
+			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
+		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
+			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))

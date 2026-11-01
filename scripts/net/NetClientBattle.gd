@@ -4848,7 +4848,9 @@ func _manual_alive() -> int:
 class Hud:
 	extends Control
 	const MarkerIconScript = preload("res://scripts/ui/MarkerIcon.gd")
+	const BarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 	var _font: Font
+	var _bar_painter: Control = null   # 非英雄单位血条复用单机 WorldBarPainter，保证三端质感一致
 	var u := 1.0
 	var safe_top := 0.0   # 刘海/挖孔避让：顶部战况带与状态文字整体下移
 	var BAND_SHIFT := 564.0   # 顶部战况带右移量（对齐 host：面板左缘 1619，右缘 2029）
@@ -4898,6 +4900,12 @@ class Hud:
 
 	func _init() -> void:
 		_font = UiKit.font()
+
+	func _ready() -> void:
+		_bar_painter = BarPainterScript.new()
+		_bar_painter.name = "WorldBars"
+		_bar_painter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(_bar_painter)
 
 	func _text(pos: Vector2, txt: String, sz: float, col: Color) -> void:
 		draw_string(_font, pos + Vector2(1.0, 1.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, sz, Color(0, 0, 0, 0.6))
@@ -4955,11 +4963,14 @@ class Hud:
 				_text(slot.position + Vector2(6.0 * s, -2.0 * s), str(i + 1), 11.0 * s, Color(1, 1, 1, 0.7))
 		# —— 世界血条（P2：复刻主机规格；死亡/背后剔除已在收集侧完成）——
 		_sync_flash()   # 受伤闪橙：按 net_id 对上帧血量，血量下探即记 0.5s 衰减橙段
+		var _unit_rows: Array = []
 		for r in wrows:
 			if str(r.get("kind", "")) == "hero":
 				_draw_hero_bar(r)
 			else:
-				_draw_unit_bar(r)
+				_unit_rows.append(_to_world_bar_row(r))
+		if _bar_painter != null:
+			_bar_painter.rows = _unit_rows
 		# —— 小地图右侧英雄环形头像带（复刻主机 respawn_container/RespawnWidget，两排）——
 		if show_widget and not widget_rows.is_empty():
 			_draw_respawn_widget_rows()
@@ -5235,6 +5246,46 @@ class Hud:
 			var _lw := _font.get_string_size(ltxt, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 			draw_string(_font, Vector2(cx - _lw / 2.0, top + 2.0), ltxt,
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 22.0, Color.YELLOW)
+
+	# 客户端世界血条 → 单机 WorldBarPainter 行格式：
+	# 名称/血量/护盾/刻度/残血拖尾/受伤闪橙/标记全部交给同一绘制器，质感与单机完全一致。
+	func _to_world_bar_row(r: Dictionary) -> Dictionary:
+		var w := float(r.get("w", 110.0))
+		var h := float(r.get("h", 15.0))
+		var hp_now := float(r.get("hp", 0.0))
+		var mhp := maxf(float(r.get("maxhp", 1.0)), 1.0)
+		var nid := int(r.get("nid", -1))
+		var shield := clampf(float(r.get("shield", 0.0)), 0.0, mhp)
+		var fr := _flash_ratio_of(nid) if nid >= 0 else 0.0
+		var famt := float(_flash_amt.get(nid, 0.0)) if nid >= 0 else 0.0
+		var lyf_rows: Array = r.get("lyf", [])
+		var doom := 0.0
+		var mlist: Array = []
+		for m in lyf_rows:
+			if m.size() >= 3:
+				doom += float(m[2])
+				if int(m[1]) > 0:
+					mlist.append({"name": str(m[0]), "count": int(m[1]), "type": "lyf"})
+		for m in r.get("mk", []):
+			if m.size() >= 2 and int(m[1]) > 0:
+				mlist.append({"name": str(m[0]), "count": int(m[1]), "type": ""})
+		doom = clampf(doom - shield, 0.0, hp_now)
+		return {
+			"pos": Vector2(float(r.get("cx", 0.0)) - w * 0.5, float(r.get("cy", 0.0)) - h * 0.5),
+			"w": w, "h": h, "hp": hp_now, "max_hp": mhp,
+			"team": int(r.get("team", 9)), "team_color": _team_color(int(r.get("team", 9))),
+			"shield": shield, "epic": bool(r.get("epic", false)),
+			"ticks": bool(r.get("ticks", false)), "tick_step": float(r.get("tick_step", 1000.0)),
+			"interfere": 0.0, "last_hit": false,
+			"lag": hp_now + famt * fr, "flash_t": fr * 0.5, "flash_amt": famt,
+			"heal_t": 0.0, "heal_amt": 0.0, "doom": doom,
+			"show_name": bool(r.get("monster", false)) and not bool(r.get("small", false)),
+			"name_text": str(r.get("name", "")),
+			"show_numbers": false, "num_text": "",
+			"turret_arrow": bool(r.get("turret", false)),
+			"shield_icon": bool(r.get("shield_icon", false)),
+			"marker_list": mlist,
+		}
 
 	func _draw_unit_bar(r: Dictionary) -> void:
 		var bw := float(r.w)
