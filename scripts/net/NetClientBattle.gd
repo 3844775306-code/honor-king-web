@@ -3502,6 +3502,8 @@ func _build_camera() -> void:
 	_cam.make_current()
 
 func _update_camera() -> void:
+	if _finale_cam_locked:
+		return
 	if _cam == null:
 		return
 	if _owned:
@@ -3977,6 +3979,7 @@ func _build_result_panel() -> void:
 # ==================== 终局演出（与单机 BattleManager._play_end_sequence 同一节奏） ====================
 # 水晶爆炸（共享 CrystalFinale）→ 5 秒 → EndBanner → 聚光灯舞台 → 个人表现 → 结算页
 var _finale_started := false
+var _finale_cam_locked := false   # 终局运镜：镜头先平滑推到水晶，期间屏蔽常规跟随
 
 func _on_net_game_over(p: Dictionary) -> void:
 	if _pm_started or _finale_started:
@@ -3990,9 +3993,18 @@ func _on_net_game_over(p: Dictionary) -> void:
 		if str(v.get("name", "")) == "crystal" and v.get("node") != null and is_instance_valid(v.get("node")):
 			crys_pos = (v.get("node") as Node3D).global_position
 			break
-	# 1) 镜头先锁到水晶，再暂停世界（暂停后 _update_camera 不再跑，机位就停在爆炸点）
-	_cam_focus = crys_pos
-	_update_camera()
+	# 1) 与单机同节奏：先用 1.1s 把镜头运到水晶（不是瞬切），再播爆炸
+	_finale_cam_locked = true
+	_first_person = false
+	if _cam != null and is_instance_valid(_cam):
+		var flip := PI if int(Config.player_team) == 1 else 0.0
+		var cam_end: Vector3 = crys_pos + CAM_FOLLOW_OFF.rotated(Vector3.UP, flip)
+		var rot := Vector3(-60.0, rad_to_deg(flip), 0.0)
+		var cam_tw := create_tween()
+		cam_tw.set_parallel(true)
+		cam_tw.tween_property(_cam, "global_position", cam_end, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		cam_tw.tween_property(_cam, "rotation_degrees", rot, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 与单机 BattleManager._play_end_sequence 同节奏：运镜与爆炸同帧启动，镜头 1.1s 滑到水晶
 	# 2) 终章爆炸：与单机/回放同一份实现
 	var fx: Node = CrystalFinaleScript.new()
 	fx.name = "CrystalFinale"
