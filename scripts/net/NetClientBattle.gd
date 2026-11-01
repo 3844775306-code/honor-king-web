@@ -635,6 +635,7 @@ func _process(delta: float) -> void:
 			_pad.refresh_cancel_aim()
 			# M4-U：普攻键读数（伤害/攻速/强化态 + 装备被动小字行，host _push_attack_stats 同款内容）
 			_pad.set_attack_state(_own.get("aa", []) if _own != null else [])
+			_pad.set_enemy_picker(_enemy_picker_list())
 		if _hud:
 			# 触控模式隐藏底部右侧旧的 1/2/3 预选技能栏（主机触控同样让旧技能条退场，以触摸层为准）
 			_hud.pad_active = show_pad
@@ -2551,6 +2552,51 @@ func _check_own_death_recap() -> void:
 		_dr.show_payload(d)
 
 
+# 索敌头像条数据：普攻射程内敌方英雄（同 host TouchController._update_enemy_picker：仅英雄、按距离排序、≤5）
+func _enemy_picker_list() -> Array:
+	if not _owned or int(_own.get("alive", 1)) != 1:
+		return []
+	var sp := _self_pos()
+	var own_team: int = int(_manifest.get("team", TEAM_PLAYER))
+	var reach: float = maxf(_reach, 1.0) + 1.2
+	var cand: Array = []
+	for nid in _views:
+		var v: Dictionary = _views[nid]
+		if int(v.get("type", -1)) != NET_HERO:
+			continue
+		if int(v.get("team", -1)) == own_team:
+			continue
+		if float(v.get("hp", 0.0)) <= 0.0:
+			continue
+		var nd = v.get("node")
+		if nd == null or not is_instance_valid(nd):
+			continue
+		var d: float = sp.distance_to(nd.global_position)
+		if d > reach:
+			continue
+		cand.append([int(nid), d])
+	cand.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
+	var out: Array = []
+	for i in range(mini(cand.size(), 5)):
+		var nid2 := int(cand[i][0])
+		var vv: Dictionary = _views[nid2]
+		out.append([nid2, str(vv.get("name", "")), nid2 == _manual_net])
+	return out
+
+
+# 点选索敌头像：再点已锁目标=解锁；否则锁该英雄并让普攻优先追它（同 host set_locked_target）
+func _on_enemy_picker_tapped(nid: int) -> void:
+	if nid < 0:
+		return
+	if _manual_net == nid:
+		_manual_net = -1
+		# 同 host：解锁后回到自动选敌（切换优先级会清 host 侧 manual_target）
+		NetSession.send_command([NetSession.C_PRIORITY, _pad.attack_priority if _pad != null else 0])
+		return
+	_manual_net = nid
+	NetSession.send_command([NetSession.C_ATTACK, nid])
+
+
 func _on_takeover(manifest: Dictionary) -> void:
 	_manifest = manifest
 	_skills = manifest.get("skills", [])
@@ -3619,6 +3665,7 @@ func _skill_disp(i: int) -> String:
 func _build_pad() -> void:
 	_pad = NetTouchPadScript.new()
 	add_child(_pad)
+	_pad.enemy_picker_tapped.connect(_on_enemy_picker_tapped)
 
 # —— P2 小地图（复刻主机 Minimap.gd：左上 inset40 / 300×300 / 原生锚点布局）——
 func _build_minimap() -> void:

@@ -35,6 +35,40 @@ const ACTIVE_SIZE := 230.0         # 主动装备按钮边长
 const CANCEL_SIZE := 300.0         # 取消施法按钮边长
 const ACTIVE_POS := [Vector2(120, 1055), Vector2(370, 1055)]
 
+# 敌人索敌头像条（同 TouchController：技能扇形外侧同圆心弧线，仅范围内敌方英雄；点选锁敌）
+const PICKER_SIZE := 118.0
+const PICKER_RADIUS := 800.0
+const PICKER_ANGLE_MIN := 8.0
+const PICKER_ANGLE_MAX := 76.0
+const PICKER_MAX := 5
+const HeroArt = preload("res://scripts/ui/HeroArt.gd")
+
+# 单个索敌头像（头像 + 队伍环；锁定态金环；点按发 tapped）
+class NetEnemyAvatar extends Control:
+	var nid := -1
+	var hero_name := ""
+	var locked := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _draw() -> void:
+		var c := size * 0.5
+		var r := minf(size.x, size.y) * 0.42
+		HeroArt.draw_portrait(self, c, r, hero_name, Color(1.0, 0.33, 0.264), false)
+		draw_arc(c, r + 3.0, 0.0, TAU, 40, Color(0, 0, 0, 0.85), 4.0)
+		draw_arc(c, r + 3.0, -PI / 2.0, -PI / 2.0 + TAU * (1.0 if locked else 0.72), 40,
+			Color(1.0, 0.84, 0.2) if locked else Color(1.0, 0.4, 0.32), 3.0)
+
+	func _gui_input(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
+				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			enemy_tapped.emit(nid)
+		elif ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed:
+			enemy_tapped.emit(nid)
+
+	signal enemy_tapped(nid: int)
+
 # —— 模式常量（与 TouchController / Hero 同义）——
 const MOVE_MODE_TURN := 0
 const MOVE_MODE_DIR := 1
@@ -47,6 +81,7 @@ const FX_BUFF_COL := Color(0.45, 1.0, 0.62)
 const FX_DEBUFF_COL := Color(0.55, 0.85, 1.0)
 
 signal move_mode_changed(mode: int)
+signal enemy_picker_tapped(nid: int)   # 索敌头像条点选（同 host _on_enemy_picker_tapped）
 
 var touch_active := true    # 由 NetClientBattle 每帧从全局 TouchController.touch_active 同步
 
@@ -76,6 +111,8 @@ var _recover_btn: SkillTouchButton = null
 var _recall_btn: TouchActionButton = null
 var _active_btns: Array = []          # 主动装备钮 ×2（TouchActionButton）
 var _cancel_btn: CancelCastButton = null
+var _picker_root: Control = null
+var _picker_btns: Array = []
 var _summoner_release_pending := {}   # 召唤师松手信息 {drag, cancel}；空=无
 var _recover_press_pending := false   # 恢复点按待消费
 var _recall_press_pending := false    # 回城点按待消费
@@ -152,6 +189,7 @@ func _ready() -> void:
 	_build_skill_cluster(root)
 	# —— P1c：召唤师 / 恢复 / 回城 / 主动装 / 取消施法（几何照抄 TouchController）——
 	_build_aux_cluster(root)
+	_build_enemy_picker(root)
 
 	visible = false   # 接管且对局开始后才由 NetClientBattle 显示
 
@@ -254,6 +292,50 @@ func _build_aux_cluster(root: Control) -> void:
 	_cancel_btn = cancel
 
 # —— 底部靠右簇锚定：from_br（右下角坐标）+ inset，尺寸 size（同 TouchController._anchor_br）——
+# 索敌头像条：技能扇形外侧同圆心弧线（同 TouchController._create_enemy_picker/_update_enemy_picker）
+func _build_enemy_picker(root: Control) -> void:
+	_picker_root = Control.new()
+	_picker_root.name = "EnemyPicker"
+	_picker_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_picker_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_picker_root.visible = false
+	root.add_child(_picker_root)
+	_picker_btns.clear()
+	for i in PICKER_MAX:
+		var av: NetEnemyAvatar = NetEnemyAvatar.new()
+		av.visible = false
+		av.enemy_tapped.connect(func(nid: int): enemy_picker_tapped.emit(nid))
+		_picker_root.add_child(av)
+		_picker_btns.append(av)
+
+
+func set_enemy_picker(list: Array) -> void:
+	if _picker_root == null:
+		return
+	var n: int = mini(list.size(), PICKER_MAX)
+	_picker_root.visible = n > 0
+	if n <= 0:
+		for av in _picker_btns:
+			av.visible = false
+		return
+	var atk_center: Vector2 = ATTACK_POS + Vector2(ATTACK_SIZE, ATTACK_SIZE) * 0.5
+	for i in _picker_btns.size():
+		var av: NetEnemyAvatar = _picker_btns[i]
+		if i >= n:
+			av.visible = false
+			continue
+		var e: Array = list[i]
+		var t: float = 0.0 if n <= 1 else float(i) / float(n - 1)
+		var ang := deg_to_rad(lerpf(PICKER_ANGLE_MIN, PICKER_ANGLE_MAX, t))
+		var pos: Vector2 = atk_center + Vector2(PICKER_RADIUS * sin(ang), PICKER_RADIUS * cos(ang))
+		_anchor_br(av, pos - Vector2(PICKER_SIZE, PICKER_SIZE) * 0.5, Vector2(PICKER_SIZE, PICKER_SIZE))
+		av.visible = true
+		av.nid = int(e[0])
+		av.hero_name = str(e[1])
+		av.locked = bool(e[2]) if e.size() > 2 else false
+		av.queue_redraw()
+
+
 func _anchor_br(ctrl: Control, from_br: Vector2, size: Vector2, inset: Vector2 = TOUCH_CLUSTER_INSET) -> void:
 	from_br += inset
 	# 手机横屏：右侧挖孔/圆角与底部手势条避让；桌面 safe_* 恒为 0

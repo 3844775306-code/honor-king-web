@@ -60,6 +60,7 @@ func _draw() -> void:
 	_s = UiKit.scale()
 	var _r := _minimap_rect()
 	_mm_inner = Rect2(_r.position + Vector2(7, 7) * _s, _r.size - Vector2(14, 14) * _s)
+	_draw_death_overlay()   # 跟随英雄阵亡：全屏压暗（同 host death overlay），HUD 仍在上层
 	_draw_info()
 	_draw_feed()
 	_draw_minimap()
@@ -71,6 +72,27 @@ func _draw() -> void:
 
 
 # ---------------- 对战信息 ----------------
+
+# 阵亡压暗（同 host UI_Manager._create_death_overlay：全屏黑 0.5；回放由跟随英雄状态驱动）
+func _draw_death_overlay() -> void:
+	var fi: int = int(st.get("follow", -1))
+	if fi < 0:
+		return
+	var heroes: Array = st.get("heroes", [])
+	if fi >= heroes.size():
+		return
+	var hd: Dictionary = heroes[fi]
+	if float(hd.get("hp", 1.0)) > 0.001:
+		return
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.5))
+	var f: Font = UiKit.font()
+	var txt := "阵亡 · 等待复活"
+	var fs := 34
+	var tw := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var c := size * 0.5
+	draw_string_outline(f, Vector2(c.x - tw * 0.5, c.y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.8))
+	draw_string(f, Vector2(c.x - tw * 0.5, c.y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1.0, 0.86, 0.4))
+
 
 func _draw_info() -> void:
 	var vp := _vp()
