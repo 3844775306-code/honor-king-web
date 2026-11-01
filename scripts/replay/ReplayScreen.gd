@@ -392,7 +392,9 @@ func _build_actors() -> void:
 			m.roughness = 0.6
 			mi.material_override = m
 			root.add_child(mi)
-		var lbeam: Node3D = Vfx.make_lock_beam(Vfx.team_color(int(t.get("team", 0))))
+		var _bt := int(t.get("team", 0))
+		var _bcol: Color = Vfx.team_color(Config.Team.PLAYER if Config.is_ally(_bt) else Config.Team.ENEMY)
+		var lbeam: Node3D = Vfx.make_lock_beam(_bcol)
 		root.add_child(lbeam)   # 与主机同层级：挂塔根节点，塔隐藏/坍塌时光束一同消失
 		lbeam.visible = false
 		_turret_nodes.append({"root": root, "max": float(t.get("maxhp", 1)), "beam": lbeam,
