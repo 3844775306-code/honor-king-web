@@ -289,7 +289,10 @@ func _build_actors() -> void:
 			m.roughness = 0.6
 			mi.material_override = m
 			root.add_child(mi)
-		_turret_nodes.append({"root": root, "max": float(t.get("maxhp", 1))})
+		var lbeam: Node3D = Vfx.make_lock_beam(Vfx.team_color(int(t.get("team", 0))))
+		add_child(lbeam)
+		lbeam.visible = false
+		_turret_nodes.append({"root": root, "max": float(t.get("maxhp", 1)), "beam": lbeam})
 	_build_jungle()
 
 
@@ -851,6 +854,20 @@ func _apply_frame(t: float) -> void:
 		if ra.is_empty():
 			continue
 		var hpv: float = lerpf(float(ra[0]), float(rb[0] if rb.size() > 0 else ra[0]), k)
+		var lbeam2 = node2.get("beam")
+		if lbeam2 != null and is_instance_valid(lbeam2):
+			var has_a: int = int(ra[4]) if ra.size() > 4 else 0
+			var has_b: int = int(rb[4]) if rb.size() > 4 else has_a
+			if hpv > 0.5 and (has_a == 1 or has_b == 1):
+				var tx_a: float = float(ra[2]) if ra.size() > 2 else 0.0
+				var tz_a: float = float(ra[3]) if ra.size() > 3 else 0.0
+				var tx_b: float = float(rb[2]) if rb.size() > 2 else tx_a
+				var tz_b: float = float(rb[3]) if rb.size() > 3 else tz_a
+				var tgt_p := Vector3(lerpf(tx_a, tx_b, k) / 100.0, 1.0, lerpf(tz_a, tz_b, k) / 100.0)
+				var src_p: Vector3 = (node2["root"] as Node3D).position + Vector3.UP * 4.0
+				Vfx.aim_lock_beam(lbeam2, src_p, tgt_p, _t)
+			else:
+				lbeam2.visible = false
 		if hpv > 0.5:
 			node2["root"].visible = true
 		elif not bool(node2.get("collapsed", false)):
@@ -907,6 +924,10 @@ func _apply_frame(t: float) -> void:
 				Vfx.cast_glow(spawn_p + Vector3.UP * 0.4, spawn_col, 0.9, 0.3)
 			node3.visible = true
 			node3.set_meta("dying", false)
+			_hud_minions.append({"wx": float(r[1]), "wz": float(r[2]), "team": int(r[4])})
+			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
+				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
+				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)]})
 			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
 			var nowp: Vector3 = Vector3(float(r[1]), 0.0, float(r[2]))
 			var prevp: Vector3 = node3.get_meta("prev", nowp)

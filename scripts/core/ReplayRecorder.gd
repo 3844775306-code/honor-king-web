@@ -191,8 +191,8 @@ func _sample(delta: float, finishing: bool) -> void:
 		hero_row[idx] = [
 			int(round(p.x * 100.0)), int(round(p.z * 100.0)), int(round(p.y * 100.0)),
 			int(round(rad_to_deg(h.rotation.y))),
-			hp, int(round(h.max_health)), int(h.level), flags,
-			int(round(h.mana)), int(round(h.max_mana)), int(h.exp), int(maxi(1, h.exp_to_next)),
+			hp, int(round(h.actual_max_health)), int(h.level), flags,
+			int(round(h.mana)), int(round(h.actual_mana_max)), int(h.exp), int(maxi(1, h.exp_to_next)),
 			int(h.kills), int(h.deaths), int(h.assists),
 			int(round(h.actual_attack_damage)), int(round(h.ability_power)),
 			int(round(h.actual_armor)), int(round(h.actual_magic_resist)),
@@ -265,7 +265,15 @@ func _sample(delta: float, finishing: bool) -> void:
 		if tidx == null:
 			continue
 		var hp2: int = maxi(0, int(round(t.health)))
-		trow[int(tidx)] = [hp2, 1 if hp2 > 0 else 0]
+		var lt = t.current_target
+		var lock_on: int = 0
+		var ltx: int = 0
+		var ltz: int = 0
+		if lt != null and is_instance_valid(lt) and lt.health > 0:
+			lock_on = 1
+			ltx = int(round(lt.global_position.x * 100.0))
+			ltz = int(round(lt.global_position.z * 100.0))
+		trow[int(tidx)] = [hp2, 1 if hp2 > 0 else 0, ltx, ltz, lock_on]
 	_frames.append({
 		"t": t_ms, "h": hero_row, "tn": trow,
 		"g": [int(round(float(bm.get("team_player_gold")))), int(round(float(bm.get("team_enemy_gold"))))],
