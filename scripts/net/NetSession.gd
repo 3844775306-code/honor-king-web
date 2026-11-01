@@ -388,11 +388,68 @@ func _rpc_lobby_ready(camp: int, lane: String, ready: bool) -> void:
 
 func _apply_lobby_ready(pid: int, camp: int, lane: String, ready: bool) -> void:
 	var lane_clean := str(lane).strip_edges()
+	var camp_v := clampi(camp, 0, 1)
+	if int(pid) == 1:
+		camp_v = TEAM_PLAYER   # 房主固定蓝方（host 模拟端 Bm.hero/镜头/基地按蓝方）
 	lobby_ready[pid] = {
-		"camp": clampi(camp, 0, 1),
+		"camp": camp_v,
 		"lane": lane_clean,
 		"ready": bool(ready) and lane_clean != "",
 	}
+	# 红方真人：确认后按分路自动配一名红方英雄（该英雄由 host 生成并交给其接管）
+	if mode == Mode.HOST and camp_v == 1 and bool(ready) and lane_clean != "":
+		_autofill_red_peer(int(pid), lane_clean)
+		if _picks.has(int(pid)):
+			_broadcast_lobby_state()
+
+
+## 该 peer 的阵营（房主固定蓝方）
+## 是否 PvP 局（有真人选红方）：快照改为全单位下发，双方各自能操控/看到单位
+func is_pvp() -> bool:
+	for pid in lobby_ready:
+		var r = lobby_ready[pid]
+		if r is Dictionary and int((r as Dictionary).get("camp", 0)) == 1:
+			return true
+	return false
+
+
+func _peer_camp(pid: int) -> int:
+	if int(pid) == 1:
+		return TEAM_PLAYER
+	var r = lobby_ready.get(int(pid), {})
+	if r is Dictionary:
+		return clampi(int((r as Dictionary).get("camp", TEAM_PLAYER)), 0, 1)
+	return TEAM_PLAYER
+
+
+## 红方真人按分路自动选一个未被占用的英雄（无需手动 BP）
+func _autofill_red_peer(pid: int, lane: String) -> void:
+	if mode != Mode.HOST or pid == 1 or _picks.has(pid):
+		return
+	var role := str(HeroPickData.lane_role(lane))
+	var used := {}
+	for q in _picks:
+		used[str(_picks[q].get("hero", ""))] = true
+	var dp = draft.get("picks", {})
+	if dp is Dictionary:
+		for k in dp:
+			if str(k).begins_with("1-"):
+				used[str((dp as Dictionary)[k])] = true
+	var pick := ""
+	for hero in HeroPickData.HERO_ROLE:
+		if str(HeroPickData.HERO_ROLE[hero]) == role and not used.has(str(hero)):
+			pick = str(hero)
+			break
+	if pick == "":
+		for hero2 in HeroPickData.HERO_ROLE:
+			if not used.has(str(hero2)):
+				pick = str(hero2)
+				break
+	if pick == "":
+		return
+	_picks[pid] = {"hero": pick, "summoner": "flash",
+		"role": str(HeroPickData.HERO_ROLE.get(pick, "")), "team": 1}
+	print("[Net] 红方真人自动配英雄 peer=", pid, " hero=", pick, " lane=", lane)
 
 
 @rpc("any_peer", "reliable", "call_remote")
@@ -604,16 +661,19 @@ func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
 	if pid not in active_player_ids():
 		printerr("[Net] 选人拒绝：本方席位已满 peer=", pid)
 		return false
-	# 严格一人一职：他人已占同职责则拒（自己改选不受限）
+	# 一人一职按阵营内去重（蓝/红双方各自阵容可同职责）
+	var my_team := _peer_camp(pid)
 	for q in _picks:
 		if int(q) == pid:
+			continue
+		if int(_picks[q].get("team", TEAM_PLAYER)) != my_team:
 			continue
 		if str(_picks[q].get("role", "")) == role:
 			return false
 	# 顺序选人：只允许本回合玩家上报，且不与展示阵容冲突
 	if not _draft_allows(pid, hero):
 		return false
-	_picks[pid] = { "hero": hero, "summoner": summoner, "role": role }
+	_picks[pid] = { "hero": hero, "summoner": summoner, "role": role, "team": my_team }
 	print("[Net] 选人锁定 peer=", pid, " hero=", hero, " role=", role)
 	_broadcast_lobby_state()
 	return true
@@ -639,11 +699,12 @@ func assign_lineup() -> void:
 		var want: String = str(_picks[pid].get("hero", ""))
 		if want.is_empty():
 			continue
+		var camp := _peer_camp(pidn)
 		for e in get_tree().get_nodes_in_group("heroes"):
 			if not is_instance_valid(e) or e is not Hero:
 				continue
 			var h: Hero = e
-			if h.team != TEAM_PLAYER or h.display_name != want:
+			if int(h.team) != camp or h.display_name != want:
 				continue
 			if _assign_peer.has(h.get_instance_id()):
 				continue
@@ -735,27 +796,22 @@ func _scan_assignments() -> void:
 	var taken := {}
 	for pid in _assign_hero:
 		taken[_assign_hero[pid]] = true
-	var free_heroes: Array = []
+	var free_by_team := {0: [], 1: []}
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or e is not Hero:
 			continue
 		var h: Hero = e
-		if h.team != TEAM_PLAYER or not h.is_ai:
+		if not h.is_ai or h.health <= 0 or taken.has(h) or not _has_ai_child(h):
 			continue
-		if h.health <= 0:
-			continue
-		if taken.has(h):
-			continue
-		if not _has_ai_child(h):
-			continue
-		free_heroes.append(h)
-	if free_heroes.is_empty():
-		return
+		var tm := clampi(int(h.team), 0, 1)
+		free_by_team[tm].append(h)
 	for pid in pending:
-		if free_heroes.is_empty():
-			break
-		var h: Hero = free_heroes.pop_front()
-		_assign_hero_to(pid, h)
+		var camp := _peer_camp(int(pid))
+		if (free_by_team[camp] as Array).is_empty():
+			continue
+		var h2: Hero = (free_by_team[camp] as Array).pop_front()
+		if h2 != null:
+			_assign_hero_to(int(pid), h2)
 
 
 func _assign_hero_to(pid: int, h: Hero) -> void:
@@ -1212,7 +1268,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
 			heroes.append(_pack_hero(e))
 	out.append(heroes)
 
@@ -1220,7 +1276,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("minions"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
 			minions.append(_pack_unit(e, 1))
 	out.append(minions)
 
@@ -1861,7 +1917,7 @@ func _build_respawn_rows() -> Array:
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or not (e is Hero):
 			continue
-		if e.team == TEAM_PLAYER or e.is_dead:
+		if is_pvp() or e.team == TEAM_PLAYER or e.is_dead:
 			var dead = e.is_dead
 			out.append([
 				_net_id_for(e), int(e.team), str(e.display_name), int(e.level),

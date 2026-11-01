@@ -528,7 +528,7 @@ func _process(delta: float) -> void:
 	# 小地图数据每帧喂入（引用式共享 views，纯展示不改模拟）
 	if _mm != null:
 		_mm.visible = _owned   # 未接管的观战棋盘期先不叠小地图
-		_mm.player_team = TEAM_PLAYER
+		_mm.player_team = Config.player_team
 		_mm.self_net = _self_net
 		_mm.views = _views
 		_mm.active = _owned and _state == 1 and not _first_person
@@ -602,7 +602,15 @@ func _process(delta: float) -> void:
 		_hud.sa = _own.get("sa", [])
 		# 主界面个人 K/D/A（own.kills/deaths/assists，同 host kda_label）
 		_hud.kda = [int(_own.get("kills", 0)), int(_own.get("deaths", 0)), int(_own.get("assists", 0))]
-		_hud.widget_rows = _respawn_rows
+		var wr: Array = []
+		for rrow in _respawn_rows:
+			if not (rrow is Array) or (rrow as Array).size() < 8:
+				continue
+			var rt := int((rrow as Array)[1])
+			var rdead := int((rrow as Array)[7]) == 1
+			if rt == int(Config.player_team) or rdead:
+				wr.append(rrow)
+		_hud.widget_rows = wr
 		_hud.show_widget = _state == 1 and not _respawn_rows.is_empty()
 	else:
 		_hud.sa = []
@@ -2517,6 +2525,13 @@ func _on_enemy_picker_tapped(nid: int) -> void:
 
 func _on_takeover(manifest: Dictionary) -> void:
 	_manifest = manifest
+	# 阵营：客户端可选择红/蓝方；接管后把本机 Config.player_team 切到该阵营，
+	# 所有共享 HUD/小地图/聊天/面板/结算都按本地阵营着色与判断（host 端仍按模拟阵营）
+	var own_team := clampi(int(manifest.get("team", Config.player_team)), 0, 1)
+	Config.player_team = own_team
+	Config._team_rolled = true
+	if _mm != null and is_instance_valid(_mm):
+		_mm.player_team = own_team
 	_skills = manifest.get("skills", [])
 	_self_net = int(manifest.get("net_id", -1))
 	if _rp != null and is_instance_valid(_rp):
@@ -2528,7 +2543,8 @@ func _on_takeover(manifest: Dictionary) -> void:
 		SfxManager.own_name = str(manifest.get("hero_name", ""))
 	if _owned:
 		NetSession.hide_spectate_overlay()
-		_status = "已接管 %s（队友/蓝方）—— 摇杆/WASD 移动，普攻轮盘攻击，R 回城" % str(manifest.get("hero_name", "英雄"))
+		_status = "已接管 %s（%s方）—— 摇杆/WASD 移动，普攻轮盘攻击，R 回城" % [
+			str(manifest.get("hero_name", "英雄")), "红" if own_team == 1 else "蓝"]
 		_reach = float(manifest.get("reach", 0.0))
 		_cam_focus = Vector3(float(manifest.get("x", 0)), 0.0, float(manifest.get("z", 0)))
 		# 复位直驱/普攻发送状态与本地优先级（主机英雄接管时已是净初态）
@@ -2667,7 +2683,7 @@ func _attack_nearest_in_reach() -> void:
 	var best_d := 1e20
 	for nid in _views:
 		var v: Dictionary = _views[nid]
-		if int(v.get("team", -1)) == TEAM_PLAYER:
+		if int(v.get("team", -1)) == Config.player_team:
 			continue
 		if float(v.get("hp", 0.0)) <= 0.0:
 			continue
@@ -2752,7 +2768,7 @@ func _pick_entity(scr: Vector2, allow_ally: bool) -> int:
 	for nid in _views:
 		var v: Dictionary = _views[nid]
 		# 攻击模式：我方单位不可点（敌方塔/兵/野怪可点）
-		if not allow_ally and v.team == TEAM_PLAYER:
+		if not allow_ally and v.team == Config.player_team:
 			continue
 		var gp: Vector3 = v.node.global_position
 		var r := _pick_radius(v)
@@ -3896,7 +3912,7 @@ func _my_result_row(p: Dictionary) -> Dictionary:
 func _start_post_match(p: Dictionary) -> void:
 	_pm_started = true
 	_pm_payload = p
-	var won: bool = int(p.get("winner", -1)) == TEAM_PLAYER
+	var won: bool = int(p.get("winner", -1)) == Config.player_team
 	get_tree().paused = true
 	# 1) 隐藏所有 HUD/面板层（演出层稍后自建）
 	_pm_hidden_layers.clear()
@@ -4419,7 +4435,7 @@ func _attack_pick(drag: Vector2) -> void:
 	var best_d := 1e9
 	for nid in _views:
 		var v: Dictionary = _views[nid]
-		if v.team == TEAM_PLAYER or v.hp <= 0.0:
+		if v.team == Config.player_team or v.hp <= 0.0:
 			continue
 		if v.type != NET_HERO and v.type != NET_MINION and v.type != NET_TURRET and v.type != NET_JUNGLE:
 			continue
@@ -4831,7 +4847,7 @@ func _pick_prio_view(mode: int, range: float) -> int:
 	var best_hp := 1e18
 	for nid in _views:
 		var v: Dictionary = _views[nid]
-		if v.team == TEAM_PLAYER or v.hp <= 0.0 or v.node == null:
+		if v.team == Config.player_team or v.hp <= 0.0 or v.node == null:
 			continue
 		var ok_type := false
 		if mode == NetTouchPadScript.PRIO_TOWER and v.type == NET_TURRET:
@@ -4937,7 +4953,7 @@ func _update_tower_rings() -> void:
 		if nd == null or not is_instance_valid(nd):
 			(r as Node3D).visible = false
 			continue
-		var show: bool = alive and int(v.get("team", TEAM_PLAYER)) != TEAM_PLAYER \
+		var show: bool = alive and int(v.get("team", Config.player_team)) != Config.player_team \
 			and float(v.get("hp", 0.0)) > 0.0 \
 			and nd.global_position.distance_to(sp) <= 11.0
 		r.visible = show
@@ -5006,7 +5022,7 @@ func _entity_pos(nid: int) -> Vector3:
 func _manual_alive() -> int:
 	if _manual_net >= 0 and _views.has(_manual_net):
 		var v: Dictionary = _views[_manual_net]
-		if v.team != TEAM_PLAYER and v.hp > 0.0 and v.node != null:
+		if v.team != Config.player_team and v.hp > 0.0 and v.node != null:
 			return _manual_net
 	return -1
 

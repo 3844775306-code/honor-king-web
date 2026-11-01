@@ -126,6 +126,8 @@ var _room_lane_btns := {}             # 房间页分路选择按钮
 var _room_confirm_btn: Button = null  # 房间页「确认阵营与分路」
 var _room_ready_lab: Label = null     # 房间页本机确认状态
 var _room_camp_lab: Label = null      # 房间页阵营显示
+var _room_camp := 0                    # 本机选择阵营（0=蓝方，1=红方；房主固定蓝方）
+var _room_camp_btns := {}              # 房间页阵营按钮
 var _diff_btn: Button = null           # 菜单页「AI 难度」循环按钮
 var _lane_role := ""                   # 选人页本机分路对应职责
 var _lane_locked := false              # 选人页是否强制锁该职责（被队友占用则不锁）
@@ -331,6 +333,8 @@ func _clear_stack() -> void:
 	_room_confirm_btn = null
 	_room_ready_lab = null
 	_room_camp_lab = null
+	_room_camp = 0
+	_room_camp_btns = {}
 	_lane_role = ""
 	_lane_locked = false
 	if _summ_tip != null and is_instance_valid(_summ_tip):
@@ -686,6 +690,13 @@ func _all_lobby_ready() -> bool:
 	return true
 
 
+func _select_room_camp(camp: int) -> void:
+	_room_camp = clampi(camp, 0, 1)
+	# 改阵营需重新确认（分路不变）
+	NetSession.set_lobby_ready(_room_camp, PlayerPrefs.get_lane(), false)
+	_refresh_room_ready_ui()
+
+
 func _on_room_confirm() -> void:
 	var lane := PlayerPrefs.get_lane()
 	if lane == "":
@@ -693,7 +704,7 @@ func _on_room_confirm() -> void:
 			_room_ready_lab.text = "请先选择分路"
 			_room_ready_lab.add_theme_color_override("font_color", COL_ERR)
 		return
-	NetSession.set_lobby_ready(0, lane, true)
+	NetSession.set_lobby_ready(_room_camp, lane, true)
 	_refresh_room_ready_ui()
 
 
@@ -701,8 +712,23 @@ func _refresh_room_ready_ui() -> void:
 	var lane := PlayerPrefs.get_lane()
 	var r := _room_ready_entry()
 	var ready := bool(r.get("ready", false))
+	if not r.is_empty():
+		_room_camp = int(r.get("camp", _room_camp))
+	var camp_name := "蓝方" if _room_camp == 0 else "红方"
+	if _room_camp_lab != null:
+		_room_camp_lab.text = camp_name
+		_room_camp_lab.add_theme_color_override("font_color",
+			UiKit.C_TEAM0 if _room_camp == 0 else UiKit.C_TEAM1)
+	for c in _room_camp_btns:
+		var cb: Button = _room_camp_btns[c]
+		if is_instance_valid(cb):
+			cb.set_pressed_no_signal(int(c) == _room_camp)
+			cb.add_theme_stylebox_override("normal",
+				UiKit.skin_button("normal", UiKit.C_TEAM0 if int(c) == 0 else UiKit.C_TEAM1, int(c) == _room_camp))
+			cb.add_theme_stylebox_override("hover",
+				UiKit.skin_button("hover", UiKit.C_TEAM0 if int(c) == 0 else UiKit.C_TEAM1, int(c) == _room_camp))
 	if _room_ready_lab != null:
-		_room_ready_lab.text = ("已确认 · 蓝方 · %s" % lane) if ready else ("待确认 · 蓝方 · %s" % lane)
+		_room_ready_lab.text = ("已确认 · %s · %s" % [camp_name, lane]) if ready else ("待确认 · %s · %s" % [camp_name, lane])
 		_room_ready_lab.add_theme_color_override("font_color", COL_OK if ready else COL_GOLD)
 	if _room_confirm_btn != null:
 		_room_confirm_btn.disabled = ready
@@ -1135,6 +1161,17 @@ func _show_room() -> void:
 	camp_row.add_child(camp_cap)
 	_room_camp_lab = _mk_label("蓝方", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
 	camp_row.add_child(_room_camp_lab)
+	# 阵营切换（联机 guest 可选红方；房主固定蓝方，保证 host 端模拟与 UI 一致）
+	for c in [0, 1]:
+		var cb := _mk_btn("蓝方" if c == 0 else "红方",
+			UiKit.C_TEAM0 if c == 0 else UiKit.C_TEAM1, false, Vector2(86, 44))
+		cb.toggle_mode = true
+		cb.pressed.connect(_select_room_camp.bind(c))
+		if NetSession.mode == NetSession.Mode.HOST and c == 1:
+			cb.disabled = true
+			cb.tooltip_text = "房主固定蓝方（红方请由客户端选择）"
+		camp_row.add_child(cb)
+		_room_camp_btns[c] = cb
 	var lobby_rule := _mk_label("全员确认阵营与分路后，房主才能开始。", _fs(UiKit.FS_XS), COL_DIM)
 	lobby_rule.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	rcol.add_child(lobby_rule)

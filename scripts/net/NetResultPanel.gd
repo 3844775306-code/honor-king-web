@@ -56,7 +56,7 @@ func _on_result(p: Dictionary) -> void:
 		return
 	_payload = p
 	BattleHistory.record(p, "联机")
-	var win := int(p.get("winner", -1)) == Config.Team.PLAYER
+	var win := int(p.get("winner", -1)) == int(Config.player_team)
 	if _backdrop != null:
 		_backdrop.set("accent", BLUE_TEAM if win else RED_TEAM)
 	UiKit.show_panel(self, 0.20)

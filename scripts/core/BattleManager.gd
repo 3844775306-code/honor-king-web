@@ -284,9 +284,12 @@ func _start_net_lineup(picks: Dictionary) -> void:
 	hero_selected = true
 	GameEntity.debug_show_path = true
 	_create_player_hero(host_hero, host_summ)          # host 本人
-	# 其余人类席：PLAYER 队、is_ai=true 但不挂 HeroAI（等接管）
+	# 其余人类席：按各自选择阵营生成（蓝方/红方），is_ai=true 但不挂 HeroAI（等接管）
 	var occupied_roles := [str(host_pick.get("role", ""))]
+	var occupied_red: Array = []
 	var used_heroes: Array = [host_hero]
+	var blue_humans := 1
+	var red_humans := 0
 	for pid in picks:
 		var pn := int(pid)
 		if pn == 1:
@@ -299,20 +302,27 @@ func _start_net_lineup(picks: Dictionary) -> void:
 		if not hero_configs.has(htype):
 			printerr("[Net] 所选英雄不在 hero_configs：", htype)
 			continue
+		var camp := clampi(int(p.get("team", Config.player_team)), 0, 1)
 		var cfg = hero_configs[htype].duplicate()
-		cfg["team"] = Config.Team.PLAYER
+		cfg["team"] = camp
 		var gh := Hero.new()
 		gh.setup(cfg)
 		gh.is_ai = true
 		gh.gold = 500
-		gh.position = Vector3(-58 + randf_range(-2, 2), 0, 58 + randf_range(-2, 2))
+		gh.position = (Vector3(-58 + randf_range(-2, 2), 0, 58 + randf_range(-2, 2)) if camp == 0
+			else Vector3(58 + randf_range(-2, 2), 0, -58 + randf_range(-2, 2)))
 		gh.setup_skills_from_database(cfg.get("skills", []), summ)
 		add_child(gh)
 		if gh.display_name == "元流之子":
 			gh.yuanliu_pick = ["生机", "穿心", "迅疾", "凝神"][randi() % 4]
 			gh._recalculate_attributes()
-		occupied_roles.append(str(p.get("role", "")))
 		used_heroes.append(htype)
+		if camp == 0:
+			blue_humans += 1
+			occupied_roles.append(str(p.get("role", "")))
+		else:
+			red_humans += 1
+			occupied_red.append(str(p.get("role", "")))
 	# 顺序选人里展示的 AI/红方席位按 BP 结果生成（避免「看到 X 实际是 Y」）；无 draft 时退回随机
 	var drafted: Dictionary = NetSession.get_draft_teams()
 	var ally_forced: Array = []
@@ -326,9 +336,8 @@ func _start_net_lineup(picks: Dictionary) -> void:
 		if hn2 != "" and not used_heroes.has(hn2) and not ally_forced.has(hn2):
 			enemy_forced.append(hn2)
 	# 蓝方 AI 补齐到 5：人类已占的职责不重复选（_create_team_ai 内部再排除 host.role）
-	var human_count := picks.size()
-	_create_team_ai(Config.Team.PLAYER, maxi(0, 5 - human_count), occupied_roles, ally_forced)
-	_create_team_ai(Config.Team.ENEMY, 5, [], enemy_forced)   # 红方 5 AI：优先用 BP 展示阵容
+	_create_team_ai(Config.Team.PLAYER, maxi(0, 5 - blue_humans), occupied_roles, ally_forced)
+	_create_team_ai(Config.Team.ENEMY, maxi(0, 5 - red_humans), occupied_red, enemy_forced)   # 红方 AI 补足
 	_create_turrets()
 	_create_jungle()
 	# 元流之子·万物为流：host 泉水四选一（AI 已在生成时随机）
@@ -1363,6 +1372,10 @@ func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_he
 			required.erase(r)
 		if hero and hero.role in required:
 			required.erase(hero.role)
+	elif not exclude_roles.is_empty():
+		# 联机 PvP：红方真人已占职责同样排除，AI 补剩余职责
+		for r2 in exclude_roles:
+			required.erase(r2)
 	# 敌方(ENEMY)不排除任何职责；单机 PLAYER count=4 时 exclude_roles 为空 → 同原逻辑
 	for r in required:
 		if picks.size() >= count: break
