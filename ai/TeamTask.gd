@@ -11,6 +11,8 @@ enum Type {
 	GANK,
 	PEEL,
 	RETREAT,
+	PUSH_TOWER,
+	INVADE_JUNGLE,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, EXPIRED, REASSIGNED }
@@ -75,4 +77,6 @@ func label() -> String:
 		Type.GANK: return "抓人"
 		Type.PEEL: return "保排"
 		Type.RETREAT: return "撤退"
+		Type.PUSH_TOWER: return "抱团推塔"
+		Type.INVADE_JUNGLE: return "反野"
 	return "待命"

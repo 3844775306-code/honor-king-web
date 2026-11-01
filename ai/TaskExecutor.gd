@@ -30,7 +30,40 @@ func execute(task: TeamTask, now: float) -> Dictionary:
 			return _peel_task(task)
 		TeamTask.Type.RETREAT:
 			return {"move_target": task.target_pos, "manual_target": null, "state": "retreat"}
+		TeamTask.Type.PUSH_TOWER:
+			return _push_tower_task(task)
+		TeamTask.Type.INVADE_JUNGLE:
+			return _invade_task(task)
 	return {}
+
+
+func _push_tower_task(task: TeamTask) -> Dictionary:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == int(hero.team) or (e as Turret).health <= 0:
+			continue
+		if (e as Node3D).global_position.distance_to(task.target_pos) > 8.0:
+			continue
+		var reach := hero.attack_range * AiConfig.ATTACK_RANGE_FACTOR + 4.0
+		if hero.global_position.distance_to((e as Node3D).global_position) <= reach:
+			return {"move_target": Vector3.ZERO, "manual_target": e, "state": "push"}
+		return {"move_target": (e as Node3D).global_position, "manual_target": null, "state": "push"}
+	return {"move_target": task.target_pos, "manual_target": null, "state": "push"}
+
+
+func _invade_task(task: TeamTask) -> Dictionary:
+	var best = null
+	var best_d := 15.0
+	for e in hero.get_tree().get_nodes_in_group("jungle_monsters"):
+		if e is JungleMonster and (e as JungleMonster).health > 0:
+			var d := task.target_pos.distance_to((e as Node3D).global_position)
+			if d < best_d:
+				best_d = d
+				best = e
+	if best != null:
+		if hero.global_position.distance_to((best as Node3D).global_position) <= 10.0:
+			return {"move_target": Vector3.ZERO, "manual_target": best, "state": "push"}
+		return {"move_target": (best as Node3D).global_position, "manual_target": null, "state": "push"}
+	return {"move_target": task.target_pos, "manual_target": null, "state": "push"}
 
 
 func _push_task(task: TeamTask) -> Dictionary:

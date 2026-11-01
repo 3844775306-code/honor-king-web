@@ -3,7 +3,7 @@ extends RefCounted
 # 4分钟后团队分推协调（集中式，由 BattleManager 统一调用）
 # 每10秒/事件触发重算双方队伍任务，结果分发到各 HeroAI
 
-enum SplitMode { DRAGON, FOUR_ONE, ONE_THREE_ONE, DEFEND }
+enum SplitMode { DRAGON, FOUR_ONE, ONE_THREE_ONE, DEFEND, PUSH_TOWER, INVADE }
 
 var bm: BattleManager
 var current_mode: int = SplitMode.FOUR_ONE
@@ -16,6 +16,8 @@ var dragon_pos: Vector3 = Vector3.ZERO
 var dragon_pos_by_team: Dictionary = {}  # {int: Vector3} 每队各自最近的龙位置
 var defending: Dictionary = {}           # {int: bool} 本秒该队是否收缩防守
 var defend_lane_by_team: Dictionary = {} # {int: int} 防守收缩到哪条分路
+var push_target_by_team: Dictionary = {} # {int: Vector3} 人数碾压时抱团推塔目标
+var invade_target_by_hero: Dictionary = {} # {Hero: Vector3} 人数优势时反野目标
 
 func _init(p_bm: BattleManager) -> void:
 	bm = p_bm
@@ -27,6 +29,8 @@ func get_mode_name() -> String:
 		SplitMode.ONE_THREE_ONE: return "1-3-1分推"
 		SplitMode.DRAGON: return "集合打龙"
 		SplitMode.DEFEND: return "收缩防守"
+		SplitMode.PUSH_TOWER: return "人数碾压抱团推塔"
+		SplitMode.INVADE: return "人数优势反野"
 	return "未知"
 
 
@@ -345,6 +349,10 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 			else:
 				t.quiet_time = 0.0
 			return t.quiet_time >= 2.5
+		TeamTask.Type.PUSH_TOWER:
+			return not _enemy_tower_near(t.target_pos, 8.0, h.team)
+		TeamTask.Type.INVADE_JUNGLE:
+			return not _jungle_monster_near(t.target_pos, 15.0)
 	return false
 
 
@@ -425,6 +433,8 @@ func allocate_all() -> Dictionary:
 	dragon_pos_by_team.clear()
 	defending.clear()
 	defend_lane_by_team.clear()
+	push_target_by_team.clear()
+	invade_target_by_hero.clear()
 
 	var result: Dictionary = {}
 	var dragon_alive := _is_dragon_alive()
@@ -432,6 +442,19 @@ func allocate_all() -> Dictionary:
 
 	for team in [Config.Team.PLAYER, Config.Team.ENEMY]:
 		var team_label := "玩家方" if team == Config.Team.PLAYER else "敌方"
+		var ally_alive := _get_ally_heroes(team).size()
+		var enemy_alive := _get_enemy_heroes(team).size()
+		# 人数碾压：敌方≤1 且我方≥3，全队放弃分推/打龙，直接抱团推塔。
+		if enemy_alive <= 1 and ally_alive >= 3:
+			var pt := _push_tower_target(team)
+			if pt != Vector3.ZERO:
+				current_mode = SplitMode.PUSH_TOWER
+				push_target_by_team[team] = pt
+				for h in _get_ally_heroes(team):
+					if h.is_ai:
+						result[h] = ai_lane_of(h)
+				print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
+				continue
 		# 防守优先：高地告急 / 大幅落后 → 全队收缩到压力最大的分路
 		if _should_defend(team):
 			var dl := _defend_lane_for(team)
@@ -443,6 +466,15 @@ func allocate_all() -> Dictionary:
 					result[h] = dl
 			print("[TeamTactics] t=%.0f %s 进入防守，收缩分路=%d" % [bm.game_time, team_label, dl])
 			continue
+		# 4分钟后只要人数有优势，就让打野尝试反野（其余人继续分推）。
+		if ally_alive > enemy_alive:
+			var invader := _find_natural_jungler(team)
+			if invader != null:
+				current_mode = SplitMode.INVADE
+				invade_target_by_hero[invader] = _enemy_jungle_target(team)
+				_allocate_team(team, default_mode, result)
+				print("[TeamTactics] t=%.0f %s 人数优势 %d:%d，%s 尝试反野" % [bm.game_time, team_label, ally_alive, enemy_alive, invader.display_name])
+				continue
 		if dragon_alive:
 			var ally_gold := _get_total_team_gold(team)
 			var enemy_gold := _get_total_team_gold(_enemy_team(team))
@@ -477,6 +509,12 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	task_stats["issued"] += 1
 	var now := bm.game_time
 	var role := str(h.role)
+	if push_target_by_team.has(h.team):
+		t.setup(TeamTask.Type.PUSH_TOWER, lane, push_target_by_team[h.team], null, 120, now, 30.0, "人数碾压抱团推塔", role)
+		return t
+	if invade_target_by_hero.has(h):
+		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 95, now, 20.0, "人数优势反野", role)
+		return t
 	if lane == AiConfig.Lane.JUNGLE:
 		# 开局/龙未刷新时只是“继续刷野”，不能把所有打野都派去一个不存在的龙坑。
 		if not _is_dragon_alive():
@@ -508,6 +546,50 @@ func _find_carry(team: int) -> Hero:
 		if str(h.role) == "射手":
 			return h
 	return null
+
+
+func ai_lane_of(h: Hero) -> int:
+	for child in h.get_children():
+		if child is HeroAI:
+			return (child as HeroAI).lane
+	return AiConfig.Lane.MID
+
+
+func _find_natural_jungler(team: int) -> Hero:
+	for h in _get_ally_heroes(team):
+		if not h.is_ai:
+			continue
+		for child in h.get_children():
+			if child is HeroAI and (child as HeroAI)._is_natural_jungler:
+				return h
+	return null
+
+
+func _push_tower_target(team: int) -> Vector3:
+	var best: Turret = null
+	var best_hp := INF
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == team or (e as Turret).health <= 0:
+			continue
+		if (e as Turret).display_name == "crystal":
+			continue
+		if (e as Turret).health < best_hp:
+			best_hp = (e as Turret).health
+			best = e as Turret
+	if best != null:
+		return best.global_position
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) != team and (e as Turret).health > 0:
+			return (e as Node3D).global_position
+	return Vector3.ZERO
+
+
+func _enemy_jungle_target(team: int) -> Vector3:
+	for p in bm.jungle_camp_positions:
+		var pos := p as Vector3
+		if BattleManager.in_enemy_jungle_zone(pos, team):
+			return pos
+	return Vector3(24, 0, -24) if team == Config.Team.PLAYER else Vector3(-24, 0, 24)
 
 
 func _lane_front_pos(team: int, lane: int) -> Vector3:
