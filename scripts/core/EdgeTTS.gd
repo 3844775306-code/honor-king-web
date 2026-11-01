@@ -103,8 +103,12 @@ func _process(delta: float) -> void:
 						_finish()
 						return
 				elif pkt.size() > 2:
-					var hlen: int = pkt.decode_u16(0)
-					if pkt.size() >= 2 + hlen:
+					# 协议：前 2 字节是「大端」头长度（不是小端！用 decode_u16 会错位，把头部当音频放出杂音）
+					var hlen: int = (int(pkt[0]) << 8) | int(pkt[1])
+					if hlen > 0 and hlen < 4096 and pkt.size() > 2 + hlen:
+						if OS.is_debug_build() and _buf.size() == 0:
+							print("[EDGE] first audio pkt hlen=", hlen, " header=",
+								pkt.slice(2, 2 + mini(hlen, 80)).get_string_from_utf8())
 						_buf.append_array(pkt.slice(2 + hlen))
 		WebSocketPeer.STATE_CLOSED:
 			_fail()
