@@ -145,6 +145,9 @@ func _try_travel_dash():
 	# 附近有可见敌方英雄：位移保留给先手/逃生
 	if perception.find_nearest_enemy_hero(AiConfig.TRAVEL_DASH_ENEMY_GUARD) != null:
 		return
+	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
+	if _try_enhanced_aa_travel(dest):
+		return
 	var idx := _pick_travel_dash_skill()
 	if idx < 0:
 		return
@@ -256,6 +259,111 @@ func _pick_dash_skill() -> Dictionary:
 
 
 ## 追击：目标在普攻距离外时，用位移技能突进贴脸（落点不进军敌塔）
+## 强化普攻位移：赶路（马超/铠/不知火舞空放；亚瑟Q/孙悟空借敌方目标跳跃）
+func _try_enhanced_aa_travel(dest: Vector3) -> bool:
+	if not is_instance_valid(hero) or not hero.has_method("ai_enhanced_aa_ready"):
+		return false
+	if not hero.ai_enhanced_aa_ready():
+		return false
+	var dir: Vector3 = dest - hero.global_position
+	dir.y = 0.0
+	if dir.length() < 0.5:
+		return false
+	dir = dir.normalized()
+	var dash_len: float = hero.ai_enhanced_aa_dash_len()
+	if dash_len <= 0.1:
+		return false
+	# 位移落点：不穿墙、不进敌方塔
+	var end: Vector3 = hero.clamp_dash_landing(dir, dash_len)
+	if hero.global_position.distance_to(end) < dash_len * 0.55:
+		return false
+	if _dash_landing_in_enemy_turret(end):
+		return false
+	var jt: GameEntity = null
+	if str(hero.display_name) in ["亚瑟", "孙悟空"]:
+		jt = _find_enhanced_jump_target(dir, dash_len)
+		if jt == null:
+			return false
+		if _dash_landing_in_enemy_turret(jt.global_position):
+			return false
+	if hero.ai_enhanced_aa_dash(dir, jt):
+		hero.move_target = Vector3.ZERO
+		if jt != null:
+			# 跳跃型（亚瑟Q/孙悟空）只是借目标赶路，别被普攻锁定在原地
+			hero.manual_target = null
+		return true
+	return false
+
+
+## 追击：用强化普攻位移拉近（跳跃型需要有目标）
+func _try_enhanced_aa_chase(target: GameEntity) -> bool:
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	if not hero.has_method("ai_enhanced_aa_ready") or not hero.ai_enhanced_aa_ready():
+		return false
+	var dist: float = hero.global_position.distance_to(target.global_position)
+	var aa: float = hero.attack_range * 0.01
+	if dist <= aa + 0.6:
+		return false
+	var dash_len: float = hero.ai_enhanced_aa_dash_len()
+	if dist > dash_len + aa + 1.2:
+		return false
+	var dir: Vector3 = target.global_position - hero.global_position
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return false
+	dir = dir.normalized()
+	var jt: GameEntity = null
+	if str(hero.display_name) in ["亚瑟", "孙悟空"]:
+		if dist > dash_len:
+			return false
+		jt = target
+	if hero.ai_enhanced_aa_dash(dir, jt):
+		hero.move_target = Vector3.ZERO
+		return true
+	return false
+
+
+## 逃跑：只用可空放的强普（马超/铠/不知火舞），朝安全方向拉开
+func _try_enhanced_aa_escape(dir: Vector3) -> bool:
+	if not hero.has_method("ai_enhanced_aa_ready") or not hero.ai_enhanced_aa_ready():
+		return false
+	if str(hero.display_name) not in ["马超", "铠", "不知火舞"]:
+		return false
+	var dash_len: float = hero.ai_enhanced_aa_dash_len()
+	var end: Vector3 = hero.clamp_dash_landing(dir, dash_len)
+	if hero.global_position.distance_to(end) < dash_len * 0.55:
+		return false
+	if _dash_landing_in_enemy_turret(end):
+		return false
+	if hero.ai_enhanced_aa_dash(dir, null):
+		hero.move_target = Vector3.ZERO
+		return true
+	return false
+
+
+## 找沿移动方向、在强化普攻距离内的敌方单位（亚瑟Q/孙悟空跳跃用）
+func _find_enhanced_jump_target(dir: Vector3, reach: float) -> GameEntity:
+	var best: GameEntity = null
+	var best_d := 1e20
+	for e in get_tree().get_nodes_in_group("entities"):
+		if e == hero or not (e is GameEntity) or e.health <= 0.0 or e.team == hero.team:
+			continue
+		if not (e is Hero or e is Minion or e is JungleMonster):
+			continue
+		var to: Vector3 = e.global_position - hero.global_position
+		to.y = 0.0
+		var d := to.length()
+		if d < 0.5 or d > reach:
+			continue
+		if to.normalized().dot(dir) < 0.45:
+			continue          # 只跳向移动方向前方的目标
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
+
+
 func _try_chase_dash(target: GameEntity) -> bool:
 	if target == null or not is_instance_valid(target) or target.health <= 0.0:
 		return false
@@ -267,6 +375,9 @@ func _try_chase_dash(target: GameEntity) -> bool:
 		return false                      # 已经在普攻距离内，不浪费位移
 	if dist > AiConfig.DASH_CHASE_MAX_RANGE:
 		return false
+	# 强化普攻追击（马超/铠/不知火舞冲脸；亚瑟Q/孙悟空跳向目标）
+	if _try_enhanced_aa_chase(target):
+		return true
 	var d := _pick_dash_skill()
 	if d.is_empty():
 		return false
@@ -298,6 +409,18 @@ func _try_escape_dash() -> bool:
 	var threat: Hero = perception.find_nearest_enemy_hero(AiConfig.DASH_ESCAPE_THREAT)
 	if threat == null:
 		return false
+	# 强化普攻逃跑（马超/铠/不知火舞可空放；亚瑟/孙悟空跳跃型不用于逃跑）
+	if str(hero.display_name) in ["马超", "铠", "不知火舞"]:
+		var edir: Vector3 = hero.global_position - threat.global_position
+		edir.y = 0.0
+		var ft: Turret = perception.find_nearest_friendly_turret(30.0)
+		if ft != null and is_instance_valid(ft):
+			var to_t: Vector3 = ft.global_position - hero.global_position
+			to_t.y = 0.0
+			if to_t.length() > 1.0:
+				edir = to_t
+		if edir.length() > 0.1 and _try_enhanced_aa_escape(edir.normalized()):
+			return true
 	var d := _pick_dash_skill()
 	if d.is_empty():
 		return false

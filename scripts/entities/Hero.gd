@@ -2475,6 +2475,77 @@ func _enhanced_aa_queued() -> bool:
 		return true
 	return false
 
+## AI 专用：强化普攻是否可用于位移
+## 马超/铠/不知火舞可空放位移；亚瑟Q/孙悟空被动是跳跃强化普攻，需要借助敌方目标
+func ai_enhanced_aa_ready() -> bool:
+	if health <= 0.0:
+		return false
+	match display_name:
+		"马超":
+			return stat_timer > 0.0
+		"铠":
+			return int(stat) == 1
+		"不知火舞":
+			return stat_timer >= 5.0
+		"亚瑟":
+			return arthur_q_active
+		"孙悟空":
+			return sunwukong_enhanced_aa
+	return false
+
+
+## AI 专用：用强化普攻位移。dir 为期望方向；jump_target 仅亚瑟Q/孙悟空需要（跳跃目标）
+func ai_enhanced_aa_dash(dir: Vector3, jump_target: GameEntity = null) -> bool:
+	if not ai_enhanced_aa_ready():
+		return false
+	if casting_skill or attack_timer > 0.0:
+		return false
+	if stun_timer > 0.0 or knockup_timer > 0.0 or suppress_timer > 0.0 or silence_timer > 0.0:
+		return false
+	var d := dir
+	d.y = 0.0
+	if d.length() < 0.05:
+		return false
+	d = d.normalized()
+	match display_name:
+		"马超":
+			_machao_enhanced_dash(null, d)
+			attack_timer = 1.0 / attack_speed
+			return true
+		"铠":
+			_kai_enhanced_dash(null, d)
+			attack_timer = 1.0 / attack_speed
+			return true
+		"不知火舞":
+			_mai_enhanced_dash(d)
+			attack_timer = 1.0 / attack_speed
+			return true
+		"亚瑟", "孙悟空":
+			if jump_target == null or not is_instance_valid(jump_target) or jump_target.health <= 0.0:
+				return false
+			if jump_target.team == team:
+				return false
+			if global_position.distance_to(jump_target.global_position) > _aa_engage_reach():
+				return false
+			manual_target = jump_target
+			_perform_attack(jump_target)
+			attack_timer = 1.0 / attack_speed
+			return true
+	return false
+
+
+## AI 专用：这次强化普攻位移的距离（规划/判定用）
+func ai_enhanced_aa_dash_len() -> float:
+	match display_name:
+		"马超", "铠":
+			return 2.5
+		"不知火舞":
+			return 2.2
+		"亚瑟", "孙悟空":
+			return maxf(1.0, _aa_engage_reach())
+	return 0.0
+
+
 # 位移至目标身旁：沿自身→目标方向落下，站距取（双方半径和+余量）且不超出普攻距离，
 # 使落点既紧贴目标、又能接着普攻（避免原「瞬移到目标中心」导致的身体重叠）。
 func _dash_beside_target(target: GameEntity) -> void:
@@ -3458,9 +3529,11 @@ func _weapon_blade_len() -> float:
 # 马超强化普攻（突进）：拾枪/召回获得强化普攻后，点普攻键 → 朝「普攻轮盘方向→目标方向→面朝方向」
 # 位移2.5米，对位移路径沿途所有敌人施加强化普攻伤害（物理，走护甲/穿透公式）；
 # 回复与全技能减CD沿用原拾枪强化普攻数值，每次冲刺结算一次；消耗4秒 stat_timer（即1次强化普攻）。
-func _machao_enhanced_dash(aim_target: GameEntity = null) -> void:
-	# 方向：普攻轮盘拖拽优先（玩家瞄准方向），其次攻击目标，最后面朝兜底（空冲）
+func _machao_enhanced_dash(aim_target: GameEntity = null, dir_override: Vector3 = Vector3.ZERO) -> void:
+	# 方向：AI 指定方向 > 普攻轮盘拖拽 > 攻击目标 > 面朝兜底（空冲）
 	var dir := Vector3.ZERO
+	if dir_override.length() > 0.05:
+		dir = dir_override.normalized()
 	if not is_ai:
 		var drag := TouchController.get_attack_drag()
 		if drag.length() > ATTACK_WHEEL_DRAG_THRESHOLD:
@@ -3517,9 +3590,11 @@ func _machao_enhanced_dash(aim_target: GameEntity = null) -> void:
 # 铠强化普攻（突进）：W 出手后获得1次强化普攻，点/按普攻键 → 朝「普攻轮盘方向→目标方向→面朝方向」
 # 位移2.5米，对位移路径沿途所有敌人各造成一次强化普攻伤害（完整普攻+强化附加，物理走护甲/穿透公式）
 # 并击飞；每次突进消耗1次强化普攻（stat 置0），无目标时也能沿轮盘/面朝空冲作为机动位移。
-func _kai_enhanced_dash(aim_target: GameEntity = null) -> void:
-	# 方向：普攻轮盘拖拽优先（玩家瞄准方向），其次攻击目标，最后面朝兜底（空冲）
+func _kai_enhanced_dash(aim_target: GameEntity = null, dir_override: Vector3 = Vector3.ZERO) -> void:
+	# 方向：AI 指定方向 > 普攻轮盘拖拽 > 攻击目标 > 面朝兜底（空冲）
 	var dir := Vector3.ZERO
+	if dir_override.length() > 0.05:
+		dir = dir_override.normalized()
 	if not is_ai:
 		var drag := TouchController.get_attack_drag()
 		if drag.length() > ATTACK_WHEEL_DRAG_THRESHOLD:
@@ -3575,8 +3650,10 @@ func _kai_enhanced_dash(aim_target: GameEntity = null) -> void:
 # 强化普攻（stat_timer>=5）就绪且没有可打目标时，点/按普攻键 → 沿「普攻轮盘方向→面朝方向」前冲 2.2 米，
 # 位移沿途敌人各吃一次强化普攻的魔法伤害（100+AP，走法穿），命中者被忍蜂推开（同强化普攻的 repel）；
 # 出手后清空 stat_timer（消耗这次强化普攻，重新蓄力）。
-func _mai_enhanced_dash() -> void:
+func _mai_enhanced_dash(dir_override: Vector3 = Vector3.ZERO) -> void:
 	var dir := Vector3.ZERO
+	if dir_override.length() > 0.05:
+		dir = dir_override.normalized()
 	if not is_ai:
 		var drag := TouchController.get_attack_drag()
 		if drag.length() > ATTACK_WHEEL_DRAG_THRESHOLD:
