@@ -790,6 +790,14 @@ func _on_snapshot(snap: Array) -> void:
 				v.lyf = ent[8]
 				if ent.size() > 9:
 					v.mk = ent[9]
+				# idx10/11（host 追加）：朝向 + 正在攻击 → 客户端即使没收到 act 事件也能转向/出攻击动作
+				if typ == NET_MINION or typ == NET_JUNGLE:
+					if ent.size() > 10:
+						v.face_yaw = float(ent[10])
+						if not v.get("set", false):
+							pass
+					if ent.size() > 11 and int(ent[11]) == 1:
+						_v_snap_unit_attack(v)
 			if not v.set:
 				v.node.global_position = pos
 				v.set = true
@@ -1029,9 +1037,7 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 		root.add_child(Vfx.ground_zone(maxf(r, 0.15), team, caster, life))
 		return root
 	var mats: Array = []
-	var team_col := COL_ALLY_DIM
-	if team == TEAM_ENEMY:
-		team_col = COL_ENEMY
+	var team_col := COL_ENEMY if (team == 0 or team == 1) and not Config.is_ally(team) else COL_ALLY_DIM
 	# 技能视觉（host VfxFactory 插桩）：元素色优先，缺失用阵营色（≤2 MeshInstance）
 	if kind == FX_SKILL_BURST or kind == FX_SKILL_DASH or kind == FX_SKILL_ULT \
 			or kind == FX_SKILL_GLOW or kind == FX_PILLAR:
@@ -1179,7 +1185,7 @@ func _spawn_host_skill_fx(kind: int, p: Vector3, team: int, r: float, life: floa
 
 func _build_skill_fx(kind: int, team: int, r: float, caster: String) -> Node3D:
 	var root := Node3D.new()
-	var col: Color = COL_ALLY_DIM if team != TEAM_ENEMY else COL_ENEMY
+	var col: Color = COL_ENEMY if (team == 0 or team == 1) and not Config.is_ally(team) else COL_ALLY_DIM
 	if caster != "":
 		col = Vfx.color_for_hero(caster)
 	col.a = 1.0
@@ -1594,6 +1600,32 @@ func _clip_hint(ap: AnimationPlayer, hints: Array) -> String:
 	# 三端统一：动画 clip 关键字匹配走 AnimMap.hint
 	return AnimMap.hint(ap, hints)
 
+# 快照里「正在攻击」时补一个攻击动作（host 的 act 事件有距离闸门，远处小兵收不到）
+func _v_snap_unit_attack(v: Dictionary) -> void:
+	var now := Time.get_ticks_msec()
+	if now - int(v.get("snap_atk_ms", 0)) < 380:
+		return
+	v.snap_atk_ms = now
+	var nn: Node3D = v.get("node")
+	if nn == null or not is_instance_valid(nn) or not v.get("set", false):
+		return
+	if not v.has("ap"):
+		_proc_recoil(v, float(v.get("face_yaw", nn.rotation.y)))
+		return
+	if now < int(v.get("att_until", 0)):
+		return
+	var ap: AnimationPlayer = v.ap
+	if ap == null or not is_instance_valid(ap):
+		return
+	var clip := str(v.get("atk_clip", ""))
+	if clip == "" or not ap.has_animation(clip):
+		return
+	ap.play(clip)
+	v.anim = "attack"
+	v.att_clip = clip
+	v.att_play = now
+	v.att_until = now + 620
+
 func _proc_death(v: Dictionary) -> void:
 	var mdl: Node3D = v.get("model", null)
 	var nn: Node3D = v.node
@@ -1742,7 +1774,7 @@ func _fire_ammo_client(mdl: Node3D) -> void:
 
 # 防御塔激光（host RPC）：细光束从塔顶连到目标，能量球本体走普通弹体快照（kind=5）
 func _on_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void:
-	var c: Color = Vfx.team_color(team)
+	var c: Color = Vfx.team_color(0 if Config.is_ally(team) else 1)
 	Vfx.beam(from, to, c, 0.055, dur)
 	await get_tree().create_timer(dur).timeout
 	if is_inside_tree():
@@ -1762,7 +1794,7 @@ func _on_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void
 		return
 	var rec: Dictionary = _tower_locks.get(key, {})
 	if not rec.has("mesh") or not is_instance_valid(rec["mesh"]):
-		var col: Color = Vfx.team_color(team)
+		var col: Color = Vfx.team_color(0 if Config.is_ally(team) else 1)
 		var mi: Node3D = Vfx.make_lock_beam(col)
 		_static_root.add_child(mi)
 		rec = {"mesh": mi, "from": from, "to": to, "cur": to, "t": Time.get_ticks_msec()}
@@ -1895,7 +1927,7 @@ func _net_melee_slash(v: Dictionary, yaw: float) -> void:
 	if nn.global_position.distance_to(sp) > (30.0 if is_hero else 20.0):
 		return
 	var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
-	var c: Color = Vfx.color_for_hero(str(v.get("name", ""))) if is_hero else Vfx.team_color(int(v.get("team", 0)))
+	var c: Color = Vfx.color_for_hero(str(v.get("name", ""))) if is_hero else Vfx.team_color(0 if Config.is_ally(int(v.get("team", 0))) else 1)
 	var from := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.85) + fwd * 0.25
 	var to := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.9) + fwd * (2.0 if is_hero else 1.5)
 	Vfx.weapon_hit(from, to, c, Color(1.0, 0.96, 0.86), 1.1 if is_hero else 0.9)
@@ -2023,8 +2055,8 @@ func _add_turret_pave(pos: Vector3, tier: String, team: int) -> void:
 func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	var node := Node3D.new()
 	var team_col := COL_ALLY_DIM
-	if team == TEAM_ENEMY:
-		team_col = COL_ENEMY
+	if team == 0 or team == 1:
+		team_col = COL_ALLY_DIM if Config.is_ally(team) else COL_ENEMY
 	elif typ != NET_HERO:
 		team_col = COL_NEUTRAL
 	# 模型 + 头顶血条偏移（≈ 模型顶部）
@@ -2884,7 +2916,7 @@ func _ai_chip_dict(a) -> Dictionary:
 func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 	# 主机 HeroInfoControl 颜色：敌方红 / 本窗口玩家绿 / 队友青（host 以 is_ai 区分，我们以是否 self 区分）
 	var bar_col := Color(1.0, 0.33, 0.264)
-	if int(v.team) != TEAM_ENEMY:
+	if Config.is_ally(int(v.team)):
 		bar_col = Color(0.0, 0.886, 0.431) if nid == _self_net else Color(0.0, 0.886, 1.0)
 	return {"kind": "hero", "nid": nid, "cx": sp.x, "cy": sp.y,
 		"name": str(v.get("name", "")), "pname": str(v.get("pname", "")), "level": int(v.get("level", 1)),
@@ -2895,7 +2927,7 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 		"ai_chip": _ai_chip_dict(v.get("ai_chip", [])),
 		"mana": float(v.get("mana", 0.0)), "maxmana": float(v.get("maxmana", 0.0)),
 		"exp": float(v.get("exp", 0.0)), "exp_to_next": float(v.get("exp_to_next", 0.0)),
-		"hidden": bool(v.get("hidden", false)) and int(v.team) != TEAM_ENEMY,
+		"hidden": bool(v.get("hidden", false)) and Config.is_ally(int(v.team)),
 		"lyf": v.get("lyf", [])}
 
 func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, label_off: float,
@@ -5525,12 +5557,17 @@ class Hud:
 					HORIZONTAL_ALIGNMENT_RIGHT, 394.0, ks, Color.WHITE)
 		var sz := 24.0 * s
 		var base := 82.0 + st + _font.get_ascent(sz)
+		var _my_blue: bool = int(Config.player_team) == 0
+		var my_g: int = int(sc.get("pg", 0)) if _my_blue else int(sc.get("eg", 0))
+		var my_k: int = int(sc.get("pk", 0)) if _my_blue else int(sc.get("ek", 0))
+		var foe_g: int = int(sc.get("eg", 0)) if _my_blue else int(sc.get("pg", 0))
+		var foe_k: int = int(sc.get("ek", 0)) if _my_blue else int(sc.get("pk", 0))
 		var segs: Array = [
-			["%s " % _format_gold(int(sc.get("pg", 0))), Color(0.0, 0.886, 1.0)],
-			["%d " % int(sc.get("pk", 0)), Color.WHITE],
+			["%s " % _format_gold(my_g), Color(0.0, 0.886, 1.0)],
+			["%d " % my_k, Color.WHITE],
 			["vs", Color.WHITE],
-			[" %d " % int(sc.get("ek", 0)), Color.WHITE],
-			[_format_gold(int(sc.get("eg", 0))), Color(1.0, 0.33, 0.264)],
+			[" %d " % foe_k, Color.WHITE],
+			[_format_gold(foe_g), Color(1.0, 0.33, 0.264)],
 		]
 		# 第三行：主宰/暗影/风暴先锋剩余波次（同 host 顶部信息带第三行）
 		if vg.size() >= 4 and (int(vg[3]) == 1 or int(vg[1]) > 0 or int(vg[2]) > 0):
@@ -5674,6 +5711,9 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
+
+
 
 
 

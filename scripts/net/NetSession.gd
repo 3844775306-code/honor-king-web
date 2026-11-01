@@ -1026,7 +1026,7 @@ func _apply_command(h: Hero, cmd: Array, pid: int) -> void:
 		return
 	if cmd[0] == C_ROSTER:
 		# 属性(C)/队伍(T)面板数据：不要求可操控（观战/刚接管均可），host 立即回传
-		rpc_id(pid, "_rpc_roster", _build_roster_payload())
+		rpc_id(pid, "_rpc_roster", _build_roster_payload(_peer_camp(pid)))
 		return
 	if cmd[0] == C_YUANLIU_PICK:
 		# 元流之子·万物为流切流派：host 权威校验——须身处自家泉水（回复判定同款半径）+ 合法流派名
@@ -1630,12 +1630,15 @@ func net_action(ent: Node3D, act: int) -> void:
 
 
 func _hero_ally_near(p: Vector3) -> bool:
+	# PvP：两端客户端都要看到附近战斗动画 → 任意存活英雄 45m 内都推；
+	# 单机/合作：只关心本机蓝方英雄附近（18m），避免远端小兵战刷事件。
+	var radius := 45.0 if is_pvp() else 18.0
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or e is not Hero or e.health <= 0:
 			continue
-		if e.team != TEAM_PLAYER:
+		if not is_pvp() and e.team != TEAM_PLAYER:
 			continue
-		if p.distance_to(e.global_position) <= 18.0:
+		if p.distance_to(e.global_position) <= radius:
 			return true
 	return false
 
@@ -1807,13 +1810,14 @@ func _pack_buff_rows(h: Hero) -> Dictionary:
 #   [23]skill_txts [[text,Color],…]（技能 Lv/CD + 召唤师 + 名刀/复活 CD，host 同源）
 #   [24]equip_txts [[text,Color],…]（装备名 + 主动 CD 后缀，host 同源）
 #   [25]exp:int（当前经验：团队统计头「经验」合计用，host team_player_exp/enemy_exp 同源口径）
-func _build_roster_payload() -> Array:
+func _build_roster_payload(camp: int = TEAM_PLAYER) -> Array:
 	var out: Array = []
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e):
 			continue
 		var dead: bool = bool(e.get("is_dead")) if e.get("is_dead") != null else e.health <= 0
-		if e.team == TEAM_PLAYER or dead or e.visible or e.vision_expose_timer > 0.0:
+		# 按「收件客户端阵营」判定：己方 5 人恒可见（含红方客户端），敌方仍需视野/阵亡
+		if e.team == camp or dead or e.visible or e.vision_expose_timer > 0.0:
 			out.append(_pack_roster_row(e))
 	return out
 
@@ -2117,6 +2121,17 @@ func _pack_unit(e: Node, type_code: int, extra = null) -> Array:
 	# 小兵/野怪被动标记（idx9；塔不追加，保持既有 idx8/9 布局不变）
 	if type_code != 2:
 		row.append(_pack_markers(e))
+		# idx10/11（小兵/野怪）：朝向 + 正在攻击标记，客户端无 act 事件时也能转向/出攻击动作
+		var yaw: float = float(e.rotation.y)
+		var atk := 0
+		var ct = e.get("current_target")
+		if ct != null and is_instance_valid(ct) and float(ct.health) > 0.0:
+			var ar = e.get("attack_range")
+			var reach: float = (float(ar) if ar != null else 100.0) * 0.01 + (3.2 if ct is Turret else 0.0)
+			if e.global_position.distance_to(ct.global_position) <= reach + 0.8:
+				atk = 1
+		row.append(yaw)
+		row.append(atk)
 	return row
 
 # 李元芳暗印摘要：[[源英雄名, 层数, 预测实际伤害], …]（客户端血条黄段/层数文字 1:1 复刻主机）
@@ -2705,4 +2720,6 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
+
+
 

@@ -196,10 +196,9 @@ func _draw() -> void:
 		sx += a_icon + gap
 
 func _team_col(team: int) -> Color:
-	if team == Config.Team.PLAYER:
-		return CYAN_C
-	if team == Config.Team.ENEMY:
-		return ENEMY_C
+	# 与单机 UI_Manager._feed_team_color 同口径：按本地阵营判我方/敌方（红方客户端自动翻转）
+	if team == Config.Team.PLAYER or team == Config.Team.ENEMY:
+		return CYAN_C if Config.is_ally(team) else ENEMY_C
 	return PURPLE_C
 
 # 同 host _apply_panel_style(panel, 0.6)：圆角玻璃 + 投影；淡出按 0.1 档缓存样式，避免每帧分配
@@ -211,3 +210,4 @@ func _row_style(alpha: float) -> StyleBoxFlat:
 		sb.shadow_color = Color(0, 0, 0, 0.45 * float(k) / 10.0)
 		_styles[k] = sb
 	return _styles[k]
+
