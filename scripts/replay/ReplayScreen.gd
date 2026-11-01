@@ -159,7 +159,7 @@ var _cam_drag := false          # 回放：直接拖动屏幕平移相机
 var _cam_drag_moved := false
 var _cam_drag_last := Vector2.ZERO
 var _cam_drag_prev_follow := -1
-const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5 秒 · N 下一击杀 · F 跟随英雄 · +/- 倍速 · 左键拖动平移 · 右键拖动旋转 · 滚轮缩放 · Esc 退出"
+const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5秒（Shift ±1秒） · ↑/↓ 倍速 · 1~5 指定倍速 · N/J 下/上个击杀 · F 切换英雄（Shift+F 反向）\nP 集锦 · C 英雄面板 · T 团队面板 · Home/End 首尾 · PageUp/PageDown ±30秒 · R 重置镜头 · H 隐藏界面 · Esc 退出 · 左键平移/右键旋转/滚轮缩放"
 
 var _hint_label: Label = null
 var _finisher_t := -1.0
@@ -912,10 +912,11 @@ func _build_ui() -> void:
 	hint.anchor_right = 0.5
 	hint.offset_left = -400.0
 	hint.offset_right = 400.0
-	hint.offset_top = 78.0
-	hint.offset_bottom = 104.0
+	hint.offset_top = 74.0
+	hint.offset_bottom = 122.0
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 	hint.add_theme_font_size_override("font_size", int(round(15.0 * UiKit.scale())))
 	hint.add_theme_color_override("font_color", Color(0.62, 0.7, 0.82))
 	_hint_label = hint
@@ -3228,6 +3229,87 @@ func _cycle_follow() -> void:
 		_hint_label.text = HINT_TEXT
 
 
+func _seek_by(sec: float) -> void:
+	_t = clampf(_t + sec, 0.0, _duration)
+	_sync_highlight_seek()
+	_rebuild_feed(_t)
+	_apply_frame(_t)
+
+
+func _jump_to_time(t: float) -> void:
+	_t = clampf(t, 0.0, _duration)
+	_sync_highlight_seek()
+	_rebuild_feed(_t)
+	_apply_frame(_t)
+
+
+func _change_speed(step: int) -> void:
+	var opts := [0.5, 1.0, 1.5, 2.0, 4.0]
+	var idx := opts.find(_speed)
+	if idx < 0:
+		idx = 1
+	idx = clampi(idx + step, 0, opts.size() - 1)
+	_speed = float(opts[idx])
+	_speed_btn.text = "%.1f×" % _speed
+
+
+func _set_speed_preset(i: int) -> void:
+	var opts := [0.5, 1.0, 1.5, 2.0, 4.0]
+	_speed = float(opts[clampi(i, 0, opts.size() - 1)])
+	_speed_btn.text = "%.1f×" % _speed
+
+
+func _seek_prev_kill() -> void:
+	for i in range(_events.size() - 1, -1, -1):
+		var ev: Dictionary = _events[i]
+		var et: float = float(ev.get("t", 0)) / 1000.0
+		if str(ev.get("k", "")) == "k" and et < _t - 0.3:
+			_t = maxf(0.0, et)
+			_playing = false
+			_play_btn.text = "▶ 播放"
+			_rebuild_feed(_t)
+			_apply_frame(_t)
+			return
+
+
+func _cycle_follow_prev() -> void:
+	if _heroes.is_empty():
+		return
+	_manual_follow -= 1
+	if _manual_follow < -1:
+		_manual_follow = _heroes.size() - 1
+	_kill_cam_t = 0.0
+	_follow_hero = _manual_follow
+	if _manual_follow >= 0:
+		_hint_label.text = "正在跟随：%s（Shift+F 反向 / Esc 回自由视角）" % str((_heroes[_manual_follow] as Dictionary).get("name", ""))
+	else:
+		_hint_label.text = HINT_TEXT
+
+
+func _reset_camera() -> void:
+	_cam_yaw = 0.0
+	_cam_pitch = -55.0
+	_cam_dist = 62.0
+	_kill_cam_t = 0.0
+	_cam_drag = false
+
+
+func _toggle_hud_visible() -> void:
+	if _hud2 == null:
+		return
+	_hud2.visible = not _hud2.visible
+	if _hint_label != null:
+		_hint_label.text = "界面已隐藏（H 显示）" if not _hud2.visible else HINT_TEXT
+
+
+func _toggle_fullscreen() -> void:
+	var mode := DisplayServer.window_get_mode()
+	if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+
+
 func _seek_next_kill() -> void:
 	for ev in _events:
 		var et: float = float(ev.get("t", 0)) / 1000.0
@@ -3250,19 +3332,39 @@ func _unhandled_input(event: InputEvent) -> void:
 		_back_to_lobby()
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		match (event as InputEventKey).keycode:
+		var ek := event as InputEventKey
+		var shift := ek.shift_pressed
+		match ek.keycode:
 			KEY_SPACE:
 				_toggle_play()
 			KEY_T:
 				_toggle_team_decision()
 			KEY_LEFT:
-				_t = maxf(0.0, _t - 5.0)
-				_sync_highlight_seek()
-				_rebuild_feed(_t)
+				_seek_by(-1.0 if shift else -5.0)
 			KEY_RIGHT:
-				_t = minf(_duration, _t + 5.0)
-				_sync_highlight_seek()
+				_seek_by(1.0 if shift else 5.0)
+			KEY_HOME:
+				_jump_to_time(0.0)
+			KEY_END:
+				_jump_to_time(_duration)
+			KEY_PAGEUP:
+				_seek_by(-30.0)
+			KEY_PAGEDOWN:
+				_seek_by(30.0)
+			KEY_UP:
+				_change_speed(1)
+			KEY_DOWN:
+				_change_speed(-1)
+			KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
+				_set_speed_preset(int(ek.keycode - KEY_1))
 			KEY_ESCAPE:
+				# 先关最上层面板，再退跟随，最后退出回放
+				if _rview != null and _rview.visible:
+					_toggle_global_panel()
+					return
+				if _tdv != null and _tdv.visible:
+					_toggle_team_decision()
+					return
 				if _follow_hero >= 0 or _manual_follow >= 0:
 					_clear_follow()
 					if _hint_label != null:
@@ -3270,13 +3372,28 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					_back_to_lobby()
 			KEY_F:
-				_cycle_follow()
+				if shift:
+					_cycle_follow_prev()
+				else:
+					_cycle_follow()
 			KEY_N:
 				_seek_next_kill()
+			KEY_J:
+				_seek_prev_kill()
+			KEY_P:
+				_toggle_highlight()
+			KEY_C:
+				_toggle_global_panel()
+			KEY_R:
+				_reset_camera()
+			KEY_H:
+				_toggle_hud_visible()
 			KEY_EQUAL, KEY_KP_ADD:
-				_cycle_speed()
+				_change_speed(1)
 			KEY_MINUS, KEY_KP_SUBTRACT:
-				_cycle_speed()
+				_change_speed(-1)
+			KEY_F11:
+				_toggle_fullscreen()
 		return
 	if event is InputEventScreenTouch:
 		var stouch: InputEventScreenTouch = event
