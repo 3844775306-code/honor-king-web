@@ -95,6 +95,7 @@ var _assign_hero := {}      # peer_id -> Hero（该真人操控的英雄）
 var _assign_peer := {}      # hero instance_id -> peer_id
 var _assign_scan := 0.0
 var _manifest := {}         # client：自己接管到的清单
+var seat_order: Array = []     # 本局选人席位顺序（host 开局随机，全员广播；1..5 号位不再固定房主优先）
 var _drive_time := {}       # host：peer_id -> 最近 C_DRIVE 墙钟秒（超时自动松手，防指令卡死）
 var _attack_time := {}      # host：peer_id -> 最近 C_ATTACK_AUTO 墙钟秒（超时自动松开普攻，防卡自动攻击）
 
@@ -388,7 +389,8 @@ func _broadcast_lobby_state() -> void:
 	if mode != Mode.HOST:
 		return
 	var state := { "phase": phase, "players": players.duplicate(true), "picks": _picks.duplicate(true),
-		"draft": draft.duplicate(true), "ready": lobby_ready.duplicate(true) }
+		"draft": draft.duplicate(true), "ready": lobby_ready.duplicate(true),
+		"order": seat_order.duplicate() }
 	if multiplayer == null or multiplayer.multiplayer_peer == null:
 		net_lobby_state.emit(state)   # 无连接（单机探针/离线）时只本地 emit
 		return
@@ -491,6 +493,11 @@ func _rpc_lobby_state(state: Dictionary) -> void:
 		players[int(id)] = state["players"][id]
 	phase = int(state.get("phase", Phase.LOBBY))
 	draft = state.get("draft", {})   # 旧端无此字段 → 空字典（退化同时选人）
+	var od = state.get("order", [])
+	if od is Array:
+		seat_order.clear()
+		for oid in od:
+			seat_order.append(int(oid))
 	lobby_ready.clear()
 	var rd = state.get("ready", {})
 	if rd is Dictionary:
@@ -530,6 +537,7 @@ func host_game(port: int = 7000) -> bool:
 		return false
 	host_port = port
 	phase = Phase.LOBBY
+	seat_order.clear()
 	mode = Mode.HOST
 	_setup_peer()
 	return multiplayer != null and multiplayer.multiplayer_peer != null
@@ -541,6 +549,7 @@ func join_game(address: String, port: int = 7000) -> bool:
 	join_address = address
 	host_port = port
 	phase = Phase.LOBBY
+	seat_order.clear()
 	mode = Mode.CLIENT
 	_setup_peer()
 	return multiplayer != null and multiplayer.multiplayer_peer != null
@@ -549,6 +558,13 @@ func join_game(address: String, port: int = 7000) -> bool:
 func begin_pick() -> void:
 	if mode != Mode.HOST or phase != Phase.LOBBY:
 		return
+	# 选人位次随机：房主不再固定 1 号位，全员按同一随机顺序占 1..N 号位（先选/后选也随席位）
+	var all_ids: Array = [1]
+	for p in players:
+		if not all_ids.has(int(p)):
+			all_ids.append(int(p))
+	all_ids.shuffle()
+	seat_order = all_ids
 	phase = Phase.SELECT
 	draft.clear()   # 顺序由大厅按需重新下发
 	_broadcast_lobby_state()
@@ -597,11 +613,7 @@ func _draft_is_turn_of(pid: int) -> bool:
 	var turn: Array = draft.get("turn", [])
 	if turn.size() < 2 or int(turn[0]) != 0:
 		return false
-	var ids: Array = [1]
-	for p in players:
-		if not ids.has(int(p)):
-			ids.append(int(p))
-	ids.sort()
+	var ids: Array = get_seat_order()
 	var seat := int(turn[1])
 	return seat < ids.size() and int(ids[seat]) == pid
 
@@ -617,11 +629,7 @@ func _draft_allows(pid: int, hero: String) -> bool:
 		return true
 	if int(turn[0]) != 0:
 		return false   # 红方/我方 AI 席位回合：不接受真人选人
-	var ids: Array = [1]
-	for p in players:
-		if not ids.has(int(p)):
-			ids.append(int(p))
-	ids.sort()
+	var ids: Array = get_seat_order()
 	var seat := int(turn[1])
 	if seat >= ids.size() or int(ids[seat]) != pid:
 		return false
@@ -654,12 +662,26 @@ func get_picks() -> Dictionary:
 
 
 func active_player_ids() -> Array:
-	# 蓝方至多 5 名真人（host=1 + 先连 4 名 client），其余连接列为旁观
+	# 蓝方至多 5 名真人，其余连接列为旁观；位次用 host 随机顺序，避免房主固定 1 号
+	if not seat_order.is_empty():
+		return seat_order.slice(0, MAX_SIDE_PLAYERS)
 	var ids: Array = [1]
 	for p in players:
 		ids.append(int(p))
 	ids.sort()
 	return ids.slice(0, MAX_SIDE_PLAYERS)
+
+
+## 本局席位顺序（含旁观）：host 随机顺序；旧端/未开局回退排序
+func get_seat_order() -> Array:
+	if not seat_order.is_empty():
+		return seat_order.duplicate()
+	var ids: Array = [1]
+	for p in players:
+		if not ids.has(int(p)):
+			ids.append(int(p))
+	ids.sort()
+	return ids
 
 
 func _all_active_picked() -> bool:
@@ -753,6 +775,7 @@ func disconnect_network() -> void:
 	lobby_ready.clear()
 	_picks.clear()
 	draft.clear()
+	seat_order.clear()
 	_manifest = {}
 	_assign_hero.clear()
 	_assign_peer.clear()
@@ -1762,7 +1785,9 @@ func _pack_hero(e: Node) -> Array:
 		_pack_hero_markers(e),  # idx20：标记图标行 [[name,count]]
 		_pack_ai_chip(e),       # idx21：AI 决策胶囊 [label,r,g,b]（非 AI 为空）
 		str(e.get("role")),     # idx22：职责（T 面板 [AI] 名字 (role) -> 分路）
-		_pack_assigned_lane(e)] # idx23：战术分配的 lane（-1=未分配）
+		_pack_assigned_lane(e), # idx23：战术分配的 lane（-1=未分配）
+		1 if bool(e.get("red_buff_active")) else 0,   # idx24：红 buff（客户端世界模型脚下红环）
+		1 if bool(e.get("blue_buff_active")) else 0]  # idx25：蓝 buff（脚下蓝环）
 
 
 func _maxmana_of(e: Node) -> float:
@@ -2720,6 +2745,3 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
-
-
-

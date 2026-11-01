@@ -760,6 +760,11 @@ func _on_snapshot(snap: Array) -> void:
 				# idx16：草丛隐藏（主机 hidden_in_bush）→ 客户端血条上方画“隐”图标
 				if ent.size() > 16:
 					v.hidden = int(ent[16]) == 1
+				# idx24/25：红/蓝 buff 状态 → 世界模型脚下光环（同单机）
+				if ent.size() > 24:
+					_set_buff_ring(v, 0, int(ent[24]) == 1)
+				if ent.size() > 25:
+					_set_buff_ring(v, 1, int(ent[25]) == 1)
 			elif typ == NET_TURRET:
 				if ent.size() > 8:
 					v.under_attack = int(ent[8])
@@ -794,8 +799,8 @@ func _on_snapshot(snap: Array) -> void:
 				if typ == NET_MINION or typ == NET_JUNGLE:
 					if ent.size() > 10:
 						v.face_yaw = float(ent[10])
-						if not v.get("set", false):
-							pass
+						if v.node != null and is_instance_valid(v.node):
+							v.node.rotation.y = float(v.face_yaw)
 					if ent.size() > 11 and int(ent[11]) == 1:
 						_v_snap_unit_attack(v)
 			if not v.set:
@@ -1441,6 +1446,7 @@ func _spawn_dmg_label(wp: Vector3, dmg: int, crit: bool, magic: bool, shielded: 
 	var lab := Label.new()
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lab.text = str(dmg)
+	lab.add_theme_font_size_override("font_size", px)
 	# 与主机一致：真伤红 / 护盾吸收白 / 法术紫 / 物理橙 / 暴击金
 	var col := Color(1.0, 0.30, 0.26) if true_dmg else (Color(0.96, 0.97, 1.0) if shielded else (Color(1.0, 0.90, 0.45) if crit else (Color(0.74, 0.53, 1.0) if magic else Color(1.0, 0.76, 0.34))))
 	var edge := Color(0.30, 0.02, 0.02, 1.0) if true_dmg else (Color(0.10, 0.10, 0.14, 0.96) if shielded else (Color(0.40, 0.24, 0.02, 1.0) if crit else Color(0.12, 0.05, 0.02, 0.96)))
@@ -1609,6 +1615,7 @@ func _v_snap_unit_attack(v: Dictionary) -> void:
 	var nn: Node3D = v.get("node")
 	if nn == null or not is_instance_valid(nn) or not v.get("set", false):
 		return
+	nn.rotation.y = float(v.get("face_yaw", nn.rotation.y))
 	if not v.has("ap"):
 		_proc_recoil(v, float(v.get("face_yaw", nn.rotation.y)))
 		return
@@ -1625,6 +1632,15 @@ func _v_snap_unit_attack(v: Dictionary) -> void:
 	v.att_clip = clip
 	v.att_play = now
 	v.att_until = now + 620
+
+# 红/蓝 buff 光环开关（which：0=红 1=蓝）
+func _set_buff_ring(v: Dictionary, which: int, on: bool) -> void:
+	var rings: Array = v.get("buff_rings", [])
+	if which >= rings.size():
+		return
+	var mi = rings[which]
+	if mi != null and is_instance_valid(mi) and mi.visible != on:
+		mi.visible = on
 
 func _proc_death(v: Dictionary) -> void:
 	var mdl: Node3D = v.get("model", null)
@@ -1880,6 +1896,15 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 	if clip == "" or not ap.has_animation(clip):
 		return
 	ap.play(clip)
+	# 武器模型动作（单机 Hero._perform_attack → "attack"、_finish_casting → "cast"）：
+	# 客户端之前只播身体 clip，武器是静止的，所以观感不如单机
+	if is_hero:
+		var wm = v.get("model")
+		if wm != null and is_instance_valid(wm):
+			if act == NetSession.ACT_ATTACK_MELEE or act == NetSession.ACT_ATTACK_SHOOT:
+				HeroWeapons.play(wm, "attack")
+			elif act == NetSession.ACT_CAST_SHOOT or act == NetSession.ACT_CAST_MELEE or act == NetSession.ACT_CAST_BOTH_SHOOT:
+				HeroWeapons.play(wm, "cast")
 	v.anim = "attack"
 	v.att_clip = clip
 	v.att_play = now
@@ -2065,6 +2090,7 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	var epic_ring_ref: MeshInstance3D = null   # 野怪活动圈（默认隐藏，玩家攻击时显示）
 	var _ring_r: float = 4.0                   # 野怪活动圈半径（普通营地 4 / 史诗 8，同 host）
 	var model_ref: Node3D = null            # 主模型实例（无骨骼动画的兵种做程序化后坐用）
+	var buff_rings: Array = []              # 英雄：红/蓝 buff 脚下光环（按快照开关）
 	match typ:
 		NET_HERO:
 			var hm := NetModels.hero(name)
@@ -2073,6 +2099,16 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				hm.scale = hm.scale * 1.5
 				node.add_child(hm)
 				model_ref = hm
+				# 红/蓝 buff 脚下光环（与单机 Hero.buff_ring_red/blue 同款）→ 放到 view 里按快照开关
+				var br_r: MeshInstance3D = MeshFactory.create_buff_aura(0)
+				br_r.position = Vector3(0.0, 0.045, 0.0)
+				br_r.visible = false
+				node.add_child(br_r)
+				var br_b: MeshInstance3D = MeshFactory.create_buff_aura(1)
+				br_b.position = Vector3(0.0, 0.055, 0.0)
+				br_b.visible = false
+				node.add_child(br_b)
+				buff_rings = [br_r, br_b]
 				head_off = 3.6     # 锚点随血条下压（4.2 → 3.6，对应主机 Request B 微调 1.8→1.2 避 band）
 			else:
 				_add_fallback_visual(node, typ, team_col)
@@ -2135,11 +2171,6 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	# 角色可读性：rim 边缘光 + 脚下接地软阴影（仅英雄，material_overlay 单层，不覆盖原材质）
 	if typ == NET_HERO:
 		UnitVisuals.attach_hero(node, team, node)
-	# 英雄脚下队伍环（识别敌我 / 锁定感）
-	if typ == NET_HERO:
-		var hring := _make_flat_ring(1.55, 1.8, Color(team_col.r, team_col.g, team_col.b, 0.85))
-		hring.position = Vector3(0.0, 0.04, 0.0)
-		node.add_child(hring)
 	$Entities.add_child(node)
 	# 行走质感：客户端同样用步频起伏（dust=false，粒子只在 host 生成，避免双端预算翻倍）
 	if model_ref != null:
@@ -2158,6 +2189,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 		"ring": tower_ring, "epic_ring": epic_ring_ref,   # 塔范围环（快照刷红/绿/黄；非塔为 null）
 		"epic_center": Vector3.ZERO, "epic_center_set": false, "epic_red": false,
 		"jring_r": (_ring_r if typ == NET_JUNGLE else 4.0), "prev_hp": 0.0, "hit_t": -999.0}
+	if typ == NET_HERO:
+		view["buff_rings"] = buff_rings
 	if model_ref != null:
 		view["model"] = model_ref
 	# #44 动画：英雄/小兵/野怪模型带 AnimationPlayer 就挂 idle/walk/attack/cast/die 驱动状态
@@ -2601,6 +2634,26 @@ func _on_takeover(manifest: Dictionary) -> void:
 # —— 输入 ——
 # 接管态：世界鼠标输入全部让位触摸层（主机桌面同样用 emulate_touch 触摸控件操控，
 # 空白区域点击不产生世界命令）。未接管的观战态保留鼠标环绕/缩放。
+## 空格普攻：放在 _input（GUI 之前）处理，避免被聚焦按钮/聊天输入框吃掉
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var k2 := event as InputEventKey
+	if not k2.pressed or k2.echo:
+		return
+	if k2.physical_keycode != KEY_SPACE and k2.keycode != KEY_SPACE:
+		return
+	if ChatService.typing or not _owned or _state != 1:
+		return
+	if int(_own.get("alive", 1)) != 1:
+		return
+	# 商店/属性面板打开时不响应（同触摸普攻的 ui_block 规则）
+	if (_sp != null and _sp.visible) or (_rp != null and _rp.visible):
+		return
+	_attack_nearest_in_reach()
+	get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var k := event as InputEventKey
@@ -4259,11 +4312,19 @@ func _tick_self_prediction(delta: float) -> void:
 
 # 预测方向：摇杆优先（同主机），其次键盘；转向模式沿 node 朝向走前后
 func _pred_dir(node: Node3D) -> Vector3:
+	# 红方相机绕 Y 轴 180°：本地预测方向必须与发送给主机的方向一致地翻转，
+	# 否则「本地预测往前走、主机往回走」，模型朝向与实际移动方向相反。
+	var flip := int(Config.player_team) == 1
 	var jv := _pad.get_move_vector() if _pad != null else Vector2.ZERO
+	if flip:
+		jv = -jv
 	if jv.length() > 0.1:
 		return Vector3(jv.x, 0.0, -jv.y)
 	var ax := Input.get_axis("ui_left", "ui_right")
 	var az := Input.get_axis("ui_down", "ui_up")
+	if flip:
+		ax = -ax
+		az = -az
 	if absf(ax) < 0.1 and absf(az) < 0.1:
 		return Vector3.ZERO
 	var mm := _pad.get_move_mode() if _pad != null else TouchController.MOVE_MODE_DIR
@@ -5711,6 +5772,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 
