@@ -6453,10 +6453,9 @@ func crystal_destroyed(team: int):
 	# 云端存档：开启「赛后自动上传」时把段位+对战纪录同步到云端（未配置则空操作）
 	CloudSyncScript.auto_upload(get_tree())
 	# 终局：先播 5 秒水晶爆炸 → 中央美术字（胜利/失败）→ 再进结算面板并冻结战场
-	if not NetSession.is_online():
-		_play_end_sequence(team, winner == Config.player_team)
-	else:
-		_show_game_over()
+	# 单机与联机统一走同一套终局演出（水晶爆炸 → EndBanner → 聚光灯舞台 → 个人表现 → 结算页）；
+	# 联机结算数据仍由 NetSession 在 game_over 翻转时广播给客户端，不受演出时长影响。
+	_play_end_sequence(team, winner == Config.player_team)
 
 var _end_seq_on: bool = false
 var _pm_view: Control = null

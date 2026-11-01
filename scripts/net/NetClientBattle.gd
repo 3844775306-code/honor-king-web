@@ -17,6 +17,7 @@ const NetKillFeedScript = preload("res://scripts/net/NetKillFeed.gd")
 const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const NetDeathRecapScript = preload("res://scripts/net/NetDeathRecap.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
+const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const NetYuanliuScript = preload("res://scripts/net/NetYuanliuSwitch.gd")
 const SpellFxTable = preload("res://scripts/core/SpellFxTable.gd")
 ## NetClientBattle —— M2-2 全 3D 渲染客户端。
@@ -299,6 +300,19 @@ var _rk: NetRecallScript
 var _dr: NetDeathRecapScript
 # —— P3f：结算页（host game_over 广播；CanvasLayer 110 最顶层模态）——
 var _go: NetResultPanelScript
+# —— P3f：终局演出（与单机同款：聚光灯 V 字舞台 + PostMatchView 铭牌 + 镜头推近 + 个人表现面板）——
+var _pm_view: Control = null
+var _pm_layer: CanvasLayer = null
+var _pm_stage_root: Node3D = null
+var _pm_hidden_layers: Array = []
+var _pm_payload := {}
+var _pm_started := false
+var _pm_stage := Vector3.ZERO
+var _pm_inward := Vector3.ZERO
+var _pm_right := Vector3.ZERO
+var _pm_env: WorldEnvironment = null
+var _pm_key: DirectionalLight3D = null
+var _pm_self_name := ""
 # —— 施法预览（按住技能钮/键盘 type0 按住瞄准时显示；世界空间贴地，复刻主机 Hero 预览三件套）——
 var _pv_range: MeshInstance3D = null   # 自身施法范围圈（type0/1 用）
 var _pv_aoe: MeshInstance3D = null     # AoE 实心填充圆 / type0 瞄准小标记
@@ -352,6 +366,7 @@ func _ready() -> void:
 	NetSession.net_snapshot.connect(_on_snapshot)
 	NetSession.net_tower_laser.connect(_on_tower_laser)
 	NetSession.net_tower_lock.connect(_on_tower_lock)
+	NetSession.net_game_over.connect(_on_net_game_over)
 	_mouse_screen = get_viewport().get_mouse_position()
 	_status = "已连接，等待接管同队 AI…（由主机分配）"
 	# 大厅选人开局：host 的接管 rpc 可能在换场景瞬间先于本场景就绪（信号无人听），
@@ -3625,6 +3640,284 @@ func _build_result_panel() -> void:
 	add_child(cl)
 	_go = NetResultPanelScript.new()
 	cl.add_child(_go)
+	_go.defer = true   # 先播终局演出，播完再显示结算页
+
+# ==================== 终局演出（与单机 BattleManager._enter_post_match 同款） ====================
+func _on_net_game_over(p: Dictionary) -> void:
+	if _pm_started:
+		return
+	_start_post_match(p)
+
+
+func _rows_of(p: Dictionary) -> Array:
+	var rows: Array = p.get("rows", [])
+	return rows if rows is Array else []
+
+
+func _my_result_row(p: Dictionary) -> Dictionary:
+	var my_name := ""
+	for v in _views.values():
+		if int(v.type) == NET_HERO and int(v.get("team", -1)) == int(_manifest.get("team", 0)) and int(v.get("nid", -1)) == _self_net:
+			my_name = str(v.get("name", ""))
+			break
+	for r in _rows_of(p):
+		if bool((r as Dictionary).get("mine", false)):
+			return r
+	for r in _rows_of(p):
+		if str((r as Dictionary).get("name", "")) == my_name:
+			return r
+	return {}
+
+
+## 终局演出：隐藏战场只留己方 5 人 → V 字聚光灯舞台 → 点击镜头推近 + 个人表现 → 再点进结算页
+func _start_post_match(p: Dictionary) -> void:
+	_pm_started = true
+	_pm_payload = p
+	var won: bool = int(p.get("winner", -1)) == TEAM_PLAYER
+	get_tree().paused = true
+	# 1) 隐藏所有 HUD/面板层（演出层稍后自建）
+	_pm_hidden_layers.clear()
+	for child in get_children():
+		if child is CanvasLayer:
+			_pm_hidden_layers.append(child)
+			child.visible = false
+	# 2) 战场退场：World/Entities 隐藏，己方英雄节点搬到聚光灯舞台
+	var world := get_node_or_null("World")
+	if world != null:
+		world.visible = false
+	var ents := get_node_or_null("Entities")
+	if ents != null:
+		ents.visible = false
+	var own_team: int = int(_manifest.get("team", TEAM_PLAYER))
+	_pm_stage_root = Node3D.new()
+	_pm_stage_root.name = "PmStage"
+	add_child(_pm_stage_root)
+	var base := Vector3(-53.0, 0.0, 53.0) if own_team == 0 else Vector3(53.0, 0.0, -53.0)
+	_pm_inward = Vector3(-base.x, 0.0, -base.z).normalized()
+	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
+	_pm_stage = base + _pm_inward * 22.0
+	_pm_stage.y = 0.0
+	var slots: Array = [
+		Vector3.ZERO,
+		_pm_right * 4.6 - _pm_inward * 2.6,
+		_pm_right * -4.6 - _pm_inward * 2.6,
+		_pm_right * 9.2 - _pm_inward * 5.2,
+		_pm_right * -9.2 - _pm_inward * 5.2,
+	]
+	# 己方英雄：本机英雄排第一（居中垫前）
+	var allies: Array = []
+	for nid in _views:
+		var v: Dictionary = _views[nid]
+		if int(v.type) != NET_HERO or int(v.get("team", -1)) != own_team:
+			continue
+		var nd = v.get("node")
+		if nd == null or not is_instance_valid(nd):
+			continue
+		allies.append(v)
+	allies.sort_custom(func(a, b):
+		var sa: int = 0 if int(a.get("nid", -1)) == _self_net else 1
+		var sb: int = 0 if int(b.get("nid", -1)) == _self_net else 1
+		return sa < sb)
+	var entries: Array = []
+	var rows := _rows_of(p)
+	for i in range(mini(allies.size(), 5)):
+		var v: Dictionary = allies[i]
+		var nd: Node3D = v.node
+		if nd.get_parent() != null:
+			nd.get_parent().remove_child(nd)
+		_pm_stage_root.add_child(nd)
+		var slot: Vector3 = _pm_stage + slots[i]
+		nd.global_position = slot
+		var face: Vector3 = (-_pm_inward)
+		nd.rotation.y = atan2(face.x, face.z)
+		nd.visible = true
+		if v.get("ap") != null and v.ap is AnimationPlayer and str(v.get("idle_clip", "")) != "":
+			(v.ap as AnimationPlayer).play(str(v.idle_clip))
+		# 铭牌数据（头像/昵称/分路/MVP/奖牌）
+		var hname := str(v.get("name", ""))
+		var row := {}
+		for r in rows:
+			if str((r as Dictionary).get("name", "")) == hname:
+				row = r
+				break
+		entries.append({
+			"world": slot,
+			"hero": hname,
+			"nick": str(v.get("pname", "")),
+			"lane": HeroPickData.role_lane(str(row.get("role", ""))),
+			"mvp": bool(row.get("mvp", v.get("mvp", false))),
+			"medal": _pm_medal(row),
+			"node": nd,
+		})
+	if entries.is_empty():
+		_pm_finish_and_show()
+		return
+	# 3) 背景压黑 + 主光（与 host 同色温），聚光灯
+	_pm_env = WorldEnvironment.new()
+	var env := Environment.new()
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(0, 0, 0)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.24, 0.27, 0.34)
+	env.ambient_light_energy = 1.05
+	env.glow_enabled = true
+	env.glow_intensity = 0.55
+	_pm_env.environment = env
+	add_child(_pm_env)
+	_pm_key = DirectionalLight3D.new()
+	_pm_key.light_color = Color(0.98, 0.95, 0.90)
+	_pm_key.light_energy = 1.35
+	_pm_key.shadow_enabled = false
+	add_child(_pm_key)
+	for i in range(entries.size()):
+		_pm_add_spotlight(Vector3(entries[i]["world"]), i == 0)
+	# 4) 镜头：从大厅上方推到舞台正面（与 host 同机位公式）
+	if _cam != null and is_instance_valid(_cam):
+		var look: Vector3 = _pm_stage
+		var cam_end: Vector3 = _pm_stage - _pm_inward * 9.0 + Vector3(0.0, 6.0, 0.0)
+		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
+		_cam.global_position = cam_end + Vector3(0.0, 26.0, 0.0)
+		_cam.rotation = rot
+	# 5) 演出层 + 铭牌（PostMatchView：与单机同一份实现）
+	_pm_layer = CanvasLayer.new()
+	_pm_layer.layer = 90
+	add_child(_pm_layer)
+	_pm_view = PostMatchViewScript.new()
+	_pm_layer.add_child(_pm_view)
+	_pm_view.set_camera(_cam)
+	_pm_view.set_stage(won, entries)
+	_pm_view.advance.connect(_on_pm_advance)
+	_pm_view.finished.connect(_on_pm_finished)
+	# 镜头推进
+	if _cam != null and is_instance_valid(_cam):
+		var look2: Vector3 = _pm_stage
+		var cam_end2: Vector3 = _pm_stage - _pm_inward * 9.0 + Vector3(0.0, 6.0, 0.0)
+		var rot2: Vector3 = Basis.looking_at((look2 - cam_end2).normalized(), Vector3.UP).get_euler()
+		var tw := _pm_view.create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(_cam, "global_position", cam_end2, 1.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.tween_property(_cam, "rotation", rot2, 1.15).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+
+
+func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
+	var root := Node3D.new()
+	root.position = pos
+	_pm_stage_root.add_child(root)
+	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
+	var sl := SpotLight3D.new()
+	sl.position = Vector3(0.0, 7.5, 0.0)
+	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+	sl.spot_range = 18.0
+	sl.spot_angle = 32.0
+	sl.light_color = col
+	sl.light_energy = 3.2 if is_player else 2.4
+	root.add_child(sl)
+
+
+# 奖牌：与 host/结算页同口径（评分 ≥78 金 / ≥64 银 / ≥52 铜）
+func _pm_medal(row: Dictionary) -> int:
+	if row.is_empty():
+		return -1
+	var score := _pm_rating(row)
+	if score >= 78.0:
+		return 0
+	if score >= 64.0:
+		return 1
+	if score >= 52.0:
+		return 2
+	return -1
+
+
+# 与 host ResultsPanel/_pm_rating 同权重的队伍内归一化评分
+func _pm_rating(r: Dictionary) -> float:
+	var mx_k := 1
+	var mx_dmg := 1.0
+	var mx_gold := 1
+	var mx_taken := 1.0
+	var tot_k := 0
+	var mx_d := 1
+	var team: int = int(r.get("team", 0))
+	for o in _rows_of(_pm_payload):
+		if int((o as Dictionary).get("team", -1)) != team:
+			continue
+		mx_k = maxi(mx_k, int(o.get("k", 0)))
+		mx_dmg = maxf(mx_dmg, float(o.get("dmg", 0)))
+		mx_gold = maxi(mx_gold, int(o.get("gold", 0)))
+		mx_taken = maxf(mx_taken, float(o.get("taken", 0)))
+		tot_k += int(o.get("k", 0))
+		mx_d = maxi(mx_d, int(o.get("d", 0)))
+	var k := float(r.get("k", 0)) / float(mx_k)
+	var dmg := float(r.get("dmg", 0)) / mx_dmg
+	var gold := float(r.get("gold", 0)) / float(mx_gold)
+	var taken := float(r.get("taken", 0)) / mx_taken
+	var kp := float(r.get("k", 0) + r.get("a", 0)) / float(maxi(1, tot_k))
+	var surv := 1.0 - float(r.get("d", 0)) / float(maxi(1, mx_d))
+	return clampf((k * 0.30 + dmg * 0.26 + gold * 0.18 + taken * 0.10 + kp * 0.10 + surv * 0.06) * 100.0, 0.0, 100.0)
+
+
+func _on_pm_advance() -> void:
+	if _pm_view == null:
+		return
+	var row := _my_result_row(_pm_payload)
+	var hero_name := str(row.get("name", _manifest.get("hero_name", "")))
+	var nick := str(row.get("nick", ""))
+	var rank: Dictionary = _pm_payload.get("rank", {})
+	var rank_lines: Array = []
+	if not rank.is_empty() and not str(rank.get("new_label", "")) == "":
+		rank_lines.append("段位 %s → %s" % [str(rank.get("old_label", "")), str(rank.get("new_label", ""))])
+		rank_lines.append("本局星数 %+d★" % int(rank.get("star_change", 0)))
+	else:
+		rank_lines.append("本局不计排位星")
+	var dur_f := float(_pm_payload.get("dur", 0.0))
+	rank_lines.append("对局时长 %02d:%02d" % [int(dur_f) / 60, int(dur_f) % 60])
+	_pm_view.show_player_detail({
+		"hero": hero_name,
+		"nick": nick,
+		"lane": HeroPickData.role_lane(str(row.get("role", ""))),
+		"mvp": bool(row.get("mvp", false)),
+		"rating": _pm_rating(row),
+		"medal": _pm_medal(row),
+		"rows": [
+			["K / D / A", "%d / %d / %d" % [int(row.get("k", 0)), int(row.get("d", 0)), int(row.get("a", 0))]],
+			["总经济", "%d" % int(row.get("gold", 0))],
+			["英雄伤害", "%d" % int(row.get("dmg", 0))],
+			["承受伤害", "%d" % int(row.get("taken", 0))],
+			["治疗量", "%d" % int(row.get("heal", 0))],
+			["补刀", "%d" % int(row.get("lh", 0))],
+			["推塔伤害", "%d" % int(row.get("turret", 0))],
+			["控制时长", "%.1f s" % (float(row.get("cc", 0)) / 10.0)],
+			["野区经济", "%d" % int(row.get("jungle", 0))],
+		],
+		"rank_lines": rank_lines,
+	})
+
+
+func _on_pm_finished() -> void:
+	_pm_finish_and_show()
+
+
+func _pm_finish_and_show() -> void:
+	if _pm_view != null and is_instance_valid(_pm_view):
+		_pm_view.queue_free()
+	_pm_view = null
+	if _pm_layer != null and is_instance_valid(_pm_layer):
+		_pm_layer.queue_free()
+	_pm_layer = null
+	if _pm_stage_root != null and is_instance_valid(_pm_stage_root):
+		_pm_stage_root.visible = false   # 英雄节点保留，避免视图字典里的 node 变悬空
+	for cl in _pm_hidden_layers:
+		if is_instance_valid(cl):
+			cl.visible = true
+	var world2 := get_node_or_null("World")
+	if world2 != null:
+		world2.visible = true
+	var ents2 := get_node_or_null("Entities")
+	if ents2 != null:
+		ents2.visible = true
+	get_tree().paused = false
+	if _go != null:
+		_go.show_deferred()
+
 
 func _reset_drive_state() -> void:
 	_d_ax = 0.0

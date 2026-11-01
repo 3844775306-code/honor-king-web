@@ -14,6 +14,7 @@ const RED_TEAM := Color(1.0, 0.33, 0.264, 1.0)
 const GOLD_COLOR := Color(1.0, 0.84, 0.0, 1.0)
 
 var _payload := {}
+var defer := false          # true=先播终局演出，播完再显示结算页（NetClientBattle 控制）
 var _f := UiKit.font()
 # 铺满自适应：面板宽按视口取（下限同 host 版心），两侧列宽随之均分
 var _pw: float = PANEL_W
@@ -47,6 +48,9 @@ func _ready() -> void:
 	NetSession.net_game_over.connect(_on_result)
 
 func _on_result(p: Dictionary) -> void:
+	if defer:
+		_payload = p
+		return
 	_payload = p
 	# 对战纪录：客户端各自把收到的结算写入本地历史
 	BattleHistory.record(p, "联机")
@@ -217,6 +221,13 @@ func _draw_row(p: Vector2, r: Dictionary, mine: bool, rs: float) -> void:
 		var slot := Rect2(p + Vector2(18.0 + s * 50.0, card.size.y - 54.0), Vector2(42.0, 42.0))
 		draw_rect(slot, Color(0.9, 0.88, 0.6, 0.15) if filled else Color(1, 1, 1, 0.04))
 		draw_rect(slot, GOLD_COLOR if filled else Color(1, 1, 1, 0.16), false, 1.0)
+
+## 终局演出播完后由 NetClientBattle 调用：解除延迟并正式显示结算页
+func show_deferred() -> void:
+	defer = false
+	if not _payload.is_empty():
+		_on_result(_payload)
+
 
 func _unhandled_input(ev: InputEvent) -> void:
 	if not (ev is InputEventKey and (ev as InputEventKey).pressed and not (ev as InputEventKey).echo):
