@@ -11,6 +11,8 @@ const MIN_GAP := 1.5          # 两次请求最小间隔，防刷
 
 var enabled := false
 var _url := DEF_URL
+var _max_tokens := 160
+var _timeout := 8.0
 var _model := DEF_MODEL
 var _key := ""
 var _http: HTTPRequest = null
@@ -44,12 +46,16 @@ func _load_cfg() -> void:
 		url = str(cf.get_value("llm", "base_url", url if url != "" else DEF_URL))
 		model = str(cf.get_value("llm", "model", model if model != "" else DEF_MODEL))
 		cfg_enabled = bool(cf.get_value("llm", "enabled", cfg_enabled))
+		_max_tokens = int(cf.get_value("llm", "max_tokens", _max_tokens))
+		_timeout = float(cf.get_value("llm", "timeout", _timeout))
 		break
 	_key = key.strip_edges()
 	if url != null and str(url).strip_edges() != "":
 		_url = str(url).strip_edges()
 	if model != null and str(model).strip_edges() != "":
 		_model = str(model).strip_edges()
+	if _http != null:
+		_http.timeout = _timeout
 	enabled = _key != "" and cfg_enabled
 
 
@@ -66,7 +72,7 @@ func ask(system_prompt: String, player_text: String, cb: Callable) -> bool:
 	var body := {
 		"model": _model,
 		"stream": false,
-		"max_tokens": 64,
+		"max_tokens": _max_tokens,
 		"temperature": 0.9,
 		"messages": [
 			{"role": "system", "content": system_prompt},
