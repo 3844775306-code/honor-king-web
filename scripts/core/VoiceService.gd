@@ -14,7 +14,7 @@ var _voice_pool_male: Array = []
 # 女性英雄（其余为男性）；灵宝为女声
 const FEMALE_HEROES := {
 	"孙尚香": true, "不知火舞": true, "甄姬": true, "安琪拉": true, "妲己": true,
-	"小乔": true, "王昭君": true,
+	"小乔": true, "王昭君": true, "沈梦溪": true,
 }
 const FEMALE_VOICE_KEYS := ["xiaoxiao", "xiaoyi", "huihui", "yaoyao", "female", "woman", "女"]
 const MALE_VOICE_KEYS := ["yunxi", "yunjian", "yunyang", "kangkang", "male", "man", "男"]
