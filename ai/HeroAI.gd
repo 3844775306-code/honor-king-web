@@ -1416,11 +1416,10 @@ func _update_finish_chase(delta: float) -> bool:
 	hero.manual_target = _chase_target
 	hero.move_target = Vector3.ZERO
 	state = State.PUSH
-	# 够不到就先交位移技能贴脸（追击用）；远程技能由 SkillTactics 按射程筛选，
-	# 追击途中也能用远程技能继续消耗。
+	# 够不到就先交位移技能贴脸（追击用）；追击途中只放远程伤害技能。
 	if _try_chase_dash(_chase_target):
 		return true
-	_try_use_skills(_chase_target)
+	skill_tactics.use_ranged_damage_skill(_chase_target)
 	return true
 
 
@@ -1708,8 +1707,8 @@ func _try_flee_poke() -> void:
 			return
 		if hero.health < hero.actual_max_health * 0.30:
 			return
-		# use_best_skill 内含射程与目标校验，不会对射程外目标空放。
-		skill_tactics.use_best_skill(enemy, 0.0)
+		# 逃跑只放远程伤害技能，不交控制/治疗，避免停下施法送命。
+		skill_tactics.use_ranged_damage_skill(enemy)
 
 
 # ==================== 购买 ====================
