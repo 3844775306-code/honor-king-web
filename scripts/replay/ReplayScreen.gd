@@ -45,6 +45,8 @@ var _hud_turrets: Array = []
 var _hud_minions: Array = []
 var _hud_jungle: Array = []
 var _mm_drag := false
+var _mm_target := Vector3.ZERO
+var _mm_was_follow := -1
 var _statics: Node3D = null
 var _cam: Camera3D = null
 var _cam_yaw := 0.0
@@ -469,10 +471,12 @@ func _build_ui() -> void:
 		UiKit.flat(0.9, 14, 1, Color(0.45, 0.62, 1.0, 0.35), Color(0.05, 0.07, 0.11, 0.94), 14.0, 12.0))
 	bar.anchor_left = 0.5
 	bar.anchor_right = 0.5
+	bar.anchor_top = 1.0
+	bar.anchor_bottom = 1.0
 	bar.offset_left = -680.0
 	bar.offset_right = 680.0
-	bar.offset_top = 14.0
-	bar.offset_bottom = 128.0
+	bar.offset_top = -128.0
+	bar.offset_bottom = -14.0
 	root.add_child(bar)
 
 	_title = Label.new()
@@ -550,9 +554,9 @@ func _build_ui() -> void:
 	hint.anchor_top = 1.0
 	hint.anchor_bottom = 1.0
 	hint.offset_left = 24.0
-	hint.offset_top = -44.0
+	hint.offset_top = -168.0
 	hint.offset_right = 1500.0
-	hint.offset_bottom = -12.0
+	hint.offset_bottom = -136.0
 	hint.add_theme_font_size_override("font_size", int(round(16.0 * UiKit.scale())))
 	hint.add_theme_color_override("font_color", Color(0.62, 0.7, 0.82))
 	_hint_label = hint
@@ -737,22 +741,38 @@ func _apply_frame(t: float) -> void:
 				node3 = _make_minion(int(r[3]), int(r[4]))
 				_mini_nodes[id] = node3
 			node3.visible = true
-			_hud_minions.append({"wx": float(r[1]), "wz": float(r[2]), "team": int(r[4])})
-			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
-				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
-				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)]})
-			# 朝向移动方向 + 轻微上下踏步（没有骨骼动画的兵种也不会像滑行）
+			node3.set_meta("dying", false)
+			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
 			var nowp: Vector3 = Vector3(float(r[1]), 0.0, float(r[2]))
 			var prevp: Vector3 = node3.get_meta("prev", nowp)
 			var dv: Vector3 = nowp - prevp
-			if dv.length() > 0.002:
+			var moving: bool = dv.length() > 0.01
+			if moving:
 				node3.rotation.y = atan2(dv.x, dv.z)
 			node3.set_meta("prev", nowp)
-			var bob: float = 0.025 * absf(sin(Time.get_ticks_msec() * 0.009 + float(id)))
+			var ph: float = float(node3.get_meta("phase", 0.0))
+			var bob: float = 0.055 * absf(sin(_t * 8.0 + ph)) if moving else 0.012 * absf(sin(_t * 2.0 + ph))
 			node3.position = Vector3(nowp.x, bob, nowp.z)
+			var mdl = node3.get_meta("model", null)
+			if mdl is Node3D:
+				(mdl as Node3D).rotation.z = 0.10 * sin(_t * 8.0 + ph) if moving else 0.0
+				(mdl as Node3D).rotation.x = 0.0
 		for id in _mini_nodes.keys():
-			if not seen.has(id):
-				_mini_nodes[id].visible = false
+			if seen.has(id):
+				continue
+			var nd2: Node3D = _mini_nodes[id]
+			if not nd2.visible:
+				continue
+			if not bool(nd2.get_meta("dying", false)):
+				nd2.set_meta("dying", true)
+				nd2.set_meta("dead_at", _t)
+			var age: float = _t - float(nd2.get_meta("dead_at", _t))
+			var mdl2 = nd2.get_meta("model", null)
+			if mdl2 is Node3D:
+				(mdl2 as Node3D).rotation.x = minf(PI * 0.5, age * 7.0)
+			nd2.position.y = -minf(0.35, age * 0.9)
+			if age > 0.8:
+				nd2.visible = false
 	# 野怪 / 史诗龙：位置插值 + 血量归零隐藏（灵魂/被击杀后不再出现）
 	var ji := _find_jungle_frame(t)
 	if ji >= 0 and ji < _jungle.size():
@@ -946,6 +966,7 @@ func _make_minion(type_code: int, team: int) -> Node3D:
 	var model: Node3D = NetModels.minion(tname, team)
 	if model != null:
 		root.add_child(model)
+		root.set_meta("model", model)
 	else:
 		var mi := MeshInstance3D.new()
 		var bm := BoxMesh.new()
@@ -1304,16 +1325,23 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
-			_mm_drag = false
+			if _mm_drag:
+				_mm_drag = false
+				if _mm_was_follow >= 0:
+					_follow_hero = _mm_was_follow
+					_manual_follow = _mm_was_follow
+				else:
+					_follow_hero = -1
+					_manual_follow = -1
+					_cam_target = _mm_target
+				_mm_was_follow = -1
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
 			var hitd: Dictionary = _hud2.call("hit", mb.position)
 			var hk := str(hitd.get("type", ""))
 			if hk == "map":
 				_mm_drag = true
-				_clear_follow()
-				_cam_pitch = -60.0
-				_cam_dist = 62.0
-				_cam_target = Vector3(float(hitd.get("x", 0.0)), 0.0, float(hitd.get("z", 0.0)))
+				_mm_was_follow = _follow_hero
+				_mm_target = Vector3(float(hitd.get("x", 0.0)), 0.0, float(hitd.get("z", 0.0)))
 				return
 			elif hk == "hero":
 				_select_follow(int(hitd.get("idx", 0)))
@@ -1327,7 +1355,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if _mm_drag and _hud2 != null:
 			var hitd2: Dictionary = _hud2.call("hit", mm.position)
 			if str(hitd2.get("type", "")) == "map":
-				_cam_target = Vector3(float(hitd2.get("x", 0.0)), 0.0, float(hitd2.get("z", 0.0)))
+				_mm_target = Vector3(float(hitd2.get("x", 0.0)), 0.0, float(hitd2.get("z", 0.0)))
 			return
 		if (mm.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
 			_cam_yaw -= mm.relative.x * 0.25
@@ -1336,6 +1364,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _update_camera() -> void:
 	if _cam == null:
+		return
+	# 小地图拖动：相机只平移，高度/俯角保持单机跟随镜头的固定偏移（不会自动变高）
+	if _mm_drag:
+		_cam.global_position = _mm_target + Vector3(0.0, 12.0, 8.0)
+		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.fov = 70.0
 		return
 	# 主视角：完全照搬单机对局镜头（固定偏移 (0,12,8)、俯角 -60°、fov70、指数平滑 + 远距吸附）
 	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
