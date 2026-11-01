@@ -459,7 +459,7 @@ func _physics_process(delta):
 				_apply_healing(28)
 		# 护盾每秒衰减2%最大生命值
 	if tower_shield_active:
-		tower_shield -= max_health * 0.02 * delta
+		tower_shield -= max_health * 0.012 * delta   # 自然衰减 = 原 2%/s 的 60%
 		if tower_shield <= 0:
 			tower_shield = 0
 			tower_shield_active = false
@@ -729,20 +729,35 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	# 我方塔被攻击：真实伤害判定通过后打"被攻击"窗口标记（塔盾吸收命中也算被攻击）
 	if health > 0.0:
 		under_attack_timer = UNDER_ATTACK_WINDOW
-	# 塔盾吸收
-	if tower_shield > 0:
+	# 塔盾吸收：盾受到的伤害也要先走物抗/法抗减免（与原 super.take_damage 的 602 公式同口径），
+	# 未破盾时按减免后的伤害扣盾；破盾溢出的减免后伤害再落到塔身。
+	var _res: float = magic_resist if is_magic else armor
+	if source is Hero:
+		_res -= source.flat_magic_pen if is_magic else source.flat_phys_pen
+		_res = maxf(_res, 0.0)
+	_res = _res * (1.0 - pen)
+	var _res_factor: float = 1.0 - _res / (_res + 602.0)
+	if source is Hero and source.equipment_slots.has("sky_book"):
+		_res_factor *= (1.0 + source.actual_ability_power / 100.0 * 0.005)
+	var _shield_eff: float = amount * _res_factor
+	var _shield_overflow: float = 0.0
+	if tower_shield > 0.0:
 		UnitVisuals.hit_flash(get_hit_flash_root())
 		play_hit_react()
-		if tower_shield >= amount:
-			tower_shield -= amount
+		if tower_shield >= _shield_eff:
+			tower_shield -= _shield_eff
 			_check_tower_shield_triggers()
 			return
 		else:
-			# 护盾被击穿：剩余溢出伤害继续落到塔身上（原实现直接清零 → 这一击完全免疫）
-			amount -= tower_shield
-			tower_shield = 0
+			# 护盾被击穿：减免后的溢出伤害继续落到塔身
+			_shield_overflow = _shield_eff - tower_shield
+			tower_shield = 0.0
+	# 有护盾且破盾：super.take_damage 会再走一次抗性，传回破盾前的等效原始伤害，避免溢出伤害被二次减免
+	var _hp_amount: float = amount
+	if _shield_overflow > 0.0:
+		_hp_amount = _shield_overflow / maxf(_res_factor, 0.0001)
 	if source:
-		super.take_damage(amount, source, is_magic,skill_id,pen, is_crit_forced) 
+		super.take_damage(_hp_amount, source, is_magic,skill_id,pen, is_crit_forced)
 	_check_tower_shield_triggers()
 
 func _check_tower_shield_triggers():
