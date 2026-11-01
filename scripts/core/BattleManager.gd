@@ -7,6 +7,8 @@ const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
+const AIDebugPanelScript = preload("res://scripts/ui/AIDebugPanel.gd")
+const AIDebugFormatScript = preload("res://scripts/debug/AIDebugFormat.gd")
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 var hero_selected: bool = false
@@ -60,6 +62,8 @@ var high_tower_destroyed = {
 # 团队统计
 var stats_timer: float = 0
 var debug_refresh_timer: float = 0.0
+var _ai_dbg: Control = null          # F3 AI 思考覆盖层
+var _ai_dbg_t: float = 0.0
 static var debug_kill_rewards: bool = true  # 调试：击杀奖励触发日志（排查单次死亡多次奖励，用BattleManager.debug_kill_rewards访问）
 var team_player_gold: int = 0
 var team_player_exp: int = 0
@@ -208,6 +212,14 @@ func _ready():
 		_generate_jungle_arc_walls()
 		return
 	add_to_group("battle_manager")
+	# AI 思考过程覆盖层（F3 开关；懒创建面板）
+	var _dbg_cl := CanvasLayer.new()
+	_dbg_cl.name = "AIDebugLayer"
+	_dbg_cl.layer = 280
+	add_child(_dbg_cl)
+	_ai_dbg = AIDebugPanelScript.new()
+	_ai_dbg.visible = false
+	_dbg_cl.add_child(_ai_dbg)
 	Config.reset_player_team()
 	# 选人/加载阶段沿用大厅氛围音乐（真正开局 _start_game_body 会淡出；直接从本场景启动也有音乐）
 	SfxManager.start_menu_music()
@@ -5279,6 +5291,7 @@ func _log_early_game_metrics() -> void:
 		totals[team_key]["cs"] += h.last_hits
 		totals[team_key]["gold"] += h.total_gold_earned
 	var doc := {"t": 240.0, "heroes": rows, "totals": totals,
+		"task_stats": (team_tactics.task_stats.duplicate() if team_tactics != null else {}),
 		"player_towers": _count_alive_turrets(Config.player_team),
 		"enemy_towers": _count_alive_turrets(Config.foe_team())}
 	early_game_metrics = doc
@@ -5780,6 +5793,12 @@ func _process(delta):
 	MapVisuals.update_backlight_for_camera(cam)
 	if not hero_selected:
 		return
+	# F3 AI 思考覆盖层：0.4s 刷新
+	if _ai_dbg != null and _ai_dbg.visible:
+		_ai_dbg_t -= delta
+		if _ai_dbg_t <= 0.0:
+			_ai_dbg_t = 0.4
+			_refresh_ai_debug()
 	
 	# 调试：每0.5秒刷新AI路径球显示
 	debug_refresh_timer -= delta
@@ -5792,6 +5811,8 @@ func _process(delta):
 	if stats_timer <= 0:
 		stats_timer = 1.0
 		_update_team_stats()
+		if team_tactics != null:
+			team_tactics.update_tasks(game_time)
 		_apply_natural_experience()
 		_apply_natural_gold()
 		# 团队事件：塔数变化 / 龙存活变化时立即请求重规划，而不是等10秒兜底
@@ -6544,6 +6565,14 @@ func _unhandled_input(event):
 	if event is InputEventKey and event.keycode == KEY_TAB and event.pressed:
 		_set_camera_mode(not first_person_view)
 
+	# F3：AI 思考过程覆盖层
+	if event is InputEventKey and event.keycode == KEY_F3 and event.pressed and not event.echo:
+		if _ai_dbg != null:
+			_ai_dbg.visible = not _ai_dbg.visible
+			_ai_dbg_t = 0.0
+			print("[Debug] AI思考覆盖层: ", "开" if _ai_dbg.visible else "关")
+		return
+
 	# F4：切换AI的A*路径小球显示
 	if event is InputEventKey and event.keycode == KEY_F4 and event.pressed:
 		GameEntity.debug_show_path = not GameEntity.debug_show_path
@@ -6915,3 +6944,17 @@ func spawn_exp_orb(world_pos: Vector3, target: Hero, amount: int):
 		orb.queue_free()
 	)
 	
+
+
+## 刷新 F3 AI 思考覆盖层（信息量尽量全）
+func _refresh_ai_debug() -> void:
+	if _ai_dbg == null:
+		return
+	var snaps: Array = []
+	for h in get_tree().get_nodes_in_group("heroes"):
+		if h is Hero and h.is_ai and not h.net_taken:
+			var snap: Dictionary = h.call("ai_debug_snapshot")
+			if not snap.is_empty():
+				snaps.append(snap)
+	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
+	_ai_dbg.set_text(txt)

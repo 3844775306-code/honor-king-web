@@ -10,6 +10,7 @@ var current_mode: int = SplitMode.FOUR_ONE
 var assignments: Dictionary = {}       # {Hero: int} 映射（兼容旧分路）
 var tasks: Dictionary = {}             # {Hero: TeamTask} 团队主线任务
 var feedback: Dictionary = {}           # {Hero: HeroAI.task_feedback()}
+var task_stats := {"issued": 0, "completed": 0, "failed": 0, "expired": 0, "reassigned": 0}
 var _urgent_replan := false
 var dragon_pos: Vector3 = Vector3.ZERO
 var dragon_pos_by_team: Dictionary = {}  # {int: Vector3} 每队各自最近的龙位置
@@ -301,6 +302,95 @@ func create_initial_tasks() -> Dictionary:
 	return tasks
 
 
+func update_tasks(now: float) -> void:
+	for h in tasks.keys():
+		var t: TeamTask = tasks[h]
+		if t == null or not t.is_active():
+			continue
+		if not is_instance_valid(h) or (h as Hero).health <= 0:
+			_finish_task(t, TeamTask.Status.FAILED)
+			continue
+		if t.is_expired(now):
+			_finish_task(t, TeamTask.Status.EXPIRED)
+			continue
+		if _task_completed(t, h as Hero, now):
+			_finish_task(t, TeamTask.Status.COMPLETED)
+
+
+func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
+	var dt := maxf(0.1, now - t.last_update)
+	t.last_update = now
+	match t.type:
+		TeamTask.Type.PUSH_LANE:
+			if t.lane == AiConfig.Lane.JUNGLE:
+				return false
+			return not _enemy_tower_near(t.target_pos, 6.0, h.team)
+		TeamTask.Type.DEFEND_LANE:
+			if _enemies_near(t.target_pos, 12.0, h.team) == 0:
+				t.quiet_time += dt
+			else:
+				t.quiet_time = 0.0
+			return t.quiet_time >= 2.5
+		TeamTask.Type.OBJECTIVE:
+			return not _jungle_monster_near(t.target_pos, 10.0)
+		TeamTask.Type.GANK:
+			if t.target_hero == null:
+				return false
+			return not is_instance_valid(t.target_hero) or (t.target_hero as Hero).health <= 0.0
+		TeamTask.Type.PEEL:
+			if t.target_hero == null or not is_instance_valid(t.target_hero) or (t.target_hero as Hero).health <= 0.0:
+				return false
+			if _enemies_near((t.target_hero as Node3D).global_position, 7.0, h.team) == 0:
+				t.quiet_time += dt
+			else:
+				t.quiet_time = 0.0
+			return t.quiet_time >= 2.5
+	return false
+
+
+func _enemy_tower_near(pos: Vector3, radius: float, team: int) -> bool:
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) != team and (e as Turret).health > 0:
+			if (e as Node3D).global_position.distance_to(pos) <= radius:
+				return true
+	return false
+
+
+func _enemies_near(pos: Vector3, radius: float, team: int) -> int:
+	var n := 0
+	for e in bm.get_tree().get_nodes_in_group("heroes"):
+		if e is Hero and int((e as Hero).team) != team and (e as Hero).health > 0:
+			if (e as Node3D).global_position.distance_to(pos) <= radius:
+				n += 1
+	return n
+
+
+func _jungle_monster_near(pos: Vector3, radius: float) -> bool:
+	for e in bm.get_tree().get_nodes_in_group("jungle_monsters"):
+		if e is JungleMonster and (e as JungleMonster).health > 0:
+			if (e as Node3D).global_position.distance_to(pos) <= radius:
+				return true
+	return false
+
+
+func _finish_task(t: TeamTask, status: int) -> void:
+	if not t.is_active():
+		return
+	t.mark(status)
+	match status:
+		TeamTask.Status.COMPLETED: task_stats["completed"] += 1
+		TeamTask.Status.FAILED: task_stats["failed"] += 1
+		TeamTask.Status.EXPIRED: task_stats["expired"] += 1
+		TeamTask.Status.REASSIGNED: task_stats["reassigned"] += 1
+	var owner := t.owner
+	if owner != null and is_instance_valid(owner):
+		for child in owner.get_children():
+			if child is HeroAI and (child as HeroAI).team_task == t:
+				(child as HeroAI).team_task = null
+				(child as HeroAI).is_dragon_rally = false
+				break
+
+
 func request_replan() -> void:
 	_urgent_replan = true
 
@@ -314,6 +404,8 @@ func consume_replan_request() -> bool:
 # 主入口：计算双方队伍的分路分配与 TeamTask
 func allocate_all() -> Dictionary:
 	_urgent_replan = false
+	for old_task in tasks.values():
+		_finish_task(old_task, TeamTask.Status.REASSIGNED)
 	tasks.clear()
 	feedback.clear()
 	# 重规划时先收一遍英雄反馈，避免指挥官完全靠全知数据判断。
@@ -381,6 +473,8 @@ func allocate_all() -> Dictionary:
 
 func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	var t := TeamTask.new()
+	t.owner = h
+	task_stats["issued"] += 1
 	var now := bm.game_time
 	var role := str(h.role)
 	if lane == AiConfig.Lane.JUNGLE:

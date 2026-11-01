@@ -13,7 +13,13 @@ enum Type {
 	RETREAT,
 }
 
+enum Status { ACTIVE, COMPLETED, FAILED, EXPIRED, REASSIGNED }
+
 var type: int = Type.NONE
+var owner: Hero = null
+var status: int = Status.ACTIVE
+var quiet_time := 0.0
+var last_update := 0.0
 var lane: int = -1
 var target_pos := Vector3.ZERO
 var target_hero: Hero = null
@@ -34,12 +40,31 @@ func setup(p_type: int, p_lane: int, p_target_pos: Vector3, p_target_hero: Hero,
 	priority = p_priority
 	created_at = p_now
 	expires_at = p_now + p_duration
+	last_update = p_now
 	reason = p_reason
 	role_hint = p_role
 
 
 func is_expired(now: float) -> bool:
 	return type == Type.NONE or now >= expires_at
+
+
+func mark(p_status: int) -> void:
+	status = p_status
+
+
+func is_active() -> bool:
+	return status == Status.ACTIVE
+
+
+func status_label() -> String:
+	match status:
+		Status.ACTIVE: return "执行中"
+		Status.COMPLETED: return "完成"
+		Status.FAILED: return "失败"
+		Status.EXPIRED: return "超时"
+		Status.REASSIGNED: return "重分配"
+	return "未知"
 
 
 func label() -> String:
