@@ -3,6 +3,7 @@ extends Node
 ## 联机：主机生成 AI 台词并广播；客户端只发主机，由主机统一回显（全端同一份顺序）。
 
 signal message(from_name: String, team: int, text: String, is_self: bool)
+signal lingbao_said(text: String)   # 灵宝说话：全局悬浮灵宝（scripts/ui/LingbaoOverlay.gd）据此弹气泡
 
 const BoxScript = preload("res://scripts/ui/ChatBox.gd")
 const MAX_TEXT := 40
@@ -94,6 +95,7 @@ func say_lingbao(text: String, broadcast: bool = false) -> void:
 	if t == "":
 		return
 	_post("灵宝", Config.player_team, t, false)
+	lingbao_said.emit(t)
 	if broadcast and NetSession.mode == NetSession.Mode.HOST:
 		NetSession.broadcast_chat("灵宝", Config.player_team, t)
 
@@ -101,6 +103,9 @@ func say_lingbao(text: String, broadcast: bool = false) -> void:
 ## 玩家在聊天里 @灵宝：小精灵回话（配了大模型就用大模型）
 func _lingbao_reply(text: String) -> void:
 	var lb = get_tree().get_first_node_in_group("lingbao")
+	if lb == null or not is_instance_valid(lb):
+		# 非战斗界面（大厅/选人/结算）：交给全局悬浮灵宝接话
+		lb = get_node_or_null("/root/LingbaoOverlay")
 	if lb == null or not is_instance_valid(lb):
 		return
 	var nm := "灵宝"
@@ -148,6 +153,11 @@ func _ensure_ui() -> void:
 		var sel_ui = _bm.get("select_ui")
 		var sel_open: bool = sel_ui != null and is_instance_valid(sel_ui) and bool(sel_ui.visible)
 		in_battle = _bm.get("hero") != null and not sel_open and not bool(_bm.get("game_over"))
+	else:
+		# 联机客户端：没有 BattleManager，用 NetClientBattle 的对局状态判定（同 host：接管后、未结算）
+		var nc := get_tree().get_first_node_in_group("net_client_battle")
+		if nc != null and is_instance_valid(nc):
+			in_battle = int(nc.get("_state")) == 1 and bool(nc.get("_owned")) and not bool(nc.get("_pm_started"))
 	if _box != null and is_instance_valid(_box):
 		if _box.visible != in_battle:
 			_box.visible = in_battle

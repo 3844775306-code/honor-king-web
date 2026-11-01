@@ -328,6 +328,7 @@ var _pv_color_key := ""
 
 # —— 生命周期 ——
 func _ready() -> void:
+	add_to_group("net_client_battle")   # ChatService 据此在联机对局挂聊天/语音 UI
 	# 进入对局：淡出大厅环境音乐
 	SfxManager.stop_menu_music()
 	# 客户端用自己的一套 HUD（NetXxx）：关掉主机单例 HUD，避免叠影
