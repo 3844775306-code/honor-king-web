@@ -39,6 +39,7 @@ var kill_exp: int = 0
 var _nav_path = PackedVector3Array()
 var _nav_index = 0
 var _nav_target = Vector3.ZERO
+var _stuck_recovery_t: float = 0.0
 var _nav_recalc_timer = 0.0
 # 卡墙检测
 var _stuck_timer: float = 0.0
@@ -1157,6 +1158,11 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		return move_dir
 	if not PathFinder.initialized:
 		return move_dir
+	# AI 被碰撞推到地图边缘（|x|/|z| ≥ 60 是 A* 实心墙格）时先夹回可行走区，
+	# 否则 A* 起点在实心格，寻路反复失败/卡墙，AI 会贴边撞墙甚至绕向敌塔。
+	if self is Hero and (self as Hero).is_ai:
+		global_position.x = clampf(global_position.x, -59.0, 59.0)
+		global_position.z = clampf(global_position.z, -59.0, 59.0)
 	# 卡墙检测：无目的地（玩家直控）时用位移判据；有目的地时用「沿目标方向的真实前进量」，
 	# 避免 CollisionSystem 每帧推离造成的来回抖动把卡墙计时器一直骗重置。
 	if destination == Vector3.ZERO:
@@ -1189,8 +1195,8 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 			if _net_dist - cur_d < 0.5 and _net_progress < 0.4:
 				_stuck_timer = maxf(_stuck_timer, 1.6)
 				_stuck_recovery_dir = Vector3.ZERO   # 让下面立刻重新选侧向
-				_nav_target = Vector3.ZERO           # 作废旧路径，下次重算
-				_nav_path = PackedVector3Array()
+				_stuck_recovery_t = 0.0
+				_nav_path = PackedVector3Array()     # 清路径触发下一帧重算；保留 _nav_target 供指示/重算
 				_nav_index = 0
 			else:
 				_stuck_timer = 0.0
@@ -1214,10 +1220,22 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 	# 卡墙超过4秒：放弃，让上层逻辑重新决策
 	if _stuck_timer > 4.0:
 		_stuck_timer = 0.0
+		_stuck_recovery_t = 0.0
+		_stuck_recovery_dir = Vector3.ZERO
+		_nav_path = PackedVector3Array()
+		_nav_index = 0
 		return Vector3.ZERO
 	# 卡墙恢复模式：沿墙滑动
 	if _stuck_recovery_dir.length() > 0.01:
-		# 沿墙滑动方向混合原方向
+		# 沿墙滑动方向混合原方向；滑动最多 1.0s，之后强制重算路径，避免永久进入贴墙恢复
+		_stuck_recovery_t += delta
+		if _stuck_recovery_t > 1.0:
+			_stuck_timer = 0.0
+			_stuck_recovery_t = 0.0
+			_stuck_recovery_dir = Vector3.ZERO
+			_nav_path = PackedVector3Array()
+			_nav_index = 0
+			return move_dir
 		var blend = _stuck_recovery_dir * 0.7 + move_dir.normalized() * 0.3
 		return blend.normalized()
 	# 优先使用实际目标点（长距离寻路），否则前瞻30单位
@@ -1267,8 +1285,11 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		return (wall_slide_dir * 0.6 + move_dir.normalized() * 0.4).normalized()
 	# 路径耗尽：若距目标仍远（>5m），强制下次重算（攻击模式除外：截断路径耗尽=已到达攻击位置，重算只会得到同样的死路径）
 	if _nav_index >= _nav_path.size():
-		if attack_range <= 0.0 and destination != Vector3.ZERO and global_position.distance_squared_to(destination) > 25.0:
-			_nav_target = Vector3.ZERO
+		# 路径走到尽头：非攻击模式下清空旧路径，让下一帧按当前目标重新 A*；
+		# 否则旧路径耗尽后会一直用 move_dir 直线走，容易撞墙/走进敌塔。
+		if attack_range <= 0.0:
+			_nav_path = PackedVector3Array()
+			_nav_index = 0
 		return move_dir
 	var waypoint = _nav_path[_nav_index]
 	var to_waypoint = waypoint - global_position
@@ -1323,6 +1344,10 @@ func _update_debug_path_visual():
 			_fmat.emission = path_color * 0.12
 			_add_path_box(parent, _fp[0], _fp[1], 0.34, _fmat)
 			return
+		if _fallback_end != Vector3.ZERO:
+			# 已经走到目标点附近：正常到达，画终点环，不画“寻路失败”的红环
+			_add_debug_end_ring(parent, _fallback_end)
+			return
 		# 无移动目标：脚边暗红圆环
 		var fail_mesh = TorusMesh.new()
 		fail_mesh.inner_radius = 0.28
@@ -1366,24 +1391,29 @@ func _update_debug_path_visual():
 			_add_path_box(parent, pts[i], pts[i + 1], 0.34, line_mat)
 	# 终点：贴地金铜色圆环（代替高亮黄球）
 	if _nav_index < _nav_path.size():
-		var end_mesh = TorusMesh.new()
-		end_mesh.inner_radius = 0.26
-		end_mesh.outer_radius = 0.38
-		end_mesh.rings = 20
-		end_mesh.ring_segments = 14
-		var end_mat = StandardMaterial3D.new()
-		end_mat.albedo_color = Color(0.88, 0.75, 0.43, 0.78)
-		end_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		end_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		end_mat.emission_enabled = true
-		end_mat.emission = Color(0.46, 0.35, 0.16)
-		var end_mi = MeshInstance3D.new()
-		end_mi.mesh = end_mesh
-		end_mi.material_override = end_mat
-		end_mi.position = _nav_path[_nav_path.size() - 1] + Vector3(0, DEBUG_PATH_Y, 0)
-		end_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(end_mi)
-		_debug_path_nodes.append(end_mi)
+		_add_debug_end_ring(parent, _nav_path[_nav_path.size() - 1])
+
+
+## 贴地终点金铜环（正常到达/路径终点共用）
+func _add_debug_end_ring(parent: Node3D, pos: Vector3) -> void:
+	var end_mesh := TorusMesh.new()
+	end_mesh.inner_radius = 0.26
+	end_mesh.outer_radius = 0.38
+	end_mesh.rings = 20
+	end_mesh.ring_segments = 14
+	var end_mat := StandardMaterial3D.new()
+	end_mat.albedo_color = Color(0.88, 0.75, 0.43, 0.78)
+	end_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	end_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	end_mat.emission_enabled = true
+	end_mat.emission = Color(0.46, 0.35, 0.16)
+	var end_mi := MeshInstance3D.new()
+	end_mi.mesh = end_mesh
+	end_mi.material_override = end_mat
+	end_mi.position = Vector3(pos.x, DEBUG_PATH_Y, pos.z)
+	end_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(end_mi)
+	_debug_path_nodes.append(end_mi)
 
 
 ## 单段路径薄盒：替代 ImmediateMesh ribbon（避免整条折线被裁剪/不可见）
