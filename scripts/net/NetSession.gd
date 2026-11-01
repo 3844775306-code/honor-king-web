@@ -1329,6 +1329,8 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 			"bs": _pack_equip_bonus(h),    # 商店「总装备加成」：host 同款文本+配色（bonus_* 含装备被动换算，客户端只画）
 			"sx": _pack_skill_icons(h),   # 触控技能键图标读数（4槽×编码数组，同 TouchController._update_skill_button_ui）
 			"aa": _pack_attack_aa(h),     # 普攻键伤害/攻速/强化+装备被动小字行（同 _push_attack_stats）
+			"aa_dmg": float(h.actual_attack_damage),   # 补刀提示：一次普攻伤害（同 host HUD last_hit 规则）
+			"flat_pen": float(h.flat_phys_pen),        # 补刀提示：固定物理穿透
 			"kills": int(h.kills), "deaths": int(h.deaths), "assists": int(h.assists),   # 主界面个人 K/D/A（同 host kda_label）
 			"tt": _tt,   # T 团队决策：["模式名", 龙存活, 我方经济, 敌方经济, 对局时长]
 		}
@@ -1395,6 +1397,7 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 		_trow.append(shield_on)
 		_trow.append(e.tower_shield)
 		_trow.append(1 if e.shield_protected_no_minion else 0)   # idx14：无兵线保护（客户端血条左侧盾形图标）
+		_trow.append(float(e.armor))                            # idx15：护甲（补刀提示）
 		turrets.append(_trow)
 	out.append(turrets)
 
@@ -1860,7 +1863,8 @@ func _pack_hero(e: Node) -> Array:
 		_pack_assigned_lane(e), # idx23：战术分配的 lane（-1=未分配）
 		1 if bool(e.get("red_buff_active")) else 0,   # idx24：红 buff（客户端世界模型脚下红环）
 		1 if bool(e.get("blue_buff_active")) else 0,  # idx25：蓝 buff（脚下蓝环）
-		e.global_position.y]   # idx26：世界高度（孙悟空筋斗云/腾空表现）
+		e.global_position.y,   # idx26：世界高度（孙悟空筋斗云/腾空表现）
+		float(e.armor)]        # idx27：护甲（补刀提示）
 
 
 func _maxmana_of(e: Node) -> float:
@@ -2234,6 +2238,7 @@ func _pack_unit(e: Node, type_code: int, extra = null) -> Array:
 		row.append(int(e.get("anim_atk_seq")) if e.get("anim_atk_seq") != null else 0)
 		var aspd: float = float(e.get("attack_speed")) if e.get("attack_speed") != null else 1.0
 		row.append(1.0 / maxf(0.1, aspd))
+		row.append(float(e.armor))   # idx14：护甲（补刀提示）
 	return row
 
 # 李元芳暗印摘要：[[源英雄名, 层数, 预测实际伤害], …]（客户端血条黄段/层数文字 1:1 复刻主机）

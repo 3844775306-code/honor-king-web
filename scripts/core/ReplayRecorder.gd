@@ -237,6 +237,7 @@ func _sample(delta: float, finishing: bool) -> void:
 			1 if h.is_mvp else 0,
 			int(round(h.recall_timer * 100.0)), int(round(h.teleport_timer * 100.0)),
 			1 if h.is_recalling else 0, 1 if h.is_teleporting else 0,
+			int(round(float(h.flat_phys_pen))),   # idx45：固定物理穿透（补刀提示）
 		]
 		# 事件：升级
 		if idx < _last_levels.size() and int(h.level) > int(_last_levels[idx]):
@@ -455,6 +456,7 @@ func _sample(delta: float, finishing: bool) -> void:
 				maxi(0, int(round(m.health))), int(m.team),
 				int(TYPE_CODE.get(str(m.display_name), 0)), int(round(m.max_health)),
 				float(m.rotation.y), int(m.get("net_attack_seq")),
+				int(round(float(m.armor))),   # idx9：护甲（补刀提示）
 			])
 		_mini_frames.append({"t": t_ms, "m": rows})
 		var jrows: Array = []
@@ -466,7 +468,8 @@ func _sample(delta: float, finishing: bool) -> void:
 				continue
 			var jp: Vector3 = j.global_position
 			jrows.append([int(jid), int(round(jp.x * 100.0)), int(round(jp.z * 100.0)),
-				maxi(0, int(round(j.health))), maxi(1, int(round(_maxhp_of_ent(j))))])
+				maxi(0, int(round(j.health))), maxi(1, int(round(_maxhp_of_ent(j)))),
+				int(round(float(j.armor)))])   # idx5：护甲（补刀提示）
 		_jungle_frames.append({"t": t_ms, "j": jrows})
 
 
@@ -706,6 +709,7 @@ func _discover_turrets() -> void:
 					"team": int(t.team),
 					"type": str(t.display_name),
 					"maxhp": int(round(t.max_health)),
+					"armor": int(round(float(t.armor))),
 				})
 	if _last_turrets_alive < 0:
 		_last_turrets_alive = _turret_alive()

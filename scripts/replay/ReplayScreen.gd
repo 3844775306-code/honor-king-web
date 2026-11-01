@@ -625,7 +625,8 @@ func _update_world_hud(t: float) -> void:
 			"shield": float(u.get("shield", 0.0)), "shield_icon": bool(u.get("shield_icon", false)),
 			"interfere": 0.0, "doom": 0.0, "lag": _lag,
 			"flash_t": _fl[0], "flash_amt": _fl[1], "heal_t": 0.0, "heal_amt": 0.0,
-			"marker_list": [], "last_hit": false, "show_numbers": false, "num_text": "",
+			"marker_list": [], "last_hit": _replay_last_hit(team_v, hp, float(u.get("armor", 0.0))),
+			"show_numbers": false, "num_text": "",
 		})
 	_bars.rows = rows
 	# —— 回放 HUD（小地图/英雄面板/对战信息/主视角技能） ——
@@ -1005,6 +1006,7 @@ func _apply_frame(t: float) -> void:
 			"ms": int(row_a[19]) if row_a.size() > 19 else 0,
 			"as": int(row_a[20]) if row_a.size() > 20 else 0,
 			"cds": _cds, "slevels": _lv, "yaw": float(row_a[3]) if row_a.size() > 3 else 0.0,
+			"flat_pen": float(row_a[45]) if row_a.size() > 45 else 0.0,
 			"shield": float(row_a[30]) / 10.0 if row_a.size() > 30 else 0.0,
 			"stun": float(row_a[31]) / 100.0 if row_a.size() > 31 else 0.0,
 			"knock": float(row_a[32]) / 100.0 if row_a.size() > 32 else 0.0,
@@ -1101,6 +1103,7 @@ func _apply_frame(t: float) -> void:
 			_unit_world.append({"kind": "turret", "pos": Vector3(float(td.get("x", 0)) / 100.0, 0.0, float(td.get("z", 0)) / 100.0),
 				"hp": hpv, "max": maxf(1.0, float(node2["max"])), "team": int(td.get("team", 0)),
 				"name": str(td.get("type", "")), "sub": str(td.get("type", "")),
+				"armor": float(td.get("armor", 0.0)),
 				"shield": _sh_amt if _sh_active else 0.0, "shield_icon": _sh_icon == 1,
 				"flash_t": _uf2[0], "flash_amt": _uf2[1]})
 	# 小兵：相邻两帧按 id 插值（3Hz 采样也能走得顺）
@@ -1124,7 +1127,8 @@ func _apply_frame(t: float) -> void:
 			rows.append([id0, x0, z0, int(ra[5]), int(ra[4]), hp0,
 				float(ra[6]) if ra.size() > 6 else 1000.0,
 				float(ra[7]) if ra.size() > 7 else 0.0,
-				int(ra[8]) if ra.size() > 8 else 0])
+				int(ra[8]) if ra.size() > 8 else 0,
+				float(ra[9]) if ra.size() > 9 else 0.0])
 		var seen := {}
 		for r in rows:
 			var id: int = int(r[0])
@@ -1145,6 +1149,7 @@ func _apply_frame(t: float) -> void:
 			_unit_world.append({"kind": "minion", "pos": Vector3(float(r[1]), 0.0, float(r[2])),
 				"hp": float(r[5]), "max": maxf(1.0, float(r[6])), "team": int(r[4]),
 				"name": str(r[3]), "sub": TYPE_NAMES[clampi(int(r[3]), 0, TYPE_NAMES.size() - 1)],
+				"armor": float(r[9]) if r.size() > 9 else 0.0,
 				"flash_t": _mf[0], "flash_amt": _mf[1]})
 			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
 			var nowp: Vector3 = Vector3(float(r[1]), 0.0, float(r[2]))
@@ -1236,6 +1241,7 @@ func _apply_frame(t: float) -> void:
 			if jroot.visible:
 				_unit_world.append({"kind": "jungle", "pos": jroot.position,
 					"hp": jhp, "max": maxf(1.0, float(jnode["max"])), "team": 2,
+					"armor": float(jrb2[5]) if jrb2.size() > 5 else (float(jra[5]) if jra.size() > 5 else 0.0),
 					"name": str(_jungle_meta[ji2].get("name", "")) if ji2 < _jungle_meta.size() else "",
 					"sub": str(_jungle_meta[ji2].get("name", "")) if ji2 < _jungle_meta.size() else "",
 					"flash_t": _jf[0], "flash_amt": _jf[1]})
@@ -2364,6 +2370,28 @@ func _update_replay_wukong_cloud(i: int, nm: String, y: float, x: float, z: floa
 
 
 ## 单位血条闪橙（同 WorldBarPainter 的 flash_t/flash_amt）：掉血瞬间 0.5s 渐变橙段
+## 补刀提示（同 host HUD last_hit 规则）：以当前主视角英雄的一次普攻（护甲减免后）判断能否补刀
+func _replay_last_hit(team: int, hp: float, armor: float) -> bool:
+	var ci: int = int(_follow_hero)
+	if ci < 0:
+		ci = int((_doc.get("meta", {}) as Dictionary).get("me", -1))
+	if ci < 0 or ci >= _hero_state.size():
+		return false
+	var hs: Dictionary = _hero_state[ci]
+	if hs.is_empty():
+		return false
+	var my_team: int = int((_heroes[ci] as Dictionary).get("team", -1)) if ci < _heroes.size() else -1
+	if my_team < 0 or team == my_team or hp <= 0.0:
+		return false
+	var atk: float = float(hs.get("ad", 0.0))
+	var pen: float = float(hs.get("flat_pen", 0.0))
+	if atk <= 0.0:
+		return false
+	var res := maxf(0.0, armor - pen)
+	var dmg := atk * (1.0 - res / (res + 602.0))
+	return hp < dmg
+
+
 func _unit_flash(key: String, hp: float, dt: float) -> Array:
 	var e: Dictionary = _flash_cache.get(key, {})
 	var prev: float = float(e.get("hp", hp))

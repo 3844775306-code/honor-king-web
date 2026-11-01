@@ -741,6 +741,10 @@ func _on_snapshot(snap: Array) -> void:
 				v.ai_chip = ent[21] if ent.size() > 21 else []          # AI 决策胶囊 [label,r,g,b]
 				v.role = str(ent[22]) if ent.size() > 22 else ""        # 职责（T 面板）
 				v.lane_assigned = int(ent[23]) if ent.size() > 23 else -1  # 战术分路
+				if ent.size() > 27:
+					v.armor = float(ent[27])   # 护甲（补刀提示）
+			if typ != NET_HERO and typ != NET_TURRET and ent.size() > 14:
+				v.armor = float(ent[14])   # 小兵/野怪护甲（补刀提示）
 			# 受击模型反馈（同 host GameEntity._damage_feedback：闪白+脉冲；英雄加后仰；70ms 节流）
 			if hp < float(v.get("prev_hp", hp)) - 0.5:
 				_net_hit_flash(v)
@@ -801,6 +805,8 @@ func _on_snapshot(snap: Array) -> void:
 					v.tower_shield = float(ent[13])
 				if ent.size() > 14:
 					v.shield_icon = int(ent[14]) == 1
+				if ent.size() > 15:
+					v.armor = float(ent[15])   # 塔护甲（补刀提示）
 				# 倒塌：host 在 dying_visual 期间仍广播 hp=0 的塔 → 本地复刻坍塌动画
 				if float(v.get("hp", 1.0)) <= 0.0 and not v.get("dying", false):
 					v.dying = true
@@ -3151,6 +3157,7 @@ func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, lab
 		monster := false, small := false) -> Dictionary:
 	return {"kind": "unit", "nid": nid, "cx": sp.x, "cy": sp.y, "w": w, "h": h,
 		"team": int(v.team), "epic": epic, "shield": float(v.get("shield", 0.0)),
+		"armor": float(v.get("armor", 0.0)),
 		"name": str(v.get("name", "")), "hp": float(v.hp), "maxhp": float(v.maxhp),
 		"label_off": label_off, "lyf": v.get("lyf", []), "mk": v.get("mk", []),
 		"turret": turret, "ticks": ticks, "tick_step": tick_step,
@@ -5495,7 +5502,7 @@ class Hud:
 			"team": int(r.get("team", 9)), "team_color": _team_color(int(r.get("team", 9))),
 			"shield": shield, "epic": bool(r.get("epic", false)),
 			"ticks": bool(r.get("ticks", false)), "tick_step": float(r.get("tick_step", 1000.0)),
-			"interfere": 0.0, "last_hit": false,
+			"interfere": 0.0, "last_hit": _last_hit_of(int(r.get("team", 9)), hp_now, float(r.get("armor", 0.0))),
 			"lag": hp_now + famt * fr, "flash_t": fr * 0.5, "flash_amt": famt,
 			"heal_t": 0.0, "heal_amt": 0.0, "doom": doom,
 			"show_name": false,   # 野怪血条不显示名字
@@ -5505,6 +5512,19 @@ class Hud:
 			"shield_icon": bool(r.get("shield_icon", false)),
 			"marker_list": mlist,
 		}
+
+	## 补刀提示（同 host HUD last_hit 规则）：取本机英雄一次普攻（税前按护甲减免）
+	func _last_hit_of(team: int, hp: float, armor: float) -> bool:
+		var _atk := float(_own.get("aa_dmg", 0.0))
+		if _atk <= 0.0 or hp <= 0.0:
+			return false
+		if team == int(_manifest.get("team", TEAM_PLAYER)):
+			return false
+		var _pen := float(_own.get("flat_pen", 0.0))
+		var res := maxf(0.0, armor - _pen)
+		var dmg := _atk * (1.0 - res / (res + 602.0))
+		return hp < dmg
+
 
 	func _draw_unit_bar(r: Dictionary) -> void:
 		var bw := float(r.w)
