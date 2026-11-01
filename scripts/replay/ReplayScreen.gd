@@ -3281,56 +3281,32 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var stouch: InputEventScreenTouch = event
 		if stouch.pressed:
-			_begin_cam_drag(stouch.position)
-		elif _cam_drag:
-			_end_cam_drag()
+			# 触屏先交给 HUD 命中测试：点头像切视角、点小地图跳转，不能被相机拖动吞掉
+			if not _handle_hud_press(stouch.position):
+				_begin_cam_drag(stouch.position)
+		else:
+			_finish_map_drag()
+			if _cam_drag:
+				_end_cam_drag()
 		return
 	if event is InputEventScreenDrag:
-		if _cam_drag:
+		if _mm_drag and _hud2 != null:
+			var hd_s: Dictionary = _hud2.call("hit", (event as InputEventScreenDrag).position)
+			if str(hd_s.get("type", "")) == "map":
+				_mm_target = Vector3(float(hd_s.get("x", 0.0)), 0.0, float(hd_s.get("z", 0.0)))
+		elif _cam_drag:
 			_pan_cam_drag((event as InputEventScreenDrag).position)
 		return
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
-			if _mm_drag:
-				_mm_drag = false
-				if _mm_was_follow >= 0:
-					_follow_hero = _mm_was_follow
-					_manual_follow = _mm_was_follow
-				else:
-					_follow_hero = -1
-					_manual_follow = -1
-					_cam_target = _mm_target
-				_mm_was_follow = -1
+			_finish_map_drag()
 			if _cam_drag:
 				_end_cam_drag()
-		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
-			var hitd: Dictionary = _hud2.call("hit", mb.position)
-			var hk := str(hitd.get("type", ""))
-			if hk == "hero_ring":
-				_follow_hero = int(hitd.get("idx", -1))
-				_manual_follow = _follow_hero
-				_mm_was_follow = _follow_hero
-				return
-			if hk == "attr_head":
-				if _hud2 != null:
-					_hud2.attr_collapsed = not _hud2.attr_collapsed
-					_hud2.queue_redraw()
-				return
-			if hk == "band":
-				_toggle_global_panel()
-				return
-			if hk == "map":
-				_mm_drag = true
-				_mm_was_follow = _follow_hero
-				_mm_target = Vector3(float(hitd.get("x", 0.0)), 0.0, float(hitd.get("z", 0.0)))
-				return
-			elif hk == "hero":
-				_select_follow(int(hitd.get("idx", 0)))
-				return
-		# 左键拖拽空白区域：直接平移回放相机
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			_begin_cam_drag(mb.position)
+			# 先处理 HUD；返回 false 才表示点在空白战场，可开始拖动相机
+			if not _handle_hud_press(mb.position):
+				_begin_cam_drag(mb.position)
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_cam_dist = clampf(_cam_dist - 6.0, 22.0, 110.0)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
@@ -3347,6 +3323,47 @@ func _unhandled_input(event: InputEvent) -> void:
 		if (mm.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0:
 			_cam_yaw -= mm.relative.x * 0.25
 			_cam_pitch = clampf(_cam_pitch - mm.relative.y * 0.2, -85.0, -20.0)
+
+
+## 统一的 HUD 点击处理（鼠标/触屏共用）；返回 true 表示事件已被 HUD 消费
+func _handle_hud_press(pos: Vector2) -> bool:
+	if _hud2 == null:
+		return false
+	var hitd: Dictionary = _hud2.call("hit", pos)
+	var hk := str(hitd.get("type", ""))
+	match hk:
+		"hero_ring", "hero":
+			_select_follow(int(hitd.get("idx", -1)))
+			return true
+		"attr_head":
+			_hud2.attr_collapsed = not _hud2.attr_collapsed
+			_hud2.queue_redraw()
+			return true
+		"band":
+			_toggle_global_panel()
+			return true
+		"map":
+			_mm_drag = true
+			_mm_was_follow = _follow_hero
+			_mm_target = Vector3(float(hitd.get("x", 0.0)), 0.0, float(hitd.get("z", 0.0)))
+			_follow_hero = -1
+			_manual_follow = -1
+			return true
+	return false
+
+
+func _finish_map_drag() -> void:
+	if not _mm_drag:
+		return
+	_mm_drag = false
+	if _mm_was_follow >= 0:
+		_follow_hero = _mm_was_follow
+		_manual_follow = _mm_was_follow
+	else:
+		_follow_hero = -1
+		_manual_follow = -1
+		_cam_target = _mm_target
+	_mm_was_follow = -1
 
 
 func _begin_cam_drag(screen: Vector2) -> void:
