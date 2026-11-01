@@ -24,7 +24,16 @@ var _edge_seq := 0
 var _edge_cur: Dictionary = {}
 var _edge_cache: Dictionary = {}
 var _edge_fail_streak := 0
+var _edge_notice_shown := false
 const EdgeScript = preload("res://scripts/core/EdgeTTS.gd")
+const HttpTtsScript = preload("res://scripts/core/HttpTTS.gd")
+var _http_tts: Node = null
+var _http_busy := false
+var _http_queue: Array = []
+var _http_seq := 0
+var _http_cur: Dictionary = {}
+var _http_cache: Dictionary = {}
+var _online_mode := "edge"   # edge / http / local
 
 
 func _ready() -> void:
@@ -40,6 +49,11 @@ func _ready() -> void:
 	_edge = EdgeScript.new()
 	_edge.name = "EdgeTTS"
 	add_child(_edge)
+	_http_tts = HttpTtsScript.new()
+	_http_tts.name = "HttpTTS"
+	add_child(_http_tts)
+	_http_tts.connect("done", Callable(self, "_on_http_done"))
+	_http_tts.connect("failed", Callable(self, "_on_http_failed"))
 	_edge.connect("done", Callable(self, "_on_edge_done"))
 	_edge.connect("failed", Callable(self, "_on_edge_failed"))
 	_fallback_blip = true
@@ -113,8 +127,11 @@ func speak(text: String, speaker: String = "") -> void:
 	_last_text = clean
 	_last_ms = now
 	var emo := _emotion_params(clean, speaker)
-	if edge_enabled and _edge != null:
+	if _online_mode == "edge" and edge_enabled and _edge != null:
 		_request_edge(clean, speaker, emo)
+		return
+	if _online_mode == "http" and _http_tts != null:
+		_request_http(clean, speaker, emo)
 		return
 	_speak_local(clean, speaker, emo)
 
@@ -144,6 +161,8 @@ func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 			_verify_tts(int(ids[ids.size() - 1]), clean, speaker)
 	else:
 		_blip_speak(clean, speaker, emo)
+	if _edge != null:
+		_edge.call("diag", "local speech tts_ok=%s text=%s" % [str(_ok), clean.substr(0, 20)])
 
 
 ## ---------------- Edge 在线神经语音 ----------------
@@ -196,6 +215,13 @@ func _on_edge_done(_id: int, stream: AudioStreamMP3) -> void:
 
 func _on_edge_failed(_id: int) -> void:
 	_edge_fail_streak += 1
+	if _edge != null:
+		_edge.call("diag", "voice edge failed, fallback local")
+	if not _edge_notice_shown:
+		_edge_notice_shown = true
+		var cs = get_node_or_null("/root/ChatService")
+		if cs != null:
+			cs.call("system_note", "在线语音不可用，已切换本地语音（详见 voice_diag.log）")
 	# 连续失败：本次会话回退本地 TTS/拟声，避免每条语音都等 8 秒超时
 	if _edge_fail_streak >= 2:
 		edge_enabled = false
@@ -206,7 +232,59 @@ func _on_edge_failed(_id: int) -> void:
 	var em: Dictionary = _edge_cur.get("e", {})
 	_edge_next()
 	if t != "":
+		# Edge 连不上（常见于 TLS/证书/网络策略）：本次会话切到有道 HTTP 在线语音
+		edge_enabled = false
+		_online_mode = "http"
+		_request_http(t, sp, em)
+
+
+func _request_http(clean: String, speaker: String, emo: Dictionary) -> void:
+	var key := speaker + "|" + clean
+	if _http_cache.has(key):
+		_play_edge(_http_cache[key])
+		return
+	if _http_busy:
+		if _http_queue.size() < 4:
+			_http_queue.append({"t": clean, "s": speaker, "e": emo})
+		return
+	_http_busy = true
+	_http_seq += 1
+	_http_cur = {"key": key, "t": clean, "s": speaker, "e": emo}
+	_http_tts.call("synth", _http_seq, clean)
+
+
+func _on_http_done(_id: int, stream: AudioStreamMP3) -> void:
+	var key := str(_http_cur.get("key", ""))
+	if key != "":
+		if _http_cache.size() > 120:
+			_http_cache.clear()
+		_http_cache[key] = stream
+	_play_edge(stream)
+	_http_next()
+
+
+func _on_http_failed(_id: int) -> void:
+	var t := str(_http_cur.get("t", ""))
+	var sp := str(_http_cur.get("s", ""))
+	var em: Dictionary = _http_cur.get("e", {})
+	_http_next()
+	if t != "":
+		_online_mode = "local"
+		if not _edge_notice_shown:
+			_edge_notice_shown = true
+			var cs = get_node_or_null("/root/ChatService")
+			if cs != null:
+				cs.call("system_note", "在线语音不可用，已切换本地语音（voice_diag.log）")
 		_speak_local(t, sp, em)
+
+
+func _http_next() -> void:
+	_http_busy = false
+	_http_cur = {}
+	if _http_queue.is_empty():
+		return
+	var nx: Dictionary = _http_queue.pop_front()
+	_request_http(str(nx.get("t", "")), str(nx.get("s", "")), nx.get("e", {}))
 
 
 func _edge_next() -> void:
@@ -221,6 +299,8 @@ func _edge_next() -> void:
 func _play_edge(stream: AudioStreamMP3) -> void:
 	if _edge_player == null or stream == null:
 		return
+	if _edge != null:
+		_edge.call("diag", "play edge audio bytes=%d" % stream.data.size())
 	if _ok and DisplayServer.has_method("tts_stop"):
 		DisplayServer.tts_stop()
 	_blip.stop()
@@ -345,7 +425,8 @@ func diagnose() -> Dictionary:
 		"enabled": enabled, "tts_ok": _ok, "has_zh": _has_zh, "voice": _voice,
 		"pool": _voice_pool, "lang": _lang, "fallback": _fallback_blip, "tts_speaking": speaking,
 		"edge_enabled": edge_enabled, "edge_busy": _edge_busy, "edge_fail": _edge_fail_streak,
-		"edge_cache": _edge_cache.size(),
+		"edge_cache": _edge_cache.size(), "online_mode": _online_mode,
+		"http_busy": _http_busy, "http_cache": _http_cache.size(),
 		"master_db": AudioServer.get_bus_volume_db(0), "master_mute": AudioServer.is_bus_mute(0),
 	}
 
@@ -359,8 +440,12 @@ func stop() -> void:
 		_edge_player.stop()
 	if _edge != null:
 		_edge.call("abort")
+	if _http_tts != null:
+		_http_tts.call("abort")
 	_edge_busy = false
 	_edge_queue.clear()
+	_http_busy = false
+	_http_queue.clear()
 
 
 ## 拟声语音：带语调曲线（问句上挑/感叹更亮/省略号拖长）+ 颤音 + 轻微气声
