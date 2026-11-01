@@ -386,8 +386,18 @@ func _process(delta):
 			hero.under_tower_attack = false
 			hero.tower_attacker = null
 		elif hero.tower_attacker and is_instance_valid(hero.tower_attacker):
-			# 立即沿直线退出塔的攻击范围
+			# 立即沿直线退出塔的攻击范围；本帧直接结束 AI 逻辑，避免随后的分路/推进决策把 move_target 改回塔下
 			_retreat_from_turret(hero.tower_attacker)
+			state = State.RETREAT
+			return
+	# 预警：被敌方塔锁定（还没吃到伤害）就立刻撤，别等第一发炮弹命中才反应
+	var _locked_t := perception.find_nearest_enemy_turret(AiConfig.SIGHT_TURRET)
+	if _locked_t != null and is_instance_valid(_locked_t) and _locked_t.health > 0.0 \
+			and _locked_t.current_target == hero \
+			and hero.global_position.distance_to(_locked_t.global_position) <= _locked_t.attack_range * 0.01 + 1.5:
+		_retreat_from_turret(_locked_t)
+		state = State.RETREAT
+		return
 	# --- 弹道躲避（每帧）：命中威胁时标记 AVOID ---
 	if _dodge_threats():
 		state = State.AVOID
@@ -730,7 +740,11 @@ func _is_under_own_tower() -> bool:
 
 func _retreat_from_turret(turret: Turret) -> void:
 	# 沿英雄→塔的直线方向退到塔范围外
-	var to_hero := (hero.global_position - turret.global_position).normalized()
+	var to_hero := (hero.global_position - turret.global_position)
+	to_hero.y = 0.0
+	if to_hero.length() < 0.01:
+		to_hero = Vector3(1.0, 0.0, 0.0)
+	to_hero = to_hero.normalized()
 	var safe_dist := turret.attack_range * 0.01 + 1.0  # 塔攻击范围 + 安全距离
 	hero.move_target = turret.global_position + to_hero * safe_dist
 	hero.manual_target = null
