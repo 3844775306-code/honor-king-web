@@ -106,7 +106,7 @@ func _ready() -> void:
 	var fsp := Control.new()
 	fsp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(fsp)
-	var go := _btn("⚙  去备战配置出装", UiKit.C_GOLD, true)
+	var go := _btn("✦  去备战配置出装", UiKit.C_GOLD, true)
 	go.custom_minimum_size = Vector2(_fs(360), _fs(56))
 	go.pressed.connect(_goto_loadout)
 	foot.add_child(go)

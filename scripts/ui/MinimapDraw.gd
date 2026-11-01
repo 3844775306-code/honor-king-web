@@ -3,7 +3,7 @@ extends RefCounted
 ## 目标计时、草丛/墙体/血包、视野框、兵线聚类。
 ## 所有函数为 CanvasItem 立即绘制，必须在 _draw() 内调用。
 
-static var FONT: Font = ThemeDB.fallback_font
+static var FONT: Font = preload("res://assets/theme/ui_font.tres")
 const ART = preload("res://scripts/ui/HeroArt.gd")   # 程序化英雄头像（与选人界面同源）
 
 # 图标放大倍数：防御塔 / 普通野怪（水晶与暴君主宰保持原尺寸）

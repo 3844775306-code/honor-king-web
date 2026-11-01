@@ -117,6 +117,9 @@ func _on_node_added(node: Node) -> void:
 ## 全局字体：项目已通过 [gui] theme/custom_font 设置了默认字体，
 ## 这里统一取默认主题字体，供 draw_string / draw_multiline_string 等自绘控件使用。
 func font() -> Font:
+	# Web 没有系统字体：必须使用随包字库（中文 + 几何符号），否则自绘文字/图标会乱码
+	if _ui_theme != null and _ui_theme.default_font != null:
+		return _ui_theme.default_font
 	var f := ThemeDB.get_default_theme().default_font
 	if f != null:
 		return f

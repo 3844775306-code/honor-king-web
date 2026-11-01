@@ -603,7 +603,7 @@ func _show_menu() -> void:
 	var act_row2 := HBoxContainer.new()
 	act_row2.add_theme_constant_override("separation", 10)
 	right.add_child(act_row2)
-	var b_controls := _mk_btn("⚙  设置", UiKit.C_TEAM0, false, Vector2(1, 56))
+	var b_controls := _mk_btn("✦  设置", UiKit.C_TEAM0, false, Vector2(1, 56))
 	b_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_controls.pressed.connect(_open_controls)
 	act_row2.add_child(b_controls)
