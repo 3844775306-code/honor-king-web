@@ -29,6 +29,16 @@ static func stats_of(u) -> Dictionary:
 			"last_hits": int(h.last_hits), "turret": float(h.turret_damage),
 			"cc": float(h.cc_duration_dealt), "jungle": int(h.jungle_gold),
 		}
+	# 适配器（HeroStatView 等）：凡是带 display_name 属性的对象都按属性读，联机/回放共用同一套评分
+	if u is Object and u.get("display_name") != null:
+		return {
+			"name": str(u.get("display_name")), "team": int(u.get("team")),
+			"k": int(u.get("kills")), "d": int(u.get("deaths")), "a": int(u.get("assists")),
+			"dmg": float(u.get("damage_dealt_to_heroes")), "taken": float(u.get("damage_taken_from_heroes")),
+			"gold": int(u.get("total_gold_earned")), "heal": float(u.get("healing_done")),
+			"last_hits": int(u.get("last_hits")), "turret": float(u.get("turret_damage")),
+			"cc": float(u.get("cc_duration_dealt")), "jungle": int(u.get("jungle_gold")),
+		}
 	if u is Dictionary:
 		var r: Dictionary = u
 		return {
@@ -158,3 +168,4 @@ static func rank_lines(rank_result: Dictionary, duration: float) -> Array:
 		out.append("本局不计排位星")
 	out.append("对局时长 %02d:%02d" % [int(duration) / 60, int(duration) % 60])
 	return out
+

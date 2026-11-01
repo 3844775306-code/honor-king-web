@@ -11,7 +11,9 @@ var GOLD_COLOR: Color = UiKit.C_GOLD
 const ROW_H = 50  # 数据页每行高度（对齐用）
 
 # ==================== 引用 ====================
-var bm: BattleManager
+var bm = null
+## 数据模型（联机/回放用）：非空时优先于 bm，实现单机与联机/回放共用同一套结算 UI
+var _model: Dictionary = {}
 var all_heroes: Array = []
 var team_player_heroes: Array = []
 var team_enemy_heroes: Array = []
@@ -97,10 +99,11 @@ func _tier_color(tier: int) -> Color:
 		_: return Color(0.78, 0.78, 0.85)
 
 # ==================== 初始化 ====================
-func setup(battle: BattleManager):
+## 单机入口：直接用 BattleManager
+func setup(battle):
+	_model = {}
 	bm = battle
 	process_mode = PROCESS_MODE_ALWAYS
-
 	all_heroes.clear()
 	team_player_heroes.clear()
 	team_enemy_heroes.clear()
@@ -111,32 +114,88 @@ func setup(battle: BattleManager):
 				team_player_heroes.append(entity)
 			else:
 				team_enemy_heroes.append(entity)
-	# 经济面板：按总经济降序排列
+		team_player_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
+		team_enemy_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
+		_prepare_rank()
+		_create_ui()
+
+
+## 联机/回放入口：传数据模型（heroes 可以是 Hero 或 HeroStatView）
+## model: {heroes, hero, player_team, winner, game_time, rank_result, team_gold_diff_history, mode}
+func setup_model(model: Dictionary) -> void:
+	_model = model
+	bm = null
+	process_mode = PROCESS_MODE_ALWAYS
+	all_heroes.clear()
+	team_player_heroes.clear()
+	team_enemy_heroes.clear()
+	var pteam := int(model.get("player_team", Config.player_team))
+	for h in (model.get("heroes", []) as Array):
+		if h == null:
+			continue
+		all_heroes.append(h)
+		if int(h.team) == pteam:
+			team_player_heroes.append(h)
+		else:
+			team_enemy_heroes.append(h)
 	team_player_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
 	team_enemy_heroes.sort_custom(func(a, b): return a.total_gold_earned > b.total_gold_earned)
+	_prepare_rank()
+	_create_ui()
 
-	# 段位结算：优先用 BattleManager.crystal_destroyed() 里已经算好的结果；
-	# 只有在没有结果时才兜底自算（否则会重复加/减星）
-	var mp0 := _find_mvp(team_player_heroes)
-	_self_is_mvp = mp0 != null and is_instance_valid(bm.hero) and mp0 == bm.hero
-	if bm.rank_result is Dictionary and not (bm.rank_result as Dictionary).is_empty():
-		_rank_result = bm.rank_result
+
+# 段位结算：优先用已算好的结果；没有才按 MatchResult 兜底（不重复加减星）
+func _prepare_rank() -> void:
+	var ph = _m_hero()
+	var mp0 = _find_mvp(team_player_heroes)
+	_self_is_mvp = mp0 != null and ph != null and mp0 == ph
+	var rr = _m_rank_result()
+	if rr is Dictionary and not (rr as Dictionary).is_empty():
+		_rank_result = rr
+	elif bool(_model.get("suppress_rank", false)):
+		_rank_result = {}
 	elif _rank_result.is_empty():
-		var rating := _calculate_rating(bm.hero) if is_instance_valid(bm.hero) else 0.0
-		var medal := _medal_index(bm.hero) if is_instance_valid(bm.hero) else -1
-		var bonus := RankSystem.medal_bonus(medal) + (200 if rating > 90.0 else 0)
-		_rank_result = RankSystem.apply_result(Config.is_ally(bm.winner), _self_is_mvp, bonus)
+		var rating := _calculate_rating(ph) if ph != null else 0.0
+		var medal := _medal_index(ph) if ph != null else -1
+		var bonus := MatchResultScript.rank_bonus(medal, rating)
+		_rank_result = RankSystem.apply_result(Config.is_ally(_m_winner()), _self_is_mvp, bonus)
 		_rank_result["medal"] = medal
 		_rank_result["medal_bonus"] = MatchResultScript.medal_bonus(medal)
 		_rank_result["top_bonus"] = MatchResultScript.top_bonus(rating)
-		_rank_result["top_bonus"] = 200 if rating > 90.0 else 0
 
-	_create_ui()
+
+# —— 模型/单机取值统一入口 ——
+func _m_hero():
+	if not _model.is_empty():
+		return _model.get("hero", null)
+	return bm.hero if bm != null else null
+
+func _m_winner() -> int:
+	if not _model.is_empty():
+		return int(_model.get("winner", -1))
+	return int(bm.winner) if bm != null else -1
+
+func _m_game_time() -> float:
+	if not _model.is_empty():
+		return float(_model.get("game_time", 0.0))
+	return float(bm.game_time) if bm != null else 0.0
+
+func _m_rank_result() -> Dictionary:
+	if not _model.is_empty():
+		var r = _model.get("rank_result", {})
+		return r if r is Dictionary else {}
+	return bm.rank_result if bm != null and bm.rank_result is Dictionary else {}
+
+func _m_gold_hist() -> Array:
+	if not _model.is_empty():
+		var g = _model.get("team_gold_diff_history", [])
+		return g if g is Array else []
+	return bm.team_gold_diff_history if bm != null else []
 
 func _create_ui():
 	# 结算页独占最上层：盖住 HUD(layer 2)/PostFX(layer 1)，避免战斗控件压在结算内容上
 	layer = UiKit.LAYER_RESULTS
-	var is_win = Config.is_ally(bm.winner)
+	var is_win = Config.is_ally(_m_winner())
 	var result_color = BLUE_TEAM if is_win else RED_TEAM
 
 	# 全屏程序化背景（渐变+辉光+网格+粒子+暗角）+ 薄暗幕保证文字可读
@@ -189,7 +248,7 @@ func _create_ui():
 	var tk_p = _team_kills(team_player_heroes)
 	var tk_e = _team_kills(team_enemy_heroes)
 	sub.text = "时长 %02d:%02d  ·  我方击杀 %d : %d  ·  本场总经济 %s" % [
-		int(bm.game_time) / 60, int(bm.game_time) % 60,
+		int(_m_game_time()) / 60, int(_m_game_time()) % 60,
 		tk_p, tk_e, _format_gold(_team_gold(team_player_heroes) + _team_gold(team_enemy_heroes))
 	]
 	_apply_label_style(sub, UiKit.FS_SM, UiKit.C_TEXT_DIM)
@@ -294,13 +353,13 @@ func _on_back_lobby():
 func _team_kills(heroes: Array) -> int:
 	var k = 0
 	for h in heroes:
-		if h is Hero: k += h.kills
+		if h != null: k += h.kills
 	return k
 
 func _team_gold(heroes: Array) -> int:
 	var g = 0
 	for h in heroes:
-		if h is Hero: g += h.total_gold_earned
+		if h != null: g += h.total_gold_earned
 	return g
 
 # ==================== Tab 1: 总览（我方 | 中央 | 敌方）====================
@@ -390,13 +449,13 @@ func _make_team_header(text: String, color: Color, heroes: Array, is_enemy: bool
 	return strip
 
 # ---- 中央 VS 列 ----
-func _build_vs_column(mvp_player: Hero, mvp_enemy: Hero) -> Control:
+func _build_vs_column(mvp_player, mvp_enemy) -> Control:
 	var col = VBoxContainer.new()
 	col.custom_minimum_size = Vector2(350, 0)
 	col.add_theme_constant_override("separation", 4)
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	var is_win = Config.is_ally(bm.winner)
+	var is_win = Config.is_ally(_m_winner())
 	var top_sp = Control.new(); top_sp.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(top_sp)
 
@@ -464,7 +523,7 @@ func _build_vs_column(mvp_player: Hero, mvp_enemy: Hero) -> Control:
 	col.add_child(bot_sp)
 	return col
 
-func _create_mvp_mini(mvp: Hero, is_enemy: bool, wide: int = 190) -> Control:
+func _create_mvp_mini(mvp, is_enemy: bool, wide: int = 190) -> Control:
 	var box = Panel.new()
 	box.custom_minimum_size = Vector2(wide, int(52 * _ui_scale()))
 	var team_color = RED_TEAM if is_enemy else BLUE_TEAM
@@ -523,7 +582,7 @@ func _create_mvp_mini(mvp: Hero, is_enemy: bool, wide: int = 190) -> Control:
 	return box
 
 # ---- 英雄卡片 ----
-func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
+func _create_hero_card(hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	var team_color = RED_TEAM if is_enemy else BLUE_TEAM
 	var card = Panel.new()
 	# 高度随整体字号缩放；136 基准保证三行（头像/KDA/装备）都完整落在卡片内
@@ -568,7 +627,7 @@ func _create_hero_card(hero: Hero, is_mvp: bool, is_enemy: bool) -> Panel:
 	if is_mvp:
 		nm_row.add_child(_tag_label("MVP", GOLD_COLOR, Color(0.15, 0.1, 0.0)))
 	var who_mark = ""
-	if hero == bm.hero:
+	if hero == _m_hero():
 		who_mark = "玩家"
 	elif hero.is_ai:
 		who_mark = "AI"
@@ -742,7 +801,7 @@ func _rating_grade_color(score: float) -> Color:
 
 # ==================== 奖牌（按对战评分，与局内结算一致） ====================
 # 0=金牌 1=银牌 2=铜牌 -1=无奖牌；门槛与 BattleManager._pm_medal_by_rating 保持一致
-func _medal_index(hero: Hero) -> int:
+func _medal_index(hero) -> int:
 	if hero == null or not is_instance_valid(hero):
 		return -1
 	var s := _calculate_rating(hero)
@@ -840,7 +899,7 @@ func _create_team_data_column(heroes: Array, is_enemy: bool, global_maxes: Dicti
 		var sn: String = STAT_META[i][2]
 		var best_val = -1.0
 		for h in heroes:
-			if h is Hero:
+			if h != null:
 				best_val = max(best_val, float(_get_hero_stats(h)[i]))
 		team_best[sn] = best_val
 
@@ -901,7 +960,7 @@ func _create_team_data_column(heroes: Array, is_enemy: bool, global_maxes: Dicti
 	container.add_child(grid)
 	return container
 
-func _create_stat_bar_cell(hero: Hero, stat_index: int, sn: String, team_color: Color, gmax: float, team_best: Dictionary) -> Control:
+func _create_stat_bar_cell(hero, stat_index: int, sn: String, team_color: Color, gmax: float, team_best: Dictionary) -> Control:
 	# 单个英雄的一条统计格：上方数值（队内最高金色）+ 下方圆角进度条。
 	# 数值区与进度条区用绝对锚点钉在固定行高 ROW_H 的固定 y 上，行高不随字体伸缩，
 	# 配合行式网格，图标与进度条逐行对齐。
@@ -944,12 +1003,12 @@ func _calc_team_maxes(heroes: Array) -> Dictionary:
 	var team_total_damage = 0.0
 	var team_total_gold = 0
 	for h in heroes:
-		if h is Hero:
+		if h != null:
 			team_total_kills += h.kills
 			team_total_damage += h.damage_dealt_to_heroes + h.turret_damage
 			team_total_gold += h.total_gold_earned
 	for h in heroes:
-		if h is Hero:
+		if h != null:
 			var participation = (float(h.kills + h.assists) / max(1, team_total_kills)) * 100.0
 			var damage_pct = ((h.damage_dealt_to_heroes + h.turret_damage) / max(1.0, team_total_damage)) * 100.0
 			var gold_pct = (float(h.total_gold_earned) / max(1, team_total_gold)) * 100.0
@@ -968,13 +1027,13 @@ func _calc_team_maxes(heroes: Array) -> Dictionary:
 			maxes["对塔伤害"] = max(maxes.get("对塔伤害", 1.0), h.turret_damage)
 	return maxes
 
-func _get_hero_stats(hero: Hero) -> Array:
+func _get_hero_stats(hero) -> Array:
 	var team_heroes = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
 	var team_total_kills = 0
 	var team_total_damage = 0.0
 	var team_total_gold = 0
 	for h in team_heroes:
-		if h is Hero:
+		if h != null:
 			team_total_kills += h.kills
 			team_total_damage += h.damage_dealt_to_heroes + h.turret_damage
 			team_total_gold += h.total_gold_earned
@@ -1049,8 +1108,8 @@ func _create_replay_tab():
 
 	var chart = GoldChart.new()
 	_fill(chart, chart_wrap, 0, 0, 0, 0)
-	chart.data = bm.team_gold_diff_history
-	chart.game_duration = bm.game_time
+	chart.data = _m_gold_hist()
+	chart.game_duration = _m_game_time()
 	chart.queue_redraw()
 
 	# 底部双 MVP 卡
@@ -1064,20 +1123,20 @@ func _create_replay_tab():
 	root.add_child(mvp_row)
 
 # ==================== MVP / 评分计算 ====================
-func _find_mvp(heroes: Array) -> Hero:
-	var best: Hero = null
+func _find_mvp(heroes: Array):
+	var best = null
 	var best_score = -1.0
 	for h in heroes:
-		if h is Hero:
+		if h != null:
 			var s = _calculate_rating(h)
 			if s > best_score:
 				best_score = s
 				best = h
 	return best
 
-func _calculate_rating(hero: Hero) -> float:
+func _calculate_rating(hero) -> float:
 	# 三端统一口径：MatchResult（与局内结算/联机/回放同一公式）
-	var team: Array = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
+	var team: Array = team_player_heroes if team_player_heroes.has(hero) else team_enemy_heroes
 	return MatchResultScript.rating(hero, team)
 # ==================== 内部类：英雄头像（程序化立绘）====================
 class HeroFace extends Control:
@@ -1292,7 +1351,7 @@ class GoldChart extends Control:
 const LingbaoStoreScript = preload("res://scripts/core/LingbaoStore.gd")
 
 func _build_reward_band() -> Control:
-	var is_win: bool = Config.is_ally(bm.winner)
+	var is_win: bool = Config.is_ally(_m_winner())
 	var rs: Dictionary = _rank_result.get("new_state", RankSystem.state()) if not _rank_result.is_empty() else RankSystem.state()
 	var old_state: Dictionary = _rank_result.get("old_state", rs) if not _rank_result.is_empty() else rs
 	var tier: int = clampi(int(rs.get("tier", 0)), 0, RankSystem.KING_INDEX)
@@ -1408,7 +1467,7 @@ func _build_reward_band() -> Control:
 		clampf(float(p_new) / float(RankSystem.STAR_POINTS), 0.0, 1.0), 0.7)
 
 	# 3) 本局结算 + 成就
-	var hero: Hero = bm.hero if is_instance_valid(bm.hero) else null
+	var hero = _m_hero()
 	var c3 := HBoxContainer.new()
 	c3.add_theme_constant_override("separation", 8)
 	c3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1491,7 +1550,7 @@ func _achievement_tag(txt: String) -> Panel:
 
 func _achievements() -> Array:
 	var out: Array = []
-	var h: Hero = bm.hero if is_instance_valid(bm.hero) else null
+	var h = _m_hero()
 	if h == null:
 		return out
 	if int(h.kills) >= 10:
@@ -1543,7 +1602,7 @@ func _team_agg(heroes: Array) -> Dictionary:
 		dmg += float(h.damage_dealt_to_heroes)
 		taken += float(h.damage_taken_from_heroes)
 		tower += float(h.turret_damage)
-	var mins := maxf(0.5, float(bm.game_time) / 60.0)
+	var mins := maxf(0.5, float(_m_game_time()) / 60.0)
 	return {
 		"kills": k, "deaths": d, "assists": asst, "gold": gold,
 		"gpm": float(gold) / mins, "dmg": dmg, "taken": taken, "tower": tower,
@@ -1649,3 +1708,10 @@ class RingGauge extends Control:
 			Color(0.70, 0.78, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		UiKit.text(self, c + Vector2(-size.x * 0.5, s1 * 0.36 + s2 * 2.9), "敌 " + txt_b, s2,
 			Color(col_b.r, col_b.g, col_b.b, 0.92), HORIZONTAL_ALIGNMENT_CENTER, size.x)
+
+
+
+
+
+
+
