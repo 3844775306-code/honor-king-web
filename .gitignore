@@ -2,6 +2,7 @@
 .godot/
 
 # 构建 / 发布产物（体积大，不入库）
+web/
 android/
 build/
 export/
