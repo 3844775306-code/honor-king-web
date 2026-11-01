@@ -7,8 +7,9 @@ signal done(req_id: int, stream: AudioStreamMP3)
 signal failed(req_id: int)
 
 const TRUSTED := "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+const EdgeTokenScript = preload("res://scripts/core/EdgeToken.gd")
 const EDGE_URL := "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
-const GEC_VERSION := "1-130.0.2849.68"
+const GEC_VERSION := "2-143.0.3650.75"
 const TIMEOUT := 6.0
 const CONNECT_TIMEOUT := 3.5
 
@@ -100,8 +101,13 @@ func synth(req_id: int, text: String, voice: String, pitch_pct: int = 0, rate_pc
 func _connect(unsafe: bool) -> bool:
 	_ws = WebSocketPeer.new()
 	_ws.set_handshake_headers(PackedStringArray([
-		"Origin: https://edge.microsoft.com",
-		"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+		"Pragma: no-cache",
+		"Cache-Control: no-cache",
+		"Origin: chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+		"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
+		"Accept-Language: en-US,en;q=0.9",
+		"Sec-CH-UA: \" Not;A Brand\";v=\"99\", \"Microsoft Edge\";v=\"143\", \"Chromium\";v=\"143\"",
+		"Sec-CH-UA-Mobile: ?0",
 	]))
 	var url := "%s?TrustedClientToken=%s&Sec-MS-GEC=%s&Sec-MS-GEC-Version=%s&ConnectionId=%s" % [
 		EDGE_URL, TRUSTED, gec_token(), GEC_VERSION, _rid]
@@ -250,11 +256,5 @@ func _ssml_msg() -> String:
 
 ## 新版 Edge TTS 需要的 Sec-MS-GEC 令牌：Windows FILETIME 取整 5 分钟 + 固定 token 的 SHA256
 static func gec_token() -> String:
-	var unix := int(Time.get_unix_time_from_system())
-	var ticks := (unix + 11644473600) * 10000000
-	ticks -= int(ticks % 3000000000)
-	var s := str(ticks)
-	var ctx := HashingContext.new()
-	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update((s + TRUSTED).to_utf8_buffer())
-	return ctx.finish().hex_encode().to_upper()
+	# 新版 Edge 要求 v2 令牌（混淆 SHA256 + CS64，每 5 分钟变化）
+	return EdgeTokenScript.current_token()
