@@ -1100,6 +1100,15 @@ func _apply_command(h: Hero, cmd: Array, pid: int) -> void:
 			h.move_target = Vector3(float(cmd[1]), 0.0, float(cmd[2]))
 			print("[Net] 指令 move_to from ", pid)
 		C_ATTACK:
+			if int(cmd[1]) == -1:
+				# 空放普攻：客户端没有可打目标时点按普攻 → host 播放动画/发子弹/亮范围圈
+				if not is_instance_valid(h) or h.is_dead:
+					return
+				_cancel_recall_if_needed(h)
+				h.move_target = Vector3.ZERO
+				h.call("_empty_attack")
+				h.attack_timer = 1.0 / maxf(h.attack_speed, 0.1)
+				return
 			var t = _entity_by_net(int(cmd[1]))
 			if t == null or not is_instance_valid(t) or not (t is GameEntity):
 				printerr("[Net] 攻击目标无效 net_id=", cmd[1])

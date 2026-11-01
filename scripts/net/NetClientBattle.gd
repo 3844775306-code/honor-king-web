@@ -251,6 +251,7 @@ var _status := ""
 
 # —— 接管触摸层（NetTouchPad）与直驱输入状态 ——
 var _atk_ring: MeshInstance3D = null   # 本机英雄普攻按住时贴地显示攻击范围圈
+var _atk_ring_flash := 0.0               # 空放普攻后短暂显示范围圈的剩余秒数
 var _pad: NetTouchPadScript
 var _reach := 0.0          # manifest 里的普攻判定距离（米，Hero._aa_engage_reach 同义）
 var _d_ax := 0.0           # 上次发送的 C_DRIVE 状态（键盘 x/z + 摇杆 xy + 移动模式）
@@ -260,6 +261,7 @@ var _d_jy := 0.0
 var _d_mode := -99
 var _d_last := 0.0         # 墙钟秒：最近一次 C_DRIVE
 var _atk_sent := false     # 上次发送的 C_ATTACK_AUTO 状态
+var _atk_prev_held := false  # 上一帧普攻是否按住（空放普攻沿检测）
 var _atk_last := 0.0       # 墙钟秒：最近一次 C_ATTACK_AUTO
 # —— P1b：技能施放翻译状态 ——
 var _manual_net := -1      # 本端 C_ATTACK 锁定的目标 net_id（复刻 host manual_target 语义）
@@ -415,6 +417,7 @@ func _process(delta: float) -> void:
 	if _hud == null:
 		return
 	_tick_intro_loading()
+	_atk_ring_flash = maxf(0.0, _atk_ring_flash - delta)
 	if not _map_applied:
 		_apply_map_if_ready()
 	if _tdv != null and _tdv.visible:
@@ -4012,7 +4015,7 @@ func _build_settings() -> void:
 	# 齿轮按钮：位置与 host settings_btn 一致（右锚 -108..-12，top 308）
 	var gear := TouchActionButtonScript.new()
 	gear.name = "NetSettingsBtn"
-	gear.label_text = "⚙"
+	gear.label_text = "✦"
 	gear.label_font_size = 54.0
 	gear.color = Color(1.0, 1.0, 1.0, 0.9)
 	gear.hold_to_act = false
@@ -4706,6 +4709,26 @@ func _poll_touch_input() -> void:
 		_d_last = now
 	# 普攻按住/松开：边沿发送；持续按住每 0.4s 心跳，防主机 0.8s 普攻超时误判松手
 	var held := _pad.is_attack_held()
+	if held and not _atk_prev_held:
+		# 空放普攻：本端没有可打目标时通知 host 发一次空放（否则点普攻完全没反馈）
+		var has_target := false
+		var sp0 := _self_pos()
+		var reach0 := float(_own.get("reach", 0.0))
+		if reach0 <= 0.5:
+			reach0 = 6.0
+		for nid0 in _views:
+			var v0: Dictionary = _views[nid0]
+			if int(v0.get("team", -1)) == int(Config.player_team):
+				continue
+			if float(v0.get("hp", 0.0)) <= 0.0:
+				continue
+			if sp0.distance_to(_view_pos(v0)) <= reach0 + 0.5:
+				has_target = true
+				break
+		if not has_target:
+			NetSession.send_command([NetSession.C_ATTACK, -1])
+			_atk_ring_flash = 0.45   # 与 host flash_attack_range_ring 一致：空放也亮一圈
+	_atk_prev_held = held
 	if held != _atk_sent:
 		NetSession.send_command([NetSession.C_ATTACK_AUTO, 1 if held else 0])
 		_atk_sent = held
@@ -5233,8 +5256,8 @@ func _pick_skill_target_net(aim: Vector3, range: float, allow_turret: bool = fal
 # 渲染位滞后最新快照 ≤1 周期且各实体相位不同，直接参与射程/距离判定会互相错位。
 ## 按住普攻键即显攻击范围圈（与主机 Hero._aa_ring_show_timer 同视觉；客户端无 Hero 节点故本地自绘）
 func _update_atk_ring() -> void:
-	var held: bool = _pad != null and _pad.is_attack_held() and _owned and _state == 1 \
-			and int(_own.get("alive", 1)) != 0
+	var held: bool = ((_pad != null and _pad.is_attack_held()) or _atk_ring_flash > 0.0) \
+			and _owned and _state == 1 and int(_own.get("alive", 1)) != 0
 	if not held:
 		if _atk_ring != null and is_instance_valid(_atk_ring):
 			_atk_ring.visible = false

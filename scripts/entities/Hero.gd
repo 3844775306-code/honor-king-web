@@ -351,6 +351,8 @@ var stat:float = 0.0
 var stat_timer:float=0.0
 var stat2:float = 0.0
 var stat2_timer:float = 0.0
+var _aa_prev_held := false          # 通用：上一帧普攻是否按住（空放普攻检测按下沿）
+var _aa_edge := false                # 通用：本帧普攻按下沿
 var machao_prev_aa_held := false    # 马超：上一帧普攻是否按住（检测按下沿）
 var machao_aa_edge := false         # 马超：普攻按下沿（无目标空冲仅在点按那帧触发）
 var kai_prev_aa_held := false    # 铠：上一帧普攻是否按住（检测按下沿）
@@ -2076,6 +2078,11 @@ func _physics_process(delta):
 	# 锁定目标进入隐身（兰陵王·影袭 / 幽影袖箭）：立即脱锁 —— 隐身期间不可被锁定攻击，仅受AoE波及
 	if manual_target and is_instance_valid(manual_target) and manual_target is Hero and (manual_target as Hero).is_invisible_to_enemy():
 		manual_target = null
+	# 通用普攻按下沿（空放普攻：无目标点按普攻 → 动画+朝向子弹+范围圈）
+	if not is_ai or net_taken:
+		var _aa_now := Input.is_action_pressed("ui_accept") or TouchController.get_attack_held() or net_attack_hold
+		_aa_edge = _aa_now and not _aa_prev_held
+		_aa_prev_held = _aa_now
 	# 马超：普攻按下沿检测（用于无目标空冲；长按不会连续空冲）
 	if not is_ai and display_name == "马超" and health > 0:
 		var _atk_now = Input.is_action_pressed("ui_accept") or TouchController.get_attack_held()
@@ -2225,6 +2232,15 @@ func _physics_process(delta):
 						or (mode_auto and not auto_chase_moved))
 				if is_recalling and not is_ai and should_attack: cancel_recall()
 				if should_attack and attack_timer <= 0: _perform_attack(target); attack_timer = 1.0 / attack_speed;
+			else:
+				# 空放普攻：没有可攻击目标时点按普攻 → 播放普攻动画、沿英雄朝向发射子弹、生成普攻范围圈
+				var can_act_e := stun_timer <= 0.0 and knockup_timer <= 0.0 and suppress_timer <= 0.0 and silence_timer <= 0.0
+				if (not is_ai or net_taken) and _aa_edge and can_act_e and not casting_skill \
+						and not is_recalling and attack_timer <= 0.0 \
+						and not UiManager.blocks_gameplay_input() and _empty_attack_allowed():
+					if is_recalling and not is_ai: cancel_recall()
+					_empty_attack()
+					attack_timer = 1.0 / attack_speed
 		if display_name == "马超" and stat_timer > 0 and not casting_skill and attack_timer <= 0:
 			var target = _get_attack_target()
 			var can_act_m = stun_timer <= 0 and knockup_timer <= 0 and suppress_timer <= 0 and silence_timer <= 0
@@ -2968,6 +2984,56 @@ func _skill_target_allowed(t: GameEntity, slot: int = -1) -> bool:
 	if slot < 0:
 		slot = pending_skill_index
 	return display_name == "李元芳" and slot == 0
+
+## 空放普攻是否允许（强化普攻有专属空放位移的英雄优先走各自的空放逻辑，避免同帧双重触发）
+func _empty_attack_allowed() -> bool:
+	match display_name:
+		"马超":
+			return stat_timer <= 0.0
+		"铠":
+			return int(stat) != 1
+		"不知火舞":
+			return stat_timer < 5.0
+	return true
+
+
+## 空放普攻：播放普攻动画 → 沿英雄朝向发射子弹 → 生成普攻范围圈（不要求锁定目标）
+func _empty_attack() -> void:
+	if health <= 0.0:
+		return
+	var fwd := Vector3(sin(rotation.y), 0.0, cos(rotation.y))
+	var now_s := Time.get_ticks_msec() * 0.001
+	_move_lock_until = now_s + 0.5
+	_aa_anim_until = now_s + 0.5
+	HeroWeapons.play(visual_mesh, "attack")
+	_attack_anim()
+	SfxManager.try_attack_sfx(display_name, attack_range)
+	flash_attack_range_ring()
+	# 录像：空放普攻也记录，回放能播攻击动画
+	var _replay_rec = get_tree().get_first_node_in_group("replay_recorder")
+	if _replay_rec != null:
+		_replay_rec.call("note_attack", display_name, global_position + Vector3.UP * 1.2,
+			global_position + fwd * 4.0, Vfx.color_for_hero(display_name))
+	if not is_melee_aa():
+		# 远程：沿朝向直线弹道（无锁定目标）
+		var bullet := Bullet.new()
+		bullet.speed = 40.0
+		bullet.damage = actual_attack_damage
+		bullet.team = team
+		bullet.source = self
+		bullet.is_magic = false
+		bullet.skill_id = 0
+		bullet.pen_percent = actual_phys_pen_percent
+		bullet.is_crit = false
+		bullet.global_position = global_position + Vector3(0.0, 1.2, 0.0)
+		bullet.set_linear(fwd, maxf(attack_range * 0.01, 6.0))
+		get_parent().add_child(bullet)
+	else:
+		# 近战：朝面向空挥一刀（刀光+接触火花），不发子弹
+		var tip := global_position + fwd * maxf(attack_range * 0.01 * 0.8, 1.0) + Vector3.UP * 0.9
+		Vfx.weapon_hit(global_position + Vector3.UP * 0.9 + fwd * 0.6, tip,
+			Vfx.color_for_hero(display_name), Color(1.0, 0.96, 0.86), 0.9)
+
 
 func _perform_attack(target: GameEntity):
 	# 走A：每次普攻瞬间播放攻击动画并锁移动 0.5s（玩家与 AI 一致），避免边打边滑
