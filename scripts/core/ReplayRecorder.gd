@@ -311,11 +311,22 @@ func _sample(delta: float, finishing: bool) -> void:
 						sx = NetSession.call("_pack_skill_icons", hu)
 					if NetSession.has_method("_pack_stat_triples"):
 						sa = NetSession.call("_pack_stat_triples", hu)
+				var dcds: Array = []
+				var dmax: Array = []
+				for _di in range(5):
+					dcds.append(snappedf(float(hu.skill_cooldowns[_di]), 0.01) if _di < hu.skill_cooldowns.size() else 0.0)
+					var dmt := 1.0
+					if _di < hu.skills.size() and hu.skills[_di] != null:
+						dmt = maxf(0.001, float(hu.skills[_di].cooldown))
+					elif _di == 4:
+						dmt = 60.0   # 恢复
+					dmax.append(snappedf(dmt, 0.01))
 				det = [aa, sx, sa,
 					float(hu.summoner_cooldown),
 					float(hu.summoner_skill.cooldown) if hu.summoner_skill != null else 1.0,
 					1 if hu.is_recalling else 0,
-					clampf(1.0 - hu.recall_timer / 7.0, 0.0, 1.0)]
+					clampf(1.0 - hu.recall_timer / 7.0, 0.0, 1.0),
+					dcds, dmax]
 			var rb = null
 			if _sample_n % 4 == 0:
 				var nrb = UiManager._compute_recommended_bundle(hu, true)

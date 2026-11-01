@@ -303,7 +303,7 @@ func _build_actors() -> void:
 		root.name = "H%d" % i
 		add_child(root)
 		var col: Color = TEAM_COL[0] if int(h.get("team", 0)) == int(Config.player_team) else TEAM_COL[1]
-		var model: Node3D = NetModels.hero(str(h.get("name", "")))
+		var model: Node3D = NetModels.hero(str(h.get("name", "")), float(h.get("ar", -1.0)))
 		var body: MeshInstance3D = null
 		if model != null:
 			root.add_child(model)
@@ -1406,11 +1406,11 @@ func _update_replay_controls() -> void:
 	_pad.visible = true
 	var meta: Dictionary = _heroes[fi] if _heroes[fi] is Dictionary else {}
 	var hs: Dictionary = _hero_state[fi] if _hero_state[fi] is Dictionary else {}
-	var cds: Array = hs.get("cds", [])
-	var totals: Array = hs.get("cd_total", [])
+	var det := _detail_for(fi)
+	var cds: Array = det.get("cds", hs.get("cds", []))
+	var totals: Array = det.get("cdmax", hs.get("cd_total", []))
 	var levels: Array = hs.get("slevels", [])
 	var sk_names: Array = meta.get("skills", [])
-	var det := _detail_for(fi)
 	var sx: Array = det.get("sx", [])
 	for i in range(3):
 		var stsk := {
@@ -1493,7 +1493,8 @@ func _detail_for(idx: int) -> Dictionary:
 		return {}
 	return {"aa": d[0], "sx": d[1], "sa": d[2],
 		"sum_cd": float(d[3]), "sum_max": float(d[4]),
-		"recalling": int(d[5]), "recall_ratio": float(d[6])}
+		"recalling": int(d[5]), "recall_ratio": float(d[6]),
+		"cds": d[7] if d.size() > 7 else [], "cdmax": d[8] if d.size() > 8 else []}
 
 
 ## 技能图标读数解码（与 NetSession._pack_skill_icons / NetClientBattle._skill_icon_extra 同编码）
@@ -1717,6 +1718,7 @@ func _start_postmatch() -> void:
 		"winner": int(_doc.get("meta", {}).get("winner", -1)),
 		"dur": _duration, "player_team": _me_team,
 		"rows": _result_rows(),
+		"replay": true,
 	}
 	var entries: Array = []
 	var ally_ids: Array = []
@@ -1806,6 +1808,14 @@ func _finish_and_show_result() -> void:
 	if _pm_stage_root != null and is_instance_valid(_pm_stage_root):
 		_pm_stage_root.queue_free()
 		_pm_stage_root = null
+	# 结算页（与联机同一份 NetResultPanel → 单机 ResultsPanel 版式）
+	_result_layer = CanvasLayer.new()
+	_result_layer.layer = 110
+	add_child(_result_layer)
+	_result_panel = NetResultPanelScript.new()
+	_result_panel.defer = false
+	_result_layer.add_child(_result_panel)
+	_result_panel._on_result(_pm_payload)
 
 func _toggle_global_panel() -> void:
 	if _rview == null:
@@ -2790,6 +2800,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 

@@ -31,6 +31,8 @@ const HERO_MODEL_MAP = {
 	"太乙真人": "res://model/hero/character-male-f.glb",
 	"鲁班七号": "res://model/hero/character-male-a.glb",
 	"夏侯惇":   "res://model/hero/character-male-a.glb",
+	"李元芳":   "res://model/hero/character-male-a.glb",
+	"元流之子": "res://model/hero/character-male-a.glb",
 	"后羿":     "res://model/hero/character-male-a.glb",
 	"大禹":     "res://model/hero/character-male-a.glb",
 	"孙悟空":   "res://model/hero/character-male-a.glb",
@@ -102,13 +104,14 @@ static func _spawn(path: String, scale: Vector3) -> Node3D:
 	return inst
 
 
-static func hero(name: String) -> Node3D:
+static func hero(name: String, reach: float = -1.0) -> Node3D:
 	var path: String = HERO_MODEL_MAP.get(name, "")
 	if path == "":
 		return null
 	var inst = _spawn(path, Vector3.ONE * HERO_SCALE)
-	# 与主机同源：英雄专属武器
-	HeroWeapons.attach(inst, name, float(HeroWeapons.HERO_REACH.get(name, -1.0)))
+	# 与主机同源：英雄专属武器；reach>0 用录像/快照里的真实攻击距离（米），武器挂点与朝向和单机一致
+	var r := reach if reach > 0.0 else float(HeroWeapons.HERO_REACH.get(name, -1.0))
+	HeroWeapons.attach(inst, name, r)
 	# 英睿签名道具：父节点是已放大 HERO_SCALE 的模型，道具容器按 1/HERO_SCALE 换算回米制
 	if name == "英睿":
 		HeroYingrui.attach_props(inst, 1.0 / HERO_SCALE)
