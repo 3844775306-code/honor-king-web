@@ -1468,12 +1468,7 @@ func _spawn_dmg_label(wp: Vector3, dmg: int, crit: bool, magic: bool, shielded: 
 	if sp.x < -320.0 or sp.x > vp.x + 320.0 or sp.y < -320.0 or sp.y > vp.y + 320.0:
 		return
 	var s := _hud_scale()
-	var base := 16
-	if dmg >= 1000: base = 50
-	elif dmg >= 500: base = 40
-	elif dmg >= 300: base = 30
-	elif dmg >= 100: base = 22
-	var px := int(round((base + (10 if crit else 0)) * s))
+	var px := int(round(UiKit.damage_number_size(float(dmg), crit) * s))
 	var lab := Label.new()
 	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lab.text = str(dmg)

@@ -1135,13 +1135,8 @@ func show_damage_number(world_pos: Vector3, damage: float, is_crit: bool, is_mag
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	var screen_pos = cam.unproject_position(world_pos + Vector3.UP * 1.5)
 	var dmg := int(damage)
-	var base_size: int = 16
-	if dmg >= 1000: base_size = 50
-	elif dmg >= 500: base_size = 40
-	elif dmg >= 300: base_size = 30
-	elif dmg >= 100: base_size = 22
 	var rs := ui_scale()
-	var fs := base_size + (10 if is_crit else 0)
+	var fs := UiKit.damage_number_size(float(dmg), is_crit)
 	var px := int(round(fs * rs))
 	var label = Label.new(); label.text = str(dmg)
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE

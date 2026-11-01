@@ -513,6 +513,13 @@ func scale() -> float:
 	return maxf(1.0, vp.get_visible_rect().size.x / DESIGN_W) * SCALE_EXTRA
 
 
+## 伤害飘字基础字号：与伤害值正相关（1 点≈16px，1000 点≈56px，封顶 80px），暴击额外 +10。
+## 单机/联机/回放共用，避免三端字号档位不一致。
+func damage_number_size(damage: float, is_crit: bool = false) -> int:
+	var px := 16.0 + maxf(damage, 0.0) * 0.04 + (10.0 if is_crit else 0.0)
+	return clampi(int(round(px)), 16, 80)
+
+
 ## 安全区内缩（虚拟像素，Vector4: left/top/right/bottom）。
 ## 仅在移动端生效；桌面返回全 0，避免 Windows 上 safe_area 是整块屏幕导致误缩。
 func safe_insets() -> Vector4:

@@ -1192,8 +1192,8 @@ func _spawn_popup(ev: Dictionary) -> void:
 			var am := int(round(float(d.get("am", 0.0))))
 			txt = "%d" % am
 			crit = bool(d.get("crit", false))
+			fs = int(round(float(UiKit.damage_number_size(float(am), crit)) * UiKit.scale()))
 			if crit:
-				fs = int(round(34.0 * UiKit.scale()))
 				col = Color(1.0, 0.55, 0.18)
 				rise = 62.0
 			elif bool(d.get("mag", false)):
