@@ -14,6 +14,10 @@ const TYPE_COL := [Color(0.80, 0.78, 0.72), Color(0.86, 0.72, 0.52), Color(0.62,
 
 static var pending_file := ""
 
+# preload 的脚本常量不能直接给 static var 赋值（GDScript 会报“给常量重新赋值”），统一走 setter
+static func set_pending_file(path: String) -> void:
+	pending_file = path
+
 var _doc: Dictionary = {}
 var _heroes: Array = []
 var _turrets: Array = []
@@ -30,6 +34,8 @@ var _popups_data: Array = []
 var _marker_src_cache: Dictionary = {}
 var _recall_nodes: Dictionary = {}   # hero idx -> 回城/传送特效节点
 var _mm_pings: Array = []
+var _feed_items: Array = []
+var _frame_obj: Array = []
 var _mm_marks: Array = []
 var _pops: Array = []
 var _shake_t := 0.0
@@ -73,7 +79,6 @@ var _play_btn: Button = null
 var _speed_btn: Button = null
 var _title: Label = null
 var _feed: VBoxContainer = null
-var _feed_items: Array = []          # [{label, t}]
 var _dragging := false
 const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5 秒 · N 下一击杀 · F 跟随英雄 · +/- 倍速 · 右键拖动旋转 · 滚轮缩放 · Esc 退出"
 
@@ -509,6 +514,21 @@ func _update_world_hud(t: float) -> void:
 					camps_st.append({"wx": jroot2.position.x, "wz": jroot2.position.z,
 						"kind": str((_jungle_meta[jidx2] as Dictionary).get("name", "")) if jidx2 >= 0 and jidx2 < _jungle_meta.size() else "",
 						"left": left})
+		var feed_st: Array = []
+		var keep_feed: Array = []
+		for fd in _feed_items:
+			var age_f: float = _t - float(fd.get("t0", 0))
+			if age_f <= 6.0:
+				feed_st.append({"a": fd.get("a", ""), "at": fd.get("at", 0), "d": fd.get("d", ""),
+					"v": fd.get("v", ""), "vt": fd.get("vt", -1), "age": age_f})
+				keep_feed.append(fd)
+		_feed_items = keep_feed
+		var obj_st: Array = []
+		if _frame_obj.size() >= 4:
+			obj_st.append({"label": "暴君", "t": float(_frame_obj[0]), "alive": int(_frame_obj[1]) == 1,
+				"color": Color(0.85, 0.6, 0.35)})
+			obj_st.append({"label": "主宰", "t": float(_frame_obj[2]), "alive": int(_frame_obj[3]) == 1,
+				"color": Color(0.65, 0.55, 0.95)})
 		var hero_nm := ""
 		if me >= 0 and me < _heroes.size():
 			hero_nm = str((_heroes[me] as Dictionary).get("name", ""))
@@ -519,6 +539,7 @@ func _update_world_hud(t: float) -> void:
 			"jungle": jung_st, "minions": _hud_minions, "cam": _cam,
 			"pings": pings_st, "marks": marks_st, "camps": camps_st,
 			"me_team": int(meta_d.get("player_team", 0)),
+			"feed": feed_st, "objectives": obj_st,
 		}
 		_hud2.queue_redraw()
 
@@ -683,6 +704,7 @@ func _apply_frame(t: float) -> void:
 	var fa: Dictionary = _frames[fi] if fi >= 0 and fi < _frames.size() else {}
 	var _g: Array = fa.get("g", [])
 	_frame_gold = [int(_g[0]) if _g.size() > 0 else 0, int(_g[1]) if _g.size() > 1 else 0]
+	_frame_obj = fa.get("obj", [])
 	var fb: Dictionary = _frames[mini(fi + 1, _frames.size() - 1)] if not _frames.is_empty() else {}
 	var ta: float = float(fa.get("t", 0)) / 1000.0
 	var tb: float = float(fb.get("t", 0)) / 1000.0
@@ -1471,6 +1493,13 @@ func _push_event(ev: Dictionary) -> void:
 				else:
 					SfxManager.call("_play_sfx", key, float(ev.get("v", 0.0)))
 		return
+	if kind0 == "feed":
+		var evt4: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt4 - _t) < 0.9:
+			_feed_items.append({"a": str(ev.get("a", "")), "at": int(ev.get("at", 0)),
+				"d": str(ev.get("d", "")), "v": str(ev.get("v", "")), "vt": int(ev.get("vt", -1)),
+				"as": ev.get("as", []), "t0": _t})
+		return
 	if kind0 == "pop":
 		var evt2: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt2 - _t) < 0.9:
@@ -1581,6 +1610,7 @@ func _purge_feed() -> void:
 
 func _rebuild_feed(t: float) -> void:
 	_clear_popups()
+	_feed_items.clear()
 	for it in _feed_items:
 		if is_instance_valid(it["label"]):
 			it["label"].queue_free()

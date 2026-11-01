@@ -146,7 +146,7 @@ func _row(e: Dictionary) -> Control:
 		var file := str(e.get("file", ""))
 		if file == "":
 			return
-		ReplayScreenScript.pending_file = file
+		ReplayScreenScript.set_pending_file(file)
 		get_tree().change_scene_to_file("res://scenes/replay.tscn"))
 	hb.add_child(play)
 	var exp := _btn("导出", Color(0.55, 0.8, 0.65))

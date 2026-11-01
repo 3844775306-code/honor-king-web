@@ -136,8 +136,11 @@ var _draft_ai_wait := 0.0
 var _draft_auto_sent := false      # guest：本回合超时自动选已提交
 var _stage_sub: Label = null       # 顶部阶段副行（顺序/倒计时）
 var _last_state := {}              # 最近一次大厅状态（取玩家名等）
-var _preview_name: Label = null    # 中栏英雄预览：名字
+var _preview_name: Label = null    # 中栏英雄预览：英雄名
+var _preview_nick: Label = null    # 中栏英雄预览：玩家昵称
 var _preview_role: Label = null    # 中栏英雄预览：职责
+var _pick_ai_names: Array = []     # 本场 AI 补位/敌方昵称（与单机选人页一致）
+var _pick_ai_names_ready := false
 var _preview_summ: Label = null    # 中栏英雄预览：召唤师技能
 var _preview_summ_icon = null      # 中栏英雄预览：召唤师技能图标
 var _preview_tip: Label = null     # 中栏底部提示（含本局分路说明）
@@ -1538,6 +1541,54 @@ func _player_name(pid: int, state: Dictionary) -> String:
 	return nm
 
 
+# 本机昵称：优先玩家缓存，其次账号名，最后网络席位名
+func _local_nickname() -> String:
+	var nm := NameStore.player_name().strip_edges()
+	if nm == "":
+		nm = AccountService.last_username().strip_edges()
+	if nm == "":
+		nm = _player_name(_self_peer(), _last_state)
+	return nm
+
+
+func _ensure_pick_ai_names() -> void:
+	if _pick_ai_names_ready:
+		return
+	var exclude: Array = [_local_nickname()]
+	for pid in NetSession.players:
+		var n := str(NetSession.players[pid].get("name", "")).strip_edges()
+		if n != "":
+			exclude.append(n)
+	_pick_ai_names = NameStore.random_ai_names(10, exclude)
+	_pick_ai_names_ready = true
+
+
+# 把「真实席位 + 顺序选人自动补位 + 敌方 AI」统一成同一份展示数据：
+# 昵称 / 英雄名 / 职责 / 召唤师，供席位卡、mini 槽、中央预览共用。
+func _seat_view(i: int, actual: Dictionary, enemy: bool) -> Dictionary:
+	_ensure_pick_ai_names()
+	var hero := str(actual.get("hero", ""))
+	if hero == "":
+		hero = str(_draft_picks.get("%d-%d" % [1 if enemy else 0, i], ""))
+	var role := str(actual.get("role", ""))
+	if role == "" and hero != "":
+		role = str(HeroPickData.HERO_ROLE.get(hero, ""))
+	var summ := str(actual.get("summoner", ""))
+	if summ == "" and hero != "":
+		summ = HeroPickData.recommended_summoner(hero)
+	var is_ai := actual.is_empty() or enemy
+	var nm := str(actual.get("name", ""))
+	if bool(actual.get("is_me", false)):
+		nm = _local_nickname()
+	elif is_ai:
+		var ai_i := (5 + i) if enemy else i
+		nm = str(_pick_ai_names[ai_i]) if ai_i < _pick_ai_names.size() else "AI %d" % (ai_i + 1)
+	return {
+		"name": nm, "hero": hero, "role": role, "summoner": summ,
+		"is_ai": is_ai, "is_me": bool(actual.get("is_me", false)), "enemy": enemy,
+	}
+
+
 func _role_owner(role: String, data: Dictionary) -> String:
 	for s in data["seats"]:
 		if str(s.role) == role:
@@ -1593,7 +1644,10 @@ class CountRing extends Control:
 # 顶部阶段条（我方/敌方 mini 槽 + 标题 + 倒计时环）→ 中部 5v5 席位 + 中央 3D 立绘 →
 # 底部 职业 tab + 英雄卡条 + 右侧召唤师/详情/锁定。网络逻辑与回调全部沿用。
 func _show_select(state: Dictionary) -> void:
+	var entering_select := _ui != UIState.SELECT
 	_ui = UIState.SELECT
+	if entering_select:
+		_pick_ai_names_ready = false
 	_connecting = false
 	_clear_stack()
 	_set_page_pad(16, 8)
@@ -1705,21 +1759,18 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	# 填充 mini 槽（我方取真实席位，缺位 = AI 补齐；敌方 5 席 = AI；顺序选人时显示已选英雄）
 	var seats: Array = data["seats"]
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
-		var mine := false
-		var ttl := "席位 %d" % (i + 1)
-		var sub_txt := "AI 补齐"
-		if i < seats.size():
-			var s: Dictionary = seats[i]
-			mine = bool(s.is_me)
-			ttl = "%d · %s" % [i + 1, str(s.name)]
-			sub_txt = str(s.hero) if str(s.hero) != "" else "待选"
-		else:
-			var ah := str(_draft_picks.get("0-%d" % i, ""))
-			if ah != "":
-				sub_txt = ah
-		_my_slots.add_child(_mk_mini_slot(ttl, sub_txt, UiKit.C_TEAM0, mine))
-		var eh := str(_draft_picks.get("1-%d" % i, ""))
-		_enemy_slots.add_child(_mk_mini_slot("%d · 敌方" % (i + 1), "AI" if eh == "" else eh, UiKit.C_TEAM1, false))
+		var seat: Dictionary = seats[i] if i < seats.size() else {}
+		var ally := _seat_view(i, seat, false)
+		var mine := bool(ally.is_me)
+		_my_slots.add_child(_mk_mini_slot(
+			"%d · %s" % [i + 1, str(ally.name)],
+			str(ally.hero) if str(ally.hero) != "" else "待选",
+			UiKit.C_TEAM0, mine))
+		var foe := _seat_view(i, {}, true)
+		_enemy_slots.add_child(_mk_mini_slot(
+			"%d · %s" % [i + 1, str(foe.name)],
+			str(foe.hero) if str(foe.hero) != "" else "待选",
+			UiKit.C_TEAM1, false))
 	return bar
 
 
@@ -1796,7 +1847,7 @@ func _build_select_main(data: Dictionary) -> Control:
 	var seats: Array = data["seats"]
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
 		var seat: Dictionary = seats[i] if i < seats.size() else {}
-		_my_col.add_child(_mk_seat_card(i + 1, seat, false))
+		_my_col.add_child(_mk_seat_card(i + 1, _seat_view(i, seat, false), false))
 
 	main.add_child(_build_center_stage())
 
@@ -1807,7 +1858,8 @@ func _build_select_main(data: Dictionary) -> Control:
 	_enemy_col.add_theme_constant_override("separation", 6)
 	main.add_child(_enemy_col)
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
-		_enemy_col.add_child(_mk_seat_card(i + 1, {}, true))
+		# 敌方虽然由 AI 操作，也显示 AI 昵称 + 顺序选人已选出的英雄名
+		_enemy_col.add_child(_mk_seat_card(i + 1, _seat_view(i, {}, true), true))
 	return main
 
 
@@ -1841,6 +1893,11 @@ func _build_center_stage() -> Control:
 	_preview_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_preview_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_preview_name)
+
+	_preview_nick = _mk_label("玩家 · %s" % _local_nickname(), _fs(UiKit.FS_MD), COL_SUB)
+	_preview_nick.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_preview_nick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	v.add_child(_preview_nick)
 
 	var chip_row := HBoxContainer.new()
 	chip_row.add_theme_constant_override("separation", 10)
@@ -1889,17 +1946,17 @@ func _build_center_stage() -> Control:
 	return box
 
 
-# 190×130 席位卡：席位号+名字 / 英雄 / 职责·召唤师（自己金框）
+# 196×136 席位卡：号位+身份 / 玩家昵称 / 英雄名 / 职责·召唤师（与单机选人对齐）
 func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
-	var is_empty := seat.is_empty()
 	var mine := bool(seat.get("is_me", false))
+	var is_ai := bool(seat.get("is_ai", false))
 	var hero := str(seat.get("hero", ""))
 	var role := str(seat.get("role", ""))
 	var accent: Color = UiKit.C_TEAM1 if enemy else UiKit.C_TEAM0
 	if hero != "":
 		accent = HeroPickData.ROLE_COLORS.get(role, accent)
 	var p := PanelContainer.new()
-	p.custom_minimum_size = Vector2(196, 130)
+	p.custom_minimum_size = Vector2(196, 136)
 	p.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD if mine else accent, mine, 0.72))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -1910,28 +1967,36 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	v.add_theme_constant_override("separation", 1)
 	row.add_child(v)
 
-	var who := "敌方 AI" if enemy else ("AI 补齐" if is_empty else str(seat.get("name", "")))
-	var head := _mk_label("%d 号位 · %s" % [idx, who], _fs(UiKit.FS_XS),
+	var side_txt := "我" if mine else ("敌方" if enemy else ("AI" if is_ai else "队友"))
+	var head := _mk_label("%d 号位 · %s" % [idx, side_txt], _fs(UiKit.FS_XS),
 		UiKit.C_GOLD if mine else COL_SUB)
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	head.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	v.add_child(head)
 
-	var hero_txt := "AI" if enemy else (hero if hero != "" else "待选")
-	var hero_lab := _mk_label(hero_txt, _fs(UiKit.FS_SM),
+	var nick := str(seat.get("name", ""))
+	if nick == "":
+		nick = "AI %d" % idx
+	var pname := _mk_label(nick, _fs(UiKit.FS_XS),
+		UiKit.C_GOLD if mine else (Color(1.0, 0.62, 0.58) if enemy else UiKit.C_TEAM0.lightened(0.45)))
+	pname.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	pname.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	v.add_child(pname)
+
+	var hero_lab := _mk_label(hero if hero != "" else "待选", _fs(UiKit.FS_SM),
 		UiKit.C_GOLD if mine else (COL_TEXT if hero != "" else COL_DIM))
 	hero_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	hero_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	v.add_child(hero_lab)
 
 	var sub_txt := "红方 · 电脑控制"
-	if not enemy:
-		if hero != "":
-			sub_txt = "%s · %s" % [role, _summoner_name(str(seat.get("summoner", "")))]
-		elif is_empty:
-			sub_txt = "空位 · AI 补"
-		else:
-			sub_txt = "职责未定"
+	if hero != "":
+		var summ_nm := _summoner_name(str(seat.get("summoner", "")))
+		sub_txt = ("%s · %s" % [role, summ_nm]) if role != "" else summ_nm
+	elif is_ai:
+		sub_txt = "红方 · 电脑控制" if enemy else "空位 · AI 补"
+	else:
+		sub_txt = "职责未定"
 	var sub := _mk_label(sub_txt, _fs(UiKit.FS_XS), COL_DIM)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -2429,6 +2494,8 @@ func _sync_pick_ui() -> void:
 func _refresh_preview() -> void:
 	if _preview_name == null:
 		return
+	if _preview_nick != null:
+		_preview_nick.text = "玩家 · %s" % _local_nickname()
 	var role := ""
 	var rcol: Color = UiKit.C_TEAM0
 	if _sel_hero != "":
