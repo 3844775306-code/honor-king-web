@@ -9,6 +9,15 @@ var _ok := false
 var _has_zh := false
 var _voice := ""
 var _voice_pool: Array = []   # 可用中文音色 id（声线轮换）
+var _voice_pool_female: Array = []
+var _voice_pool_male: Array = []
+# 女性英雄（其余为男性）；灵宝为女声
+const FEMALE_HEROES := {
+	"孙尚香": true, "不知火舞": true, "甄姬": true, "安琪拉": true, "妲己": true,
+	"小乔": true, "王昭君": true,
+}
+const FEMALE_VOICE_KEYS := ["xiaoxiao", "xiaoyi", "huihui", "yaoyao", "female", "woman", "女"]
+const MALE_VOICE_KEYS := ["yunxi", "yunjian", "yunyang", "kangkang", "male", "man", "男"]
 var _lang := ""
 var _fallback_blip := false
 var _utt := 0
@@ -122,17 +131,39 @@ func _pick_voices() -> void:
 		if not zh.has(v):
 			zh.append(v)
 	_voice_pool = zh
+	_voice_pool_female.clear()
+	_voice_pool_male.clear()
+	for v in voices:
+		var vid2 := str(v.get("id", ""))
+		if vid2 == "" or not zh.has(vid2):
+			continue
+		var nm2 := (str(v.get("name", "")) + " " + vid2).to_lower()
+		var fem := false
+		var mal := false
+		for k in FEMALE_VOICE_KEYS:
+			if nm2.find(k) >= 0: fem = true
+		for k in MALE_VOICE_KEYS:
+			if nm2.find(k) >= 0: mal = true
+		if fem and not mal:
+			_voice_pool_female.append(vid2)
+		elif mal and not fem:
+			_voice_pool_male.append(vid2)
 	_has_zh = not zh.is_empty()
 
 
-## 按角色选音色：同角色固定；灵宝优先用最轻的女声
+## 按角色性别选音色：女性英雄固定女声池、男性英雄固定男声池；灵宝女声
+func _is_female(speaker: String) -> bool:
+	return speaker == "灵宝" or FEMALE_HEROES.has(speaker)
+
+
 func _voice_for(speaker: String) -> String:
-	if _voice_pool.is_empty():
+	var pool: Array = _voice_pool_female if _is_female(speaker) else _voice_pool_male
+	if pool.is_empty():
+		pool = _voice_pool
+	if pool.is_empty():
 		return ""
-	if speaker == "灵宝":
-		return str(_voice_pool[0])
-	var idx: int = int(abs(hash(speaker)) % _voice_pool.size())
-	return str(_voice_pool[idx])
+	var idx: int = int(abs(hash(speaker)) % pool.size())
+	return str(pool[idx])
 
 
 ## 朗读。speaker 区分声线；标点/情绪词改变音高语速
@@ -166,13 +197,20 @@ func _speak_web(clean: String, speaker: String, emo: Dictionary) -> bool:
 	var txt := JSON.stringify(clean)
 	var pitch := clampf(float(emo.get("pitch", 1.0)), 0.5, 2.0)
 	var rate := clampf(float(emo.get("rate", 1.0)) * 0.95, 0.5, 2.0)
+	var female := "true" if _is_female(speaker) else "false"
 	var js := """(function(){try{
 		var ss=window.speechSynthesis; if(!ss) return false;
 		ss.cancel();
 		var u=new SpeechSynthesisUtterance(%s);
 		u.lang='zh-CN'; u.pitch=%f; u.rate=%f; u.volume=1.0;
+		try{
+			var vs=(ss.getVoices()||[]).filter(function(v){return /^zh/i.test(v.lang||'');});
+			var f=vs.find(function(v){return /(xiaoxiao|xiaoyi|huihui|yaoyao|female|女)/i.test(v.name||'');});
+			var m=vs.find(function(v){return /(yunxi|yunjian|yunyang|kangkang|male|男)/i.test(v.name||'');});
+			var pick=%s?f:m; if(!pick) pick=vs[0]; if(pick) u.voice=pick;
+		}catch(e2){}
 		ss.speak(u); return true;
-	}catch(e){return false;}})()""" % [txt, pitch, rate]
+	}catch(e){return false;}})()""" % [txt, pitch, rate, female]
 	return bool(JavaScriptBridge.eval(js, true))
 
 
@@ -181,7 +219,7 @@ func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 	# Windows 本地 SAPI 兜底：网络音频不可用时至少能正确读出文字
 	if _sapi_enabled and _sapi != null and _sapi.call("available"):
 		var rate_i: int = clampi(int(round((float(emo.get("rate", 1.0)) - 1.0) * 10.0)), -5, 6)
-		if _sapi.call("speak", clean, rate_i):
+		if _sapi.call("speak", clean, rate_i, _is_female(speaker)):
 			diag("local sapi speak rate=%d text=%s" % [rate_i, clean.substr(0, 20)])
 			return
 	var clauses := _split_clauses(clean)
@@ -214,11 +252,11 @@ func _speak_local(clean: String, speaker: String, emo: Dictionary) -> void:
 ## ---------------- Edge 在线神经语音 ----------------
 
 func _edge_voice(speaker: String) -> String:
-	if speaker == "灵宝":
-		return "zh-CN-XiaoyiNeural"
-	var pool := ["zh-CN-XiaoxiaoNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural",
-		"zh-CN-YunyangNeural", "zh-CN-XiaoyiNeural"]
-	return pool[int(abs(hash(speaker)) % pool.size())]
+	if _is_female(speaker):
+		var fem := ["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural"]
+		return fem[int(abs(hash(speaker)) % fem.size())]
+	var male := ["zh-CN-YunxiNeural", "zh-CN-YunjianNeural", "zh-CN-YunyangNeural"]
+	return male[int(abs(hash(speaker)) % male.size())]
 
 
 func _edge_pct(v: float, lo: int, hi: int) -> int:
