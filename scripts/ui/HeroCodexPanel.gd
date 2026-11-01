@@ -210,7 +210,7 @@ func _build_preview() -> Control:
 	_preview.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_preview.set_orbit_enabled(true)
 	_preview.mouse_filter = Control.MOUSE_FILTER_STOP   # 滑动旋转：由 HeroPreview 接管拖拽
-	var orbit_hint := _lab("↔ 按住拖动可旋转查看模型", UiKit.FS_SM, Color(1, 1, 1, 0.55))
+	var orbit_hint := _lab("←→ 按住拖动可旋转查看模型", UiKit.FS_SM, Color(1, 1, 1, 0.55))
 	orbit_hint.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
 	orbit_hint.offset_top = _fs(14)
 	orbit_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
