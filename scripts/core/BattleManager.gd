@@ -3,6 +3,7 @@ extends Node3D
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
+const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
@@ -6473,6 +6474,7 @@ func crystal_destroyed(team: int):
 	_play_end_sequence(team, winner == Config.player_team)
 
 var _end_seq_on: bool = false
+var _pm_stage_node: PostMatchStage = null
 var _pm_view: Control = null
 var _pm_layer: CanvasLayer = null
 var _pm_heroes: Array = []
@@ -6544,70 +6546,25 @@ func _enter_post_match(won: bool) -> void:
 		add_child(key)
 		_pm_key = key
 		_pm_lights.append(key)
-	var base: Vector3 = Vector3(-53.0, 0.0, 53.0) if Config.player_team == Config.Team.PLAYER else Vector3(53.0, 0.0, -53.0)
-	_pm_inward = Vector3(-base.x, 0.0, -base.z).normalized()
-	_pm_right = _pm_inward.cross(Vector3.UP).normalized()
-	_pm_stage = base + _pm_inward * 22.0
-	_pm_stage.y = 0.0
-	# V 字站位：玩家居中垫前，两侧各两人逐级后退
-	var slots: Array = [
-		Vector3.ZERO,
-		_pm_right * 4.6 - _pm_inward * 2.6,
-		_pm_right * -4.6 - _pm_inward * 2.6,
-		_pm_right * 9.2 - _pm_inward * 5.2,
-		_pm_right * -9.2 - _pm_inward * 5.2,
-	]
+	# 收集 5 名己方英雄（玩家居中垫前，其余 4 人补位）
 	_pm_heroes.clear()
 	_pm_heroes.append(_pm_player)
 	for h in get_tree().get_nodes_in_group("heroes"):
 		if h is Hero and h != _pm_player and h.team == Config.player_team and _pm_heroes.size() < 5:
 			_pm_heroes.append(h)
-	for i in range(_pm_heroes.size()):
-		var eh: Hero = _pm_heroes[i]
-		var off: Vector3 = slots[i]
-		# 阵亡的（对局结束时正在死亡/等待复活）也要上台：恢复存活外观，否则死亡会把整个人隐藏
-		eh.is_dead = false
-		eh.is_reviving = false
-		eh.revive_timer = 0.0
-		eh.respawn_timer = 0.0
-		eh.health = eh.max_health
-		eh.visible = true
-		eh.scale = Vector3.ONE
-		eh.global_position = _pm_stage + off
-		eh.velocity = Vector3.ZERO
-		# 面向镜头：相机在 stage + inward*d，英雄朝 +inward 才是正脸（此前取了反方向）
-		eh.rotation = Vector3(0.0, atan2(_pm_inward.x, _pm_inward.z), 0.0)
-		# 冻结站位：停掉 AI 与英雄物理，避免铭牌/人物在舞台上持续漂移
-		for ch in eh.get_children():
-			if ch is HeroAI:
-				ch.set_physics_process(false)
-				ch.set_process(false)
-		eh.set_physics_process(false)
-		if eh.anim_player != null and eh.anim_player.has_animation("idle"):
-			eh.anim_player.play("idle")
-		_pm_add_spotlight(eh.global_position, i == 0)
-	# 评分与奖牌：MVP = 队伍对战评分最高者；金/银/铜牌按评分门槛，评分不够则无奖牌
+	# 评分 / 奖牌 / MVP：统一走 MatchResult（三端同一口径）
 	var team_list: Array = _pm_team_list(Config.player_team)
 	var medal_of: Dictionary = {}
 	var mvp_hero: Hero = _pm_player
 	var best_r := -1.0
-	for eh3 in _pm_heroes:
-		var rh: Hero = eh3
-		var rr: float = _pm_rating(rh, team_list)
-		medal_of[rh] = _pm_medal_by_rating(rr)
+	for eh in _pm_heroes:
+		var rr: float = MatchResultScript.rating(eh, team_list)
+		medal_of[eh] = MatchResultScript.medal_by_rating(rr)
 		if rr > best_r:
 			best_r = rr
-			mvp_hero = rh
-	# 叠层 UI（独立 CanvasLayer，压在 HUD 之上）
-	_pm_layer = CanvasLayer.new()
-	_pm_layer.layer = 90
-	add_child(_pm_layer)
-	_pm_view = PostMatchViewScript.new()
-	_pm_layer.add_child(_pm_view)
-	_pm_view.set_camera(cam)
+			mvp_hero = eh
 	var entries: Array = []
-	for eh2 in _pm_heroes:
-		var hh: Hero = eh2
+	for hh in _pm_heroes:
 		entries.append({
 			"world": hh.global_position,
 			"hero": str(hh.display_name),
@@ -6617,61 +6574,14 @@ func _enter_post_match(won: bool) -> void:
 			"medal": int(medal_of.get(hh, -1)),
 			"node": hh,
 		})
-	_pm_view.set_stage(won, entries)
-	_pm_view.advance.connect(_on_pm_advance)
-	_pm_view.finished.connect(_on_pm_finished)
-	# 镜头推到 V 字正面（再拉近一档，人物占满画面）
-	if cam != null and is_instance_valid(cam):
-		var look: Vector3 = _pm_stage + Vector3(0.0, 1.25, 0.0)
-		var cam_end: Vector3 = _pm_stage + _pm_inward * 6.2 + Vector3(0.0, 3.9, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		# 主光方向：与镜头同侧、略俯视，正面照亮 5 人
-		if _pm_key != null and is_instance_valid(_pm_key):
-			var light_dir: Vector3 = (-_pm_inward + Vector3(0.0, -0.85, 0.0)).normalized()
-			_pm_key.global_rotation = Basis.looking_at(light_dir, Vector3.UP).get_euler()
-		var tw: Tween = _pm_view.create_tween()
-		tw.set_parallel(true)
-		tw.tween_property(cam, "global_position", cam_end, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw.tween_property(cam, "rotation", rot, 1.1).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		# 兜底：补间若被中断/暂停，结束帧直接把镜头锁到目标机位，避免停在半空看不到人
-		tw.finished.connect(func():
-			if cam != null and is_instance_valid(cam):
-				cam.global_position = cam_end
-				cam.rotation = rot)
-
-
-## 单盏聚光灯：顶光 + 地面光圈（不打体积光柱，避免糊住人物）
-func _pm_add_spotlight(pos: Vector3, is_player: bool) -> void:
-	var root := Node3D.new()
-	root.position = pos
-	add_child(root)
-	_pm_lights.append(root)
-	var col: Color = Color(1.0, 0.92, 0.62) if is_player else Color(0.62, 0.86, 1.0)
-	var sl := SpotLight3D.new()
-	sl.position = Vector3(0.0, 7.5, 0.0)
-	sl.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-	sl.spot_range = 18.0
-	sl.spot_angle = 32.0
-	sl.light_energy = 4.5 if is_player else 3.2
-	sl.light_color = col
-	root.add_child(sl)
-	# 只保留地面光圈：不放体积光柱，避免光柱糊住人物轮廓看不清
-	var disc := MeshInstance3D.new()
-	var cm := CylinderMesh.new()
-	cm.top_radius = 1.25
-	cm.bottom_radius = 1.25
-	cm.height = 0.02
-	cm.radial_segments = 40
-	disc.mesh = cm
-	disc.position = Vector3(0.0, 0.02, 0.0)
-	var dm := StandardMaterial3D.new()
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	dm.albedo_color = Color(col.r, col.g, col.b, 0.34 if is_player else 0.22)
-	disc.material_override = dm
-	root.add_child(disc)
-
+	# 舞台本体：站位 / 聚光灯 / 黑背景 + 主光 / 铭牌层 / 镜头，全部由共享 PostMatchStage 负责
+	_pm_stage_node = PostMatchStageScript.new()
+	_pm_stage_node.name = "PostMatchStage"
+	add_child(_pm_stage_node)
+	_pm_stage_node.detail_provider = func() -> Dictionary: return _pm_player_detail(_pm_player)
+	_pm_stage_node.finished.connect(_on_pm_finished)
+	_pm_stage_node.setup(self, cam, _pm_heroes, entries, won, 0, {"own_team": Config.player_team})
+	_pm_view = _pm_stage_node.view
 
 ## 某一方队伍英雄列表（评分归一化用）
 func _pm_team_list(team: int) -> Array:
@@ -6696,29 +6606,6 @@ func _pm_medal_by_rating(r: float) -> int:
 ## 奖牌额外积分（数值由 RankSystem 统一维护）
 func _pm_medal_bonus(medal: int) -> int:
 	return MatchResultScript.medal_bonus(medal)
-
-## 第一次点击：镜头把玩家推到屏幕左侧，右侧出个人表现面板（其余英雄留在台上不退场）
-func _on_pm_advance() -> void:
-	var p: Hero = _pm_player
-	if p == null or not is_instance_valid(p):
-		return
-	if _pm_view == null or not is_instance_valid(_pm_view):
-		return
-	if cam != null and is_instance_valid(cam):
-		# 适当后撤，让玩家在左三分之一的同时，其余 4 名队友仍留在画面里（不退出舞台）
-		var look: Vector3 = p.global_position - _pm_right * 5.8 + Vector3(0.0, 1.45, 0.0)
-		var cam_end: Vector3 = p.global_position + _pm_inward * 9.6 - _pm_right * 5.8 + Vector3(0.0, 5.6, 0.0)
-		var rot: Vector3 = Basis.looking_at((look - cam_end).normalized(), Vector3.UP).get_euler()
-		var tw2: Tween = _pm_view.create_tween()
-		tw2.set_parallel(true)
-		tw2.tween_property(cam, "global_position", cam_end, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw2.tween_property(cam, "rotation", rot, 0.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		tw2.finished.connect(func():
-			if cam != null and is_instance_valid(cam):
-				cam.global_position = cam_end
-				cam.rotation = rot)
-	_pm_view.show_player_detail(_pm_player_detail(p))
-
 
 ## 玩家个人表现数据（右侧面板 + 本局上/掉分）
 func _pm_player_detail(h: Hero) -> Dictionary:
