@@ -19,6 +19,8 @@ var item_tactics: ItemActiveTactics
 var brain: HeroBrain
 var threat_model: ThreatModel
 var trade_planner: TradePlanner
+var task_executor: TaskExecutor
+var team_task: TeamTask = null
 var think_timer: float = 0.0
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
@@ -56,6 +58,7 @@ func _ready():
 	perception = AiPerception.new(hero)
 	threat_model = ThreatModel.new(hero)
 	trade_planner = TradePlanner.new(hero, threat_model, perception)
+	task_executor = TaskExecutor.new(hero, perception)
 	skill_tactics = SkillTactics.new(hero, perception)
 	summoner_tactics = SummonerTactics.new(hero, perception)
 	item_tactics = ItemActiveTactics.new(hero, perception)
@@ -748,6 +751,26 @@ func _decide():
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt := bm.game_time if bm else 0.0
 
+	# 团队主线任务：团队层只给任务，英雄层负责翻译成走位/目标。
+	if team_task != null and team_task.is_expired(gt):
+		team_task = null
+		is_dragon_rally = false
+	if team_task != null:
+		var tr := task_executor.execute(team_task, gt)
+		if not tr.is_empty():
+			if tr.has("lane"):
+				lane = int(tr.get("lane", lane))
+				if lane_strategy:
+					lane_strategy.pending_lane = lane
+			if tr.has("manual_target"):
+				hero.manual_target = tr.get("manual_target")
+			if tr.has("move_target"):
+				hero.move_target = tr.get("move_target")
+			state = State.RETREAT if str(tr.get("state", "push")) == "retreat" else State.PUSH
+			# 推线任务仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
+			if team_task.type != TeamTask.Type.PUSH_LANE:
+				return
+
 	# 同步分路到策略模块
 	if not _is_natural_jungler:
 		if lane_strategy:
@@ -798,6 +821,39 @@ func _decide():
 				if lane != lane_strategy.lane:
 					lane = lane_strategy.lane
 			state = State.PUSH
+
+
+# 由团队指挥官下发的结构化主线任务
+func assign_team_task(task: TeamTask) -> void:
+	team_task = task
+	if task == null:
+		return
+	if task.type == TeamTask.Type.OBJECTIVE:
+		is_dragon_rally = true
+		dragon_rally_pos = task.target_pos
+	else:
+		is_dragon_rally = false
+	if task.lane >= 0:
+		lane = task.lane
+		if _is_natural_jungler and jungle_strategy:
+			jungle_strategy.pending_lane = task.lane
+		elif not _is_natural_jungler and lane_strategy:
+			lane_strategy.pending_lane = task.lane
+
+
+func task_feedback() -> Dictionary:
+	var tname := ""
+	var ttype := TeamTask.Type.NONE
+	if team_task != null:
+		tname = team_task.label()
+		ttype = team_task.type
+	return {
+		"task": tname, "type": ttype, "lane": lane,
+		"hp_ratio": hero.health / maxf(1.0, hero.actual_max_health),
+		"threat": threat_model.enemy_threat(),
+		"need_help": hero.health < hero.actual_max_health * 0.38 and threat_model.enemy_threat() > 0.8,
+		"can_engage": hero.health > hero.actual_max_health * 0.45,
+	}
 
 
 # 由 BattleManager 统一调用的分路分配接口
@@ -1185,6 +1241,11 @@ func _recall_safe_behavior(delta):
 		_leave_recall_spot()
 		return
 	if hero.global_position.distance_to(safe_pos) > 2.0:
+		# 去安全点的路上有敌人/敌塔危险区，或敌人已压到身边：先拉开，不闷头跑/读条
+		if perception.count_enemy_heroes_near(AiConfig.RECALL_DANGER_RADIUS) > 0 \
+				or _recall_path_threatened(safe_pos):
+			_leave_recall_spot()
+			return
 		hero.move_target = safe_pos
 	elif not hero.is_recalling:
 		hero.start_recall()
@@ -1218,7 +1279,7 @@ func _find_safe_recall_spot() -> Vector3:
 		var dir = (hero.global_position - turret.global_position).normalized()
 		return turret.global_position + dir * 2
 	var bush := perception.find_nearest_bush(AiConfig.FRIENDLY_TURRET_FAR)
-	if bush != Vector3.ZERO and not _recall_point_threatened(bush):
+	if bush != Vector3.ZERO and not _recall_point_threatened(bush) and not _recall_path_threatened(bush):
 		return bush
 	return Vector3.ZERO
 
@@ -1241,9 +1302,36 @@ func _pick_safe_recall_turret() -> Turret:
 			continue
 		if _recall_point_threatened(t.global_position):
 			continue
+		var spot: Vector3 = t.global_position + (hero.global_position - t.global_position).normalized() * 2.0
+		if _recall_path_threatened(spot):
+			continue
 		best_d = d
 		best = t
 	return best
+
+
+# 回城路径是否穿过敌人/敌塔危险区：沿英雄→安全点分段采样，避免"点安全但路上被截"
+func _recall_path_threatened(target: Vector3) -> bool:
+	var start: Vector3 = hero.global_position
+	var total: float = start.distance_to(target)
+	if total < 0.5:
+		return false
+	var steps: int = maxi(2, int(ceil(total / 5.0)))
+	var tree := hero.get_tree()
+	for i in range(steps + 1):
+		var p: Vector3 = start.lerp(target, float(i) / float(steps))
+		if perception.count_enemy_heroes_near_center(p, AiConfig.RECALL_DANGER_RADIUS) > 0:
+			return true
+		if tree == null:
+			continue
+		for ent in tree.get_nodes_in_group("turrets"):
+			if not (ent is Turret) or ent.health <= 0.0 or ent.team == hero.team:
+				continue
+			var t := ent as Turret
+			var reach: float = t.attack_range * 0.01 + 2.0
+			if p.distance_to(t.global_position) <= reach:
+				return true
+	return false
 
 
 # 该位置附近（RECALL_SPOT_CLEAR 内）有没有敌方英雄
