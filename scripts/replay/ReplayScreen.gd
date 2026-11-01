@@ -9,7 +9,8 @@ const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
 const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")
-const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")   # 三端共享动画 clip 映射
+const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
+const WukongCloudScript = preload("res://scripts/fx/WukongCloud.gd")   # 三端共享动画 clip 映射
 const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
 const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")   # 三端共享技能特效
 const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
@@ -915,7 +916,9 @@ func _apply_frame(t: float) -> void:
 				iap.play(iclip)
 		node["root"].visible = true
 		var prev: Vector3 = node.get("last", Vector3.ZERO)
-		node["root"].position = Vector3(x, 0.0, z)
+		var _fy: float = float(row_a[2]) / 100.0 if row_a.size() > 2 else 0.0
+		node["root"].position = Vector3(x, _fy, z)
+		_update_replay_wukong_cloud(i, str((_heroes[i] as Dictionary).get("name", "")), _fy, x, z)
 		var moved: bool = prev.distance_to(Vector3(x, 0.0, z)) > 0.02
 		node["last"] = Vector3(x, 0.0, z)
 		var ap2: AnimationPlayer = node.get("ap")
@@ -1130,6 +1133,9 @@ func _apply_frame(t: float) -> void:
 			var jrb2: Array = jmb.get(ji2, jra)
 			var jhp: float = lerpf(float(jra[3]), float(jrb2[3]) if jrb2.size() > 3 else float(jra[3]), jk)
 			var jnode: Dictionary = _jungle_nodes[ji2]
+			# 野怪最大生命值逐帧取录像值（史诗阶段会成长；旧录像无 idx4 时回退初始 max）
+			var jmax: float = float(jrb2[4]) if jrb2.size() > 4 else (float(jra[4]) if jra.size() > 4 else float(jnode["max"]))
+			jnode["max"] = maxf(1.0, jmax)
 			var jroot: Node3D = jnode["root"]
 			var jap2: AnimationPlayer = jnode.get("ap")
 			if jhp > 0.5:
@@ -1468,6 +1474,13 @@ func _update_replay_controls() -> void:
 	var ui_row := _ui_row_for(fi)
 	if _tgt_panel != null:
 		var tr: Array = ui_row.get("tgt", []) if ui_row is Dictionary else []
+		# 旧录像/非英雄目标行的 maxhp 可能为 0：用当前回放世界里的同阵营同名单位补正
+		if tr.size() >= 6 and float(tr[5]) <= 0.0:
+			for uw in _unit_world:
+				if str(uw.get("name", "")) == str(tr[2]) and int(uw.get("team", -1)) == int(tr[1]):
+					tr = tr.duplicate()
+					tr[5] = float(uw.get("max", 1.0))
+					break
 		_tgt_panel.refresh(tr)
 	if _rec_bar != null:
 		var rb = ui_row.get("rb", null) if ui_row is Dictionary else null
@@ -2190,6 +2203,28 @@ func _play_attack_anim(idx: int) -> void:
 	ap.play(clip)
 	nd["anim"] = "attack"
 	nd["atk_until"] = _t + 0.42
+
+
+## 回放孙悟空筋斗云：按录像高度/位移驱动脚下云团（与主机同一份 WukongCloud）
+func _update_replay_wukong_cloud(i: int, nm: String, y: float, x: float, z: float) -> void:
+	if i < 0 or i >= _hero_nodes.size():
+		return
+	var nd: Dictionary = _hero_nodes[i]
+	var root3 = nd.get("root")
+	if root3 == null or not is_instance_valid(root3):
+		return
+	var want: bool = nm == "孙悟空" and y > 0.45
+	var cl = nd.get("cloud")
+	if want and (cl == null or not is_instance_valid(cl)):
+		cl = WukongCloudScript.build()
+		root3.add_child(cl)
+		nd["cloud"] = cl
+	if cl != null and is_instance_valid(cl):
+		cl.visible = want
+		if want:
+			var last: Vector3 = nd.get("last", Vector3(x, 0, z))
+			var d := Vector3(x - last.x, 0.0, z - last.z)
+			WukongCloudScript.tick(cl, d, 10.0, _t, true)
 
 
 func _find_bullet_frame(t: float) -> int:

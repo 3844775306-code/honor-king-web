@@ -462,7 +462,8 @@ func _sample(delta: float, finishing: bool) -> void:
 			if jid == null:
 				continue
 			var jp: Vector3 = j.global_position
-			jrows.append([int(jid), int(round(jp.x * 100.0)), int(round(jp.z * 100.0)), maxi(0, int(round(j.health)))])
+			jrows.append([int(jid), int(round(jp.x * 100.0)), int(round(jp.z * 100.0)),
+				maxi(0, int(round(j.health))), maxi(1, int(round(_maxhp_of_ent(j))))])
 		_jungle_frames.append({"t": t_ms, "j": jrows})
 
 
@@ -607,8 +608,10 @@ func _bullet_flags_local(bl) -> int:
 func _maxhp_of_ent(e) -> float:
 	if e == null:
 		return 1.0
-	if e.get("actual_max_health") != null:
-		return float(e.actual_max_health)
+	# 非英雄（小兵/野怪/塔）不会初始化 actual_max_health(默认0)，优先取有效值再回退 max_health。
+	var actual = e.get("actual_max_health")
+	if actual != null and float(actual) > 0.0:
+		return float(actual)
 	if e.get("max_health") != null:
 		return float(e.max_health)
 	return 1.0
