@@ -49,6 +49,20 @@ const LINES_INTENT_DEFEND := ["塔要掉了，我回防", "守塔，别出去", 
 const LINES_INTENT_ROTATE := ["我游走一下", "去帮一波，等我", "我过去了，别开团"]
 const LINES_INTENT_AVOID := ["先避一下", "别在塔下打", "绕一下再打"]
 
+# AI 正在做的事（与意图同一来源，说“我正在…”而不是只说“我要去…”）
+const LINES_DOING_PUSH := ["我在清这波线", "正在推塔，别断兵", "我在带线，你们抱团"]
+const LINES_DOING_FARM := ["我正在补这波兵", "我在发育，等我两件", "正在清线攒钱"]
+const LINES_DOING_JUNGLE := ["我正在刷这组野", "野区刷到一半", "我在打红，马上到"]
+const LINES_DOING_CHASE := ["我正在追他", "我在追，别抢", "正追着残血呢"]
+const LINES_DOING_KILL := ["我在收这个人头", "正在打，能杀", "我在他脸上"]
+const LINES_DOING_RETREAT := ["我正在撤，别管我", "我在往塔下退", "正在跑，别回头"]
+const LINES_DOING_RECALL := ["我正在回城读条", "我在泉水补状态", "正在回城，马上来"]
+const LINES_DOING_DEFEND := ["我正在回防守塔", "我在守这座塔", "正在往家赶"]
+const LINES_DOING_ROTATE := ["我正在赶过去", "我在路上，到了就开", "正在游走"]
+const LINES_DOING_AVOID := ["我正在绕后", "我在避战拉扯", "正在找位置"]
+const LINES_DOING_DEAD := ["我倒了，正在等复活", "我在看复活时间", "正在泉水等活"]
+const LINES_DOING_CAST := ["我正在放技能", "我在读条，别打断", "正在蓄力"]
+
 var typing := false              # 正在打字：UiManager 据此屏蔽走位/技能输入
 
 var _box: Control = null
@@ -315,7 +329,7 @@ func _ambient_line() -> void:
 	# 优先说和它当前行为一致的话（清线/刷野/追击/回城/守塔…）
 	var it := _ai_intent(h)
 	if not it.is_empty() and randf() < 0.65:
-		var il := _intent_line(h, it)
+		var il := _doing_line(h, it) if randf() < 0.5 else _intent_line(h, it)
 		if il != "":
 			_say(h, il)
 			return
@@ -381,6 +395,60 @@ func _intent_text(it: Dictionary) -> String:
 	return "带线"
 
 
+## 当前正在做的事（比“接下来打算”更即时：回城/读条/追击/刷野/补刀…）
+func _doing_line(h, it: Dictionary) -> String:
+	if h == null or not is_instance_valid(h):
+		return ""
+	if bool(h.is_dead):
+		return _pick(LINES_DOING_DEAD)
+	if bool(h.get("casting_skill")):
+		return _pick(LINES_DOING_CAST)
+	if bool(h.is_recalling):
+		return _pick(LINES_DOING_RECALL)
+	var pool: Array = []
+	match str(it.get("kind", "")):
+		"push": pool = LINES_DOING_PUSH
+		"farm": pool = LINES_DOING_FARM
+		"jungle": pool = LINES_DOING_JUNGLE
+		"chase": pool = LINES_DOING_CHASE
+		"kill": pool = LINES_DOING_KILL
+		"retreat": pool = LINES_DOING_RETREAT
+		"recall": pool = LINES_DOING_RECALL
+		"defend": pool = LINES_DOING_DEFEND
+		"rotate": pool = LINES_DOING_ROTATE
+		"avoid": pool = LINES_DOING_AVOID
+		"dead": pool = LINES_DOING_DEAD
+	if pool.is_empty():
+		return ""
+	return _pick(pool)
+
+
+## 当前动作文本（喂给大模型，让它既能说正在做、也能说接下来）
+func _doing_text(h, it: Dictionary) -> String:
+	if h == null or not is_instance_valid(h):
+		return "在行动"
+	if bool(h.is_dead):
+		return "已阵亡，正在等复活"
+	if bool(h.get("casting_skill")):
+		return "正在施放技能/读条"
+	if bool(h.is_recalling):
+		return "正在回城"
+	if bool(h.is_teleporting):
+		return "正在传送/游走"
+	var k := str(it.get("kind", ""))
+	match k:
+		"push": return "正在清线推塔"
+		"farm": return "正在清线发育"
+		"jungle": return "正在刷野"
+		"chase": return "正在追击敌人"
+		"kill": return "正在收残血"
+		"retreat": return "正在残血撤退"
+		"defend": return "正在回防守塔"
+		"rotate": return "正在游走支援"
+		"avoid": return "正在避战找位置"
+	return "正在带线"
+
+
 func _intent_line(h, it: Dictionary) -> String:
 	var pool: Array = []
 	match str(it.get("kind", "")):
@@ -427,7 +495,7 @@ func _announce_intent() -> void:
 			continue
 		if randf() > 0.55:
 			continue
-		var line := _intent_line(h, it)
+		var line := _doing_line(h, it) if randf() < 0.45 else _intent_line(h, it)
 		if line == "":
 			continue
 		_intent_said[id] = now
@@ -640,7 +708,7 @@ func _minute_system_prompt(h, st: Dictionary) -> String:
 	return ("你是手机 MOBA《王者荣耀》对局中的 AI 队友，操控英雄「%s」（%s，性格%s）。"
 		+ "现在第 %d 分钟，请主动在队伍频道说一句 8~20 字的中文，像真人玩家："
 		+ "结合当前局势给队友一个具体建议或一句带情绪的话（催推进/提醒撤退/约龙/护人/吐槽都行），"
-		+ "必须和你接下来真正要做的事一致（例如准备回城就说回城、要去追人就说追人、要去刷野就说刷野）。"
+		+ "必须和你当前正在做、或接下来真正要做的事一致（例如正在清线/刷野/回城/追击，就说正在做；准备回城/追人/刷野，就说接下来要去做）。"
 		+ "不要复述数字、不要自我介绍、不要自称 AI 或模型，不要引号、括号、换行，只输出这一句话。") % [
 		str(h.display_name), str(h.role), _persona_of(h), int(st.get("minute", 0))]
 
@@ -653,11 +721,13 @@ func _minute_user_prompt(h, st: Dictionary) -> String:
 		obj_txt = "暴君已刷新" if float(st.get("obj_t", 0.0)) <= 0.0 else "暴君快刷新"
 	var player_txt := "玩家已阵亡" if bool(st.get("player_dead", false)) else ("玩家血量偏低" if float(st.get("player_hp", 1.0)) < 0.3 else "玩家状态正常")
 	var lines := "、".join(_recent_lines.slice(maxi(0, _recent_lines.size() - 3)))
-	var intent_txt := _intent_text(_ai_intent(h))
-	return ("局势：我方塔%d/敌方塔%d，金币差%+d，%s，%s；你自己血量%d%%，身边敌人%d个。你接下来打算：%s。最近说过：%s。请换一种说法，别重复。") % [
+	var it_m := _ai_intent(h)
+	var intent_txt := _intent_text(it_m)
+	var doing_txt := _doing_text(h, it_m)
+	return ("局势：我方塔%d/敌方塔%d，金币差%+d，%s，%s；你自己血量%d%%，身边敌人%d个。你当前正在：%s；接下来打算：%s。最近说过：%s。可以说正在做的事，也可以说接下来要做什么；换一种说法，别重复。") % [
 		int(st.get("my_towers", 0)), int(st.get("foe_towers", 0)), int(st.get("gold_diff", 0)),
 		player_txt, obj_txt, int(round(float(st.get("self_hp", 1.0)) * 100.0)),
-		int(st.get("near_enemies", 0)), intent_txt, lines if lines != "" else "无"]
+		int(st.get("near_enemies", 0)), doing_txt, intent_txt, lines if lines != "" else "无"]
 
 
 func _sanitize_llm_line(raw: String) -> String:
@@ -683,7 +753,7 @@ func _sanitize_llm_line(raw: String) -> String:
 func _fallback_minute_line(h) -> String:
 	var it := _ai_intent(h)
 	if not it.is_empty():
-		var il := _intent_line(h, it)
+		var il := _doing_line(h, it) if randf() < 0.5 else _intent_line(h, it)
 		if il != "":
 			return il
 	var ctx := _contextual_line(h)
