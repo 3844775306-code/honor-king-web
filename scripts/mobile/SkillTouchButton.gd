@@ -139,6 +139,12 @@ func _process(delta: float) -> void:
 	_press = move_toward(_press, target, delta * 14.0)
 	queue_redraw()
 
+## 回放/观战用：外部触发一次按下动效（不进入真实瞄准/施法）
+func flash_press() -> void:
+	_press = 1.0
+	queue_redraw()
+
+
 func is_held() -> bool:
 	return _active
 

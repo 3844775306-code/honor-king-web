@@ -607,6 +607,23 @@ func consume_priority_press() -> int:
 	_priority_press_pending = -1
 	return v
 
+## 回放：外部触发技能/普攻按钮按下动效
+func flash_skill(i: int) -> void:
+	if i >= 0 and i < _skill_btns.size() and is_instance_valid(_skill_btns[i]):
+		_skill_btns[i].call("flash_press")
+
+
+func flash_attack() -> void:
+	if _attack_btn != null and is_instance_valid(_attack_btn):
+		_attack_btn.flash_press()
+
+
+## 回放：摇杆视觉跟随英雄移动方向（不产生输入）
+func set_joystick_external(v: Vector2) -> void:
+	if _joystick != null and is_instance_valid(_joystick):
+		_joystick.set_external_move(v)
+
+
 func set_attack_priority(p: int) -> void:
 	attack_priority = p if (p == PRIO_TOWER or p == PRIO_MINION) else PRIO_AUTO
 	_sync_priority_buttons()

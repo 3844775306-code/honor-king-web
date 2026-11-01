@@ -3057,6 +3057,8 @@ func _clear_toasts() -> void:
 func _play_cast_fx(ev: Dictionary) -> void:
 	# 三端共享 SkillFxPresenter：录像带 skill id 时用 SkillDatabase 原技能，与 host 播放完全同源
 	var caster_name := str(ev.get("n", ""))
+	if _pad != null and _is_followed_caster(caster_name):
+		_pad.flash_skill(int(ev.get("s", 0)))
 	# host 记录的 caster_pos 已是 Vfx.play_spell 的 cp（含 +UP*1.2 + fwd*0.65）；
 	# SkillFxPresenter 内部还会再加一次，这里先减掉，避免回放技能特效整体偏高/偏前。
 	var cp := Vector3(float(ev.get("cx", 0)) / 100.0, float(ev.get("cy", 120)) / 100.0, float(ev.get("cz", 0)) / 100.0)

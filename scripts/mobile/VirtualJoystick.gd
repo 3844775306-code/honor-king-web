@@ -49,6 +49,18 @@ func _process(delta: float) -> void:
 func get_home() -> Vector2:
 	return size * 0.5
 
+## 回放/观战用：外部驱动摇杆视觉方向（不产生真实输入）
+func set_external_move(v: Vector2) -> void:
+	if _active:
+		return
+	move_vector = v.limit_length(1.0)
+	var home := get_home()
+	_knob_pos = home + Vector2(move_vector.x, -move_vector.y) * MAX_RADIUS
+	_visual_pos = _knob_pos
+	_press = maxf(_press, 0.35)
+	queue_redraw()
+
+
 func is_active() -> bool:
 	return _active
 

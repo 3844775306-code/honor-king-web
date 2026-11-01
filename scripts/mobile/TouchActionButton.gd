@@ -83,6 +83,12 @@ func _process(delta: float) -> void:
 	_press = move_toward(_press, target, delta * 14.0)
 	queue_redraw()
 
+## 回放/观战用：外部触发一次按下动效
+func flash_press() -> void:
+	_press = 1.0
+	queue_redraw()
+
+
 func _draw():
 	var p := clampf(_press, 0.0, 1.0)
 	var center := size * 0.5 + Vector2(0, p * 1.8)
