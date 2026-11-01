@@ -1913,7 +1913,7 @@ func _fire_ammo_client(mdl: Node3D) -> void:
 
 # 防御塔激光（host RPC）：细光束从塔顶连到目标，能量球本体走普通弹体快照（kind=5）
 func _on_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void:
-	var c: Color = Vfx.team_color(0 if Config.is_ally(team) else 1)
+	var c: Color = Vfx.team_color(team)   # 固定按塔阵营：蓝=蓝、红=红
 	Vfx.beam(from, to, c, 0.055, dur)
 	await get_tree().create_timer(dur).timeout
 	if is_inside_tree():
@@ -1958,7 +1958,7 @@ func _on_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void
 		return
 	var rec: Dictionary = _tower_locks.get(key, {})
 	if not rec.has("mesh") or not is_instance_valid(rec["mesh"]):
-		var col: Color = Vfx.team_color(0 if Config.is_ally(team) else 1)
+		var col: Color = Vfx.team_color(team)   # 固定按塔阵营：蓝=蓝、红=红
 		var mi: Node3D = Vfx.make_lock_beam(col)
 		_static_root.add_child(mi)
 		rec = {"mesh": mi, "from": from, "to": to, "cur": to, "t": Time.get_ticks_msec()}
@@ -2101,7 +2101,7 @@ func _net_melee_slash(v: Dictionary, yaw: float) -> void:
 	if nn.global_position.distance_to(sp) > (30.0 if is_hero else 20.0):
 		return
 	var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
-	var c: Color = Vfx.color_for_hero(str(v.get("name", ""))) if is_hero else Vfx.team_color(0 if Config.is_ally(int(v.get("team", 0))) else 1)
+	var c: Color = Vfx.color_for_hero(str(v.get("name", ""))) if is_hero else Vfx.team_color(int(v.get("team", 0)))
 	var from := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.85) + fwd * 0.25
 	var to := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.9) + fwd * (2.0 if is_hero else 1.5)
 	Vfx.weapon_hit(from, to, c, Color(1.0, 0.96, 0.86), 1.1 if is_hero else 0.9)
