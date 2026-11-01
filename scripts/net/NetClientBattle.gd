@@ -5083,6 +5083,12 @@ class Hud:
 				var _fw_h := (float(_flash_amt.get(_nid_h, 0.0)) / mhp) * bw * _fr_h
 				if _fw_h > 0.5:
 					draw_rect(Rect2(bx + hpx, by, _fw_h, bh), Color.ORANGE)
+		# 刻度：每 1000 血一条（暗线 + 右侧微高光，与 host HeroInfoControl 完全一致）
+		var _segs_h: int = int(floor(mhp / 1000.0))
+		for _si in range(1, _segs_h + 1):
+			var _sx: float = bx + (1000.0 * float(_si) / mhp) * bw
+			draw_line(Vector2(_sx, by + 1.0), Vector2(_sx, by + bh - 1.0), Color(0, 0, 0, 0.55), 1.0)
+			draw_line(Vector2(_sx + 1.0, by + 1.0), Vector2(_sx + 1.0, by + bh - 1.0), Color(1, 1, 1, 0.22), 1.0)
 		# 低血警示脉冲 + 顶部白线压边（同 host HeroInfoControl）
 		if ratio < 0.3 and ratio > 0.0:
 			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.006)

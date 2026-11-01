@@ -12,6 +12,7 @@ var _req := 0.0
 var _rows: Array = []
 
 func _ready() -> void:
+	NetSession.net_roster.connect(_on_roster)   # 收到即渲染（不等 0.5s 轮询）
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	visible = false
@@ -27,8 +28,11 @@ func show_panel(v: String) -> void:
 	UiKit.show_panel(self, 0.15)
 	if _v != null and is_instance_valid(_v):
 		UiKit.show_panel(_v, 0.15)
-	_req = 99.0
+	_req = 0.0   # 立即请求一次（原先 99 秒后才首次拉取，面板一直是空的）
 	set_process(true)
+	# 已有缓存载荷则先渲染，避免请求往返期间空白
+	if _rows.size() > 0:
+		_apply()
 	queue_redraw()
 
 func hide_panel() -> void:
@@ -49,6 +53,13 @@ func _process(delta: float) -> void:
 	if p.size() > 0:
 		_rows = p
 		_apply()
+
+func _on_roster(p: Array) -> void:
+	if p.is_empty():
+		return
+	_rows = p
+	_apply()
+
 
 func _apply() -> void:
 	var out: Array = []
