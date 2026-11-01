@@ -4,6 +4,7 @@ extends Node
 ## 创建：BattleManager._create_player_hero() 里 ReplayScript.ensure(self)
 
 const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")
+const BulletVisual = preload("res://scripts/core/BulletVisual.gd")
 const GROUP := "replay_recorder"
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 
@@ -365,15 +366,10 @@ func _sample(delta: float, finishing: bool) -> void:
 			cg = tcol2.g
 			cb = tcol2.b
 		# 弹体视觉档：kind/vkind（与 host NetSession 快照同编码）→ 回放用同一 ProjectilePresenter 还原
-		var bk := 0
-		var vk := 0
-		var bfl := 0
-		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_kind"):
-			bk = int(NetSession.call("_bullet_kind", b))
-		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_vkind"):
-			vk = int(NetSession.call("_bullet_vkind", b))
-		if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_bullet_flags"):
-			bfl = int(NetSession.call("_bullet_flags", b))
+		# 弹体视觉档在本地计算（单机录像此前只对 HOST 模式记录，导致回放塔能量球/技能弹体回退）
+		var bk := _bullet_kind_local(b)
+		var vk := _bullet_vkind_local(b)
+		var bfl := _bullet_flags_local(b)
 		brows.append([int(bid), int(round(bp2.x * 100.0)), int(round(bp2.z * 100.0)), int(b.team),
 			snappedf(cr, 0.01), snappedf(cg, 0.01), snappedf(cb, 0.01), snappedf(float(b.get("radius")), 0.01),
 			bk, vk, int(round(bp2.y * 100.0)), bfl])
@@ -557,6 +553,54 @@ func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: C
 		"tx": int(round(to_pos.x * 100.0)), "tz": int(round(to_pos.z * 100.0)),
 		"cr": snappedf(color.r, 0.01), "cg": snappedf(color.g, 0.01), "cb": snappedf(color.b, 0.01),
 	})
+
+
+func _bullet_kind_local(bl) -> int:
+	if bl == null:
+		return 0
+	if bool(bl.get("is_houyi_ult")) if bl.get("is_houyi_ult") != null else false:
+		return 4
+	var bsrc = bl.get("source")
+	if bsrc == null or not is_instance_valid(bsrc):
+		return 0
+	if bsrc is Turret:
+		return 5
+	if bsrc is Minion:
+		if bsrc.display_name == "ranged":
+			return 2
+		if bsrc.display_name == "siege":
+			return 3
+	if bsrc is Hero and float(bsrc.attack_range) > 400.0:
+		return 1
+	return 0
+
+
+func _bullet_vkind_local(bl) -> int:
+	if bl == null:
+		return 0
+	var vk := int(BulletVisual.vkind_for(bl))
+	if vk > 0:
+		return vk
+	var bsrc = bl.get("source")
+	if is_instance_valid(bsrc) and bsrc is Hero and bsrc.display_name == "小乔" and int(bl.get("skill_id")) == 1:
+		return 1
+	return 0
+
+
+func _bullet_flags_local(bl) -> int:
+	if bl == null:
+		return 0
+	var f := 0
+	var is_skill := int(bl.get("skill_id")) != 0
+	var lin = bl.get("linear_dir")
+	var linear: bool = lin is Vector3 and (lin as Vector3) != Vector3.ZERO
+	if is_skill and linear:
+		f |= 1
+	var bsrc = bl.get("source")
+	if is_instance_valid(bsrc) and bsrc is Hero:
+		if not is_skill or (linear and float(bl.get("damage")) > 0.0):
+			f |= 2
+	return f
 
 
 func _maxhp_of_ent(e) -> float:

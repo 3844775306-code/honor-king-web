@@ -342,6 +342,16 @@ func _build_actors() -> void:
 		var tp := Vector3(float(t.get("x", 0)) / 100.0, 0.0, float(t.get("z", 0)) / 100.0)
 		root.position = tp
 		add_child(root)
+		# 塔基青白砖环（与单机/联机同一份 DecorMesh.turret_ring_pave；塔毁后砖仍在地面）
+		var _ttype := str(t.get("type", "outer"))
+		var _inner := 1.45 if _ttype == "crystal" else 1.15
+		var _outer := 5.8 if _ttype == "crystal" else 4.7
+		var _hq := Vector3(-60.0, 0.0, 60.0) if int(t.get("team", 0)) == 0 else Vector3(60.0, 0.0, -60.0)
+		var _on_high: bool = Vector2(tp.x - _hq.x, tp.z - _hq.z).length() < 35.0
+		var _top_y: float = 0.177 if _on_high else 0.152
+		var _pave := DecorMesh.turret_ring_pave(tp, _inner, _outer, _top_y)
+		_pave.name = "TurretRingPave_%d" % i
+		add_child(_pave)
 		var is_crystal: bool = str(t.get("type", "")) == "crystal"
 		var col: Color = TEAM_COL[0] if int(t.get("team", 0)) == int(Config.player_team) else TEAM_COL[1]
 		var tmodel: Node3D = NetModels.turret(str(t.get("type", "outer")), int(t.get("team", 0)))
@@ -996,7 +1006,9 @@ func _apply_frame(t: float) -> void:
 				var tx_b: float = float(rb[2]) if rb.size() > 2 else tx_a
 				var tz_b: float = float(rb[3]) if rb.size() > 3 else tz_a
 				var tgt_p := Vector3(lerpf(tx_a, tx_b, k) / 100.0, 1.0, lerpf(tz_a, tz_b, k) / 100.0)
-				var src_p: Vector3 = (node2["root"] as Node3D).position + Vector3.UP * 4.0
+				var _tier := str((_turrets[i] as Dictionary).get("type", "")) if i < _turrets.size() else "outer"
+				var _src_h := 3.30 if _tier == "crystal" else 3.45
+				var src_p: Vector3 = (node2["root"] as Node3D).position + Vector3.UP * _src_h
 				Vfx.aim_lock_beam(lbeam2, src_p, tgt_p, _t)
 			else:
 				lbeam2.visible = false

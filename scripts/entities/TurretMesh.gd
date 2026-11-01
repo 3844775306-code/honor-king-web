@@ -48,7 +48,7 @@ static func base_brick_material() -> StandardMaterial3D:
 	if _base_brick_mat != null:
 		return _base_brick_mat
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.72, 0.92, 0.94)
+	m.albedo_color = Color(0.76, 0.92, 0.95)
 	m.roughness = 0.82
 	m.metallic = 0.04
 	_base_brick_mat = m

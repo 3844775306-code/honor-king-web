@@ -581,7 +581,14 @@ static func turret_ring_pave(center: Vector3, inner_r: float, outer_r: float, to
 	var mi := MeshInstance3D.new()
 	mi.mesh = _pave_ring_meshes[key]
 	# 同心环砖（与高地/兵线擂台同一套极坐标砖纹），中心徽半径设为 0 → 环上无徽记
-	mi.material_override = _ring_brick_double_sided(center, outer_r)
+	var pave_mat := _ring_brick_double_sided(center, outer_r)
+	# 防御塔脚下砖块：青白色（仅塔基铺装，不影响高地砖/兵线擂台）
+	pave_mat.set_shader_parameter("brick_a", Color(0.74, 0.90, 0.93))
+	pave_mat.set_shader_parameter("brick_b", Color(0.60, 0.81, 0.86))
+	pave_mat.set_shader_parameter("mortar_col", Color(0.40, 0.52, 0.55))
+	pave_mat.set_shader_parameter("moss_col", Color(0.34, 0.46, 0.42))
+	pave_mat.set_shader_parameter("rim_col", Color(0.66, 0.82, 0.85))
+	mi.material_override = pave_mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position = Vector3(center.x, top_y, center.z)
 	root.add_child(mi)

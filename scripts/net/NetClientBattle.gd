@@ -801,8 +801,17 @@ func _on_snapshot(snap: Array) -> void:
 						v.face_yaw = float(ent[10])
 						if v.node != null and is_instance_valid(v.node):
 							v.node.rotation.y = float(v.face_yaw)
-					if ent.size() > 11 and int(ent[11]) == 1:
-						_v_snap_unit_attack(v)
+					if ent.size() > 12:
+						var aseq := int(ent[12])
+						if not v.has("atk_seq"):
+							v["atk_seq"] = aseq          # 首帧只记录，不补动作
+						elif aseq != int(v["atk_seq"]):
+							v["atk_seq"] = aseq
+							_v_unit_attack_now(v)        # 服务器真出手了才播，节奏严格一致
+						if ent.size() > 13:
+							v["atk_int"] = float(ent[13])
+					elif ent.size() > 11 and int(ent[11]) == 1:
+						_v_snap_unit_attack(v)   # 旧版 host 无序号：保留兜底
 			if not v.set:
 				v.node.global_position = pos
 				v.set = true
@@ -1665,6 +1674,39 @@ func _proc_death(v: Dictionary) -> void:
 		tw.tween_property(mdl, "position:y", base.y - 0.12, 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 
 
+# 服务器出手序号变化时调用：每次真出手播一次，节奏与 host 完全一致
+func _v_unit_attack_now(v: Dictionary) -> void:
+	var nn: Node3D = v.get("node")
+	if nn == null or not is_instance_valid(nn) or not v.get("set", false):
+		return
+	nn.rotation.y = float(v.get("face_yaw", nn.rotation.y))
+	var now := Time.get_ticks_msec()
+	if not v.has("ap"):
+		_proc_recoil(v, float(v.get("face_yaw", nn.rotation.y)))
+		return
+	var ap: AnimationPlayer = v.ap
+	if ap == null or not is_instance_valid(ap):
+		return
+	var clip := str(v.get("atk_clip", ""))
+	if clip == "" or not ap.has_animation(clip):
+		return
+	ap.play(clip)
+	v.anim = "attack"
+	v.att_clip = clip
+	v.att_play = now
+	v.att_until = now + 620
+
+
+func _find_model_pivot(n: Node) -> Node3D:
+	if n is Node3D and str(n.name) == "ModelPivot":
+		return n as Node3D
+	for c in n.get_children():
+		var r := _find_model_pivot(c)
+		if r != null:
+			return r
+	return null
+
+
 # 无骨骼模型的普攻动作（与 host Minion._model_lunge/_siege_recoil 同参数）
 func _proc_recoil(v: Dictionary, yaw: float) -> void:
 	var mdl: Node3D = v.get("model", null)
@@ -1693,9 +1735,15 @@ func _proc_recoil(v: Dictionary, yaw: float) -> void:
 	elif kind in ["dragon", "storm", "shadow_dragon"]:
 		p = {"back": 0.13, "fwd": 0.38, "up": 0.12, "down": 0.24, "twist": 0.0, "dip": 0.06,
 			"windup": 0.10, "strike": 0.12, "settle": 0.30}
-	var base_pos := pivot.position
-	var base_rot := pivot.rotation
-	var base_scl := pivot.scale
+	var rest_pos: Vector3 = pivot.get_meta("rest_pos", pivot.position)
+	var rest_rot: Vector3 = pivot.get_meta("rest_rot", pivot.rotation)
+	var rest_scl: Vector3 = pivot.get_meta("rest_scl", pivot.scale)
+	pivot.position = rest_pos
+	pivot.rotation = rest_rot
+	pivot.scale = rest_scl
+	var base_pos := rest_pos
+	var base_rot := rest_rot
+	var base_scl := rest_scl
 	var seed_v := absi(mdl.get_instance_id() % 89)
 	var rnd := float(seed_v) / 89.0
 	var side_dir: float = 1.0 if (seed_v % 2 == 0) else -1.0
@@ -1755,8 +1803,12 @@ func _siege_recoil_client(mdl: Node3D, pivot: Node3D, yaw: float) -> void:
 		dist = 0.20
 	else:
 		recoil_node = mdl
-	var base := recoil_node.position
-	var base_rot := recoil_node.rotation
+	var rest_pos2: Vector3 = recoil_node.get_meta("rest_pos", recoil_node.position)
+	var rest_rot2: Vector3 = recoil_node.get_meta("rest_rot", recoil_node.rotation)
+	recoil_node.position = rest_pos2
+	recoil_node.rotation = rest_rot2
+	var base := rest_pos2
+	var base_rot := rest_rot2
 	var tw := create_tween()
 	tw.tween_property(recoil_node, "position:z", base.z - dist, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.parallel().tween_property(recoil_node, "rotation:x", base_rot.x - 0.075, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -1831,14 +1883,12 @@ func _update_tower_locks(delta: float) -> void:
 		if mi == null or not is_instance_valid(mi):
 			_tower_locks.erase(key)
 			continue
-		if now - int(rec.get("t", now)) > 1200:
+		if now - int(rec.get("t", now)) > 450:
 			mi.queue_free()
 			_tower_locks.erase(key)
 			continue
-		var cur: Vector3 = rec.get("cur", rec["to"])
-		cur = cur.lerp(rec["to"], clampf(delta * 16.0, 0.0, 1.0))
-		rec["cur"] = cur
-		Vfx.aim_lock_beam(mi, rec["from"], cur, float(Time.get_ticks_msec()) * 0.001)
+		# 与主机 Turret._update_lock_beam 同帧直瞄最新目标（host 每帧 aim；客户端无法每帧收包，但不再 lerp 滞后）
+		Vfx.aim_lock_beam(mi, rec["from"], rec["to"], float(Time.get_ticks_msec()) * 0.001)
 
 
 func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
@@ -2171,6 +2221,13 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	if typ == NET_HERO:
 		UnitVisuals.attach_hero(node, team, node)
 	$Entities.add_child(node)
+	# 记录 ModelPivot 的静止姿态：程序化普攻 tween 每次都从这里开始/回到这里，避免被打断后基准漂移（下沉）
+	if model_ref != null:
+		var _pv := _find_model_pivot(model_ref)
+		if _pv != null:
+			_pv.set_meta("rest_pos", _pv.position)
+			_pv.set_meta("rest_rot", _pv.rotation)
+			_pv.set_meta("rest_scl", _pv.scale)
 	# 行走质感：客户端同样用步频起伏（dust=false，粒子只在 host 生成，避免双端预算翻倍）
 	if model_ref != null:
 		# 三端共享行走参数（ActorPresenter，与 host Minion/Hero/JungleMonster 同一份表）
