@@ -315,6 +315,7 @@ var _kf: NetKillFeedScript
 var _rk: NetRecallScript
 # —— P3e：死亡回放（host 死亡跃迁推送一次；CanvasLayer 70 盖过战报/回城）——
 var _dr: NetDeathRecapScript
+var _own_alive_prev := 1     # 上一帧 own.alive：1→0 死亡跃迁时主动向主机补要死亡回放
 # —— P3f：结算页（host game_over 广播；CanvasLayer 110 最顶层模态）——
 var _go: NetResultPanelScript
 # —— P3f：终局演出（与单机同款：聚光灯 V 字舞台 + PostMatchView 铭牌 + 镜头推近 + 个人表现面板）——
@@ -2694,6 +2695,13 @@ func _update_cast_preview() -> void:
 func _check_own_death_recap() -> void:
 	if _dr == null or _own.is_empty():
 		return
+	var al := int(_own.get("alive", 1))
+	if _own_alive_prev == 1 and al == 0:
+		# 死亡跃迁：主动向主机要一次回放数据（1→0 那一帧的 RPC/快照可能丢失，仅靠它们会空面板）
+		NetSession.send_command([NetSession.C_RECAP])
+		if OS.is_debug_build():
+			print("[Net] 死亡回放：已向主机请求 payload")
+	_own_alive_prev = al
 	var d = _own.get("dr", null)
 	if d is Dictionary and not (d as Dictionary).is_empty():
 		_dr.show_payload(d)
@@ -5942,6 +5950,7 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
 
 
 

@@ -214,6 +214,7 @@ const C_INSPECT := 14      # [14, target_net_id]
 const C_ROSTER := 15       # [15] 打开属性(C)/队伍(T)面板时请求队伍行（host 立即回 _rpc_roster；0.5s 节流在客户端）
 const C_YUANLIU_PICK := 16 # [16, pick名] 元流之子·万物为流切流派（host 校验身处自家泉水后 apply；仅限 元流之子）
 const C_SURRENDER := 17     # [17] 发起投降（host 调 UiManager._start_surrender_vote，同单机流程）
+const C_RECAP := 18         # [18] 客户端死亡后主动请求死亡回放（host 立即回 _rpc_death_recap）
 
 
 func _ready() -> void:
@@ -1050,6 +1051,12 @@ func _apply_command(h: Hero, cmd: Array, pid: int) -> void:
 	if cmd[0] == C_ROSTER:
 		# 属性(C)/队伍(T)面板数据：不要求可操控（观战/刚接管均可），host 立即回传
 		rpc_id(pid, "_rpc_roster", _build_roster_payload(_peer_camp(pid)))
+	elif cmd[0] == C_RECAP:
+		# 死亡回放补发：客户端死亡时主动要一次，避免只有 1→0 跃迁帧的 RPC/快照丢失
+		if _assign_hero.has(pid):
+			var hh: Hero = _assign_hero[pid]
+			if hh != null and is_instance_valid(hh):
+				rpc_id(pid, "_rpc_death_recap", _pack_death_recap(hh))
 		return
 	if cmd[0] == C_YUANLIU_PICK:
 		# 元流之子·万物为流切流派：host 权威校验——须身处自家泉水（回复判定同款半径）+ 合法流派名
@@ -1308,7 +1315,7 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 		if _pa == 1 and _al == 0 and multiplayer.is_server():
 			var _drp := _pack_death_recap(h)
 			rpc_id(pid, "_rpc_death_recap", _drp)
-			own["dr"] = _drp   # 兜底：随快照一起下发（RPC 单包丢失时客户端仍能弹完整回放）
+			own[pid]["dr"] = _drp   # 兜底：随快照一起下发（RPC 单包丢失时客户端仍能弹完整回放）
 		_prev_alive[pid] = _al
 	out.append(own)
 
@@ -2797,3 +2804,4 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
+
