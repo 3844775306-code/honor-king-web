@@ -379,8 +379,8 @@ func _draw():
 
 	# 残血拖尾（掉血后浅色回落）
 	if _hp_lag > hp + 0.5:
-		var lagw: float = (_hp_lag / max_hp) * bar_width
-		draw_rect(Rect2(bx + hw, y_offset, lagw - hw, bh), Color(1.0, 0.93, 0.82, 0.34))
+		var lagw: float = (clampf(_hp_lag, hp, max_hp) / max_hp) * bar_width
+		draw_rect(Rect2(bx + hw, y_offset, maxf(0.0, lagw - hw), bh), Color(1.0, 0.93, 0.82, 0.34))
 		draw_rect(Rect2(bx + lagw - 2.0, y_offset, 2.0, bh), Color(1.0, 0.9, 0.75, 0.85))
 
 	# 渐变填充
@@ -421,14 +421,14 @@ func _draw():
 	# 受伤闪橙
 	if damage_flash_timer > 0:
 		var fr: float = damage_flash_timer / 0.5
-		var flash_width: float = (damage_flash_amount / max_hp) * bar_width * fr
+		var flash_width: float = clampf((damage_flash_amount / max_hp) * bar_width * fr, 0.0, bar_width - hw)
 		draw_rect(Rect2(bx + hw, y_offset, flash_width, bh), Color(1.0, 0.62, 0.12, 0.92))
 		draw_rect(Rect2(bx + hw, y_offset, flash_width, 2.0), Color(1.0, 0.95, 0.8, 0.8))
 
 	# 回血暗色（回血时在血条内出现的暗影）
 	if heal_timer > 0:
 		var hr: float = heal_timer / 0.5
-		var heal_width: float = (heal_amount / max_hp) * bar_width
+		var heal_width: float = clampf((heal_amount / max_hp) * bar_width, 0.0, hw)
 		draw_rect(Rect2(bx + hw - heal_width, y_offset, heal_width, bh),
 			Color(tc.r * 0.6, tc.g * 0.6, tc.b * 0.6, hr))
 
