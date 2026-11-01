@@ -34,6 +34,7 @@ var _backdrop: Control = null
 var _rank_result: Dictionary = {}
 var _tab := 0               # 0=总览 1=数据 2=回放
 var _tab_rects: Array = []
+var _btn_rects: Array = []
 
 func _rs() -> float:
 	var vp := get_viewport()
@@ -256,8 +257,18 @@ func _draw() -> void:
 		_draw_data(panel, content_y, my_rows, en_rows, rs)
 	else:
 		_draw_replay(panel, content_y, rs)
-	# 底部
-	_text(Vector2(panel.position.x + _pw * 0.5 - 90.0, panel.position.y + panel.size.y - 22.0),
+	# 底部按钮（同 host ResultsPanel：再来一局 / 返回大厅）
+	_btn_rects.clear()
+	var btn_y := panel.position.y + panel.size.y - 56.0
+	var bw2 := 200.0
+	var bh2 := 40.0
+	var bx2 := panel.position.x + _pw * 0.5 - bw2 - 12.0
+	_draw_btn(Rect2(bx2, btn_y, bw2, bh2), "再来一局", GOLD_COLOR)
+	_btn_rects.append(["play_again", Rect2(bx2, btn_y, bw2, bh2)])
+	bx2 += bw2 + 24.0
+	_draw_btn(Rect2(bx2, btn_y, bw2, bh2), "返回大厅", BLUE_TEAM)
+	_btn_rects.append(["back_lobby", Rect2(bx2, btn_y, bw2, bh2)])
+	_text(Vector2(panel.position.x + 24.0, panel.position.y + panel.size.y - 26.0),
 		"Esc / 点击面板外关闭", int(round(15.0 * rs)), Color(1, 1, 1, 0.55))
 
 func _draw_overview(panel: Rect2, y: float, my_rows: Array, en_rows: Array, is_win: bool, rs: float) -> void:
@@ -441,6 +452,26 @@ func _fmt_stat(ci: int, v: float) -> String:
 		3, 4: return "%.0f%%" % v
 	return str(int(v))
 
+func _draw_btn(r: Rect2, label: String, accent: Color) -> void:
+	draw_rect(r, Color(0.08, 0.11, 0.18, 0.95))
+	draw_rect(r, Color(accent.r, accent.g, accent.b, 0.85), false, 2.0)
+	var fs := 20
+	var w := _f.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	_text(Vector2(r.position.x + (r.size.x - w) * 0.5, r.position.y + 28.0), label, fs, accent)
+
+
+func _on_play_again() -> void:
+	# 联机局需重新建房/加入：统一直回大厅（与返回大厅同路径，避免单方重开造成状态错乱）
+	_on_back_lobby()
+
+
+func _on_back_lobby() -> void:
+	visible = false
+	if NetSession.mode != NetSession.Mode.NONE:
+		NetSession.disconnect_network()
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+
+
 func _draw_replay(panel: Rect2, y: float, rs: float) -> void:
 	var cx := panel.position.x + _pw * 0.5
 	_text(Vector2(cx - 220.0, y + 60.0), "联机对局暂无回放录像", int(round(28.0 * rs)), Color(0.9, 0.94, 1.0))
@@ -461,6 +492,13 @@ func _gui_input(ev: InputEvent) -> void:
 	if mb.button_index != MOUSE_BUTTON_LEFT:
 		return
 	var p: Vector2 = mb.position
+	for b in _btn_rects:
+		if (b[1] as Rect2).has_point(p):
+			if str(b[0]) == "play_again":
+				_on_play_again()
+			else:
+				_on_back_lobby()
+			return
 	for i in range(_tab_rects.size()):
 		if (_tab_rects[i] as Rect2).has_point(p):
 			_tab = i

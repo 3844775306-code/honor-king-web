@@ -214,6 +214,7 @@ var _pop_offsets := {}         # key(0.1 精度 Vector3) -> {"count": int, "ms":
 var _exp_orbs := []            # {n: Node3D, nid, tx, tz, spd}（每帧向目标英雄头顶飞行）
 var _cam: Camera3D
 var _cam_focus := Vector3.ZERO
+var _spectate_nid := -1   # 阵亡后点队友头像观战的 net_id（复活自动清空，同 host spectate_hero）
 var _cam_yaw := 225.0     # 度数；默认看向对角方向
 var _cam_pitch := 42.0
 var _cam_dist := 36.0
@@ -473,10 +474,18 @@ func _process(delta: float) -> void:
 	# 相机聚焦（英雄跟随 / 小地图拖动+轻点覆盖 / Tab 第一人称）
 	var want := Vector3.ZERO
 	if _owned:
+		# 阵亡观战：点队友头像后镜头跟随该队友，自己复活即收回（同 host：点存活队友头像切镜头）
+		if int(_own.get("alive", 1)) == 1:
+			_spectate_nid = -1
 		var sv = _views.get(_self_net)
+		if _spectate_nid >= 0 and _views.has(_spectate_nid):
+			var tv = _views[_spectate_nid]
+			if tv.get("node") != null and is_instance_valid(tv.node):
+				want = Vector3(tv.node.global_position.x, 0.0, tv.node.global_position.z)
+			sv = null
 		if sv != null:
 			want = Vector3(sv.node.global_position.x, 0.0, sv.node.global_position.z)
-		else:
+		elif _spectate_nid < 0:
 			# 阵亡瞬间英雄被移出 snapshot：沿用 own 最后一次坐标，镜头停在阵亡点不飘走
 			want = Vector3(float(_own.get("x", 0.0)), 0.0, float(_own.get("z", 0.0)))
 	if _owned and _first_person:
@@ -2636,6 +2645,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event is InputEventMouseButton:
 			var mb2 := event as InputEventMouseButton
 			if mb2.button_index == MOUSE_BUTTON_LEFT and mb2.pressed:
+				# 复活头像带：阵亡时点存活队友头像切换观战镜头（同 host respawn_container）
+				if _hud != null and int(_own.get("alive", 1)) != 1:
+					var wh: Array = _hud.widget_at(mb2.position)
+					if wh.size() >= 4 and int(wh[1]) == int(_manifest.get("team", TEAM_PLAYER)) and int(wh[2]) == 0:
+						_spectate_nid = int(wh[0])
+						return
 				# 属性面板标题条：点击展开/收起（同 host 点标题条 toggle_attribute_panel）
 				if _hud != null and _hud._attr_head_rect.has_point(mb2.position):
 					_hud.attr_collapsed = not _hud.attr_collapsed
@@ -5052,6 +5067,7 @@ class Hud:
 	var kda: Array = []       # 主界面个人 K/D/A：[kills,deaths,assists]（host own.kills/…，同 host kda_label）
 	var widget_rows: Array = []   # 小地图右侧英雄环形头像带行（host SNAP_RESPAWN，见 NetSession._build_respawn_rows）
 	var show_widget := false      # 头像带显隐：对局中且有接管英雄时展示
+	var _widget_hits: Array = []  # 复活头像带命中区 [[nid,team,dead,Rect2]]（阵亡点队友头像切镜头）
 
 	# —— 受伤闪橙（复刻主机 HeroInfoControl/HealthBarControl：血量比上帧少 → 血条右端 0.5s 衰减橙段）——
 	# 按 net_id 记世界血条各实体的上一血量/闪断宽度/超时；闪段只在 draw 衰减时不占 process
@@ -5509,6 +5525,7 @@ class Hud:
 
 	# —— 小地图右侧英雄环形头像带（同 host respawn_container：小地图右侧 (340,28)，单元 130×150、行距 6、环 r=56.25）——
 	func _draw_respawn_widget_rows() -> void:
+		_widget_hits.clear()
 		var x0 := 500.0 + UiKit.safe_left()   # 小地图 450 宽 + 内距
 		var y0 := 28.0 + safe_top
 		var cell_w := 130.0
@@ -5532,6 +5549,8 @@ class Hud:
 			var xx := x0
 			for r in row:
 				_draw_widget_cell(r, xx, yy)
+				if r.size() >= 8:
+					_widget_hits.append([int(r[0]), int(r[1]), int(r[7]), Rect2(xx, yy, cell_w, cell_h)])
 				xx += cell_w + sep_x
 			yy += cell_h + sep_y
 
@@ -5563,6 +5582,13 @@ class Hud:
 			var hratio := clampf(float(r[4]) / maxhp, 0.0, 1.0)
 			var hcol := Color(0.25, 1.0, 0.3) if hratio > 0.5 else (Color(1.0, 0.9, 0.2) if hratio > 0.25 else Color(1.0, 0.3, 0.2))
 			draw_arc(center, ring_r + 3.75, -PI / 2.0, -PI / 2.0 + TAU * hratio, 48, hcol, 5.0)
+
+	func widget_at(pos: Vector2) -> Array:
+		for h in _widget_hits:
+			if (h[3] as Rect2).has_point(pos):
+				return h
+		return []
+
 
 	func _draw_widget_mid(center: Vector2, txt: String) -> void:
 		var sz := _font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 24).x

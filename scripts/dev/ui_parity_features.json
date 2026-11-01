@@ -504,7 +504,7 @@
           "spectate_hero"
         ],
         "net": [
-          "spectate_hero"
+          "_spectate_nid|widget_at"
         ]
       },
       "accepted": {

@@ -831,15 +831,47 @@ func _need_cost(id: String) -> int:
 func _unhandled_input(ev: InputEvent) -> void:
 	if not (ev is InputEventKey and (ev as InputEventKey).pressed and not (ev as InputEventKey).echo):
 		return
-	match (ev as InputEventKey).keycode:
+	var kc := int((ev as InputEventKey).keycode)
+	match kc:
 		KEY_O:
 			toggle()
+			return
 		KEY_B:
 			if visible:
 				quick_buy()
+			return
 		KEY_ESCAPE:
 			if visible:
 				hide_panel()
+			return
+	if not visible:
+		return
+	# 与 host 商店键盘一致：1-9 切分类（含「推荐」页）、↑↓ 在当前分类里选装、Enter 购买
+	if kc >= KEY_1 and kc <= KEY_9:
+		var tabs := _tabs()
+		var ti := kc - KEY_1
+		if ti < tabs.size():
+			_tab = ti
+			_scroll = 0
+			_sel = ""
+			queue_redraw()
+		return
+	if kc == KEY_UP or kc == KEY_DOWN:
+		var ids: Array = _items_of_tab(_tab)
+		if ids.is_empty():
+			return
+		var cur := ids.find(_sel)
+		if cur < 0:
+			cur = 0
+		else:
+			cur = clampi(cur + (-1 if kc == KEY_UP else 1), 0, ids.size() - 1)
+		_sel = str(ids[cur])
+		queue_redraw()
+		return
+	if kc == KEY_ENTER or kc == KEY_KP_ENTER:
+		if _sel != "":
+			buy(_sel)
+		return
 
 func _gui_input(ev: InputEvent) -> void:
 	if not (ev is InputEventMouseButton):
