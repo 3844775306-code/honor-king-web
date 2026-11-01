@@ -63,6 +63,10 @@ func _ready() -> void:
 	_http_tts.connect("failed", Callable(self, "_on_http_failed"))
 	_edge.connect("done", Callable(self, "_on_edge_done"))
 	_edge.connect("failed", Callable(self, "_on_edge_failed"))
+	# 预热 Edge 连接：把首次 ~0.9s TLS/WS 握手提前到游戏启动后（失败会自动降级，不阻塞）
+	get_tree().create_timer(0.6).timeout.connect(func():
+		if _edge != null and edge_enabled and enabled:
+			_edge.call("warmup"))
 	_fallback_blip = true
 	# 本地 TTS 走 Windows WinRT 语音合成（SAPI/WinRT SpeechSynthesis）。在没有中文语音包、
 	# 精简版系统或受限环境下，引擎内部会抛 winrt::hresult_error 且未捕获，直接把进程打崩
