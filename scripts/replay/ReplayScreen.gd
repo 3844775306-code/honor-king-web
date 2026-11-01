@@ -276,7 +276,13 @@ func _build_jungle() -> void:
 		var model: Node3D = NetModels.jungle(str(jm.get("name", "")))
 		if model != null:
 			root.add_child(model)
-		_jungle_nodes.append({"root": root, "max": maxf(1.0, float(jm.get("maxhp", 1)))})
+		var jap := _find_ap(root)
+		_setup_idle_walk(jap)
+		var jidle := _clip_hint(jap, ["idle"])
+		if jidle != "":
+			jap.play(jidle)
+		_jungle_nodes.append({"root": root, "max": maxf(1.0, float(jm.get("maxhp", 1))),
+			"ap": jap, "idle": jidle, "dying": false})
 
 
 ## 真实战场的血条层：英雄用 HeroInfoControl（血/蓝/等级/经验/名字），其他单位交给 WorldBarPainter
@@ -634,9 +640,30 @@ func _apply_frame(t: float) -> void:
 		var flags_a: int = int(row_a[7]) if row_a.size() > 7 else 0
 		var flags_b: int = int(row_b[7]) if row_b.size() > 7 else flags_a
 		var alive: bool = (flags_a & 1) != 0 or (flags_b & 1) != 0
-		node["root"].visible = alive
 		if not alive:
+			# 阵亡：播死亡剪辑（没有就程序化倒地），1.1s 后隐藏
+			if not bool(node.get("dying", false)):
+				node["dying"] = true
+				node["dead_at"] = _t
+				var dap: AnimationPlayer = node.get("ap")
+				var dclip := _clip_hint(dap, ["die", "death"])
+				if dap != null and dclip != "":
+					dap.play(dclip)
+			var dage: float = _t - float(node.get("dead_at", _t))
+			node["root"].rotation.x = minf(PI * 0.5, dage * 6.0)
+			node["root"].position.y = -minf(0.5, dage * 1.2)
+			if dage > 1.1:
+				node["root"].visible = false
 			continue
+		if bool(node.get("dying", false)):
+			node["dying"] = false
+			node["root"].rotation.x = 0.0
+			node["root"].position.y = 0.0
+			var iap: AnimationPlayer = node.get("ap")
+			var iclip := str(node.get("idle", ""))
+			if iap != null and iclip != "":
+				iap.play(iclip)
+		node["root"].visible = true
 		var prev: Vector3 = node.get("last", Vector3.ZERO)
 		node["root"].position = Vector3(x, 0.0, z)
 		var moved: bool = prev.distance_to(Vector3(x, 0.0, z)) > 0.02
@@ -701,7 +728,13 @@ func _apply_frame(t: float) -> void:
 		if ra.is_empty():
 			continue
 		var hpv: float = lerpf(float(ra[0]), float(rb[0] if rb.size() > 0 else ra[0]), k)
-		node2["root"].visible = hpv > 0.5
+		if hpv > 0.5:
+			node2["root"].visible = true
+		elif not bool(node2.get("collapsed", false)):
+			node2["collapsed"] = true
+			node2["root"].visible = true
+			var is_crys: bool = i < _turrets.size() and str((_turrets[i] as Dictionary).get("type", "")) == "crystal"
+			Turret.play_collapse(node2["root"], 1.9 if is_crys else 1.6, get_parent())
 		if i < _turrets.size():
 			var td0: Dictionary = _turrets[i]
 			_hud_turrets.append({"wx": float(td0.get("x", 0)) / 100.0, "wz": float(td0.get("z", 0)) / 100.0,
@@ -796,7 +829,28 @@ func _apply_frame(t: float) -> void:
 			var jhp: float = lerpf(float(jra[3]), float(jrb2[3]) if jrb2.size() > 3 else float(jra[3]), jk)
 			var jnode: Dictionary = _jungle_nodes[ji2]
 			var jroot: Node3D = jnode["root"]
-			jroot.visible = jhp > 0.5
+			var jap2: AnimationPlayer = jnode.get("ap")
+			if jhp > 0.5:
+				if bool(jnode.get("dying", false)):
+					jnode["dying"] = false
+					jroot.rotation.x = 0.0
+					jroot.position.y = 0.0
+					var jic := str(jnode.get("idle", ""))
+					if jap2 != null and jic != "":
+						jap2.play(jic)
+				jroot.visible = true
+			else:
+				if not bool(jnode.get("dying", false)):
+					jnode["dying"] = true
+					jnode["dead_at"] = _t
+					var jdc := _clip_hint(jap2, ["die", "death"])
+					if jap2 != null and jdc != "":
+						jap2.play(jdc)
+				var jage: float = _t - float(jnode.get("dead_at", _t))
+				jroot.rotation.x = minf(PI * 0.5, jage * 6.0)
+				jroot.position.y = -minf(0.4, jage * 1.0)
+				if jage > 1.0:
+					jroot.visible = false
 			if jroot.visible:
 				_unit_world.append({"kind": "jungle", "pos": jroot.position,
 					"hp": jhp, "max": maxf(1.0, float(jnode["max"])), "team": 2,
@@ -1070,6 +1124,15 @@ func _fmt(sec: float) -> String:
 
 func _push_event(ev: Dictionary) -> void:
 	var kind0 := str(ev.get("k", ""))
+	if kind0 == "lvl":
+		var evt1: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt1 - _t) < 0.9:
+			var hi2: int = int(ev.get("a", -1))
+			if hi2 >= 0 and hi2 < _hero_pos.size():
+				var lp: Vector3 = _hero_pos[hi2] + Vector3.UP * 1.0
+				Vfx.sigil(lp, Color(1.0, 0.86, 0.4), 1.6, 0.5)
+				Vfx.cast_glow(lp, Color(1.0, 0.92, 0.6), 1.4, 0.7)
+		return
 	if kind0 == "cast" or kind0 == "atk":
 		var evt0: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt0 - _t) < 0.9:

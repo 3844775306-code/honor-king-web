@@ -41,6 +41,7 @@ var _bullet_ids := {}        # 子弹 instance_id -> 录像内 id
 var _bullet_next_id := 0
 var _bullet_frames: Array = []  # [{t, b:[[id,x,z,team,r,g,bl,radius]...]}]
 var _last_kills: Array = []
+var _last_levels: Array = []
 var _last_deaths: Array = []
 var _last_turrets_alive := -1
 var _last_crystal := -1
@@ -144,6 +145,7 @@ func _try_start() -> void:
 			"sd": _sd,
 		})
 		_last_kills.append(int(h.kills))
+		_last_levels.append(int(h.level))
 		_last_deaths.append(int(h.deaths))
 	_started = true
 	_t0 = float(bm.get("game_time"))
@@ -197,6 +199,10 @@ func _sample(delta: float, finishing: bool) -> void:
 			int(h.skill_levels[2]) if h.skill_levels.size() > 2 else 0,
 			int(h.skill_levels[3]) if h.skill_levels.size() > 3 else 0,
 		]
+		# 事件：升级
+		if idx < _last_levels.size() and int(h.level) > int(_last_levels[idx]):
+			_events.append({"t": t_ms, "k": "lvl", "a": int(idx)})
+			_last_levels[idx] = int(h.level)
 		# 事件：击杀 / 阵亡
 		if idx < _last_kills.size():
 			if int(h.kills) > int(_last_kills[idx]):
