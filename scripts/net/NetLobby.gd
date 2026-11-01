@@ -69,6 +69,7 @@ var COL_GOLD: Color = UiKit.C_GOLD
 
 var _stack: VBoxContainer    # 页面内容根（铺满安全区，各页重建）
 var _page: MarginContainer   # 安全内边距容器
+var _backdrop: Control = null   # 程序化背景（随本机阵营改色）
 var _ui := UIState.MENU
 var _role := -1              # -1=无；0=房主；1=玩家（guest）
 var _connecting := false
@@ -151,6 +152,7 @@ var _draft_ai_wait := 0.0
 var _draft_auto_sent := false      # guest：本回合超时自动选已提交
 var _stage_sub: Label = null       # 顶部阶段副行（顺序/倒计时）
 var _last_state := {}              # 最近一次大厅状态（取玩家名等）
+var _select_struct_key := ""       # 选人页结构指纹：相同则只刷新状态，不整页重建
 var _preview_name: Label = null    # 中栏英雄预览：英雄名
 var _preview_nick: Label = null    # 中栏英雄预览：玩家昵称
 var _preview_role: Label = null    # 中栏英雄预览：职责
@@ -274,7 +276,7 @@ func _build_base() -> void:
 	add_child(bg)
 
 	# 程序化动态背景（渐变+辉光+网格+粒子+暗角）：铺满屏幕并压在最底层之上
-	UiKit.make_backdrop(self, UiKit.C_TEAM0, 1.0)
+	_backdrop = UiKit.make_backdrop(self, UiKit.C_TEAM0, 1.0)
 	move_child(bg, 0)
 
 	# 页面区：铺满 + 各页按需设置内边距（菜单/房间 64/40，选人页 16/8）
@@ -418,6 +420,9 @@ func _show_menu() -> void:
 	_ui = UIState.MENU
 	_role = -1
 	_connecting = false
+	if _backdrop != null and is_instance_valid(_backdrop):
+		_backdrop.set("accent", UiKit.C_TEAM0)   # 回主菜单恢复蓝色底
+		_backdrop.queue_redraw()
 
 	# 全屏舞台：动态网格背景 + 中央战术沙盘 + 左右两栏（品牌 / 操作）
 	var stage := Control.new()
@@ -733,6 +738,7 @@ func _on_room_confirm() -> void:
 
 
 func _refresh_room_ready_ui() -> void:
+	_apply_backdrop_camp()
 	var lane := PlayerPrefs.get_lane()
 	var r := _room_ready_entry()
 	var ready := bool(r.get("ready", false))
@@ -1455,8 +1461,15 @@ func _seat_peer(team: int, seat: int) -> int:
 
 
 # 本机此刻能否锁定（草稿齐 + 轮到自己 + 未结束）
+func _nickname_ok() -> bool:
+	return NameStore.player_name().strip_edges() != "" \
+		or AccountService.last_username().strip_edges() != ""
+
+
 func _pick_ready() -> bool:
 	if _sel_hero == "" or _sel_sid == "" or _draft_done():
+		return false
+	if not _nickname_ok():
 		return false
 	return not (_draft_active() and not _draft_is_my_turn())
 
@@ -1470,6 +1483,14 @@ func _hero_pickable(hname: String) -> bool:
 	if _lane_locked and role != _lane_role:
 		return false
 	return true
+
+
+func _first_lane_hero() -> String:
+	for hn in HeroPickData.HERO_ROLE:
+		var h := str(hn)
+		if str(HeroPickData.HERO_ROLE[h]) == _lane_role and _hero_pickable(h):
+			return h
+	return ""
 
 
 # 本分路内随机一名可选的英雄（超时自动选，同单机 _random_lane_hero）
@@ -1842,7 +1863,18 @@ class CountRing extends Control:
 # ==================== SELECT：王者式自选版式 ====================
 # 顶部阶段条（我方/敌方 mini 槽 + 标题 + 倒计时环）→ 中部 5v5 席位 + 中央 3D 立绘 →
 # 底部 职业 tab + 英雄卡条 + 右侧召唤师/详情/锁定。网络逻辑与回调全部沿用。
+func _select_key(state: Dictionary) -> String:
+	var d = state.get("draft", {})
+	var dp = (d as Dictionary).get("picks", {}) if d is Dictionary else {}
+	return JSON.stringify({
+		"players": state.get("players", {}), "picks": state.get("picks", {}),
+		"order": state.get("order", []), "ready": state.get("ready", {}),
+		"draft_picks": dp,
+	})
+
+
 func _show_select(state: Dictionary) -> void:
+	_apply_backdrop_camp()
 	var entering_select := _ui != UIState.SELECT
 	_ui = UIState.SELECT
 	if entering_select:
@@ -1900,13 +1932,22 @@ func _show_select(state: Dictionary) -> void:
 	elif _tab_role == _lane_role:
 		_tab_role = ""
 	_adopt_self_choice(state, data)
-	# 进入选人页：已锁定/已选英雄时直接进入立绘阶段（同单机按 sel_player_picked 初始化）
-	_pick_stage = _sel_hero == ""
+	# 与单机一致：首次进入选人页先预览本分路第一个可用英雄（仍停留在选英雄浮层）
+	if _sel_hero == "" and not state.get("picks", {}).has(_self_peer()):
+		var _fh := _first_lane_hero()
+		if _fh != "":
+			_sel_hero = _fh
+			_sel_sid = str(HeroPickData.recommended_summoner(_fh))
+			_sel_summ = _summoner_name(_sel_sid)
+	# 首次进入按是否有本机锁定决定阶段；后续状态刷新不重置用户已经切到的立绘阶段
+	if entering_select or state.get("picks", {}).has(_self_peer()):
+		_pick_stage = not state.get("picks", {}).has(_self_peer())
 	_stack.add_child(_build_stage_bar(data, state))
 	_stack.add_child(_build_select_main(data))
 	_stack.add_child(_build_select_bottom())
 	_refresh_preview()
 	_refresh_select(state, data)
+	_select_struct_key = _select_key(state)
 
 
 # 顶部 92 高阶段条：我方 5 mini 席 | 标题+副行+倒计时环 | 敌方 5 mini 席
@@ -1924,9 +1965,12 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var _lc: Color = UiKit.C_TEAM1 if _local_camp() == 1 else UiKit.C_TEAM0
 	var _ec: Color = UiKit.C_TEAM1 if _local_camp() == 0 else UiKit.C_TEAM0
-	var lt := _mk_label("我方", _fs(UiKit.FS_SM), _lc)
-	lt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	left.add_child(lt)
+	var ltag := VBoxContainer.new()
+	ltag.alignment = BoxContainer.ALIGNMENT_CENTER
+	ltag.custom_minimum_size = Vector2(64, 0)
+	ltag.add_child(_mk_label("我方", _fs(UiKit.FS_SM), _lc))
+	ltag.add_child(_mk_label("5 席", _fs(UiKit.FS_XS), COL_DIM))
+	left.add_child(ltag)
 	_my_slots = HBoxContainer.new()
 	_my_slots.add_theme_constant_override("separation", 6)
 	left.add_child(_my_slots)
@@ -1966,9 +2010,12 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var right := HBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var rt := _mk_label("敌方", _fs(UiKit.FS_SM), _ec)
-	rt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	right.add_child(rt)
+	var rtag := VBoxContainer.new()
+	rtag.alignment = BoxContainer.ALIGNMENT_CENTER
+	rtag.custom_minimum_size = Vector2(64, 0)
+	rtag.add_child(_mk_label("敌方", _fs(UiKit.FS_SM), _ec))
+	rtag.add_child(_mk_label("5 席", _fs(UiKit.FS_XS), COL_DIM))
+	right.add_child(rtag)
 	_enemy_slots = HBoxContainer.new()
 	_enemy_slots.add_theme_constant_override("separation", 6)
 	right.add_child(_enemy_slots)
@@ -1994,10 +2041,10 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	return bar
 
 
-# 150×72 mini 席位槽：席位号+名字 / 已选英雄或待选（自己金框）
+# 136×84 mini 席位槽：席位号+名字 / 已选英雄或待选（自己金框）
 func _mk_mini_slot(title: String, sub: String, accent: Color, mine: bool) -> PanelContainer:
 	var p := PanelContainer.new()
-	p.custom_minimum_size = Vector2(150, 72)
+	p.custom_minimum_size = Vector2(136, 84)
 	var sb: StyleBoxFlat = UiKit.skin_card(UiKit.C_GOLD, true) if mine else UiKit.skin_chip(accent, 0.55, 10)
 	sb.content_margin_left = 6
 	sb.content_margin_right = 6
@@ -2091,8 +2138,16 @@ func _build_center_stage() -> Control:
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.clip_contents = true
+	# 与单机选人一致：中央 3D 立绘按 900×1100 竖版比例取景，避免宽屏拉伸
+	var prev_ratio := AspectRatioContainer.new()
+	prev_ratio.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	prev_ratio.ratio = 900.0 / 1100.0
+	prev_ratio.stretch_mode = 1          # STRETCH_HEIGHT
+	prev_ratio.alignment_horizontal = 1  # ALIGNMENT_CENTER
+	prev_ratio.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(prev_ratio)
 	_prev = preload("res://scripts/ui/HeroPreview.gd").new() as HeroPreview
-	box.add_child(_prev)
+	prev_ratio.add_child(_prev)
 	_prev.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
 	# 覆盖层：英雄名大标题 / 职责 chip / 召唤师 chip / 技能 chip 行
@@ -2383,8 +2438,11 @@ func _build_select_bottom() -> Control:
 	var name_edit := LineEdit.new()
 	_select_nick_edit = name_edit
 	name_edit.max_length = 12
-	name_edit.placeholder_text = "输入昵称"
-	name_edit.text = _local_nickname()
+	name_edit.placeholder_text = "输入昵称后锁定"
+	var _n0 := NameStore.player_name().strip_edges()
+	if _n0 == "":
+		_n0 = AccountService.last_username().strip_edges()
+	name_edit.text = _n0
 	name_edit.custom_minimum_size = Vector2(190, 56)
 	name_edit.add_theme_font_override("font", UiKit.font())
 	name_edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
@@ -2394,7 +2452,8 @@ func _build_select_bottom() -> Control:
 	name_edit.add_theme_stylebox_override("focus", UiKit.skin_chip(UiKit.C_GOLD, 1.0))
 	name_edit.text_changed.connect(func(t: String) -> void:
 		if t.strip_edges() != "":
-			NameStore.save_player_name(t.strip_edges()))
+			NameStore.save_player_name(t.strip_edges())
+		_sync_pick_ui())
 	name_box.add_child(name_edit)
 	side_right.add_child(name_box)
 	if _my_seat <= NetSession.MAX_SIDE_PLAYERS:
@@ -3227,6 +3286,9 @@ func _build_items_tooltip(items: Array) -> String:
 	return " · ".join(names)
 
 func _on_pick_confirm() -> void:
+	if not _nickname_ok():
+		_show_pick_error("请先在昵称栏填写昵称")
+		return
 	if _sel_hero == "" or _sel_sid == "":
 		return
 	# 分路锁定时锁定前再校验一次职责
@@ -3294,9 +3356,12 @@ func _on_lobby_state(state: Dictionary) -> void:
 		# 顺序选人：host 以自己的推进为准，guest 采纳主机广播（无 draft 字段 = 旧流程同时选人）
 		if _role != 0:
 			_apply_draft_state(state.get("draft", {}))
-		# 大厅选人阶段：host 与每个 client 同屏选人。
-		# 每次状态事件都整体重建面板（他人锁定改灰 / 掉线腾出职责 / 旁观升席都即时生效；
-		# _adopt_self_choice 会保留本机未锁草稿，锁定态则采纳权威值）。
+		# 阵容/席位/分路没有变化时只刷新状态与回合条，避免每个选人 tick 整页重建
+		if _ui == UIState.SELECT and _select_struct_key != "" \
+				and _select_struct_key == _select_key(state):
+			_refresh_select(state, _seat_rows(state))
+			_tick_draft_ui()
+			return
 		_show_select(state)
 		return
 	if ph == NetSession.Phase.BATTLE:
@@ -3353,6 +3418,14 @@ func _local_camp() -> int:
 	if r is Dictionary:
 		return int(r.get("camp", 0))
 	return 0
+
+
+func _apply_backdrop_camp() -> void:
+	if _backdrop == null or not is_instance_valid(_backdrop):
+		return
+	var camp := _local_camp()
+	_backdrop.set("accent", UiKit.C_TEAM1 if camp == 1 else UiKit.C_TEAM0)
+	_backdrop.queue_redraw()
 
 
 func _route_battle() -> void:
