@@ -27,6 +27,7 @@ var _mini_nodes: Dictionary = {}     # id -> Node3D
 var _jungle_meta: Array = []
 var _bullets: Array = []
 var _popups_data: Array = []
+var _marker_src_cache: Dictionary = {}
 var _pops: Array = []
 var _shake_t := 0.0
 var _shake_amp := 0.0
@@ -103,13 +104,13 @@ func _ready() -> void:
 	_jungle_meta = _doc.get("jungle_meta", [])
 	_bullets = _doc.get("bullets", [])
 	_popups_data = _doc.get("popups", [])
-	# 飘字并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
+	# 飘字/音效并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
 	var _combined: Array = (_doc.get("events", []) as Array).duplicate()
 	_combined.append_array(_popups_data)
+	_combined.append_array(_doc.get("audio", []))
 	_combined.sort_custom(func(a, b) -> bool: return int(a.get("t", 0)) < int(b.get("t", 0)))
 	_events = _combined
 	_map = _doc.get("map", {})
-	_events = []
 	var meta: Dictionary = _doc.get("meta", {})
 	_duration = maxf(float(meta.get("duration", 0.0)), 1.0)
 	for ev in _events:
@@ -124,6 +125,8 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	PostFX.set_dead(false)
+	PostFX.set_low_hp(1.0)
 	# fake hero 只是给 HeroInfoControl 提供字段，没进树，退出时手动释放
 	for ui in _hero_uis:
 		var fake = ui.get("fake")
@@ -355,6 +358,19 @@ func _update_world_hud(t: float) -> void:
 		fake.mana = float(st.get("mana", 0))
 		fake.max_mana = maxf(1.0, float(st.get("max_mana", 1)))
 		fake.actual_mana_max = maxf(1.0, float(st.get("max_mana", 1)))
+		fake.shield_remaining = float(st.get("shield", 0.0))
+		fake.stun_timer = float(st.get("stun", 0.0))
+		fake.knockup_timer = float(st.get("knock", 0.0))
+		fake.froze_timer = float(st.get("froze", 0.0))
+		fake.suppress_timer = float(st.get("suppress", 0.0))
+		fake.silence_timer = float(st.get("silence", 0.0))
+		fake.slow_timer = float(st.get("slow", 0.0))
+		fake.slow_amount = float(st.get("slow_amt", 0.0))
+		fake.bt_timer = float(st.get("bt", 0.0))
+		fake.wd_timer = float(st.get("wd", 0.0))
+		fake.revive_timer = float(st.get("revive", 0.0))
+		fake.is_mvp = int(st.get("mvp", 0)) == 1
+		_apply_markers(fake, str(st.get("markers", "")))
 		fake.exp = int(float(st.get("exp", 0)))
 		fake.exp_to_next = int(maxf(1.0, float(st.get("exp_to_next", 200))))
 		var wp: Vector3 = (st.get("pos", Vector3.ZERO) as Vector3) + Vector3.UP * 2.4
@@ -619,6 +635,7 @@ func _process(delta: float) -> void:
 			_t = _duration
 	_apply_frame(_t)
 	_update_popups(delta)
+	_update_postfx(delta)
 	_update_ui()
 	_update_camera()
 
@@ -728,6 +745,19 @@ func _apply_frame(t: float) -> void:
 			"ms": int(row_a[19]) if row_a.size() > 19 else 0,
 			"as": int(row_a[20]) if row_a.size() > 20 else 0,
 			"cds": _cds, "slevels": _lv, "yaw": float(row_a[3]) if row_a.size() > 3 else 0.0,
+			"shield": float(row_a[30]) / 10.0 if row_a.size() > 30 else 0.0,
+			"stun": float(row_a[31]) / 100.0 if row_a.size() > 31 else 0.0,
+			"knock": float(row_a[32]) / 100.0 if row_a.size() > 32 else 0.0,
+			"froze": float(row_a[33]) / 100.0 if row_a.size() > 33 else 0.0,
+			"suppress": float(row_a[34]) / 100.0 if row_a.size() > 34 else 0.0,
+			"silence": float(row_a[35]) / 100.0 if row_a.size() > 35 else 0.0,
+			"slow": float(row_a[36]) / 100.0 if row_a.size() > 36 else 0.0,
+			"slow_amt": float(row_a[37]) / 100.0 if row_a.size() > 37 else 0.0,
+			"bt": float(row_a[38]) / 100.0 if row_a.size() > 38 else 0.0,
+			"wd": float(row_a[39]) / 100.0 if row_a.size() > 39 else 0.0,
+			"revive": float(row_a[40]) / 100.0 if row_a.size() > 40 else 0.0,
+			"markers": str(row_a[41]) if row_a.size() > 41 else "",
+			"mvp": int(row_a[42]) if row_a.size() > 42 else 0,
 			"pos": Vector3(x, 0.0, z), "alive": alive, "invis": invis,
 		}
 	# 塔
@@ -968,6 +998,47 @@ func _find_jungle_frame(t: float) -> int:
 
 
 ## 飘字：用与对局一致的数值/配色规则（伤害：物伤黄白/法伤紫/暴击更大；金币金色；治疗绿色）
+## 被动标记：fake 英雄的 markers 是 [{source: GameEntity, ...}] 数组，source 只用来显示名字
+func _marker_source(nm: String) -> GameEntity:
+	var cached = _marker_src_cache.get(nm)
+	if cached != null and is_instance_valid(cached):
+		return cached
+	var ge := GameEntity.new()
+	ge.display_name = nm
+	_marker_src_cache[nm] = ge
+	return ge
+
+
+func _apply_markers(fake: Hero, txt: String) -> void:
+	var arr: Array = []
+	if txt != "":
+		for part in txt.split("|", false):
+			var kv := str(part).split(":", false)
+			if kv.size() < 2:
+				continue
+			var src := _marker_source(str(kv[0]))
+			var cnt: int = int(kv[1])
+			for k in range(cnt):
+				arr.append({"source": src, "stack": k + 1})
+	fake.markers = arr
+
+
+## PostFX：跟随英雄的受击红晕 / 低血红屏 / 阵亡灰屏（与对局同源）
+func _update_postfx(delta: float) -> void:
+	if _follow_hero < 0 or _follow_hero >= _hero_state.size():
+		return
+	var st: Dictionary = _hero_state[_follow_hero] if not (_hero_state[_follow_hero] as Dictionary).is_empty() else {}
+	if st.is_empty():
+		return
+	if not bool(st.get("alive", false)):
+		PostFX.set_dead(true)
+		PostFX.set_low_hp(0.0)
+		return
+	PostFX.set_dead(false)
+	var mx: float = maxf(1.0, float(st.get("mx", 1.0)))
+	PostFX.set_low_hp(clampf((float(st.get("hp", 0.0)) + float(st.get("shield", 0.0))) / mx, 0.0, 1.0))
+
+
 func _spawn_popup(ev: Dictionary) -> void:
 	var kind := str(ev.get("p", ""))
 	var d: Dictionary = ev.get("d", {})
@@ -997,6 +1068,10 @@ func _spawn_popup(ev: Dictionary) -> void:
 				if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
 					if wp.distance_to(_hero_pos[_follow_hero]) < 18.0 and float(d.get("am", 0.0)) >= 60.0:
 						_shake(0.16, 0.16)
+					if wp.distance_to(_hero_pos[_follow_hero]) < 14.0:
+						# 跟随英雄受击：同对局红晕闪一下
+						PostFX.damage(clampf(float(d.get("am", 0.0)) / 400.0, 0.2, 0.9),
+							clampf(float(d.get("am", 0.0)) / 900.0, 0.0, 0.5))
 		"gold":
 			txt = "+%d" % int(d.get("am", 0))
 			col = Color(1.0, 0.86, 0.35)
@@ -1242,6 +1317,16 @@ func _fmt(sec: float) -> String:
 
 func _push_event(ev: Dictionary) -> void:
 	var kind0 := str(ev.get("k", ""))
+	if kind0 == "sfx" or kind0 == "ann":
+		var evt3: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt3 - _t) < 0.5:
+			var key := str(ev.get("key", ""))
+			if key != "":
+				if kind0 == "ann":
+					SfxManager.play_announce(key, false)
+				else:
+					SfxManager.call("_play_sfx", key, float(ev.get("v", 0.0)))
+		return
 	if kind0 == "pop":
 		var evt2: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt2 - _t) < 0.9:

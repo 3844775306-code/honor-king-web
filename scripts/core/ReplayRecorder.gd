@@ -41,6 +41,8 @@ var _bullet_ids := {}        # 子弹 instance_id -> 录像内 id
 var _bullet_next_id := 0
 var _bullet_frames: Array = []  # [{t, b:[[id,x,z,team,r,g,bl,radius]...]}]
 var _popup_events: Array = []   # [{t,k:"pop",p:kind,x,y,z,d:{...}}]
+var _audio_events: Array = []   # [{t,k:"sfx"/"ann",key}]
+const AUDIO_MAX := 40000
 const POPUP_MAX := 30000
 var _last_kills: Array = []
 var _last_levels: Array = []
@@ -169,7 +171,7 @@ func _sample(delta: float, finishing: bool) -> void:
 	_discover_jungle()
 	var hero_row: Array = []
 	for i in range(_hero_meta.size()):
-		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+		hero_row.append([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "", 0])
 	for h in get_tree().get_nodes_in_group("heroes"):
 		if not (h is Hero):
 			continue
@@ -200,6 +202,14 @@ func _sample(delta: float, finishing: bool) -> void:
 			int(h.skill_levels[1]) if h.skill_levels.size() > 1 else 0,
 			int(h.skill_levels[2]) if h.skill_levels.size() > 2 else 0,
 			int(h.skill_levels[3]) if h.skill_levels.size() > 3 else 0,
+			int(round(h.shield_remaining * 10.0)),
+			int(round(h.stun_timer * 100.0)), int(round(h.knockup_timer * 100.0)),
+			int(round(h.froze_timer * 100.0)), int(round(h.suppress_timer * 100.0)),
+			int(round(h.silence_timer * 100.0)), int(round(h.slow_timer * 100.0)),
+			int(round(h.slow_amount * 100.0)), int(round(h.bt_timer * 100.0)),
+			int(round(h.wd_timer * 100.0)), int(round(h.revive_timer * 100.0)),
+			_markers_to_str(h),
+			1 if h.is_mvp else 0,
 		]
 		# 事件：升级
 		if idx < _last_levels.size() and int(h.level) > int(_last_levels[idx]):
@@ -356,6 +366,28 @@ func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: C
 	})
 
 
+func _markers_to_str(h) -> String:
+	var parts: Array = []
+	for src in h.get_marker_sources():
+		if src == null or not is_instance_valid(src):
+			continue
+		var cnt: int = int(h.count_markers(src))
+		if cnt > 0:
+			parts.append("%s:%d" % [str(src.display_name), cnt])
+	return "|".join(parts)
+
+
+## 音效打点（SfxManager 调用）：回放时重播同一组合成音
+func note_sfx(key: String, vol_offset: float = 0.0, is_ann: bool = false) -> void:
+	if _saved or not _started:
+		return
+	if _audio_events.size() >= AUDIO_MAX:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_audio_events.append({"t": int(round(gt * 1000.0)), "k": "ann" if is_ann else "sfx",
+		"key": str(key), "v": snappedf(vol_offset, 0.01)})
+
+
 func _capture_map() -> void:
 	var walls: Array = []
 	for w in get_tree().get_nodes_in_group("walls"):
@@ -472,6 +504,7 @@ func _save() -> void:
 		"jungle": _jungle_frames,
 		"bullets": _bullet_frames,
 		"popups": _popup_events,
+		"audio": _audio_events,
 		"jungle_meta": _jungle_meta,
 		"map": _map_meta,
 		"events": _events,

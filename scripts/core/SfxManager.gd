@@ -141,6 +141,8 @@ const _SYNTH := {
 	"buy":      {"kind": "bell", "f0": 880.0, "dur": 0.16, "vol": 0.22, "decay": 5.0, "harmonic": 1.5},
 	"sell":     {"kind": "bell", "f0": 587.33, "dur": 0.16, "vol": 0.20, "decay": 6.0, "harmonic": 1.5},
 	"ui_click": {"kind": "bell", "f0": 1320.0, "dur": 0.06, "vol": 0.15, "decay": 8.0, "harmonic": 2.0},
+	# 技能冷却结束“就绪”：两颗高音铃短促上行，音量压得比点击更低，避免频繁刺耳
+	"skill_ready": {"kind": "arp", "notes": [1046.5, 1567.98], "step": 0.055, "dur": 0.16, "vol": 0.16},
 	"recall":   {"kind": "sweep", "f0": 330.0, "f1": 660.0, "dur": 0.70, "vol": 0.22, "decay": 1.4, "noise": 0.04},
 	"crit":     {"kind": "bell", "f0": 1568.0, "dur": 0.13, "vol": 0.25, "decay": 5.0, "harmonic": 2.01, "noise": 0.08},
 	# —— 防御塔 / 主宰先锋 ——
@@ -151,7 +153,7 @@ const _SYNTH := {
 }
 
 # 同类短音最小间隔（ms）：受击/金币/施法连续触发时防糊成一片
-const _SFX_MIN_GAP := {"hurt": 320, "coin": 90, "last_hit": 65, "heal": 400, "crit": 140, "ui_click": 45}
+const _SFX_MIN_GAP := {"hurt": 320, "coin": 90, "last_hit": 65, "heal": 400, "crit": 140, "ui_click": 45, "skill_ready": 200}
 
 # 英雄专属技能音色（其余按元素+技能类型动态合成）：小乔 Q 回旋扇 / R 流星
 const _SKILL_SFX_OVERRIDE := {
@@ -539,6 +541,9 @@ func _own_hero_node() -> Node3D:
 
 # 独立 SFX 池：找空闲播放器，全忙则轮询顶替（不影响播报单通道）
 func _play_sfx(key: String, vol_offset: float = 0.0) -> void:
+	var _rrec_sfx = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_sfx != null:
+		_rrec_sfx.call("note_sfx", key, vol_offset, false)
 	var is_synth := _SYNTH.has(key) or key.find(":") >= 0
 	# 同类短音节流（受击/金币/施法叠得太密会糊；技能命中 160ms 内合并）
 	var gap: int = int(_SFX_MIN_GAP.get(key, 0))
@@ -1016,6 +1021,9 @@ func _resolve_key(actor: String, actor_team: int, desc: String, victim: String, 
 
 ## 单发播报（胜利/失败/通用）。to_net=true 时 host 转发给接管客户端（NetKillFeed 剥前缀本地播）。
 func play_announce(key: String, to_net := false) -> void:
+	var _rrec_ann = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_ann != null:
+		_rrec_ann.call("note_sfx", key, 0.0, true)
 	# 敌方关键抢夺有两个同文案音频变体，随机取一个
 	if key == "e_steal":
 		key = "e_steal_a" if randi() % 2 == 0 else "e_steal_b"
