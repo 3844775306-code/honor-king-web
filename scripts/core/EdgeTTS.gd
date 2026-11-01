@@ -193,8 +193,10 @@ func _process(delta: float) -> void:
 				elif pkt.size() > 2:
 					var hlen: int = (int(pkt[0]) << 8) | int(pkt[1])
 					if hlen > 0 and hlen < 4096 and pkt.size() > 2 + hlen:
-						var hdr := pkt.slice(2, 2 + mini(hlen, 120)).get_string_from_utf8()
-						var is_audio := hdr.find("Path:audio") >= 0 and hdr.find("metadata") < 0
+						# 完整解析头（部分移动端/线路的 Path:audio 头 >120 字节，截断会把音频包误判为 metadata 丢掉 → MP3 拼不完整变杂音）
+						var hdr := pkt.slice(2, 2 + hlen).get_string_from_utf8()
+						var hdr_l := hdr.to_lower()
+						var is_audio := hdr_l.find("path:audio") >= 0 and hdr_l.find("metadata") < 0
 						if is_audio:
 							_buf.append_array(pkt.slice(2 + hlen))
 						else:

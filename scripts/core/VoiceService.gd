@@ -37,7 +37,8 @@ var _http_queue: Array = []
 var _http_seq := 0
 var _http_cur: Dictionary = {}
 var _http_cache: Dictionary = {}
-var _online_mode := "edge"   # edge / http / local
+var _online_mode := "edge"   # edge / http / local / browser
+var _web_tts := false          # 浏览器原生 speechSynthesis（手机 Web 端优先，避免 MP3 解码成杂音）
 
 
 func _ready() -> void:
@@ -68,11 +69,18 @@ func _ready() -> void:
 		if _edge != null and edge_enabled and enabled:
 			_edge.call("warmup"))
 	_fallback_blip = true
+	# 手机 Web：优先浏览器原生 speechSynthesis（音频由系统输出，彻底绕开 MP3 动画/解码在手机端的杂音）
+	if OS.has_feature("web"):
+		_web_tts = bool(JavaScriptBridge.eval("!!(window.speechSynthesis && window.SpeechSynthesisUtterance)", true))
+		if _web_tts:
+			_online_mode = "browser"
+	# 原生手机：启用系统 TTS（Android/iOS 系统中文语音），避免在线 MP3 在手机解码器上出杂音
+	var _native_mobile := Config.on_mobile() and not OS.has_feature("web")
 	# 本地 TTS 走 Windows WinRT 语音合成（SAPI/WinRT SpeechSynthesis）。在没有中文语音包、
 	# 精简版系统或受限环境下，引擎内部会抛 winrt::hresult_error 且未捕获，直接把进程打崩
 	# （表现为「导出的 exe 双击打不开 / 一闪退」，headless 不崩是因为没有 TTS 设备）。
 	# 因此本地 TTS 默认关闭、按需在 player_prefs 里把 op_tts_local 打开；语音播报仍走 Edge 在线语音。
-	if not PlayerPrefs.opt_bool("tts_local", false):
+	if not PlayerPrefs.opt_bool("tts_local", false) and not _native_mobile:
 		if OS.is_debug_build():
 			print("[VOICE] 本地 TTS 未启用（op_tts_local=false），跳过 WinRT 语音枚举")
 		return
@@ -86,6 +94,8 @@ func _ready() -> void:
 	_fallback_blip = _voice == ""
 	if _voice == "":
 		_ok = false
+	if _native_mobile and _ok:
+		_online_mode = "local"   # 原生手机优先系统 TTS，不再走在线 MP3
 	if OS.is_debug_build():
 		print("[VOICE] init ", diagnose())
 
@@ -138,6 +148,8 @@ func speak(text: String, speaker: String = "") -> void:
 	_last_text = clean
 	_last_ms = now
 	var emo := _emotion_params(clean, speaker)
+	if _online_mode == "browser" and _speak_web(clean, speaker, emo):
+		return
 	if _online_mode == "edge" and edge_enabled and _edge != null:
 		_request_edge(clean, speaker, emo)
 		return
@@ -145,6 +157,23 @@ func speak(text: String, speaker: String = "") -> void:
 		_request_http(clean, speaker, emo)
 		return
 	_speak_local(clean, speaker, emo)
+
+
+## 浏览器原生语音：手机 Web 端直接调用 speechSynthesis（无需 MP3 解码，不会出现杂音）
+func _speak_web(clean: String, speaker: String, emo: Dictionary) -> bool:
+	if not _web_tts:
+		return false
+	var txt := JSON.stringify(clean)
+	var pitch := clampf(float(emo.get("pitch", 1.0)), 0.5, 2.0)
+	var rate := clampf(float(emo.get("rate", 1.0)) * 0.95, 0.5, 2.0)
+	var js := """(function(){try{
+		var ss=window.speechSynthesis; if(!ss) return false;
+		ss.cancel();
+		var u=new SpeechSynthesisUtterance(%s);
+		u.lang='zh-CN'; u.pitch=%f; u.rate=%f; u.volume=1.0;
+		ss.speak(u); return true;
+	}catch(e){return false;}})()""" % [txt, pitch, rate]
+	return bool(JavaScriptBridge.eval(js, true))
 
 
 ## 本地 TTS / 拟声（Edge 不可用时的兜底）
@@ -321,6 +350,18 @@ func _play_edge(stream: AudioStreamMP3) -> void:
 	if _ok and DisplayServer.has_method("tts_stop"):
 		DisplayServer.tts_stop()
 	_blip.stop()
+	# 手机 Web 无 speechSynthesis 时：用浏览器 <audio> 解码 MP3，绕开 Godot Web Audio 的 MP3 解码杂音
+	if OS.has_feature("web") and stream.data.size() > 64:
+		var b64 := Marshalls.raw_to_base64(stream.data)
+		var js2 := """(function(){try{
+			var a=window.__hkVoiceAudio;
+			if(!a){a=new Audio(); window.__hkVoiceAudio=a;}
+			a.pause(); a.src='data:audio/mpeg;base64,%s';
+			var p=a.play(); if(p&&p.catch) p.catch(function(){});
+			return true;
+		}catch(e){return false;}})()""" % b64
+		if bool(JavaScriptBridge.eval(js2, true)):
+			return
 	_edge_player.stream = stream
 	_edge_player.play()
 
