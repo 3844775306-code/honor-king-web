@@ -797,6 +797,9 @@ func _on_snapshot(snap: Array) -> void:
 					Turret.play_collapse(v.node, sf2, v.node.get_parent())
 					Vfx.shockwave(v.node.global_position + Vector3(0, 0.25, 0), 3.2 * sf2, Color(0.74, 0.70, 0.64), 0.8)
 					Vfx.hit_spark(v.node.global_position + Vector3.UP * 1.4 * sf2, Color(1.0, 0.76, 0.42), Vector3.UP, 1.8)
+					# 与单机 TurretWreck 同款的灰色残骸减速环（客户端只复刻视觉，减速仍由 host 结算）
+					if str(v.get("name", "")) != "crystal":
+						_spawn_tower_wreck_visual(v.node.global_position, int(v.team))
 					v.dying_until = Time.get_ticks_msec() + 2400
 			elif ent.size() > 8:
 				v.lyf = ent[8]
@@ -964,6 +967,28 @@ func _mm_global_bullet_rows() -> Array:
 	return out
 
 
+func _spawn_tower_wreck_visual(pos: Vector3, team: int) -> void:
+	var root := Node3D.new()
+	root.name = "TowerWreck"
+	root.position = Vector3(pos.x, 0.05, pos.z)
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 8.75
+	torus.outer_radius = 9.05
+	ring.mesh = torus
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.45, 0.45, 0.5, 0.35)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring.material_override = mat
+	root.add_child(ring)
+	_static_root.add_child(root)
+	# host 的 TurretWreck 只存在 3 秒
+	get_tree().create_timer(3.0).timeout.connect(func() -> void:
+		if is_instance_valid(root):
+			root.queue_free())
+
+
 func _obtain_bullet(team: int, kind: int, flags: int = 0) -> Dictionary:
 	var m: Node3D = null
 	var pool: Array = _b_pool.get(kind, [])
@@ -984,7 +1009,10 @@ func _obtain_bullet(team: int, kind: int, flags: int = 0) -> Dictionary:
 # 路径缺失时回退旧圆柱（保留队伍色近似），与 host Bullet.gd 的回退球体同一思路。
 func _make_bullet_visual(kind: int, team: int = 0, flags: int = 0) -> Node3D:
 	# 三端共享：kind 0..3 模型档 / 4 后羿R / 5 塔能量球 / 1000+vkind 定制档，全部走 ProjectilePresenter
-	return ProjectilePresenter.make(kind, team, 0, 0.15, flags)
+	# 防御塔能量球在单机里是 Bullet.radius(默认0.2) 再 ×source_scale(3)；客户端 kind=5
+	# 之前只传 0.15，实际球体只有单机 1/4 大，几乎看不见。
+	var rr := 0.6 if kind == 5 else 0.15
+	return ProjectilePresenter.make(kind, team, 0, rr, flags)
 
 
 

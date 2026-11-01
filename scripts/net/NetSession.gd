@@ -1585,6 +1585,7 @@ func push_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void
 	rpc("_rpc_tower_laser", from, to, team, dur)
 
 
+@rpc("any_peer", "reliable", "call_remote")
 func _rpc_tower_laser(from: Vector3, to: Vector3, team: int, dur: float) -> void:
 	net_tower_laser.emit(from, to, team, dur)
 
@@ -1599,6 +1600,7 @@ func push_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> voi
 	rpc("_rpc_tower_lock", from, to, team, active)
 
 
+@rpc("any_peer", "reliable", "call_remote")
 func _rpc_tower_lock(from: Vector3, to: Vector3, team: int, active: bool) -> void:
 	net_tower_lock.emit(from, to, team, active)
 
