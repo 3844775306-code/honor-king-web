@@ -75,7 +75,8 @@ func _find_jungle_target() -> GameEntity:
 	# 1. 10m内敌方英雄
 	if hero.last_attacker and hero.last_attacker is Hero and hero.last_attacker.health >0:
 		var entity = hero.last_attacker
-		if not(_is_under_own_tower(entity) and entity.health > 0.2 * entity.max_health) and not entity.is_untargetable_by_enemies():
+		if not(_is_under_own_tower(entity) and entity.health > 0.2 * entity.max_health) \
+				and not entity.is_untargetable_by_enemies() and not _is_under_unsafe_tower(entity):
 			var dist := hero.global_position.distance_to(entity.global_position)
 			if dist < 12:
 				return hero.last_attacker
@@ -89,6 +90,9 @@ func _find_jungle_target() -> GameEntity:
 			continue
 		var h := entity as Hero
 		if h.is_untargetable_by_enemies():
+			continue
+		# 前4分钟 gank 不越塔：目标在敌方塔下且没有足够己方兵线掩护时放弃
+		if _is_under_unsafe_tower(h):
 			continue
 		if h.health < best_hp:
 			best_hp = h.health
