@@ -5841,6 +5841,29 @@ func get_dead_visions(team: int = -1) -> Array:
 	_dead_visions = keep
 	return out
 
+# 技能侦察区域（鲁班2/后羿R）：用于小地图雾层临时照亮
+var _skill_reveal_zones: Array = []
+
+func add_skill_reveal_zone(team: int, pos: Vector3, radius: float, duration: float) -> void:
+	_skill_reveal_zones.append({
+		"team": int(team), "pos": Vector3(pos.x, 0.0, pos.z),
+		"r": float(radius), "until": Time.get_ticks_msec() * 0.001 + duration,
+	})
+
+func get_skill_reveal_zones(team: int = -1) -> Array:
+	var now := Time.get_ticks_msec() * 0.001
+	var keep: Array = []
+	var out: Array = []
+	for z in _skill_reveal_zones:
+		if float(z.get("until", 0.0)) <= now:
+			continue
+		keep.append(z)
+		if team < 0 or int(z.get("team", -1)) == team:
+			out.append(z)
+	_skill_reveal_zones = keep
+	return out
+
+
 func _seen_by_dead_vision(pos: Vector3, team: int) -> bool:
 	for d in get_dead_visions(team):
 		var vr: float = 10.0 if str(d.get("kind", "")) == "turret" else 8.0
@@ -5875,9 +5898,11 @@ func _update_vision(delta: float) -> void:
 			entity.visible = true
 			continue
 
-		# Attack exposure: 2s forced visibility after being hit
-		if entity.vision_expose_timer > 0:
-			entity.vision_expose_timer -= delta * 5.0
+		# Attack exposure / 技能侦察：2s forced visibility after being hit or revealed
+		if entity.vision_expose_timer > 0 \
+				or (entity.skill_reveal_timer > 0 and entity.skill_reveal_team == player_team):
+			if entity.vision_expose_timer > 0:
+				entity.vision_expose_timer -= delta * 5.0
 			entity.visible = true
 			continue
 
@@ -5911,9 +5936,11 @@ func _update_vision(delta: float) -> void:
 		if not is_instance_valid(entity) or entity.health <= 0:
 			continue
 
-		# Attack exposure: 2s forced visibility after being hit
-		if entity.vision_expose_timer > 0:
-			entity.vision_expose_timer -= delta * 5.0
+		# Attack exposure / 技能侦察：2s forced visibility after being hit or revealed
+		if entity.vision_expose_timer > 0 \
+				or (entity.skill_reveal_timer > 0 and entity.skill_reveal_team == player_team):
+			if entity.vision_expose_timer > 0:
+				entity.vision_expose_timer -= delta * 5.0
 			entity.visible = true
 			continue
 
@@ -5954,7 +5981,10 @@ func _update_vision(delta: float) -> void:
 		if entity.lanling_stealth_active or entity.shadow_dart_active:
 			entity.visible = false
 			continue
-		# 攻击暴露：出手/受击后 2 秒内强制可见
+		# 攻击暴露 / 技能侦察：出手/受击或鲁班2/后羿R 照出后 2 秒内强制可见
+		if entity.skill_reveal_timer > 0 and entity.skill_reveal_team == player_team:
+			entity.visible = true
+			continue
 		if entity.vision_expose_timer > 0:
 			entity.visible = true
 			continue

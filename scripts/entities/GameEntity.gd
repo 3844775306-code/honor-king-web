@@ -48,6 +48,7 @@ var _stuck_recovery_dir: Vector3 = Vector3.ZERO
 var _net_timer: float = 0.0
 var _net_dist: float = -1.0
 var _net_travel: float = 0.0
+var _net_progress: float = 0.0   # 1.2s 窗口内沿“到目的地”方向的实际前进量（忽略碰撞推离抖动）
 var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
 static var debug_show_path: bool = false
@@ -64,6 +65,8 @@ var knockup_timer: float = 0.0
 var last_attacker: GameEntity = null
 var last_hit_timer: float = 0.0
 var vision_expose_timer: float = 0.0  # 攻击暴露视野残留（2秒）
+var skill_reveal_timer: float = 0.0   # 技能侦察视野（鲁班2/后羿R，2秒；可照出草丛/隐身）
+var skill_reveal_team: int = -1       # 施放侦察技能的一方，避免敌方也共享该视野
 var _last_skill_id: int = -999
 var last_type: bool = false
 var is_dead: bool = false
@@ -515,6 +518,8 @@ func _add_cc_span(agg: Dictionary, hero_name: String, skill_id: int, dur: float)
 	agg[key]["duration"] = float(agg[key]["duration"]) + dur
 
 func _process(delta: float) -> void:
+	if skill_reveal_timer > 0.0:
+		skill_reveal_timer = maxf(0.0, skill_reveal_timer - delta)
 	if knockup_timer > 0:
 		knockup_timer -= delta * (1.0 + toughness)
 		attack_timer =0.5
@@ -1151,43 +1156,47 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 		return move_dir
 	if not PathFinder.initialized:
 		return move_dir
-	# 卡墙检测：距离上次记录位置超过0.3m则重置
-	var moved_since_check = global_position.distance_squared_to(_stuck_pos)
-	if moved_since_check > 0.09:
-		_stuck_timer = 0.0
+	# 卡墙检测：无目的地（玩家直控）时用位移判据；有目的地时用「沿目标方向的真实前进量」，
+	# 避免 CollisionSystem 每帧推离造成的来回抖动把卡墙计时器一直骗重置。
+	if destination == Vector3.ZERO:
+		if _stuck_timer > 0.0 and global_position.distance_squared_to(_stuck_pos) > 0.09:
+			_stuck_timer = 0.0
+			_stuck_recovery_dir = Vector3.ZERO
 		_stuck_pos = global_position
-		_stuck_recovery_dir = Vector3.ZERO
+		_net_dist = -1.0
+		_net_timer = 0.0
+		_net_travel = 0.0
+		_net_progress = 0.0
 	else:
-		_stuck_timer += delta
-	# 净进展看门狗：贴着墙来回滑行时每帧都能挪一点，会把上面的 0.3m 重置一直触发、
-	# 永远进不了贴墙恢复。改成每 1.2 秒检查一次「是否真的更靠近目的地」。
-	# 注意要同时要求「这段时间总位移很小」才判定卡墙：追击移动靶时距离可能保持不变，
-	# 但只要人在跑就不算卡住，否则会误触发侧滑/清路径，反而把 AI 晃成抽筋。
-	if destination != Vector3.ZERO:
 		if _net_dist < 0.0:
 			_net_dist = global_position.distance_to(destination)
 			_net_timer = 0.0
 			_net_travel = 0.0
+			_net_progress = 0.0
 			_net_prev = global_position
-		_net_travel += global_position.distance_to(_net_prev)
+		var step := global_position - _net_prev
+		_net_travel += step.length()
+		var to_dest := destination - global_position
+		to_dest.y = 0.0
+		if to_dest.length() > 0.1:
+			_net_progress += step.dot(to_dest.normalized())
 		_net_prev = global_position
 		_net_timer += delta
 		if _net_timer >= 1.2:
 			var cur_d: float = global_position.distance_to(destination)
-			# 既没有靠近目的地、又几乎没走动 → 真的被墙卡住
-			if _net_dist - cur_d < 0.5 and _net_travel < 1.5:
+			# 距离没变近、沿目标方向也几乎没前进（贴墙来回抖）→ 真卡墙
+			if _net_dist - cur_d < 0.5 and _net_progress < 0.4:
 				_stuck_timer = maxf(_stuck_timer, 1.6)
 				_stuck_recovery_dir = Vector3.ZERO   # 让下面立刻重新选侧向
 				_nav_target = Vector3.ZERO           # 作废旧路径，下次重算
 				_nav_path = PackedVector3Array()
 				_nav_index = 0
+			else:
+				_stuck_timer = 0.0
 			_net_dist = cur_d
 			_net_timer = 0.0
 			_net_travel = 0.0
-	else:
-		_net_dist = -1.0
-		_net_timer = 0.0
-		_net_travel = 0.0
+			_net_progress = 0.0
 	# 卡墙超过1.5秒：进入贴墙滑行恢复
 	if _stuck_timer > 1.5 and _stuck_recovery_dir.length() < 0.01:
 		# 尝试垂直于原移动方向的左右两侧

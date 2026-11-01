@@ -57,6 +57,7 @@ const SNAP_SCORE := 10        # 顶部实时战况（击杀比分+经济比分�
 const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _build_respawn_rows 尾段；长度守卫防旧 host）
 const SNAP_VISION := 12       # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 const SNAP_HEALTH_PACKS := 13 # 血包状态 [x,z,team,available,cooldown_timer,respawn_time]
+const SNAP_SKILL_REVEALS := 14 # 技能侦察区域 [x,z,radius]（鲁班2/后羿R）
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 const MOVE_JUMP_UNITS := 100.0    # 相邻快照样本位移超此即判瞬移/位移技能/回城：直接贴最新，不插值滑行
 
@@ -904,6 +905,10 @@ func _on_snapshot(snap: Array) -> void:
 		_apply_health_packs(snap[SNAP_HEALTH_PACKS])
 	else:
 		_apply_health_packs([])
+	if snap.size() > SNAP_SKILL_REVEALS:
+		_mm.skill_reveal_rows = snap[SNAP_SKILL_REVEALS]
+	else:
+		_mm.skill_reveal_rows = []
 
 func _apply_health_packs(rows: Array) -> void:
 	_health_pack_available.clear()

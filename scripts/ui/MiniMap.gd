@@ -40,6 +40,8 @@ var zoomed: bool = false
 var _zoom_pos := Vector2.ZERO
 var _zoom_scale := Vector2.ONE
 var _zoom_z := 0
+var _zoom_parent: Node = null
+var _zoom_parent_layer: CanvasLayer = null
 
 # 性能优化：地形底图预渲染为纹理，避免每帧 14400 次 draw_rect
 var _terrain_texture: ImageTexture = null
@@ -202,10 +204,15 @@ func enter_zoom():
 	_zoom_pos = position
 	_zoom_scale = scale
 	_zoom_z = z_index
-	var vp := get_viewport().get_visible_rect().size
+	# 原地放大（不移动到屏幕中间），并临时提升到高 CanvasLayer 盖住所有 HUD/触控层
 	scale = Vector2(2.0, 2.0)
-	position = (vp - size * scale) * 0.5
-	z_index = _zoom_z + 20   # 放大时盖住同层 HUD 元素（收起时还原）
+	_zoom_parent = get_parent()
+	_zoom_parent_layer = CanvasLayer.new()
+	_zoom_parent_layer.layer = 200
+	if _zoom_parent != null:
+		_zoom_parent.add_child(_zoom_parent_layer)
+		reparent(_zoom_parent_layer, false)
+	z_index = 0
 	queue_redraw()
 
 func exit_zoom():
@@ -214,6 +221,11 @@ func exit_zoom():
 	position = _zoom_pos
 	scale = _zoom_scale
 	z_index = _zoom_z
+	if _zoom_parent_layer != null and is_instance_valid(_zoom_parent_layer):
+		if _zoom_parent != null and is_instance_valid(_zoom_parent):
+			reparent(_zoom_parent, false)
+		_zoom_parent_layer.queue_free()
+	_zoom_parent_layer = null
 	queue_redraw()
 
 func _get_entity_at_minimap(local_pos: Vector2) -> GameEntity:
@@ -655,6 +667,9 @@ func _fog_sources() -> Array:
 			for d in battle.get_dead_visions(player_team):
 				out.append({"p": d.get("pos", Vector3.ZERO),
 					"r": 18.0 if str(d.get("kind", "")) == "turret" else 9.0})
+		if battle.has_method("get_skill_reveal_zones"):
+			for z in battle.get_skill_reveal_zones(player_team):
+				out.append({"p": z.get("pos", Vector3.ZERO), "r": float(z.get("r", 8.0))})
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	out.append({"p": Vector3(-53.0, 0.0, 53.0), "r": 18.0})
 	return out

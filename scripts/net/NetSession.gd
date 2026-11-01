@@ -1513,6 +1513,14 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 			float(hp.get("cooldown_timer")), float(hp.get("respawn_time"))])
 	out.append(hp_rows)
 
+	# 技能侦察区域：[x,z,radius]（鲁班2/后羿R 命中点 2 秒照亮小地图）
+	var reveal_rows: Array = []
+	if bm.has_method("get_skill_reveal_zones"):
+		for z in bm.get_skill_reveal_zones(viewer):
+			reveal_rows.append([float(z.get("pos", Vector3.ZERO).x),
+				float(z.get("pos", Vector3.ZERO).z), float(z.get("r", 8.0))])
+	out.append(reveal_rows)
+
 	return out
 
 
@@ -1543,6 +1551,9 @@ func _pos_in_vision(p: Vector3, sources: Array) -> bool:
 ## - 红方没有 host 的视野状态，用红方自己的英雄/小兵/塔 18m 视野源判定。
 func _sees_unit(e: Node, viewer: int, sources: Array) -> bool:
 	if int(e.get("team")) == viewer:
+		return true
+	# 鲁班2/后羿R 技能侦察：双方客户端都强制可见，且优先于草丛/隐身隐藏
+	if float(e.get("skill_reveal_timer")) > 0.0 and int(e.get("skill_reveal_team")) == viewer:
 		return true
 	if viewer == TEAM_PLAYER and (bool(e.get("visible")) or float(e.get("vision_expose_timer")) > 0.0):
 		return true

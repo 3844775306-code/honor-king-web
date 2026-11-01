@@ -29,6 +29,7 @@ var player_team := TEAM_PLAYER
 var views := {}              # net_id -> view（NetClientBattle 每帧整体替换引用）
 var residual_vision: Array = []   # 死亡视野残留 [{pos, r, until}，塔2s/小兵1s]
 var health_pack_available := {}   # 血包 key "x_z" -> available
+var skill_reveal_rows: Array = [] # 技能侦察区域 [x,z,radius]（鲁班2/后羿R）
 var vision_rows: Array = []  # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 var self_net := -1
 var own_recalling := 0       # 自己英雄回城中（画回城黄线）
@@ -565,6 +566,9 @@ func _fog_sources() -> Array:
 	for d in residual_vision:
 		if float(d.get("until", 0.0)) > now:
 			out.append({"p": d.get("pos", Vector3.ZERO), "r": float(d.get("r", 9.0))})
+	for z in skill_reveal_rows:
+		if z is Array and (z as Array).size() >= 3:
+			out.append({"p": Vector3(float(z[0]), 0.0, float(z[1])), "r": float(z[2])})
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	return out
 

@@ -179,6 +179,27 @@ func set_goal(pos):
 
 # 鲁班七号2技能：只有「身边」的小兵/野怪可被命中；离鲁班超过3米的非英雄目标直接穿过。
 # 英雄不受距离限制（全图炮的核心用途）。
+## 鲁班2/后羿R 的侦察视野：命中点周围敌方单位强制可见 2 秒
+func _reveal_enemies_around(center: Vector3, radius: float) -> void:
+	if source == null or not is_instance_valid(source):
+		return
+	for ent in get_tree().get_nodes_in_group("entities"):
+		if ent == source or not is_instance_valid(ent):
+			continue
+		if int(ent.team) == int(team) or ent.health <= 0:
+			continue
+		if ent is Turret:
+			continue
+		if center.distance_to(ent.global_position) > radius:
+			continue
+		ent.vision_expose_timer = maxf(float(ent.vision_expose_timer), 2.0)
+		ent.skill_reveal_timer = maxf(float(ent.skill_reveal_timer), 2.0)
+		ent.skill_reveal_team = int(team)
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.has_method("add_skill_reveal_zone"):
+		bm.call("add_skill_reveal_zone", int(team), center, radius, 2.0)
+
+
 func _luban_w_can_hit(entity) -> bool:
 	if not luban_w_knockback:
 		return true
@@ -310,6 +331,9 @@ func _physics_process(delta):
 				if (houyi_r or luban_w_knockback) and entity is Hero:
 					entity.set_meta("mm_shot_hit_ms", Time.get_ticks_msec())
 					entity.set_meta("mm_shot_hit_kind", "houyi" if houyi_r else "luban")
+				# 鲁班2 / 后羿R：命中后照亮落点周围敌人视野 2 秒
+				if is_houyi_ult or luban_w_knockback:
+					_reveal_enemies_around(global_position, 8.0)
 				if source.display_name == "铠" and skill_id == 1:
 					target.apply_move_pct_buff("ms_slow", 1, -0.9, true)
 					var kai_q_level = source.skill_levels[0]
