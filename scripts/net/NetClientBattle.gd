@@ -3152,12 +3152,26 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 		"hidden": bool(v.get("hidden", false)) and Config.is_ally(int(v.team)),
 		"lyf": v.get("lyf", [])}
 
+## 补刀提示（同 host HUD last_hit 规则）：本机英雄一次普攻、税前护甲按 602 公式减免
+func _last_hit_of(team: int, hp: float, armor: float) -> bool:
+	var _atk := float(_own.get("aa_dmg", 0.0))
+	if _atk <= 0.0 or hp <= 0.0:
+		return false
+	if team == int(_manifest.get("team", TEAM_PLAYER)):
+		return false
+	var _pen := float(_own.get("flat_pen", 0.0))
+	var res := maxf(0.0, armor - _pen)
+	var dmg := _atk * (1.0 - res / (res + 602.0))
+	return hp < dmg
+
+
 func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, label_off: float,
 		epic := false, turret := false, ticks := false, tick_step := 1000.0,
 		monster := false, small := false) -> Dictionary:
 	return {"kind": "unit", "nid": nid, "cx": sp.x, "cy": sp.y, "w": w, "h": h,
 		"team": int(v.team), "epic": epic, "shield": float(v.get("shield", 0.0)),
 		"armor": float(v.get("armor", 0.0)),
+		"last_hit": _last_hit_of(int(v.team), float(v.hp), float(v.get("armor", 0.0))),
 		"name": str(v.get("name", "")), "hp": float(v.hp), "maxhp": float(v.maxhp),
 		"label_off": label_off, "lyf": v.get("lyf", []), "mk": v.get("mk", []),
 		"turret": turret, "ticks": ticks, "tick_step": tick_step,
@@ -5502,7 +5516,7 @@ class Hud:
 			"team": int(r.get("team", 9)), "team_color": _team_color(int(r.get("team", 9))),
 			"shield": shield, "epic": bool(r.get("epic", false)),
 			"ticks": bool(r.get("ticks", false)), "tick_step": float(r.get("tick_step", 1000.0)),
-			"interfere": 0.0, "last_hit": _last_hit_of(int(r.get("team", 9)), hp_now, float(r.get("armor", 0.0))),
+			"interfere": 0.0, "last_hit": bool(r.get("last_hit", false)),
 			"lag": hp_now + famt * fr, "flash_t": fr * 0.5, "flash_amt": famt,
 			"heal_t": 0.0, "heal_amt": 0.0, "doom": doom,
 			"show_name": false,   # 野怪血条不显示名字
@@ -5512,19 +5526,6 @@ class Hud:
 			"shield_icon": bool(r.get("shield_icon", false)),
 			"marker_list": mlist,
 		}
-
-	## 补刀提示（同 host HUD last_hit 规则）：取本机英雄一次普攻（税前按护甲减免）
-	func _last_hit_of(team: int, hp: float, armor: float) -> bool:
-		var _atk := float(_own.get("aa_dmg", 0.0))
-		if _atk <= 0.0 or hp <= 0.0:
-			return false
-		if team == int(_manifest.get("team", TEAM_PLAYER)):
-			return false
-		var _pen := float(_own.get("flat_pen", 0.0))
-		var res := maxf(0.0, armor - _pen)
-		var dmg := _atk * (1.0 - res / (res + 602.0))
-		return hp < dmg
-
 
 	func _draw_unit_bar(r: Dictionary) -> void:
 		var bw := float(r.w)
