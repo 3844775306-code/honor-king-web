@@ -1188,6 +1188,7 @@ func _build_snapshot(bm: Node) -> Array:
 		var shield_on: int = 1 if e.tower_shield_active and e.tower_shield > 0.0 else 0
 		_trow.append(shield_on)
 		_trow.append(e.tower_shield)
+		_trow.append(1 if e.shield_protected_no_minion else 0)   # idx14：无兵线保护（客户端血条左侧盾形图标）
 		turrets.append(_trow)
 	out.append(turrets)
 
@@ -1490,7 +1491,8 @@ func _pack_hero(e: Node) -> Array:
 	return [_net_id_for(e), 0, e.team, e.global_position.x, e.global_position.z, e.health, _maxhp_of(e), e.level, str(e.display_name),
 		e.mana, _maxmana_of(e), e.shield_remaining, int(e.exp), int(e.exp_to_next),
 		_pack_lyf(e), e.rotation.y, 1 if bool(e.get("hidden_in_bush")) else 0,
-		str(e.get("player_name"))]   # idx17：玩家/AI 昵称（无英雄名时兜底显示）
+		str(e.get("player_name")),   # idx17：玩家/AI 昵称（无英雄名时兜底显示）
+		1 if bool(e.get("is_mvp")) else 0]   # idx18：MVP 王冠（客户端世界血条右侧徽章）
 
 
 func _maxmana_of(e: Node) -> float:

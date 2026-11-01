@@ -663,6 +663,7 @@ func _on_snapshot(snap: Array) -> void:
 			v.team = team
 			if typ == NET_HERO:
 				v.pname = str(ent[17]) if ent.size() > 17 else ""
+				v.mvp = int(ent[18]) == 1 if ent.size() > 18 else false
 			if typ == NET_JUNGLE:
 				if hp < float(v.get("prev_hp", hp)) - 0.5:
 					v["hit_t"] = _last_snap_time
@@ -711,6 +712,8 @@ func _on_snapshot(snap: Array) -> void:
 					v.tower_shield_active = int(ent[12]) == 1
 				if ent.size() > 13:
 					v.tower_shield = float(ent[13])
+				if ent.size() > 14:
+					v.shield_icon = int(ent[14]) == 1
 				# 倒塌：host 在 dying_visual 期间仍广播 hp=0 的塔 → 本地复刻坍塌动画
 				if float(v.get("hp", 1.0)) <= 0.0 and not v.get("dying", false):
 					v.dying = true
@@ -2629,7 +2632,11 @@ func _collect_world_bars() -> Array:
 			NET_HERO:
 				rows.append(_hero_bar_row(nid, v, sp))
 			NET_TURRET:
-				rows.append(_unit_bar_row(nid, v, sp, 300.0, 22.0, 92.0, false, true, true, 2000.0))
+				# 塔盾：host 血条读 tower.tower_shield（不是 entity.shield_remaining），同款接入
+				var _tsh: float = float(v.get("tower_shield", 0.0)) if bool(v.get("tower_shield_active", false)) else 0.0
+				var _trow := _unit_bar_row(nid, v, sp, 300.0, 22.0, 92.0, false, true, true, 2000.0)
+				_trow["shield"] = _tsh
+				rows.append(_trow)
 			NET_MINION:
 				var mn := str(v.get("name", ""))
 				var vanguard := mn.find("先锋") >= 0 or mn in ["dragon", "storm", "shadow_dragon"]
@@ -2656,7 +2663,7 @@ func _hero_bar_row(nid: int, v: Dictionary, sp: Vector2) -> Dictionary:
 	return {"kind": "hero", "nid": nid, "cx": sp.x, "cy": sp.y,
 		"name": str(v.get("name", "")), "pname": str(v.get("pname", "")), "level": int(v.get("level", 1)),
 		"hp": float(v.hp), "maxhp": float(v.maxhp), "hp_col": bar_col,
-		"shield": float(v.get("shield", 0.0)),
+		"shield": float(v.get("shield", 0.0)), "mvp": bool(v.get("mvp", false)),
 		"mana": float(v.get("mana", 0.0)), "maxmana": float(v.get("maxmana", 0.0)),
 		"exp": float(v.get("exp", 0.0)), "exp_to_next": float(v.get("exp_to_next", 0.0)),
 		"hidden": bool(v.get("hidden", false)) and int(v.team) != TEAM_ENEMY,
@@ -2670,7 +2677,8 @@ func _unit_bar_row(nid: int, v: Dictionary, sp: Vector2, w: float, h: float, lab
 		"name": str(v.get("name", "")), "hp": float(v.hp), "maxhp": float(v.maxhp),
 		"label_off": label_off, "lyf": v.get("lyf", []), "mk": v.get("mk", []),
 		"turret": turret, "ticks": ticks, "tick_step": tick_step,
-		"monster": monster, "small": small}
+		"monster": monster, "small": small,
+		"shield_icon": bool(v.get("shield_icon", false))}
 
 # —— 世界 / 相机 / HUD 搭建 ——
 func _make_mat(col: Color, rough := 0.9) -> StandardMaterial3D:
@@ -4511,6 +4519,49 @@ class Hud:
 		draw_circle(c, s * 0.20, eye_col)
 		draw_line(c + Vector2(-ew * 1.15, eh * 1.5), c + Vector2(ew * 1.15, -eh * 1.5), Color(1.0, 0.40, 0.34, 0.95), 2.2)
 
+	# MVP 王冠（复刻 host HeroInfoControl._draw_mvp_badge，尺寸随血条高度）
+	func _draw_mvp_badge(c: Vector2, r: float) -> void:
+		var t: float = Time.get_ticks_msec() * 0.001
+		var pulse: float = 0.5 + 0.5 * sin(t * 2.1)
+		draw_circle(c, r * (1.46 + 0.08 * pulse), Color(1.0, 0.78, 0.30, 0.08 + 0.05 * pulse))
+		draw_circle(c, r * 1.14, Color(1.0, 0.70, 0.22, 0.18))
+		draw_circle(c, r, Color(0.11, 0.07, 0.02, 0.97))
+		draw_arc(c, r - 1.0, 0.0, TAU, 48, Color(1.0, 0.80, 0.34, 0.95), 2.4)
+		draw_arc(c, r * 0.84, 0.0, TAU, 40, Color(1.0, 0.72, 0.24, 0.45), 1.1)
+		draw_arc(c, r - 1.8, PI * 1.12, PI * 1.86, 24, Color(1.0, 0.96, 0.82, 0.85), 1.5)
+		var s: float = r * 0.76
+		var pts := PackedVector2Array([
+			c + Vector2(-0.62, 0.26) * s, c + Vector2(-0.62, -0.18) * s,
+			c + Vector2(-0.31, 0.04) * s, c + Vector2(0.0, -0.48) * s,
+			c + Vector2(0.31, 0.04) * s, c + Vector2(0.62, -0.18) * s,
+			c + Vector2(0.62, 0.26) * s,
+		])
+		draw_colored_polygon(pts, Color(1.0, 0.84, 0.38, 0.98))
+		draw_rect(Rect2(c + Vector2(-0.62, 0.27) * s, Vector2(1.24, 0.17) * s), Color(1.0, 0.68, 0.16, 0.98))
+		for i in range(3):
+			var gx: float = -0.34 + 0.34 * i
+			draw_circle(c + Vector2(gx, 0.355) * s, s * 0.08, Color(0.26, 0.09, 0.02, 0.95))
+		for pp in [Vector2(-0.62, -0.18), Vector2(0.0, -0.48), Vector2(0.62, -0.18)]:
+			draw_circle(c + pp * s, s * 0.085, Color(1.0, 0.97, 0.86, 0.95))
+		draw_polyline(pts + PackedVector2Array([pts[0]]), Color(0.36, 0.19, 0.02, 0.85), 1.4)
+
+	# 无兵线保护盾形图标（复刻 host WorldBarPainter._draw_shield_icon）
+	func _draw_shield_glyph(c: Vector2, s: float, col: Color) -> void:
+		var pts := PackedVector2Array([
+			c + Vector2(-0.55 * s, -0.85 * s), c + Vector2(0.55 * s, -0.85 * s),
+			c + Vector2(0.62 * s, 0.0), c + Vector2(0.3 * s, 0.68 * s),
+			c + Vector2(0.0, 1.0 * s), c + Vector2(-0.3 * s, 0.68 * s),
+			c + Vector2(-0.62 * s, 0.0),
+		])
+		draw_colored_polygon(pts, Color(0, 0, 0, 0.45))
+		var inner := PackedVector2Array()
+		for q in pts:
+			inner.append(c + (q - c) * 0.84)
+		draw_colored_polygon(inner, col)
+		var outline := pts.duplicate()
+		outline.append(pts[0])
+		draw_polyline(outline, Color(0.10, 0.03, 0.05, 0.9), 1.5)
+
 	func _draw_hero_bar(r: Dictionary) -> void:
 		var cx := float(r.cx)
 		# 主机 HUD：position = 锚点屏幕位 - custom_minimum_size/2（HeroInfoControl 高 320 → /2=160）
@@ -4617,6 +4668,9 @@ class Hud:
 			draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0),
 					Color(1.0, 0.25, 0.18, 0.30 + 0.45 * pulse), false, 2.0)
 		draw_rect(Rect2(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0), Color(1, 1, 1, 0.16), false, 1.0)
+		# MVP 王冠（host：血条右侧金色王冠徽章，半径 = bar_height×0.66）
+		if bool(r.get("mvp", false)):
+			_draw_mvp_badge(Vector2(bx + bw + 12.0 + bh * 0.66, by + bh * 0.5), bh * 0.66)
 		# 法力条（同 host：半高、3 段蓝渐变 + 蓝边框）
 		var mana_max := float(r.get("maxmana", 0.0))
 		if mana_max > 0.0:
@@ -4717,6 +4771,10 @@ class Hud:
 							Color(1, 1, 1, 0.14), 1.0)
 						tx += tick_step
 			draw_rect(Rect2(left, top2, bw, bh), Color(tc.r, tc.g, tc.b, 0.5), false, 1.0)
+		# 无兵线保护盾形图标（host：画在血条左侧居中，高 74% 血条高、上限 20px）
+		if bool(r.get("shield_icon", false)):
+			var _ss: float = minf(bh * 0.74, 20.0)
+			_draw_shield_glyph(Vector2(left - (_ss + 10.0), top2 + bh * 0.5), _ss, _team_color(int(r.get("team", 9))))
 		# 防御塔：不画名称标签，改为血条下方一个指向塔身的小三角箭头
 		# host 规则：只有野怪显示名称（show_name = is_monster），字号 20、居中、带描边；小兵不挂名字
 		var label := str(r.get("name", ""))
