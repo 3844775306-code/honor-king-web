@@ -65,6 +65,7 @@ var luban_w_missing_hp_pct: float = 0.0   # 鲁班七号W：已损生命百分�
 var xiahou_r_dash: bool = false           # 夏侯惇R：命中后拉拽英雄
 var houyi_r: bool = false                   # 后羿R：全图火焰箭
 var houyi_r_origin: Vector3 = Vector3.ZERO  # 后羿R：发射位置
+var _reveal_tick := 0.0                      # 鲁班2/后羿R：飞行路径侦察节拍
 var is_houyi_ult: bool = false              # 后羿R：使用太阳火箭视觉
 var dayu_w: bool = false          # 大禹W子弹标记
 var dayu_r1: bool = false         # 大禹R1乾鼎标记
@@ -292,6 +293,12 @@ func _physics_process(delta):
 		var step = speed * delta
 		global_position += linear_dir * step
 		traveled += step
+		# 鲁班2/后羿R：飞行路径周围 3 米持续侦察，敌人被照出 2 秒
+		if is_houyi_ult or luban_w_knockback:
+			_reveal_tick -= delta
+			if _reveal_tick <= 0.0:
+				_reveal_tick = 0.12
+				_reveal_enemies_around(global_position, 3.0)
 		# 后羿R：太阳火箭拖尾和旋转火环
 		if is_houyi_ult and visual_mesh:
 			# 旋转火环
@@ -331,9 +338,9 @@ func _physics_process(delta):
 				if (houyi_r or luban_w_knockback) and entity is Hero:
 					entity.set_meta("mm_shot_hit_ms", Time.get_ticks_msec())
 					entity.set_meta("mm_shot_hit_kind", "houyi" if houyi_r else "luban")
-				# 鲁班2 / 后羿R：命中后照亮落点周围敌人视野 2 秒
+				# 鲁班2 / 后羿R：命中落点也补一次 3 米侦察（非命中路径的主要判定在飞行中）
 				if is_houyi_ult or luban_w_knockback:
-					_reveal_enemies_around(global_position, 8.0)
+					_reveal_enemies_around(global_position, 3.0)
 				if source.display_name == "铠" and skill_id == 1:
 					target.apply_move_pct_buff("ms_slow", 1, -0.9, true)
 					var kai_q_level = source.skill_levels[0]
