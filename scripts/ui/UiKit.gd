@@ -524,13 +524,20 @@ func damage_number_size(damage: float, is_crit: bool = false) -> int:
 
 
 ## 移动端输入：iOS 上 LineEdit 触摸不弹键盘时，Web 用 window.prompt 兜底，原生用显式虚拟键盘
-static func bind_mobile_text_edit(le: LineEdit, title: String = "请输入") -> void:
+static func bind_mobile_text_edit(le: LineEdit, title: String = "请输入", numeric: bool = false, allow_dot: bool = false, max_len: int = 15) -> void:
 	if le == null:
 		return
 	le.set("virtual_keyboard_enabled", true)
 	le.gui_input.connect(func(ev: InputEvent) -> void:
 		if not (ev is InputEventScreenTouch) or not (ev as InputEventScreenTouch).pressed:
 			return
+		if numeric:
+			# 数字输入（IP/端口）：直接弹游戏内数字键盘，完全不依赖系统虚拟键盘（iOS 最稳）
+			var pad = load("res://scripts/ui/MobileNumberPad.gd")
+			if pad != null:
+				pad.open(le, title, allow_dot, max_len)
+				le.accept_event()
+				return
 		if OS.has_feature("web"):
 			var res = JavaScriptBridge.eval("window.prompt(%s, %s)" % [
 				JSON.stringify(title), JSON.stringify(str(le.text))], true)

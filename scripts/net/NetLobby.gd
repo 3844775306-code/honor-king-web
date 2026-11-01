@@ -587,8 +587,8 @@ func _show_menu() -> void:
 	_ip_edit = ip_edit
 	_port_edit = port_edit
 	# iOS/移动端：标准 LineEdit 触摸可能不弹系统键盘，绑定兜底输入
-	UiKit.bind_mobile_text_edit(ip_edit, "主机 IP（如 192.168.1.10）")
-	UiKit.bind_mobile_text_edit(port_edit, "房间端口（默认 7000）")
+	UiKit.bind_mobile_text_edit(ip_edit, "主机 IP（如 192.168.1.10）", true, true, 15)
+	UiKit.bind_mobile_text_edit(port_edit, "房间端口（默认 7000）", true, false, 5)
 
 	# 功能按钮拆成两行两列：原来 4 个挤一行，最小宽度会把右栏撑出屏幕
 	var act_row1 := HBoxContainer.new()
