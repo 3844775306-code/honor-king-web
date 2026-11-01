@@ -269,6 +269,10 @@ func _sample(delta: float, finishing: bool) -> void:
 	_frames.append({
 		"t": t_ms, "h": hero_row, "tn": trow,
 		"g": [int(round(float(bm.get("team_player_gold")))), int(round(float(bm.get("team_enemy_gold"))))],
+		"obj": [float(bm.get("tyrant_timer")) if bm.get("tyrant_timer") != null else 0.0,
+			1 if bm.get("tyrant_alive") else 0,
+			float(bm.get("dragon_timer")) if bm.get("dragon_timer") != null else 0.0,
+			1 if bm.get("dragon_alive") else 0],
 	})
 	# 推塔 / 水晶事件
 	var alive_now := _turret_alive()
@@ -326,6 +330,15 @@ func note_popup(kind: String, pos: Vector3, data: Dictionary) -> void:
 		"x": int(round(pos.x * 100.0)), "y": int(round(pos.y * 100.0)), "z": int(round(pos.z * 100.0)),
 		"d": data,
 	})
+
+
+## 战报（击杀/塔/龙/多杀）：由 UI_Manager.show_kill_feed 在真实对局中回调
+func note_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int, assists: Array) -> void:
+	if _saved or not _started:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_events.append({"t": int(round(gt * 1000.0)), "k": "feed", "a": str(actor), "at": int(actor_team),
+		"d": str(desc), "v": str(victim), "vt": int(victim_team), "as": assists})
 
 
 func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,

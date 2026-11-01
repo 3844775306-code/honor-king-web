@@ -61,6 +61,7 @@ func _draw() -> void:
 	var _r := _minimap_rect()
 	_mm_inner = Rect2(_r.position + Vector2(7, 7) * _s, _r.size - Vector2(14, 14) * _s)
 	_draw_info()
+	_draw_feed()
 	_draw_minimap()
 	_draw_roster()
 	var follow: int = int(st.get("follow", -1))
@@ -157,6 +158,22 @@ func _draw_minimap() -> void:
 	var tex := _ensure_static_tex(inner)
 	if tex != null:
 		draw_texture_rect(tex, inner, false)
+	# 视野雾：以己方英雄/小兵/塔为视野源，按对局小地图同款网格压暗
+	var vision: Array = []
+	for h in st.get("heroes", []):
+		if Config.is_ally(int(h.get("team", 0))) and int(h.get("alive", 1)) == 1:
+			vision.append({"p": Vector3(float(h.get("wx", 0)), 0.0, float(h.get("wz", 0))), "r": 24.0})
+	for m in st.get("minions", []):
+		if Config.is_ally(int(m.get("team", 0))):
+			vision.append({"p": Vector3(float(m.get("wx", 0)), 0.0, float(m.get("wz", 0))), "r": 9.0})
+	for tt0 in st.get("turrets", []):
+		if Config.is_ally(int(tt0.get("team", 0))) and int(tt0.get("alive", 1)) == 1:
+			vision.append({"p": Vector3(float(tt0.get("wx", 0)), 0.0, float(tt0.get("wz", 0))), "r": 20.0})
+	if not vision.is_empty():
+		var fog := MinimapDrawScript.fog_grid(vision, 120.0, 12.0)
+		draw_set_transform(inner.position, 0.0, Vector2.ONE)
+		MinimapDrawScript.draw_fog(self, fog, inner.size.x, 0.26)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	# 防御塔（对局同款图标：外塔方/内塔带框/高地菱形/水晶六边形 + 血条）
 	for tt in st.get("turrets", []):
 		var tp := _world_to_mm(Vector3(float(tt.get("wx", 0.0)), 0.0, float(tt.get("wz", 0.0))), inner)
@@ -222,6 +239,12 @@ func _draw_minimap() -> void:
 		var corners: PackedVector2Array = MinimapDrawScript.viewport_corners(cam, cb)
 		if corners.size() >= 3:
 			MinimapDrawScript.draw_viewport(self, corners, false)
+	# 暴君/主宰计时（小地图下方，与对局同款文字样式）
+	var objs: Array = st.get("objectives", [])
+	if not objs.is_empty():
+		draw_set_transform(inner.position, 0.0, Vector2.ONE)
+		MinimapDrawScript.draw_objectives(self, objs, inner.size.x)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	UiKit.text(self, Vector2(rect.position.x + 10.0 * _s, rect.position.y + 18.0 * _s),
 		"小地图（拖动移视角）", int(round(13.0 * _s)), Color(0.78, 0.86, 0.98))
 
@@ -231,6 +254,43 @@ func _world_to_mm_cb(w: Vector3) -> Vector2:
 
 
 var _mm_inner := Rect2()
+
+
+# ---------------- 击杀战报（右边栏，与对局播报一致的头像+播报文字） ----------------
+
+func _draw_feed() -> void:
+	var items: Array = st.get("feed", [])
+	if items.is_empty():
+		return
+	var vp := _vp()
+	var w := 460.0 * _s
+	var row_h := 44.0 * _s
+	for i in range(mini(items.size(), 5)):
+		var it: Dictionary = items[items.size() - 1 - i]
+		var age: float = float(it.get("age", 0.0))
+		var a: float = clampf(1.0 - (age - 4.8) / 1.2, 0.0, 1.0)
+		if a <= 0.0:
+			continue
+		var r := Rect2(vp.x - 24.0 * _s - w, 118.0 * _s + float(i) * row_h, w, row_h - 5.0 * _s)
+		draw_style_box(UiKit.flat(0.8, 8, 1, Color(0.45, 0.62, 1.0, 0.22),
+			Color(0.03, 0.045, 0.075, 0.88 * a), 6.0, 4.0), r)
+		var acol: Color = Color(0.35, 0.85, 1.0) if Config.is_ally(int(it.get("at", 0))) else Color(1.0, 0.42, 0.36)
+		var fs := int(round(17.0 * _s))
+		if HeroArt != null:
+			HeroArt.draw_portrait(self, r.position + Vector2(22.0 * _s, r.size.y * 0.5), 14.0 * _s,
+				str(it.get("a", "")), acol, false)
+		UiKit.text(self, Vector2(r.position.x + 44.0 * _s, r.position.y + 20.0 * _s), str(it.get("a", "")),
+			fs, Color(0.95, 0.98, 1.0, a))
+		UiKit.text(self, Vector2(r.position.x + 150.0 * _s, r.position.y + 20.0 * _s), str(it.get("d", "")),
+			fs, Color(1.0, 0.88, 0.55, a))
+		var vname := str(it.get("v", ""))
+		if vname != "":
+			var vcol: Color = Color(0.35, 0.85, 1.0) if Config.is_ally(int(it.get("vt", 0))) else Color(1.0, 0.42, 0.36)
+			UiKit.text(self, Vector2(r.position.x + 258.0 * _s, r.position.y + 20.0 * _s), vname,
+				fs, Color(0.95, 0.98, 1.0, a))
+			if HeroArt != null:
+				HeroArt.draw_portrait(self, r.position + Vector2(r.size.x - 24.0 * _s, r.size.y * 0.5),
+					14.0 * _s, vname, vcol, false)
 
 
 # ---------------- 全局英雄信息面板 ----------------

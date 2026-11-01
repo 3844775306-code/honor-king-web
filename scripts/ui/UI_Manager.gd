@@ -955,6 +955,12 @@ func _format_hero_lane_line(h: Hero, assigned_lane: int, is_ai: bool) -> String:
 ## assists：[{name:String, team:int}]（可选；推塔时可含小兵）。英雄头像会自动带原初印记等级。
 func show_kill_feed(actor: String, actor_team: int, desc: String, victim: String = "", victim_team: int = -1,
 		assists: Array = []):
+	var _rrec_feed = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_feed != null:
+		var _as_rows: Array = []
+		for a in assists:
+			_as_rows.append({"name": str(a.get("name", "")), "team": int(a.get("team", 0))})
+		_rrec_feed.call("note_feed", actor, actor_team, desc, victim, victim_team, _as_rows)
 	# 原初印记等级在“事件发生这一刻”取样（排队延迟播出时不跟着变）
 	var a_mark := _feed_mark_of(actor)
 	var v_mark := _feed_mark_of(victim)
