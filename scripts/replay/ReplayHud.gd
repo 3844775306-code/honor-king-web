@@ -16,8 +16,13 @@ const ROSTER_W := 306.0
 const SKILL_SIZE := 148.0
 
 var _s := 1.0
+var _f: Font = null
+var _ring_hits: Array = []      # [[hero_idx, Rect2], …] 头像行命中
+var _attr_head_rect := Rect2()
+var attr_collapsed := false     # 属性面板折叠（同单机）
 
 func _ready() -> void:
+	_f = UiKit.font()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
@@ -46,6 +51,13 @@ func hit(pos: Vector2) -> Dictionary:
 	var W: float = size.x if size.x > 1.0 else _vp().x
 	if Rect2(W - 781.0, 6.0, 410.0, 190.0).has_point(pos) or Rect2(W - 776.0, 8.0, 250.0, 44.0).has_point(pos):
 		return {"type": "band"}
+	# 复活/观战头像行（小地图右侧，所有人常显，可点切换主视角）
+	for hrow in _ring_hits:
+		if (hrow[1] as Rect2).has_point(pos):
+			return {"type": "hero_ring", "idx": int(hrow[0])}
+	# 属性面板标题条：展开/收起
+	if _attr_head_rect.size.x > 0.0 and _attr_head_rect.has_point(pos):
+		return {"type": "attr_head"}
 	var mr := _minimap_rect()
 	if mr.has_point(pos):
 		var fx: float = clampf((pos.x - mr.position.x) / mr.size.x, 0.0, 1.0)
@@ -69,9 +81,8 @@ func _draw() -> void:
 	_mm_inner = Rect2(_r.position + Vector2(7, 7) * _s, _r.size - Vector2(14, 14) * _s)
 	_draw_death_overlay()   # 跟随英雄阵亡：全屏压暗（同 host death overlay），HUD 仍在上层
 	_draw_info()
-	_draw_feed()
 	_draw_minimap()
-	_draw_roster()
+	_draw_hero_rings()
 	var follow: int = int(st.get("follow", -1))
 	if follow >= 0:
 		_draw_attrs(follow)
@@ -421,33 +432,152 @@ func _draw_roster() -> void:
 # ---------------- 主视角：属性面板 ----------------
 
 func _draw_attrs(idx: int) -> void:
-	var heroes: Array = st.get("heroes", [])
-	if idx < 0 or idx >= heroes.size():
+	# 与单机/联机同款：18 行属性面板（基础白 / +装备绿 / +增益橙，两列 9 行，可折叠）
+	var sa: Array = st.get("sa", [])
+	var cfg: Array = UiManager.ATTRIBUTE_ROWS
+	var n := mini(cfg.size(), int(sa.size() / 3))
+	if n <= 0:
+		_attr_head_rect = Rect2()
 		return
-	var h: Dictionary = heroes[idx]
-	var mm := _minimap_rect()
-	var rect := Rect2(mm.position.x, 40.0 + UiKit.safe_top() + 450.0 + 10.0, 300.0 * _s, 214.0 * _s)
-	draw_style_box(UiKit.flat(0.72, 12, 1, Color(0.45, 0.62, 1.0, 0.26), Color(0.03, 0.045, 0.075, 0.92), 8.0, 8.0), rect)
-	var fs := int(round(16.0 * _s))
-	var cap := "主视角 · %s（Esc 回自由镜头）" % str(h.get("name", ""))
-	UiKit.text(self, Vector2(rect.position.x + 12.0 * _s, rect.position.y + 24.0 * _s), cap,
-		int(round(15.0 * _s)), Color(1.0, 0.9, 0.55))
-	var rows := [
-		["物理攻击", "%d" % int(h.get("ad", 0))],
-		["法术强度", "%d" % int(h.get("ap", 0))],
-		["护甲", "%d" % int(h.get("armor", 0))],
-		["魔抗", "%d" % int(h.get("mr", 0))],
-		["移速", "%.0f" % (float(h.get("ms", 0)) / 10.0)],
-		["攻速", "%d%%" % int(h.get("as", 0))],
-	]
-	var y := rect.position.y + 52.0 * _s
-	for r in rows:
-		UiKit.text(self, Vector2(rect.position.x + 16.0 * _s, y), str(r[0]), fs, Color(0.72, 0.8, 0.92))
-		UiKit.text(self, Vector2(rect.position.x + 150.0 * _s, y), str(r[1]), fs, Color(0.96, 0.98, 1.0))
-		y += 26.0 * _s
+	var pad := 12.0 * _s
+	var head_h := 30.0 * _s
+	var legend_h := 26.0 * _s
+	var row_h := 28.0 * _s
+	var col_w := 200.0 * _s
+	var col_gap := 12.0 * _s
+	var ncol := 2
+	var per_col := int(ceil(float(n) / float(ncol)))
+	var panel_w := pad * 2.0 + col_w * float(ncol) + col_gap * float(ncol - 1)
+	var panel_h := pad * 2.0 + head_h + legend_h + row_h * float(per_col)
+	if attr_collapsed:
+		panel_w = minf(panel_w, 450.0)
+		panel_h = pad * 2.0 + head_h
+	var left := 40.0 + UiKit.safe_left()
+	var top := 40.0 + UiKit.safe_top() + 460.0
+	draw_style_box(UiKit.flat(0.5, 12, 1), Rect2(left, top, panel_w, panel_h))
+	_attr_head_rect = Rect2(left, top, panel_w, maxf(panel_h, head_h + pad * 2.0))
+	var hs := int(round(16.0 * _s))
+	draw_string(_f, Vector2(left + pad, top + 2.0 * _s + (head_h - (_f.get_ascent(hs) + _f.get_descent(hs))) * 0.5 + _f.get_ascent(hs)),
+		"属性  ▼" if attr_collapsed else "属性  ▲", HORIZONTAL_ALIGNMENT_LEFT, -1, hs, Color(0.85, 0.9, 1.0, 0.95))
+	if attr_collapsed:
+		return
+	var lys := int(round(13.0 * _s))
+	var ly := top + pad + head_h + (_f.get_ascent(lys) + _f.get_descent(lys)) * 0.5 + _f.get_ascent(lys)
+	var lx := left + pad
+	for lg in [["基础", Color.WHITE], ["  +装备", ATTR_EQUIP_C], ["  +增益", ATTR_BUFF_C]]:
+		var lt: String = str(lg[0])
+		draw_string(_f, Vector2(lx, ly), lt, HORIZONTAL_ALIGNMENT_LEFT, -1, lys, lg[1])
+		lx += _f.get_string_size(lt, HORIZONTAL_ALIGNMENT_LEFT, -1, lys).x
+	var y0 := top + pad + head_h + legend_h
+	var rfs := int(round(15.0 * _s))
+	for i in range(n):
+		var c: Dictionary = cfg[i]
+		var col := int(i / per_col)
+		var ri := i % per_col
+		var x0 := left + pad + float(col) * (col_w + col_gap)
+		var mult := float(c.get("mult", 1.0))
+		var pct := bool(c.get("pct", false))
+		var base_v := float(sa[i * 3]) * mult
+		var equip_v := float(sa[i * 3 + 1]) * mult
+		var buff_v := float(sa[i * 3 + 2]) * mult
+		var row_y := y0 + float(ri) * row_h + row_h * 0.72
+		var nm: String = str(c.get("name", "")) + "  "
+		draw_string(_f, Vector2(x0, row_y), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, ATTR_NAME_C)
+		var tx := x0 + _f.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs).x
+		var wrote := false
+		for k in range(3):
+			var v: float = [base_v, equip_v, buff_v][k]
+			if absf(v) < 0.05:
+				continue
+			var t2: String = _attr_txt(v, pct)
+			if k > 0 and v > 0.0:
+				t2 = "+" + t2
+			var ccol: Color = [ATTR_BASE_C, ATTR_EQUIP_C, ATTR_BUFF_C][k]
+			draw_string(_f, Vector2(tx, row_y), t2, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, ccol)
+			tx += _f.get_string_size(t2, HORIZONTAL_ALIGNMENT_LEFT, -1, rfs).x
+			wrote = true
+		if not wrote:
+			draw_string(_f, Vector2(tx, row_y), "0", HORIZONTAL_ALIGNMENT_LEFT, -1, rfs, ATTR_BASE_C)
 
 
-# ---------------- 主视角：技能按钮冷却（对局同款扇形） ----------------
+const ATTR_BASE_C := Color(0.94, 0.96, 1.0)
+const ATTR_EQUIP_C := Color(0.55, 1.0, 0.62)
+const ATTR_BUFF_C := Color(1.0, 0.75, 0.4)
+const ATTR_NAME_C := Color(0.74, 0.8, 0.92)
+
+
+func _attr_txt(v: float, pct: bool) -> String:
+	if pct:
+		return "%.0f%%" % (v * 100.0)
+	if absf(v) >= 100.0:
+		return "%d" % int(round(v))
+	return "%.1f" % v
+
+
+## 小地图右侧「所有人」英雄头像行（我方 5 + 敌方 5，死亡也显示，可点切主视角）
+func _draw_hero_rings() -> void:
+	_ring_hits.clear()
+	var heroes: Array = st.get("heroes", [])
+	if heroes.is_empty():
+		return
+	var my_team := int(st.get("me_team", 0))
+	var follow := int(st.get("follow", -1))
+	var x0 := 500.0 + UiKit.safe_left()
+	var y0 := 28.0 + UiKit.safe_top()
+	var cell_w := 130.0
+	var cell_h := 150.0
+	var sep_x := 4.0
+	var sep_y := 6.0
+	var rows: Array = [[], []]
+	for i in range(heroes.size()):
+		var h: Dictionary = heroes[i]
+		var row := 0 if int(h.get("team", 0)) == my_team else 1
+		rows[row].append([i, h])
+	var yy := y0
+	for row in rows:
+		var xx := x0
+		for item in row:
+			var idx: int = int(item[0])
+			var h2: Dictionary = item[1]
+			var cell := Rect2(xx, yy, cell_w, cell_h)
+			_draw_hero_ring_cell(h2, cell, idx == follow)
+			_ring_hits.append([idx, cell])
+			xx += cell_w + sep_x
+		yy += cell_h + sep_y
+
+
+func _draw_hero_ring_cell(h: Dictionary, r: Rect2, is_follow: bool) -> void:
+	var c := r.position + Vector2(r.size.x * 0.5, 70.0)
+	var ring_r := 56.25
+	var team := int(h.get("team", 0))
+	var alive := int(h.get("alive", 1)) == 1
+	var team_col := Color(0.0, 0.886, 1.0) if team == int(st.get("me_team", 0)) else Color(1.0, 0.33, 0.264)
+	HeroArt.draw_portrait(self, c, ring_r, str(h.get("name", "")), team_col, not alive)
+	draw_arc(c, ring_r + 3.75, 0.0, TAU, 48, Color.BLACK, 5.0)
+	if is_follow:
+		draw_arc(c, ring_r + 8.0, 0.0, TAU, 48, Color(1.0, 0.86, 0.4), 3.0)
+	if not alive:
+		var remain: float = float(h.get("revive", 0.0))
+		draw_arc(c, ring_r + 3.75, -PI * 0.5, -PI * 0.5 + TAU * clampf(remain / 10.0, 0.0, 1.0), 48, Color.WHITE, 5.0)
+		var fs := int(round(24.0 * _s))
+		var txt := str(int(ceil(remain)))
+		var tw := _f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		draw_string_outline(_f, Vector2(c.x - tw * 0.5, c.y + 9.0 * _s), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 3, Color(0, 0, 0, 0.75))
+		draw_string(_f, Vector2(c.x - tw * 0.5, c.y + 9.0 * _s), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
+	else:
+		var mx: float = maxf(1.0, float(h.get("mx", 1.0)))
+		var ratio: float = clampf(float(h.get("hp", 0.0)) / mx, 0.0, 1.0)
+		var hcol := Color(0.25, 1.0, 0.3) if ratio > 0.5 else (Color(1.0, 0.9, 0.2) if ratio > 0.25 else Color(1.0, 0.3, 0.2))
+		draw_arc(c, ring_r + 3.75, -PI * 0.5, -PI * 0.5 + TAU * ratio, 48, hcol, 5.0)
+	var lv := int(h.get("lvl", 1))
+	var k := int(h.get("k", 0)); var d := int(h.get("d", 0)); var a := int(h.get("a", 0))
+	var fs2 := int(round(14.0 * _s))
+	var label := "Lv.%d  %d/%d/%d" % [lv, k, d, a]
+	var tw2 := _f.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs2).x
+	draw_string(_f, Vector2(c.x - tw2 * 0.5, r.position.y + r.size.y - 12.0 * _s), label,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs2, Color(0.9, 0.94, 1.0))
+
+
 
 func _draw_skills(follow: int) -> void:
 	if follow < 0:

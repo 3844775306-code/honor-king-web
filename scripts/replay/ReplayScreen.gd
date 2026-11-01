@@ -15,6 +15,9 @@ const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetRecommendBarScript = preload("res://scripts/net/NetRecommendBar.gd")
 const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
 const RosterViewScript = preload("res://scripts/ui/RosterView.gd")
+const NetKillFeedScript = preload("res://scripts/net/NetKillFeed.gd")
+const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
+const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -74,7 +77,14 @@ var _tgt_panel = null
 var _rview = null
 var _rview_layer: CanvasLayer = null
 var _last_hero_rows: Array = []
-var _rb_cache := {}   # hero idx -> 最近一次推荐装 bundle（录像变化才记录，播放时续用）
+var _rb_cache := {}
+var _det_cache := {}      # hero idx -> 操作盘/HUD 细节（aa/sx/sa/summoner/recall）
+var _tt_cache: Array = []
+var _kfeed = null
+var _recall_view = null
+var _tdv = null
+var _tdv_layer: CanvasLayer = null
+var _me_team := 0   # hero idx -> 最近一次推荐装 bundle（录像变化才记录，播放时续用）
 var _hero_uis: Array = []          # [{info, fake, i}]
 var _hero_state: Array = []        # 每帧英雄状态（血/蓝/等级/经验/位置）
 var _unit_world: Array = []        # 本帧需要画血条的单位（世界坐标）
@@ -151,6 +161,7 @@ func _ready() -> void:
 	_events = _combined
 	_map = _doc.get("map", {})
 	var meta: Dictionary = _doc.get("meta", {})
+	_me_team = int(meta.get("player_team", int(Config.player_team)))
 	_duration = maxf(float(meta.get("duration", 0.0)), 1.0)
 	for ev in _events:
 		if str(ev.get("k", "")) == "k":
@@ -408,6 +419,24 @@ func _build_hud() -> void:
 	_rec_bar = NetRecommendBarScript.new()
 	rcl.add_child(_rec_bar)
 	_rec_bar.visible = false
+	# —— 击杀战报（复用联机同款 NetKillFeed：头像/印记/助攻行）——
+	var kcl := CanvasLayer.new()
+	kcl.layer = 70
+	add_child(kcl)
+	_kfeed = NetKillFeedScript.new()
+	kcl.add_child(_kfeed)
+	# —— 回城指示（同联机 NetRecall）——
+	var rcl2 := CanvasLayer.new()
+	rcl2.layer = 70
+	add_child(rcl2)
+	_recall_view = NetRecallScript.new()
+	rcl2.add_child(_recall_view)
+	# —— T 团队决策面板（共享 TeamDecisionView）——
+	_tdv_layer = CanvasLayer.new()
+	_tdv_layer.layer = 101
+	add_child(_tdv_layer)
+	_tdv = TeamDecisionViewScript.new()
+	_tdv_layer.add_child(_tdv)
 
 
 func _update_world_hud(t: float) -> void:
@@ -602,6 +631,7 @@ func _update_world_hud(t: float) -> void:
 			"pings": pings_st, "marks": marks_st, "camps": camps_st,
 			"me_team": int(meta_d.get("player_team", 0)),
 			"feed": feed_st, "objectives": obj_st,
+			"sa": _detail_for(_follow_hero).get("sa", []),
 		}
 		_hud2.queue_redraw()
 		_last_hero_rows = heroes_st
@@ -618,7 +648,7 @@ func _build_ui() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
 
-	# 顶部中央：标题 + 进度条 + 时间（右上角留给与对局同位置的战况带，y154 留给战报）
+	# 顶部中央：标题 + 快捷键提示（战报/战况带/头像行均在 HUD 层）
 	_title = Label.new()
 	_title.anchor_left = 0.5
 	_title.anchor_right = 0.5
@@ -637,13 +667,24 @@ func _build_ui() -> void:
 	var res: String = ("胜利" if win == int(Config.player_team) else "失败") if win >= 0 else "录像"
 	_title.text = "%s · %s · %s" % [str(my.get("name", "")), str(meta.get("mode", "")), res]
 
+	# 底部：回放进度条 + 回放相关按钮（回放专属，单机没有）
+	var bar := Panel.new()
+	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	bar.add_theme_stylebox_override("panel",
+		UiKit.flat(0.9, 14, 1, Color(0.45, 0.62, 1.0, 0.35), Color(0.05, 0.07, 0.11, 0.94), 14.0, 12.0))
+	bar.anchor_left = 0.0
+	bar.anchor_top = 1.0
+	bar.anchor_right = 0.0
+	bar.anchor_bottom = 1.0
+	bar.offset_left = 24.0 + UiKit.safe_left()
+	bar.offset_right = bar.offset_left + 1500.0
+	bar.offset_top = -104.0 - UiKit.safe_bottom()
+	bar.offset_bottom = -16.0 - UiKit.safe_bottom()
+	root.add_child(bar)
+
 	_slider = HSlider.new()
-	_slider.anchor_left = 0.5
-	_slider.anchor_right = 0.5
-	_slider.offset_left = -620.0
-	_slider.offset_right = 620.0
-	_slider.offset_top = 50.0
-	_slider.offset_bottom = 74.0
+	_slider.position = Vector2(20.0, 14.0)
+	_slider.size = Vector2(720.0, 24.0)
 	_slider.min_value = 0.0
 	_slider.max_value = _duration
 	_slider.step = 0.05
@@ -655,56 +696,39 @@ func _build_ui() -> void:
 			_apply_frame(_t))
 	_slider.drag_started.connect(func() -> void: _dragging = true)
 	_slider.drag_ended.connect(func(_v: bool) -> void: _dragging = false)
-	root.add_child(_slider)
+	bar.add_child(_slider)
 
 	_ui_time = Label.new()
-	_ui_time.anchor_left = 0.5
-	_ui_time.anchor_right = 0.5
-	_ui_time.offset_left = 632.0
-	_ui_time.offset_right = 820.0
-	_ui_time.offset_top = 52.0
-	_ui_time.offset_bottom = 78.0
+	_ui_time.position = Vector2(752.0, 10.0)
+	_ui_time.size = Vector2(120.0, 30.0)
 	_ui_time.add_theme_font_size_override("font_size", int(round(20.0 * UiKit.scale())))
 	_ui_time.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
-	root.add_child(_ui_time)
+	bar.add_child(_ui_time)
 
-	# 播放控制：底部右侧辅助键带（与对局「回城 / 恢复 / 召唤师」同尺寸 220、离底 30、离右 420/660/900/1140）
 	_play_btn = _mk_btn("⏸ 暂停", Color(0.45, 0.7, 1.0))
-	_anchor_br_btn(_play_btn, Vector2(420, 30), Vector2(220, 220))
+	_play_btn.position = Vector2(886.0, 8.0)
+	_play_btn.custom_minimum_size = Vector2(140.0, 40.0)
 	_play_btn.pressed.connect(_toggle_play)
-	root.add_child(_play_btn)
-
+	bar.add_child(_play_btn)
 	_speed_btn = _mk_btn("1.0×", Color(0.55, 0.85, 0.75))
-	_anchor_br_btn(_speed_btn, Vector2(660, 30), Vector2(220, 220))
+	_speed_btn.position = Vector2(1036.0, 8.0)
+	_speed_btn.custom_minimum_size = Vector2(140.0, 40.0)
 	_speed_btn.pressed.connect(_cycle_speed)
-	root.add_child(_speed_btn)
-
+	bar.add_child(_speed_btn)
 	_hl_btn = _mk_btn("◆ 集锦", Color(1.0, 0.78, 0.4))
-	_anchor_br_btn(_hl_btn, Vector2(900, 30), Vector2(220, 220))
+	_hl_btn.position = Vector2(1186.0, 8.0)
+	_hl_btn.custom_minimum_size = Vector2(140.0, 40.0)
 	_hl_btn.pressed.connect(_toggle_highlight)
-	root.add_child(_hl_btn)
-
+	bar.add_child(_hl_btn)
 	var quit := _mk_btn("✕ 退出", Color(0.9, 0.55, 0.45))
-	_anchor_br_btn(quit, Vector2(1140, 30), Vector2(220, 220))
+	quit.position = Vector2(1336.0, 8.0)
+	quit.custom_minimum_size = Vector2(140.0, 40.0)
 	quit.pressed.connect(_back_to_lobby)
-	root.add_child(quit)
+	bar.add_child(quit)
 
-	# 击杀播报：与对局同位置（顶部居中、宽 620、top 154）
-	_feed = VBoxContainer.new()
-	_feed.anchor_left = 0.5
-	_feed.anchor_right = 0.5
-	_feed.offset_left = -310.0
-	_feed.offset_right = 310.0
-	_feed.offset_top = 154.0
-	_feed.add_theme_constant_override("separation", 2)
-	root.add_child(_feed)
-
-	# 快捷键提示：顶部中央（标题/进度条下方，避开右上战况带与 y154 战报；底部让给播放键带）
 	var hint := Label.new()
 	hint.anchor_left = 0.5
 	hint.anchor_right = 0.5
-	hint.anchor_top = 0.0
-	hint.anchor_bottom = 0.0
 	hint.offset_left = -400.0
 	hint.offset_right = 400.0
 	hint.offset_top = 78.0
@@ -716,19 +740,6 @@ func _build_ui() -> void:
 	_hint_label = hint
 	hint.text = HINT_TEXT
 	root.add_child(hint)
-
-
-## 右下锚点（同 TouchController._anchor_br：离右/离底偏移 + 簇内缩进 + 安全区）
-func _anchor_br_btn(c: Control, from_br: Vector2, sz: Vector2) -> void:
-	var off := from_br + Vector2(80.0, 20.0) + Vector2(UiKit.safe_right(), UiKit.safe_bottom())
-	c.anchor_left = 1.0
-	c.anchor_top = 1.0
-	c.anchor_right = 1.0
-	c.anchor_bottom = 1.0
-	c.offset_left = -off.x - sz.x
-	c.offset_top = -off.y - sz.y
-	c.offset_right = -off.x
-	c.offset_bottom = -off.y
 
 
 func _mk_btn(text: String, accent: Color) -> Button:
@@ -1342,15 +1353,21 @@ func _update_replay_controls() -> void:
 	var totals: Array = hs.get("cd_total", [])
 	var levels: Array = hs.get("slevels", [])
 	var sk_names: Array = meta.get("skills", [])
+	var det := _detail_for(fi)
+	var sx: Array = det.get("sx", [])
 	for i in range(3):
-		_pad.set_skill_state(i, {
+		var stsk := {
 			"name": str(sk_names[i]) if i < sk_names.size() else "",
 			"level": int(levels[i]) if i < levels.size() else 0,
 			"max_level": 6 if i < 2 else 3,
 			"cd": float(cds[i]) if i < cds.size() else 0.0,
 			"cdmax": float(totals[i]) if i < totals.size() else 1.0,
 			"mana_ok": true,
-		})
+		}
+		var ex: Dictionary = _sx_extra(sx, i)
+		for k in ex:
+			stsk[k] = ex[k]
+		_pad.set_skill_state(i, stsk)
 		_pad.set_upgrade_visible(i, false)
 	if int(meta.get("has4", 0)) == 1:
 		_pad.set_extra_skill_visible(true)
@@ -1363,12 +1380,18 @@ func _update_replay_controls() -> void:
 		})
 	else:
 		_pad.set_extra_skill_visible(false)
-	_pad.set_summoner_state({"name": str(meta.get("summoner", "")), "cd": 0.0,
-		"cdmax": float(meta.get("summoner_cdmax", 1.0))})
+	_pad.set_summoner_state({"name": str(meta.get("summoner", "")),
+		"cd": float(det.get("sum_cd", 0.0)), "cdmax": float(det.get("sum_max", 1.0))})
 	_pad.set_recover_state({"cd": float(cds[4]) if cds.size() > 4 else 0.0, "cdmax": 60.0})
 	for i in range(2):
 		_pad.set_active_visible(i, false)
-	_pad.set_enemy_picker([])
+	# 普攻轮盘读数（aa：伤害/攻速/强化/装备被动小字）
+	_pad.set_attack_state(det.get("aa", []))
+	# 回城进度
+	if _recall_view != null:
+		_recall_view.feed(int(det.get("recalling", 0)), float(det.get("recall_ratio", 0.0)))
+	# 敌人索敌头像条：射程内敌方英雄（同单机规则）
+	_pad.set_enemy_picker(_replay_enemy_picker(fi, meta))
 	var ui_row := _ui_row_for(fi)
 	if _tgt_panel != null:
 		var tr: Array = ui_row.get("tgt", []) if ui_row is Dictionary else []
@@ -1399,11 +1422,107 @@ func _ui_row_for(idx: int) -> Dictionary:
 				_rb_cache[idx] = rb
 			else:
 				rb = _rb_cache.get(idx, null)
+			if (row as Array).size() > 4 and (row as Array)[4] is Array:
+				_det_cache[idx] = (row as Array)[4]
+			if fr.get("tt", []) is Array and not (fr.get("tt", []) as Array).is_empty():
+				_tt_cache = fr.get("tt", [])
 			return {"gold": int((row as Array)[1]), "tgt": (row as Array)[2], "rb": rb}
 	return {}
 
 
+func _detail_for(idx: int) -> Dictionary:
+	var d = _det_cache.get(idx, null)
+	if not (d is Array) or (d as Array).size() < 7:
+		return {}
+	return {"aa": d[0], "sx": d[1], "sa": d[2],
+		"sum_cd": float(d[3]), "sum_max": float(d[4]),
+		"recalling": int(d[5]), "recall_ratio": float(d[6])}
+
+
+## 技能图标读数解码（与 NetSession._pack_skill_icons / NetClientBattle._skill_icon_extra 同编码）
+func _sx_extra(sx: Array, i: int) -> Dictionary:
+	if i >= sx.size():
+		return {}
+	var f: Array = sx[i]
+	if not (f is Array) or f.size() < 15:
+		return {}
+	return {
+		"in_window": int(f[0]) == 1,
+		"win_left": float(f[1]), "win_total": float(f[2]), "segments_left": int(f[3]),
+		"icon_dmg": int(f[4]), "icon_dmg_magic": int(f[5]) == 1,
+		"icon_dmg2": int(f[6]), "icon_dmg2_magic": int(f[7]) == 1,
+		"icon_count": int(f[8]), "icon_fx": f[9], "icon_aa": int(f[10]) == 1,
+		"charge_max": int(f[11]), "charge_now": int(f[12]),
+		"blocked": int(f[13]) == 1, "block_cue": str(f[14]),
+	}
+
+
 ## 点顶部战况带 → 打开全局英雄信息面板（同单机 C 面板，复用 RosterView）
+## 索敌头像条：跟随英雄射程内敌方英雄（按距离排序，≤5）
+func _replay_enemy_picker(fi: int, meta: Dictionary) -> Array:
+	var ar := float(meta.get("ar", 0.0))
+	if ar <= 0.0 or fi < 0 or fi >= _hero_pos.size():
+		return []
+	var my_team := int(meta.get("team", _me_team))
+	var sp: Vector3 = _hero_pos[fi]
+	var cand: Array = []
+	for i in range(_heroes.size()):
+		if i == fi:
+			continue
+		var hm: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
+		if int(hm.get("team", -1)) == my_team:
+			continue
+		var hs: Dictionary = _hero_state[i] if i < _hero_state.size() and _hero_state[i] is Dictionary else {}
+		if int(hs.get("alive", 1)) == 0:
+			continue
+		var d: float = sp.distance_to(_hero_pos[i])
+		if d > ar + 1.2:
+			continue
+		cand.append([i, d])
+	cand.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
+	var out: Array = []
+	for i in range(mini(cand.size(), 5)):
+		var idx := int(cand[i][0])
+		out.append([idx, str((_heroes[idx] as Dictionary).get("name", "")), false])
+	return out
+
+
+## T 团队决策面板：录像 tt（模式/龙/经济/时长）+ 双方分路计划
+func _toggle_team_decision() -> void:
+	if _tdv == null:
+		return
+	if _tdv.visible:
+		_tdv.visible = false
+		return
+	var tt: Array = _tt_cache
+	var data := {
+		"time": float(tt[4]) if tt.size() > 4 else _t,
+		"mode": str(tt[0]) if tt.size() > 0 else "—",
+		"dragon": bool(int(tt[1])) if tt.size() > 1 else false,
+		"gold_diff": (int(tt[2]) - int(tt[3])) if tt.size() > 3 else 0,
+		"allies": [], "foes": [],
+	}
+	for i in range(_heroes.size()):
+		var m: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
+		var role := str(m.get("role", ""))
+		var line := "[AI] %s (%s) -> %s" % [str(m.get("name", "")), role, _lane_name(HeroPickData.role_lane(role))]
+		if int(m.get("team", 0)) == _me_team:
+			(data["allies"] as Array).append(line)
+		else:
+			(data["foes"] as Array).append(line)
+	_tdv.set_data(data)
+	_tdv.visible = true
+
+
+func _lane_name(lane: String) -> String:
+	match lane:
+		"发育路": return "发育路"
+		"中路", "MID": return "MID"
+		"对抗路": return "对抗路"
+		"打野": return "打龙"
+	return "未分配"
+
+
 func _toggle_global_panel() -> void:
 	if _rview == null:
 		_rview_layer = CanvasLayer.new()
@@ -1900,10 +2019,9 @@ func _push_event(ev: Dictionary) -> void:
 		return
 	if kind0 == "feed":
 		var evt4: float = float(ev.get("t", 0)) / 1000.0
-		if _playing and absf(evt4 - _t) < 0.9:
-			_feed_items.append({"a": str(ev.get("a", "")), "at": int(ev.get("at", 0)),
-				"d": str(ev.get("d", "")), "v": str(ev.get("v", "")), "vt": int(ev.get("vt", -1)),
-				"as": ev.get("as", []), "t0": _t})
+		if _playing and absf(evt4 - _t) < 0.9 and _kfeed != null:
+			_kfeed.push(str(ev.get("a", "")), int(ev.get("at", 0)), str(ev.get("d", "")),
+				str(ev.get("v", "")), int(ev.get("vt", -1)), ev.get("as", []), 0, 0)
 		return
 	if kind0 == "pop":
 		var evt2: float = float(ev.get("t", 0)) / 1000.0
@@ -1942,11 +2060,22 @@ func _push_event(ev: Dictionary) -> void:
 			txt = "%s 阵亡" % who2
 			col = Color(1.0, 0.5, 0.45)
 		"tower":
-			txt = "防御塔被摧毁 ×%d" % int(ev.get("b", 1))
-			col = Color(0.7, 0.85, 1.0)
+			var t_tm := int(ev.get("tm", -1))
+			if t_tm < 0:
+				txt = "防御塔被摧毁 ×%d" % int(ev.get("b", 1))
+				col = Color(0.7, 0.85, 1.0)
+			else:
+				var mine := t_tm == _me_team
+				txt = ("我方塔被摧毁 ×%d" if mine else "敌方塔被摧毁 ×%d") % int(ev.get("b", 1))
+				col = Color(0.7, 0.85, 1.0) if mine else Color(1.0, 0.55, 0.45)
 		"crystal":
-			txt = "水晶被摧毁"
-			col = Color(1.0, 0.85, 0.4)
+			var c_tm := int(ev.get("tm", -1))
+			if c_tm < 0:
+				txt = "水晶被摧毁"
+				col = Color(1.0, 0.85, 0.4)
+			else:
+				txt = "我方水晶被摧毁" if c_tm == _me_team else "敌方水晶被摧毁"
+				col = Color(1.0, 0.45, 0.4) if c_tm == _me_team else Color(1.0, 0.85, 0.4)
 	if txt == "":
 		return
 	# 击杀/阵亡瞬间切一次跟拍镜头（约 2.4s），正在手动跟随时不抢镜头
@@ -2075,6 +2204,8 @@ func _purge_feed() -> void:
 
 
 func _rebuild_feed(t: float) -> void:
+	if _kfeed != null:
+		_kfeed.clear()
 	_clear_popups()
 	_clear_toasts()
 	_feed_items.clear()
@@ -2215,6 +2346,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		match (event as InputEventKey).keycode:
 			KEY_SPACE:
 				_toggle_play()
+			KEY_T:
+				_toggle_team_decision()
 			KEY_LEFT:
 				_t = maxf(0.0, _t - 5.0)
 				_sync_highlight_seek()
@@ -2254,6 +2387,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
 			var hitd: Dictionary = _hud2.call("hit", mb.position)
 			var hk := str(hitd.get("type", ""))
+			if hk == "hero_ring":
+				_follow_hero = int(hitd.get("idx", -1))
+				_manual_follow = _follow_hero
+				_mm_was_follow = _follow_hero
+				return
+			if hk == "attr_head":
+				if _hud2 != null:
+					_hud2.attr_collapsed = not _hud2.attr_collapsed
+					_hud2.queue_redraw()
+				return
 			if hk == "band":
 				_toggle_global_panel()
 				return

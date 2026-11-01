@@ -787,6 +787,45 @@
         ]
       },
       "accepted": {}
+    },
+    {
+      "id": "replay_hero_ring_switch",
+      "name": "回放小地图右侧全部英雄头像(可切主视角)",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "_ring_hits"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_progress_bar",
+      "name": "回放底部进度条与播放按钮",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "_play_btn"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_perspective_report",
+      "name": "回放战况按玩家视角播报(我方/敌方塔)",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "_me_team"
+        ]
+      },
+      "accepted": {}
     }
   ]
 }

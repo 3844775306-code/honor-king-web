@@ -38,12 +38,32 @@ func _on_kill_feed(actor: String, actor_team: int, desc: String, victim: String,
 		SfxManager.play_announce(desc.trim_prefix(SfxManager.ANN_PREFIX))
 		return
 	SfxManager.play_feed(actor, actor_team, desc, victim, victim_team)
+	push(actor, actor_team, desc, victim, victim_team, assists, a_mark, v_mark)
 	_q.append({"actor": actor, "a_team": actor_team, "desc": desc, "victim": victim,
 		"v_team": victim_team, "assists": assists, "a_mark": a_mark, "v_mark": v_mark})
 	if _q.size() > 12:
 		_q.pop_front()
 	if _cur.is_empty():
 		_next()
+
+## 外部注入一条战报（回放录像使用；不依赖 NetSession 信号）
+func push(actor: String, actor_team: int, desc: String, victim: String, victim_team: int,
+		assists: Array = [], a_mark: int = 0, v_mark: int = 0) -> void:
+	_q.append({"actor": actor, "a_team": actor_team, "desc": desc, "victim": victim,
+		"v_team": victim_team, "assists": assists, "a_mark": a_mark, "v_mark": v_mark})
+	if _q.size() > 12:
+		_q.pop_front()
+	if _cur.is_empty():
+		_next()
+
+
+
+## 回放倒退重建：清空队列与当前条
+func clear() -> void:
+	_q.clear()
+	_cur = {}
+	queue_redraw()
+
 
 func _next() -> void:
 	if _q.is_empty():

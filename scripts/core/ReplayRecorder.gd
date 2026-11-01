@@ -57,6 +57,8 @@ var _rb_last := {}   # hero idx -> 上次推荐装 bundle（变化才记录）  
 var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
 var _sample_n := 0
 var _last_turrets_alive := -1
+var _last_turrets_by_team: Array = []
+var _last_crystal_by_team: Array = []
 var _last_crystal := -1
 var _finished := false
 var _saved := false
@@ -165,6 +167,7 @@ func _try_start() -> void:
 			"summoner_cd": float(h.summoner_cooldown),
 			"summoner_cdmax": float(h.summoner_skill.cooldown) if h.summoner_skill != null else 1.0,
 			"has4": 1 if (h.skills.size() > 3 and h.skills[3] != null) else 0,
+			"ar": float(h.attack_range) * 0.01,
 		})
 		_last_kills.append(int(h.kills))
 		_last_levels.append(int(h.level))
@@ -293,6 +296,23 @@ func _sample(delta: float, finishing: bool) -> void:
 				tgt_row = [0, int(tgt.team), str(tgt.display_name), int(tgt.level),
 					int(round(tgt.health)), int(round(_maxhp_of_ent(tgt))),
 					int(round(tgt.attack)), 0, int(round(tgt.armor)), int(round(tgt.magic_resist))]
+			var det = null
+			if _sample_n % 4 == 0:
+				var aa: Array = []
+				var sx: Array = []
+				var sa: Array = []
+				if NetSession.mode == NetSession.Mode.HOST:
+					if NetSession.has_method("_pack_attack_aa"):
+						aa = NetSession.call("_pack_attack_aa", hu)
+					if NetSession.has_method("_pack_skill_icons"):
+						sx = NetSession.call("_pack_skill_icons", hu)
+					if NetSession.has_method("_pack_stat_triples"):
+						sa = NetSession.call("_pack_stat_triples", hu)
+				det = [aa, sx, sa,
+					float(hu.summoner_cooldown),
+					float(hu.summoner_skill.cooldown) if hu.summoner_skill != null else 1.0,
+					1 if hu.is_recalling else 0,
+					clampf(1.0 - hu.recall_timer / 7.0, 0.0, 1.0)]
 			var rb = null
 			if _sample_n % 4 == 0:
 				var nrb = UiManager._compute_recommended_bundle(hu, true)
@@ -300,9 +320,12 @@ func _sample(delta: float, finishing: bool) -> void:
 				if _rb_last.get(uidx, "") != sig:
 					_rb_last[uidx] = sig
 					rb = nrb
-			urow.append([int(uidx), int(hu.gold), tgt_row, rb])
+			urow.append([int(uidx), int(hu.gold), tgt_row, rb, det])
 		if not urow.is_empty():
-			_ui_frames.append({"t": t_ms, "h": urow})
+			var tt := []
+			if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_pack_team_tactics"):
+				tt = NetSession.call("_pack_team_tactics")
+			_ui_frames.append({"t": t_ms, "h": urow, "tt": tt})
 	var brows: Array = []
 	for b in get_tree().get_nodes_in_group("projectiles"):
 		if not is_instance_valid(b):
@@ -369,13 +392,32 @@ func _sample(delta: float, finishing: bool) -> void:
 	})
 	# 推塔 / 水晶事件
 	var alive_now := _turret_alive()
-	if _last_turrets_alive >= 0 and alive_now < _last_turrets_alive:
-		_events.append({"t": t_ms, "k": "tower", "b": _last_turrets_alive - alive_now})
+	var per_team := _turret_alive_by_team()
+	if _last_turrets_by_team.size() < 2:
+		_last_turrets_by_team = per_team
+	elif _last_turrets_alive >= 0 and alive_now < _last_turrets_alive:
+		for tm in 2:
+			var lost: int = int(_last_turrets_by_team[tm]) - int(per_team[tm])
+			if lost > 0:
+				_events.append({"t": t_ms, "k": "tower", "b": lost, "tm": int(tm)})
+	if _last_turrets_alive < 0:
 		_last_turrets_alive = alive_now
+	elif alive_now < _last_turrets_alive:
+		_last_turrets_alive = alive_now
+	_last_turrets_by_team = per_team
 	var cry := _crystal_alive()
-	if _last_crystal >= 0 and cry < _last_crystal:
-		_events.append({"t": t_ms, "k": "crystal"})
+	var cper := _crystal_alive_by_team()
+	if _last_crystal_by_team.size() < 2:
+		_last_crystal_by_team = cper
+	elif _last_crystal >= 0 and cry < _last_crystal:
+		for tm2 in 2:
+			if int(_last_crystal_by_team[tm2]) > int(cper[tm2]):
+				_events.append({"t": t_ms, "k": "crystal", "tm": int(tm2)})
+	if _last_crystal < 0:
 		_last_crystal = cry
+	elif cry < _last_crystal:
+		_last_crystal = cry
+	_last_crystal_by_team = cper
 	if finishing:
 		pass
 	# 小兵（3Hz）
@@ -593,6 +635,26 @@ func _discover_turrets() -> void:
 		_last_turrets_alive = _turret_alive()
 	if _last_crystal < 0:
 		_last_crystal = _crystal_alive()
+
+
+func _turret_alive_by_team() -> Array:
+	var arr: Array = [0, 0]
+	for t in get_tree().get_nodes_in_group("turrets"):
+		if t is Turret and t.health > 0:
+			var tm := int(t.team)
+			if tm >= 0 and tm < 2:
+				arr[tm] += 1
+	return arr
+
+
+func _crystal_alive_by_team() -> Array:
+	var arr: Array = [0, 0]
+	for t in get_tree().get_nodes_in_group("turrets"):
+		if t is Turret and str(t.display_name) == "crystal" and t.health > 0:
+			var tm := int(t.team)
+			if tm >= 0 and tm < 2:
+				arr[tm] += 1
+	return arr
 
 
 func _turret_alive() -> int:
