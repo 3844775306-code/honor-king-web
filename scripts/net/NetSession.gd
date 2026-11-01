@@ -723,6 +723,12 @@ func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
 		printerr("[Net] 选人拒绝：目录外英雄 hero=", hero)
 		return false
 	var role: String = HeroPickData.HERO_ROLE[hero]
+	# 房间确认的分路是硬约束：host/客户端都不能绕过 UI 选其它职责
+	var ready_row = lobby_ready.get(int(pid), {})
+	var confirmed_lane := str((ready_row as Dictionary).get("lane", "")) if ready_row is Dictionary else ""
+	if confirmed_lane != "" and role != HeroPickData.lane_role(confirmed_lane):
+		printerr("[Net] 选人拒绝：分路不符 lane=", confirmed_lane, " hero=", hero)
+		return false
 	if not HeroPickData.SUMMONERS.values().has(summoner):
 		summoner = "flash"
 	if pid != 1 and not players.has(pid):

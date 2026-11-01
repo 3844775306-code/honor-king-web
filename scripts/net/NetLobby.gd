@@ -700,10 +700,17 @@ func _room_ready_entry() -> Dictionary:
 func _all_lobby_ready() -> bool:
 	if NetSession.mode != NetSession.Mode.HOST:
 		return false
+	var seen_lanes := {}
 	for pid in NetSession.players:
 		var r: Dictionary = NetSession.lobby_ready.get(int(pid), {})
-		if not bool(r.get("ready", false)) or str(r.get("lane", "")) == "":
+		var lane := str(r.get("lane", ""))
+		if not bool(r.get("ready", false)) or lane == "":
 			return false
+		var camp := NetSession._peer_camp(int(pid))
+		var key := "%d|%s" % [camp, lane]
+		if seen_lanes.has(key):
+			return false   # 同阵营不允许重复分路
+		seen_lanes[key] = true
 	return true
 
 
@@ -1886,7 +1893,8 @@ func _show_select(state: Dictionary) -> void:
 			_style_room_lane_btns()
 	# 分路 → 职责：未被队友占用则锁死本局职责，否则放开并提示
 	_lane_role = HeroPickData.lane_role(PlayerPrefs.get_lane())
-	_lane_locked = _lane_role != "" and not _blocked_roles.has(_lane_role)
+	# 分路是硬限制：即使该职责已被队友占用（房间分路冲突）也不放开选择，避免选人页绕过房间分路
+	_lane_locked = _lane_role != ""
 	if _lane_locked:
 		_tab_role = _lane_role
 	elif _tab_role == _lane_role:
@@ -1947,7 +1955,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 		if _lane_locked:
 			stage_sub_txt = "本机分路：%s · 只能选择%s" % [lane, _lane_role]
 		elif _lane_role != "":
-			stage_sub_txt = "本机分路「%s」已被队友占用，可选其他职责" % lane
+			stage_sub_txt = "本机分路「%s」与队友冲突，请回房间更换分路" % lane
 	_stage_sub = _mk_label(stage_sub_txt, _fs(UiKit.FS_SM), COL_SUB)
 	_stage_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tv.add_child(_stage_sub)
