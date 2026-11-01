@@ -263,6 +263,13 @@ func _build_world() -> void:
 	bm.set_physics_process(false)
 	bm.process_mode = Node.PROCESS_MODE_DISABLED
 	_world = bm
+	# 回放世界里的血包（固定点位；visual_only，不参与拾取）
+	for hp_spawn in BattleManager.HEALTH_PACK_SPAWNS:
+		var hp := HealthPack.new()
+		hp.visual_only = true
+		hp.team = int(hp_spawn[1])
+		hp.position = hp_spawn[0] + Vector3(0.0, 0.3, 0.0)
+		bm.add_child(hp)
 	# 小地图静态数据（墙体/草丛）
 	var _walls: Array = []
 	for w in get_tree().get_nodes_in_group("walls"):
@@ -353,13 +360,23 @@ func _build_actors() -> void:
 		root.add_child(_bb)
 		var ap := _find_ap(root)
 		_setup_idle_walk(ap)
-		var idle_c := _clip_hint(ap, ["idle"])
-		var walk_c := _clip_hint(ap, ["walk", "run"])
-		var atk_c := _clip_hint(ap, ["attack"])
+		var _hname := str(h.get("name", ""))
+		var idle_c := AnimMap.clip(ap, "idle", _hname)
+		var walk_c := AnimMap.clip(ap, "walk", _hname)
+		var atk_c := AnimMap.clip(ap, "attack", _hname)
+		var atk_shoot := AnimMap.clip(ap, "attack_shoot", _hname)
+		var atk_l := AnimMap.clip(ap, "attack_melee_left", _hname)
+		var atk_r := AnimMap.clip(ap, "attack_melee_right", _hname)
+		var _ar := float(h.get("ar", -1.0))
+		if _ar < 0.0:
+			# 旧录像没有 ar 字段：按职业回退（射手/法师远程，其余近战）
+			var _role := str(h.get("role", ""))
+			_ar = 4.5 if _role in ["射手", "法师"] else 1.5
 		if idle_c != "":
 			ap.play(idle_c)
 		# 名字/血条交给真实战场的 HeroInfoControl（下一段 _build_hud 创建），这里只留模型
 		_hero_nodes.append({"root": root, "ap": ap, "idle": idle_c, "walk": walk_c, "attack": atk_c,
+			"atk_shoot": atk_shoot, "atk_l": atk_l, "atk_r": atk_r, "ar": _ar, "melee_flip": false,
 			"last": Vector3.ZERO, "anim": "idle", "atk_until": -1.0,
 			"buff_red": _br, "buff_blue": _bb})
 	# 防御塔 / 水晶
@@ -928,7 +945,7 @@ func _apply_frame(t: float) -> void:
 				node["dying"] = true
 				node["dead_at"] = _t
 				var dap: AnimationPlayer = node.get("ap")
-				var dclip := _clip_hint(dap, ["die", "death"])
+				var dclip := AnimMap.clip(dap, "die", str((_heroes[i] as Dictionary).get("name", "")))
 				if dap != null and dclip != "":
 					dap.play(dclip)
 			var dage: float = _t - float(node.get("dead_at", _t))
@@ -1153,6 +1170,7 @@ func _apply_frame(t: float) -> void:
 			var node3 = _mini_nodes.get(id)
 			if node3 == null:
 				node3 = _make_minion(int(r[3]), int(r[4]))
+				node3.set_meta("type_name", str(r[3]))
 				_mini_nodes[id] = node3
 				# 兵线出生光效（与对局兵线刷出时的落地波一致）
 				var spawn_p := Vector3(float(r[1]), 0.2, float(r[2]))
@@ -1193,12 +1211,34 @@ func _apply_frame(t: float) -> void:
 			if not bool(nd2.get_meta("dying", false)):
 				nd2.set_meta("dying", true)
 				nd2.set_meta("dead_at", _t)
+				nd2.set_meta("sink_base_y", nd2.position.y)
+				var walker2 = nd2.get_node_or_null("WalkFeel")
+				if walker2:
+					walker2.set_process(false)
 			var age: float = _t - float(nd2.get_meta("dead_at", _t))
 			var mdl2 = nd2.get_meta("model", null)
+			var mname := str(nd2.get_meta("type_name", ""))
+			var is_drg: bool = mname in ["dragon", "storm", "shadow_dragon"]
+			var depth2: float = 2.4 if is_drg else 1.5
+			var fall_t: float = 0.7 if is_drg else 0.55
 			if mdl2 is Node3D:
-				(mdl2 as Node3D).rotation.x = minf(PI * 0.5, age * 7.0)
-			nd2.position.y = -minf(0.35, age * 0.9)
-			if age > 0.8:
+				var m3 := mdl2 as Node3D
+				if age <= 0.62:
+					if is_drg:
+						var kd := clampf(age / fall_t, 0.0, 1.0)
+						m3.rotation.x = 0.55 * kd
+						m3.position.y = -0.55 * kd
+					else:
+						var dirf := 1.0 if (id % 2 == 0) else -1.0
+						var kn := clampf(age / fall_t, 0.0, 1.0)
+						m3.rotation.z = dirf * 1.35 * kn
+						m3.position.y = -0.12 * kn
+				else:
+					# 倒地后缓缓沉入地面（同 host _start_sink_away：0.88s Sine EaseIn）
+					var ks := clampf((age - 0.62) / 0.88, 0.0, 1.0)
+					var es := 1.0 - cos(ks * PI * 0.5)
+					nd2.position.y = float(nd2.get_meta("sink_base_y", 0.0)) - depth2 * es
+			if age > 1.56:
 				nd2.visible = false
 	# 野怪 / 史诗龙：位置插值 + 血量归零隐藏（灵魂/被击杀后不再出现）
 	var ji := _find_jungle_frame(t)
@@ -2372,8 +2412,22 @@ func _play_attack_anim(idx: int) -> void:
 	if _wm != null:
 		HeroWeapons.play(_wm, "attack")
 	var ap: AnimationPlayer = nd.get("ap")
-	var clip := str(nd.get("attack", ""))
-	if ap == null or clip == "":
+	if ap == null:
+		return
+	var clip := ""
+	var ar := float(nd.get("ar", -1.0))
+	var shoot := str(nd.get("atk_shoot", ""))
+	var al := str(nd.get("atk_l", ""))
+	var ar2 := str(nd.get("atk_r", ""))
+	if ar > 2.5 and shoot != "":
+		clip = shoot
+	elif al != "" or ar2 != "":
+		var flip := bool(nd.get("melee_flip", false))
+		nd["melee_flip"] = not flip
+		clip = al if flip else ar2
+	else:
+		clip = str(nd.get("attack", ""))
+	if clip == "":
 		return
 	var atk := ap.get_animation(clip)
 	if atk != null:
