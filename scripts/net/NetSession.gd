@@ -1702,7 +1702,9 @@ func push_net_action(nid: int, act: int, yaw: float) -> void:
 	if ent == null or not is_instance_valid(ent):
 		return
 	var p := Vector3(ent.global_position.x, 0.0, ent.global_position.z)
-	if not _hero_ally_near(p):
+	# 死亡动作必须无条件下发：小兵/野怪死在视野边缘或远处时，原 18m 闸门会让客户端
+	# 连死亡动作都收不到，模型直接消失。
+	if act != ACT_DIE and not _hero_ally_near(p):
 		return
 	# 行布局与客户端 EV_* 下标一致：x/y/z 在 [2..4]，ACT 的 nid/act/yaw 在 [5..7]
 	_push_ev_row(p, [0, EV_ACT, p.x, p.y, p.z, nid, act, yaw])

@@ -838,6 +838,10 @@ func _on_snapshot(snap: Array) -> void:
 			if not v.set:
 				v.node.global_position = pos
 				v.set = true
+	# 先处理本帧 events：死亡 ACT_DIE 会设置 dying_until，随后剔除阶段才能保留死亡动画。
+	# 之前 events 在剔除之后处理，小兵/野怪死亡帧会先被 queue_free，死亡动作永远看不到。
+	if snap.size() > SNAP_EVENTS:
+		_apply_events(snap)
 	# 剔除本帧不在的实体（死亡动作播放中的先留着，播完再释放）
 	var now_ms := Time.get_ticks_msec()
 	for nid in _views.keys():
@@ -858,9 +862,6 @@ func _on_snapshot(snap: Array) -> void:
 		_apply_bullets(snap)
 	if snap.size() > SNAP_FX:
 		_apply_fx(snap)
-	# #44：events 尾段（host v5 idx9）→ 伤害/金币弹出 + 经验珠
-	if snap.size() > SNAP_EVENTS:
-		_apply_events(snap)
 	# 顶部实时战况（host v6 idx10 全量统计）→ 击杀比分+经济比分
 	_check_own_death_recap()
 	if snap.size() > SNAP_SCORE:
@@ -1997,6 +1998,9 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 	if not v.has("ap"):
 		if act == NetSession.ACT_DIE:
 			_proc_death(v)
+			# 程序化小兵/野怪没有 AnimationPlayer，必须自己留死亡动画时间；
+			# 否则下一次快照剔除会立刻 queue_free，只剩“啪”一下消失。
+			v.dying_until = Time.get_ticks_msec() + 1000
 		elif act == NetSession.ACT_ATTACK_MELEE:
 			_proc_recoil(v, yaw)   # 无骨骼动画的模型（攻城车/程序化兵种）：程序化动作
 		if act == NetSession.ACT_ATTACK_MELEE:
