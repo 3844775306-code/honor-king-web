@@ -912,9 +912,13 @@ func _say(h, text: String, force: bool = false) -> void:
 	var nm := str(h.display_name)
 	if nm == "":
 		nm = "队友"
-	_post(nm, int(h.team), text, false)
+	# AI 发言统一先说身份，再进入聊天/TTS/联机广播，保证三端文本一致
+	var line := str(text).strip_edges()
+	if line != "" and not line.begins_with("我是") and not line.begins_with(nm):
+		line = "我是%s，%s" % [nm, line]
+	_post(nm, int(h.team), line, false)
 	if NetSession.mode == NetSession.Mode.HOST:
-		NetSession.broadcast_chat(nm, int(h.team), text)
+		NetSession.broadcast_chat(nm, int(h.team), line)
 
 
 # ---------------- 内部：语音 ----------------
