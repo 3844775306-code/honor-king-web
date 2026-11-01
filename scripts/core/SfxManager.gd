@@ -973,8 +973,13 @@ func _render_synth(cfg: Dictionary, key: String) -> AudioStreamWAV:
 
 func _resolve_key(actor: String, actor_team: int, desc: String, victim: String, victim_team: int) -> String:
 	var my_side := Config.is_ally(actor_team)
-	# 中性警报（host/客户端各自已加「我方/敌方」前缀，这里按类型出语音）
+	# 塔/水晶警报（host/客户端各自已加「我方/敌方」前缀）：只有「我方」塔被攻击才播对应语音；
+	# 敌方塔被攻击不播「我方防御塔正在被攻击」，否则会误报
 	if desc.find("正在被攻击") >= 0:
+		var own_side := desc.begins_with("我方") or (victim_team >= 0 and victim_team == int(Config.player_team)) \
+			or (victim_team < 0 and desc.begins_with("我方"))
+		if not own_side or desc.begins_with("敌方"):
+			return ""
 		if desc.find("水晶") >= 0:
 			return "crystal_warn"
 		if desc.find("高地") >= 0:
@@ -1130,3 +1135,4 @@ func _play(key: String) -> void:
 	_player.play()
 	_playing_key = key
 	_playing_prio = prio
+

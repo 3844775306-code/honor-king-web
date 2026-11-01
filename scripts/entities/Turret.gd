@@ -690,7 +690,12 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			warn_desc = "高地防御塔正在被攻击"
 		elif display_name == "crystal":
 			warn_desc = "水晶正在被攻击"
-		battle.ui.show_kill_feed("", Config.Team.NEUTRAL, warn_desc, display_name, team)
+		if Config.is_ally(team):
+			# 己方塔：本机显示+播报「我方…」，并广播给同阵营客户端
+			battle.ui.show_kill_feed("", Config.Team.NEUTRAL, warn_desc, display_name, team)
+		else:
+			# 敌方塔：只广播给该塔所属阵营的客户端，host 本机不显示也不播报（避免误报「我方防御塔被攻击」）
+			NetSession.broadcast_kill_feed("", Config.Team.NEUTRAL, warn_desc, display_name, team)
 		_recently_reported = true
 		# 不能用 await：take_damage 会挂起 25 秒，首次命中（例如第一只小兵）等于白打
 		get_tree().create_timer(25.0).timeout.connect(_clear_recently_reported)
