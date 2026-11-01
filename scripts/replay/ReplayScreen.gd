@@ -608,7 +608,7 @@ func _update_world_hud(t: float) -> void:
 			"hp": hp, "max_hp": mx, "team": team_v, "team_color": team_col,
 			"pos": sp2 - Vector2(w, hh) * 0.5, "w": w, "h": hh,
 			"epic": epic, "ticks": ticks, "tick_step": step,
-			"name_text": sub, "show_name": kind == "jungle",
+			"name_text": sub, "show_name": false,   # 野怪血条不显示名字
 			"turret": is_turret, "turret_arrow": is_turret,
 			"shield": float(u.get("shield", 0.0)), "shield_icon": bool(u.get("shield_icon", false)),
 			"interfere": 0.0, "doom": 0.0, "lag": _lag,

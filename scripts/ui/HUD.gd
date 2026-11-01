@@ -235,7 +235,7 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 
 	# 文本：名称/血量（血量键值不变就不重建字符串）
 	# 防御塔不再显示名称文字，改为血条下方一个指向塔身的小三角箭头
-	row["show_name"] = is_monster
+	row["show_name"] = false   # 野怪血条不显示名字
 	row["turret_arrow"] = is_turret
 	# 默认隐藏具体血量数值（如需按距离显示，把下面的 false 换成 dist <= 26.0）
 	row["show_numbers"] = false

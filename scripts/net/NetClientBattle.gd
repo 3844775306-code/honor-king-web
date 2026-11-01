@@ -5452,20 +5452,8 @@ class Hud:
 
 	# 无兵线保护盾形图标（复刻 host WorldBarPainter._draw_shield_icon）
 	func _draw_shield_glyph(c: Vector2, s: float, col: Color) -> void:
-		var pts := PackedVector2Array([
-			c + Vector2(-0.55 * s, -0.85 * s), c + Vector2(0.55 * s, -0.85 * s),
-			c + Vector2(0.62 * s, 0.0), c + Vector2(0.3 * s, 0.68 * s),
-			c + Vector2(0.0, 1.0 * s), c + Vector2(-0.3 * s, 0.68 * s),
-			c + Vector2(-0.62 * s, 0.0),
-		])
-		draw_colored_polygon(pts, Color(0, 0, 0, 0.45))
-		var inner := PackedVector2Array()
-		for q in pts:
-			inner.append(c + (q - c) * 0.84)
-		draw_colored_polygon(inner, col)
-		var outline := pts.duplicate()
-		outline.append(pts[0])
-		draw_polyline(outline, Color(0.10, 0.03, 0.05, 0.9), 1.5)
+		# 与单机/回放共用同一份美化盾图标
+		BarPainterScript.draw_shield_icon(self, c, s, col)
 
 	func _draw_hero_bar(r: Dictionary) -> void:
 		# 共享绘制：三端同一份 scripts/ui/shared/SharedHeroBar.gd；这里只把快照/本地差值喂成数据
@@ -5506,7 +5494,7 @@ class Hud:
 			"interfere": 0.0, "last_hit": false,
 			"lag": hp_now + famt * fr, "flash_t": fr * 0.5, "flash_amt": famt,
 			"heal_t": 0.0, "heal_amt": 0.0, "doom": doom,
-			"show_name": bool(r.get("monster", false)) and not bool(r.get("small", false)),
+			"show_name": false,   # 野怪血条不显示名字
 			"name_text": str(r.get("name", "")),
 			"show_numbers": false, "num_text": "",
 			"turret_arrow": bool(r.get("turret", false)),

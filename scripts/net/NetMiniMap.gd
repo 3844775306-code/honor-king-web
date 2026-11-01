@@ -45,6 +45,7 @@ var zoomed := false
 var _zoom_pos := Vector2.ZERO
 var _zoom_scale := Vector2.ONE
 var _zoom_z := 0
+var _zoom_layer_restore := -1
 
 # 相机覆盖状态（NetClientBattle 每帧读取后自行应用/复位）
 var panning := false
@@ -167,10 +168,13 @@ func enter_zoom() -> void:
 	_zoom_pos = position
 	_zoom_scale = scale
 	_zoom_z = z_index
-	var vp := get_viewport_rect().size
+	# 原地放大（不移动到屏幕中间），并临时把所在 CanvasLayer 提到最上层，盖住 HUD/触控
 	scale = Vector2(2.0, 2.0)
-	position = (vp - size * scale) * 0.5
-	z_index = _zoom_z + 20
+	var _p := get_parent()
+	if _p is CanvasLayer:
+		_zoom_layer_restore = (_p as CanvasLayer).layer
+		(_p as CanvasLayer).layer = 200
+	z_index = 0
 	queue_redraw()
 
 func exit_zoom() -> void:
@@ -180,6 +184,9 @@ func exit_zoom() -> void:
 	position = _zoom_pos
 	scale = _zoom_scale
 	z_index = _zoom_z
+	var _p2 := get_parent()
+	if _p2 is CanvasLayer and _zoom_layer_restore >= 0:
+		(_p2 as CanvasLayer).layer = _zoom_layer_restore
 	queue_redraw()
 
 func _flip180() -> bool:

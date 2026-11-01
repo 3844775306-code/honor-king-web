@@ -341,19 +341,46 @@ func _draw_epic(r: Dictionary) -> void:
 
 # ============================ 盾形图标 ============================
 func _draw_shield_icon(c: Vector2, s: float, col: Color) -> void:
+	draw_shield_icon(self, c, s, col)
+
+
+## 通用美化盾图标（塔/单位血条）：圆角盾形 + 双层描边 + 顶部高光 + 中心菱形盾徽 + 外发光
+static func draw_shield_icon(ci: CanvasItem, c: Vector2, s: float, col: Color) -> void:
 	var pts := PackedVector2Array([
-		c + Vector2(-0.55 * s, -0.85 * s), c + Vector2(0.55 * s, -0.85 * s),
-		c + Vector2(0.62 * s, 0.0), c + Vector2(0.3 * s, 0.68 * s),
-		c + Vector2(0.0, 1.0 * s), c + Vector2(-0.3 * s, 0.68 * s),
-		c + Vector2(-0.62 * s, 0.0),
+		c + Vector2(-0.50 * s, -0.78 * s), c + Vector2(-0.24 * s, -0.92 * s),
+		c + Vector2(0.24 * s, -0.92 * s), c + Vector2(0.50 * s, -0.78 * s),
+		c + Vector2(0.58 * s, -0.26 * s), c + Vector2(0.38 * s, 0.38 * s),
+		c + Vector2(0.0 * s, 0.95 * s), c + Vector2(-0.38 * s, 0.38 * s),
+		c + Vector2(-0.58 * s, -0.26 * s),
 	])
-	draw_colored_polygon(pts, Color(0, 0, 0, 0.45))
-	var inner := PackedVector2Array()
+	var glow := PackedVector2Array()
 	for q in pts:
-		inner.append(c + (q - c) * 0.84)
-	draw_colored_polygon(inner, col)
+		glow.append(c + (q - c) * 1.16)
+	ci.draw_colored_polygon(glow, Color(col.r, col.g, col.b, 0.18))
+	ci.draw_colored_polygon(pts, Color(0.04, 0.06, 0.09, 0.94))
+	var border := PackedVector2Array()
+	for q in pts:
+		border.append(c + (q - c) * 0.90)
+	ci.draw_colored_polygon(border, Color(col.r * 0.45, col.g * 0.45, col.b * 0.45, 1.0))
+	var face := PackedVector2Array()
+	for q in pts:
+		face.append(c + (q - c) * 0.74)
+	ci.draw_colored_polygon(face, col)
+	# 顶部高光
+	ci.draw_colored_polygon(PackedVector2Array([
+		c + Vector2(-0.34 * s, -0.70 * s), c + Vector2(0.34 * s, -0.70 * s),
+		c + Vector2(0.22 * s, -0.28 * s), c + Vector2(-0.22 * s, -0.28 * s),
+	]), Color(1, 1, 1, 0.22))
+	# 中心菱形盾徽
+	var emblem := PackedVector2Array([
+		c + Vector2(0.0, -0.44 * s), c + Vector2(0.21 * s, -0.03 * s),
+		c + Vector2(0.0, 0.34 * s), c + Vector2(-0.21 * s, -0.03 * s),
+	])
+	ci.draw_colored_polygon(emblem, Color(1, 1, 1, 0.88))
+	var em_out := emblem.duplicate()
+	em_out.append(emblem[0])
+	ci.draw_polyline(em_out, Color(0.10, 0.18, 0.22, 0.55), maxf(1.0, s * 0.05))
 	var outline := pts.duplicate()
 	outline.append(pts[0])
-	draw_polyline(outline, Color(0.10, 0.03, 0.05, 0.9), 1.5)
-	draw_line(c + Vector2(-0.48 * s, -0.32 * s), c + Vector2(0.0, 0.05 * s), Color(1, 1, 1, 0.6), maxf(s * 0.14, 1.0))
-	draw_line(c + Vector2(0.0, 0.05 * s), c + Vector2(0.48 * s, -0.32 * s), Color(1, 1, 1, 0.6), maxf(s * 0.14, 1.0))
+	ci.draw_polyline(outline, Color(0.02, 0.03, 0.05, 0.85), maxf(1.2, s * 0.09))
+	ci.draw_polyline(border, Color(1, 1, 1, 0.22), maxf(1.0, s * 0.05))
