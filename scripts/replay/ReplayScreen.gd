@@ -164,7 +164,7 @@ var _cam_drag := false          # 回放：直接拖动屏幕平移相机
 var _cam_drag_moved := false
 var _cam_drag_last := Vector2.ZERO
 var _cam_drag_prev_follow := -1
-const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5秒（Shift ±1秒） · ↑/↓ 倍速 · 1~5 指定倍速 · N/J 下/上个击杀 · F 切换英雄（Shift+F 反向）\nP 集锦 · C 英雄面板 · T 团队面板 · Home/End 首尾 · PageUp/PageDown ±30秒 · R 重置镜头 · H 隐藏界面 · F3 AI思考 · Esc 退出 · 左键平移/右键旋转/滚轮缩放"
+const HINT_TEXT := "空格 播放/暂停 · ←/→ ±5秒（Shift ±1秒） · ↑/↓ 倍速 · 1~5 指定倍速 · N/J 下/上个击杀 · F 切换英雄（Shift+F 反向）\nP 集锦 · C 英雄面板 · T 团队面板 · Home/End 首尾 · PageUp/PageDown ±30秒 · R 重置镜头 · H 隐藏界面 · F3 AI思考 · F5 AI胶囊 · Esc 退出 · 左键平移/右键旋转/滚轮缩放"
 
 var _hint_label: Label = null
 var _finisher_t := -1.0
@@ -2860,10 +2860,82 @@ func _set_bar(fill: MeshInstance3D, ratio: float) -> void:
 
 
 func _update_ui() -> void:
+	_apply_replay_ai_chips()
 	if _slider != null and not _dragging:
 		_slider.set_value_no_signal(clampf(_t, 0.0, _duration))
 	if _ui_time != null:
 		_ui_time.text = "%s / %s" % [_fmt(_t), _fmt(_duration)]
+
+
+## 旧录像/旧采样没有 chip 字段时，从完整快照反推两行胶囊
+func _chip_from_snapshot(snap: Dictionary) -> Dictionary:
+	var st_cn := ""
+	match str(snap.get("state", "")):
+		"PUSH": st_cn = "推线"
+		"FARM": st_cn = "打野" if str(snap.get("lane", "")) == "野区" else "补刀"
+		"RETREAT": st_cn = "撤退"
+		"RECALL", "RECALL_SAFE": st_cn = "回城"
+		"AVOID": st_cn = "躲避"
+	var it_cn := ""
+	match str(snap.get("intent", "")):
+		"push": it_cn = "推线"
+		"farm": it_cn = "补刀"
+		"jungle": it_cn = "刷野"
+		"chase": it_cn = "追击"
+		"fight": it_cn = "对拼"
+		"kill": it_cn = "收割"
+		"retreat": it_cn = "撤退"
+		"recall": it_cn = "回城"
+		"rotate": it_cn = "支援"
+		"avoid": it_cn = "躲技能"
+	var p1: Array = []
+	if str(snap.get("lane", "")) != "": p1.append(str(snap.get("lane", "")))
+	if st_cn != "": p1.append(st_cn)
+	if str(snap.get("intent_target", "")) != "": p1.append("→ " + str(snap.get("intent_target", "")))
+	var p2: Array = []
+	if it_cn != "": p2.append("意图:" + it_cn)
+	var p: Dictionary = snap.get("perception", {})
+	if str(p.get("near_enemy_hero", "")) != "": p2.append("敌 " + str(p.get("near_enemy_hero", "")))
+	p2.append("敌%d友%d" % [int(p.get("enemies12", 0)), int(p.get("allies12", 0))])
+	var hpm: float = maxf(1.0, float(snap.get("hp_max", 1.0)))
+	p2.append("HP%d%%" % int(round(float(snap.get("hp", 0)) / hpm * 100.0)))
+	return {"line1": " · ".join(p1), "line2": " | ".join(p2), "r": 0.52, "g": 0.78, "b": 1.0}
+
+
+## 回放血条 AI 胶囊：取当前时间之前最近一帧 ai_frames，按 name+team 注入 HeroInfoControl
+func _apply_replay_ai_chips() -> void:
+	if _ai_frames.is_empty() or _hero_uis.is_empty():
+		return
+	var target_ms := int(round(_t * 1000.0))
+	var best: Dictionary = {}
+	var lo := 0
+	var hi := _ai_frames.size() - 1
+	while lo <= hi:
+		var mid := (lo + hi) / 2
+		if int(_ai_frames[mid].get("t", 0)) <= target_ms:
+			best = _ai_frames[mid]
+			lo = mid + 1
+		else:
+			hi = mid - 1
+	var chips := {}
+	for snap in best.get("a", []):
+		if snap is Dictionary:
+			var chip = snap.get("chip", {})
+			if not (chip is Dictionary) or (chip as Dictionary).is_empty():
+				chip = _chip_from_snapshot(snap)
+			if chip is Dictionary and not (chip as Dictionary).is_empty():
+				chips["%s|%d" % [str(snap.get("name", "")), int(snap.get("team", 0))]] = chip
+	for i in range(_hero_uis.size()):
+		if i >= _heroes.size():
+			break
+		var e: Dictionary = _hero_uis[i]
+		var info = e.get("info")
+		if info == null:
+			continue
+		var hrow: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
+		var key := "%s|%d" % [str(hrow.get("name", "")), int(hrow.get("team", 0))]
+		info.set("ai_chip_override", chips.get(key, {}))
+		info.queue_redraw()
 
 
 func _fmt(sec: float) -> String:
@@ -3499,6 +3571,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_fullscreen()
 			KEY_F3:
 				_toggle_ai_debug()
+			KEY_F5:
+				GameEntity.debug_show_ai_chip = not GameEntity.debug_show_ai_chip
+				_apply_replay_ai_chips()
 		return
 	if event is InputEventScreenTouch:
 		var stouch: InputEventScreenTouch = event

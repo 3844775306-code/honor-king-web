@@ -932,6 +932,7 @@ func debug_snapshot() -> Dictionary:
 		"summoner": {"last": str(summoner_tactics.last_action)},
 		"brain": brain_path,
 		"strategy": {"lane": lane_txt, "jungle": jungle_txt},
+		"chip": debug_chip_info(),
 		"log": _dbg_log.duplicate(),
 	}
 

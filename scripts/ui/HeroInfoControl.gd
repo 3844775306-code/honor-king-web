@@ -8,6 +8,8 @@ const BuffArt = preload("res://scripts/ui/BuffArt.gd")
 var hero: Hero = null
 ## 回放用：外部直接注入的状态条（录像里录下的被动/附魔/层数等），非空时优先于按 hero 字段计算
 var external_statuses: Array = []
+## 回放用：外部注入的 AI 决策胶囊 {line1,line2,r,g,b}；非空时优先于 hero 的 HeroAI
+var ai_chip_override: Dictionary = {}
 
 var bar_width: float = 280.0
 var bar_height: float = 28.0
@@ -250,7 +252,13 @@ func _draw():
 		name_str += " · " + hero.player_name
 	var ai_label := ""
 	var ai_col := Color(0.52, 0.78, 1.0)
-	if hero.is_ai:
+	if not ai_chip_override.is_empty():
+		ai_label = str(ai_chip_override.get("line1", ""))
+		var _l2 := str(ai_chip_override.get("line2", ""))
+		if _l2 != "":
+			ai_label += "\n" + _l2
+		ai_col = Color(float(ai_chip_override.get("r", 0.52)), float(ai_chip_override.get("g", 0.78)), float(ai_chip_override.get("b", 1.0)))
+	elif hero.is_ai:
 		var ai = null
 		for child in hero.get_children():
 			if child is HeroAI:
