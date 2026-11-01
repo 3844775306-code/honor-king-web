@@ -1308,8 +1308,9 @@ func _update_debug_path_visual():
 	# 半透明窄带 + 终点圆环，避免亮青/亮橙在绿色地形上像 UI 叠加层。
 	var path_color := team_color.lerp(Color(0.72, 0.66, 0.50), 0.45)
 	path_color.a = 0.85
-	# A*失败/尚未算出路径：仍画出英雄→当前移动目标的直线指示，避免完全看不到路径
-	if _nav_path.is_empty():
+	# A*失败/尚未算出路径/当前路径已走到尽头（_nav_index 越界时后面的 pts 只剩起点，画不出折线）：
+	# 都退化成英雄→当前导航目标的直线指示，避免完全看不到路径
+	if _nav_path.is_empty() or _nav_index >= _nav_path.size():
 		var _fallback_end: Vector3 = _nav_target
 		if _fallback_end != Vector3.ZERO and global_position.distance_to(_fallback_end) > 1.2:
 			var _fp: Array[Vector3] = [global_position + Vector3(0, DEBUG_PATH_Y, 0), _fallback_end + Vector3(0, DEBUG_PATH_Y, 0)]
