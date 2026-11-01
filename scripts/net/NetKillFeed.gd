@@ -31,8 +31,25 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	NetSession.net_kill_feed.connect(_on_kill_feed)
 
+## 塔/水晶警报中性文案 → 本地阵营加「我方/敌方」；非我方警报直接丢弃（红方视角）
+func _localize(desc: String, victim_team: int) -> String:
+	if desc.find("正在被攻击") < 0:
+		return desc
+	var base := desc
+	if base.begins_with("我方") or base.begins_with("敌方"):
+		base = base.substr(2)
+	return ("我方" if victim_team == int(Config.player_team) else "敌方") + base
+
+
+func _is_foreign_warning(desc: String, victim_team: int) -> bool:
+	return desc.find("正在被攻击") >= 0 and victim_team >= 0 and victim_team != int(Config.player_team)
+
+
 func _on_kill_feed(actor: String, actor_team: int, desc: String, victim: String, victim_team: int,
 		assists: Array, a_mark: int, v_mark: int) -> void:
+	if _is_foreign_warning(desc, victim_team):
+		return
+	desc = _localize(desc, victim_team)
 	# host 开局链经战报通道转发的纯音频（SFX:: 前缀）：剥掉本地播、不画横幅
 	if desc.begins_with(SfxManager.ANN_PREFIX):
 		SfxManager.play_announce(desc.trim_prefix(SfxManager.ANN_PREFIX))
@@ -49,6 +66,9 @@ func _on_kill_feed(actor: String, actor_team: int, desc: String, victim: String,
 ## 外部注入一条战报（回放录像使用；不依赖 NetSession 信号）
 func push(actor: String, actor_team: int, desc: String, victim: String, victim_team: int,
 		assists: Array = [], a_mark: int = 0, v_mark: int = 0) -> void:
+	if _is_foreign_warning(desc, victim_team):
+		return
+	desc = _localize(desc, victim_team)
 	_q.append({"actor": actor, "a_team": actor_team, "desc": desc, "victim": victim,
 		"v_team": victim_team, "assists": assists, "a_mark": a_mark, "v_mark": v_mark})
 	if _q.size() > 12:

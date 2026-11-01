@@ -968,6 +968,13 @@ func _render_synth(cfg: Dictionary, key: String) -> AudioStreamWAV:
 
 func _resolve_key(actor: String, actor_team: int, desc: String, victim: String, victim_team: int) -> String:
 	var my_side := Config.is_ally(actor_team)
+	# 中性警报（host/客户端各自已加「我方/敌方」前缀，这里按类型出语音）
+	if desc.find("正在被攻击") >= 0:
+		if desc.find("水晶") >= 0:
+			return "crystal_warn"
+		if desc.find("高地") >= 0:
+			return "high_warn"
+		return "tower_warn"
 	match desc:
 		"第一滴血":
 			return "first_blood"

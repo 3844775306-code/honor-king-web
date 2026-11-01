@@ -975,13 +975,15 @@ func show_kill_feed(actor: String, actor_team: int, desc: String, victim: String
 			continue
 		assist_rows.append([nm, int(a.get("team", actor_team)), _feed_mark_of(nm)])
 	# P3e：网络对局时把击杀/塔/龙/名刀/复活等全部战报经 NetSession 广播给接管客户端（全网单点入口）
+	# 塔/水晶警报统一用中性文案广播，显示与语音各端按本地阵营加「我方/敌方」前缀
 	if NetSession.mode == NetSession.Mode.HOST:
 		NetSession.broadcast_kill_feed(actor, actor_team, desc, victim, victim_team,
 			assist_rows, a_mark, v_mark)
+	var disp_desc: String = _localize_feed_desc(desc, victim_team)
 	# 播报语音（host/离线本地单点；接管客户端由 NetKillFeed 各自触发）
-	SfxManager.play_feed(actor, actor_team, desc, victim, victim_team)
+	SfxManager.play_feed(actor, actor_team, disp_desc, victim, victim_team)
 	# 进队列：每条只播 1 条，前一条播满 2.0s 再播下一条
-	_kf_queue.append({"actor": actor, "a_team": actor_team, "desc": desc,
+	_kf_queue.append({"actor": actor, "a_team": actor_team, "desc": disp_desc,
 		"victim": victim, "v_team": victim_team, "a_mark": a_mark, "v_mark": v_mark,
 		"assists": assist_rows})
 	while _kf_queue.size() > KF_QUEUE_MAX:
@@ -989,6 +991,17 @@ func show_kill_feed(actor: String, actor_team: int, desc: String, victim: String
 	_kf_pump()
 
 ## 英雄当前原初印记等级（0~6，每 100 原初积分 1 级；非英雄返回 0）
+## 塔/水晶警报中性文案 → 按本地阵营加「我方/敌方」前缀（host/客户端/回放共用口径）
+func _localize_feed_desc(desc: String, victim_team: int) -> String:
+	if desc.find("正在被攻击") < 0:
+		return desc
+	var base := desc
+	if base.begins_with("我方") or base.begins_with("敌方"):
+		base = base.substr(2)
+	var own := victim_team < 0 or victim_team == Config.player_team
+	return ("我方" if own else "敌方") + base
+
+
 func _feed_mark_of(entity_name: String) -> int:
 	if entity_name == "":
 		return 0

@@ -3429,18 +3429,22 @@ func _update_camera() -> void:
 		if int(_own.get("hidden_self", 0)) == 1:
 			zoom = 1.25
 		# host：目标点 = 英雄 + 跟随偏移 + 拖动平移偏移；震屏在其后叠加
-		var target := _cam_focus + CAM_FOLLOW_OFF * zoom + _cam_pan + _shake_offset()
+		# 红方：镜头绕 Y 轴 180°（与单机 BattleManager.cam_yaw = PI 一致，出生在右下、操作方向同手感）
+		var flip_yaw := PI if int(Config.player_team) == 1 else 0.0
+		var cam_off := CAM_FOLLOW_OFF.rotated(Vector3.UP, flip_yaw)
+		var pan_rot := _cam_pan.rotated(Vector3.UP, flip_yaw)
+		var target := _cam_focus + cam_off * zoom + pan_rot + _shake_offset()
 		if _cam_intro_t < 0.0:
 			_cam_intro_t = 0.0
 		if _cam_intro_t < CAM_INTRO_DUR:
 			_cam_intro_t += get_process_delta_time()
 			var e := 1.0 - pow(1.0 - clampf(_cam_intro_t / CAM_INTRO_DUR, 0.0, 1.0), 3.0)
-			_cam.global_position = target + Vector3(0.0, 70.0, 130.0) * (1.0 - e)
-			_cam.rotation_degrees = Vector3(lerpf(-72.0, -60.0, e), 0.0, 0.0)
+			_cam.global_position = target + Vector3(0.0, 70.0, 130.0).rotated(Vector3.UP, flip_yaw) * (1.0 - e)
+			_cam.rotation_degrees = Vector3(lerpf(-72.0, -60.0, e), rad_to_deg(flip_yaw), 0.0)
 			_cam.fov = lerpf(52.0, 70.0, e) - _fov_punch_cur
 			return
 		_cam.global_position = target
-		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.rotation_degrees = Vector3(-60.0, rad_to_deg(flip_yaw), 0.0)
 		_cam.fov = 70.0 - _fov_punch_cur
 		return
 	var pitch := deg_to_rad(_cam_pitch)
@@ -4277,6 +4281,11 @@ func _tick_self_prediction(delta: float) -> void:
 	var ax := Input.get_axis("ui_left", "ui_right")
 	var az := Input.get_axis("ui_down", "ui_up")
 	var jv := _pad.get_move_vector()
+	if int(Config.player_team) == 1:
+		# 红方相机翻转：本地移动预测与发送方向保持一致
+		ax = -ax
+		az = -az
+		jv = -jv
 	# 无输入且尚未起预测：不介入（走快照插值）；已在预测态则继续做快照校正，保证松手瞬间不弹回滞后位置
 	if absf(ax) < 0.02 and absf(az) < 0.02 and jv.length() < 0.02 and not _pred_on:
 		_pred_turn_cd = 0.0
@@ -4380,6 +4389,11 @@ func _poll_touch_input() -> void:
 	var az := Input.get_axis("ui_down", "ui_up")
 	var jv := _pad.get_move_vector()
 	var mm := _pad.get_move_mode()
+	# 红方：屏幕/摇杆方向 → 世界方向需绕 180°（相机已翻转），否则移动方向相反
+	if int(Config.player_team) == 1:
+		ax = -ax
+		az = -az
+		jv = -jv
 	var changed := absf(ax - _d_ax) > 0.02 or absf(az - _d_az) > 0.02 \
 		or absf(jv.x - _d_jx) > 0.02 or absf(jv.y - _d_jy) > 0.02 or mm != _d_mode
 	var driving := absf(ax) > 0.02 or absf(az) > 0.02 or jv.length() > 0.02

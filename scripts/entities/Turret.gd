@@ -681,14 +681,15 @@ func _clear_recently_reported() -> void:
 
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false,skill_id:int=0,pen: float = 0.0, is_crit_forced: int = -1):
 	# 无兵线减伤：仅对英雄伤害生效，且塔附近没有攻击方的小兵
-	if not _recently_reported and Config.is_ally(team):
+	if not _recently_reported and (Config.is_ally(team) or NetSession.is_pvp()):
 		var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 		# 按塔类型出差异化警报文案（高地塔/水晶），战报 desc 直接给到 SfxManager 选对应语音
-		var warn_desc := "我方防御塔正在被攻击"
+		# 中性文案（不带阵营前缀）：host/客户端按本地阵营各自加「我方/敌方」，红方视角不会串
+		var warn_desc := "防御塔正在被攻击"
 		if display_name == "high":
-			warn_desc = "我方高地防御塔正在被攻击"
+			warn_desc = "高地防御塔正在被攻击"
 		elif display_name == "crystal":
-			warn_desc = "我方水晶正在被攻击"
+			warn_desc = "水晶正在被攻击"
 		battle.ui.show_kill_feed("", Config.Team.NEUTRAL, warn_desc, display_name, team)
 		_recently_reported = true
 		# 不能用 await：take_damage 会挂起 25 秒，首次命中（例如第一只小兵）等于白打

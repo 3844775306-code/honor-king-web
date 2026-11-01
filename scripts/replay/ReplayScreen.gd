@@ -189,6 +189,7 @@ func _ready() -> void:
 	_map = _doc.get("map", {})
 	var meta: Dictionary = _doc.get("meta", {})
 	_me_team = int(meta.get("player_team", int(Config.player_team)))
+	Config.player_team = _me_team   # 回放视角=录像玩家阵营：警报/播报前缀按同一口径
 	_duration = maxf(float(meta.get("duration", 0.0)), 1.0)
 	for ev in _events:
 		if str(ev.get("k", "")) == "k":

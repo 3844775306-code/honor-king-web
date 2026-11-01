@@ -181,18 +181,37 @@ func exit_zoom() -> void:
 	z_index = _zoom_z
 	queue_redraw()
 
+func _flip180() -> bool:
+	# 红方视角：小地图整体旋转 180°（己方基地在左下），与单机 Minimap._flip180 一致
+	return player_team == 1
+
+
 func _local_to_world(local_pos: Vector2) -> Vector3:
 	if local_pos.x < 0.0 or local_pos.x > MINIMAP_SIZE or local_pos.y < 0.0 or local_pos.y > MINIMAP_SIZE:
 		return Vector3.ZERO
-	return Vector3((local_pos.x / MINIMAP_SIZE - 0.5) * MAP_SIZE, 0.0, (local_pos.y / MINIMAP_SIZE - 0.5) * MAP_SIZE)
+	var lp := local_pos
+	if _flip180():
+		lp = Vector2(MINIMAP_SIZE - lp.x, MINIMAP_SIZE - lp.y)
+	return Vector3((lp.x / MINIMAP_SIZE - 0.5) * MAP_SIZE, 0.0, (lp.y / MINIMAP_SIZE - 0.5) * MAP_SIZE)
+
 
 func _world_to_minimap(w: Vector3) -> Vector2:
-	return Vector2((w.x + MAP_SIZE / 2.0) * MINIMAP_SIZE / MAP_SIZE, (w.z + MAP_SIZE / 2.0) * MINIMAP_SIZE / MAP_SIZE)
+	var p := Vector2((w.x + MAP_SIZE / 2.0) * MINIMAP_SIZE / MAP_SIZE,
+		(w.z + MAP_SIZE / 2.0) * MINIMAP_SIZE / MAP_SIZE)
+	if _flip180():
+		p = Vector2(MINIMAP_SIZE - p.x, MINIMAP_SIZE - p.y)
+	return p
 
 # —— 绘制 ——
 func _draw() -> void:
 	_ensure_terrain_texture()
-	draw_texture_rect(_terrain_texture, Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), false)
+	if _flip180():
+		# 红方：底图原地旋转 180°（同单机 Minimap：不能负尺寸 Rect2，否则底板错位）
+		draw_set_transform(Vector2(MINIMAP_SIZE, MINIMAP_SIZE), PI, Vector2.ONE)
+		draw_texture_rect(_terrain_texture, Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), false)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	else:
+		draw_texture_rect(_terrain_texture, Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), false)
 	# 静态地图：草丛 / 墙体 / 血包点位（host 下发 payload.bushes/walls/packs）
 	if not _static_done:
 		_cache_static_map()
