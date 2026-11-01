@@ -16,6 +16,7 @@ var _ammo_node: MeshInstance3D = null   # 模型上膛的箭（弓兵/攻城车�
 var _death_anim_started: bool = false
 var _wp_idx_cached: int = -1      # 路点到达半径缓存（塔位路点会被塔基推挤，半径需放宽）
 var _wp_reach: float = 1.0
+var net_attack_seq: int = 0       # 普攻视觉序号：录像按序号变化补播攻击动作
 var teleport_channel_protected := false   # 被选为传送落点：传送引导期间不攻击/不移动/免伤
 
 func _ready():
@@ -207,6 +208,7 @@ func _play_anim(anim_name: String):
 	# 联机：小兵攻击动作推给客户端（非 HOST 由 net_action 直接忽略；
 	# 「附近有己方英雄」的闸门在 NetSession.push_net_action 里，不会刷远端小兵战）
 	if anim_name == "attack-melee-left":
+		net_attack_seq += 1
 		NetSession.net_action(self, 0)
 	if display_name in ["dragon", "storm", "shadow_dragon"]:
 		match anim_name:
@@ -331,6 +333,7 @@ func _physics_process(delta):
 						_tk = "monster"
 					Vfx.hit_impact(tp + Vector3.UP * 0.6, (tp - global_position).normalized(),
 						Vfx.team_color(team), Color(1.0, 0.95, 0.85), 0.6 if display_name != "super" else 0.85, _tk, "minion")
+				anim_atk_seq += 1
 				attack_timer = 1.0 / attack_speed
 				# 兵种攻击音（近战/远程/炮车/超级兵/龙兵各不同，仅本地英雄附近）
 				SfxManager.try_minion_attack_sfx(display_name, global_position)

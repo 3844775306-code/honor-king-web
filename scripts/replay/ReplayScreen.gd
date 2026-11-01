@@ -1052,7 +1052,9 @@ func _apply_frame(t: float) -> void:
 			var z0: float = lerpf(float(ra[2]), float(rb2[2]) if rb2.size() > 2 else float(ra[2]), k2) / 100.0
 			var hp0: float = lerpf(float(ra[3]), float(rb2[3]) if rb2.size() > 3 else float(ra[3]), k2)
 			rows.append([id0, x0, z0, int(ra[5]), int(ra[4]), hp0,
-				float(ra[6]) if ra.size() > 6 else 1000.0])
+				float(ra[6]) if ra.size() > 6 else 1000.0,
+				float(ra[7]) if ra.size() > 7 else 0.0,
+				int(ra[8]) if ra.size() > 8 else 0])
 		var seen := {}
 		for r in rows:
 			var id: int = int(r[0])
@@ -1080,13 +1082,14 @@ func _apply_frame(t: float) -> void:
 			if moving:
 				node3.rotation.y = atan2(dv.x, dv.z)
 			node3.set_meta("prev", nowp)
-			var ph: float = float(node3.get_meta("phase", 0.0))
-			var bob: float = 0.055 * absf(sin(_t * 8.0 + ph)) if moving else 0.012 * absf(sin(_t * 2.0 + ph))
-			node3.position = Vector3(nowp.x, bob, nowp.z)
-			var mdl = node3.get_meta("model", null)
-			if mdl is Node3D:
-				(mdl as Node3D).rotation.z = 0.10 * sin(_t * 8.0 + ph) if moving else 0.0
-				(mdl as Node3D).rotation.x = 0.0
+			node3.position = Vector3(nowp.x, 0.0, nowp.z)   # 行走起伏/摆动交给 WalkFeel，与单机同源
+			# 攻击序号变化 → 播一次与单机同参数的程序化攻击动作（攻城车后坐/弓兵拉弓/近战前刺）
+			var atk_seq := int(r[8]) if r.size() > 8 else 0
+			if atk_seq > int(node3.get_meta("atk_seq", 0)):
+				node3.set_meta("atk_seq", atk_seq)
+				if r.size() > 7:
+					node3.rotation.y = float(r[7])
+				_play_minion_attack(node3, int(r[3]))
 		for id in _mini_nodes.keys():
 			if seen.has(id):
 				continue
@@ -2241,6 +2244,8 @@ func _make_minion(type_code: int, team: int) -> Node3D:
 	if model != null:
 		root.add_child(model)
 		root.set_meta("model", model)
+		# 行走质感与单机/客户端同源：步频起伏、左右摆、前倾、腿部/龙翼枢轴
+		WalkFeel.attach(root, model, _minion_walk_opts(tname, model))
 	else:
 		var mi := MeshInstance3D.new()
 		var bm := BoxMesh.new()
@@ -2280,6 +2285,77 @@ func _model_top(root: Node3D) -> float:
 		for c in n.get_children():
 			stack.append(c)
 	return top
+
+
+func _minion_walk_opts(kind: String, model: Node3D) -> Dictionary:
+	if kind in ["dragon", "storm", "shadow_dragon"]:
+		return {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
+			"wings": [model.get_node_or_null("ModelPivot/WingL"),
+				model.get_node_or_null("ModelPivot/WingR")]}
+	if kind == "siege":
+		return {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
+	var swing := 0.52 if kind == "super" else 0.62
+	return {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust_size": 0.18,
+		"legs": [model.get_node_or_null("ModelPivot/LegL"), model.get_node_or_null("ModelPivot/LegR")],
+		"leg_swing": swing}
+
+
+## 小兵普攻动作：与单机 Minion._model_lunge / _siege_recoil 同参数的程序化版本
+func _play_minion_attack(root: Node3D, type_code: int) -> void:
+	var mdl = root.get_meta("model", null)
+	if not (mdl is Node3D) or not is_instance_valid(mdl):
+		return
+	var kind: String = TYPE_NAMES[clampi(type_code, 0, TYPE_NAMES.size() - 1)]
+	var pivot: Node3D = (mdl as Node3D).get_node_or_null("ModelPivot")
+	if pivot == null:
+		return
+	var old: Tween = pivot.get_meta("atk_tween", null)
+	if old != null and old.is_valid():
+		old.kill()
+	var base_pos := pivot.position
+	var base_rot := pivot.rotation
+	if kind == "siege":
+		var dist := 0.20
+		var tw := create_tween()
+		tw.tween_property(pivot, "position:z", base_pos.z - dist, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(pivot, "rotation:x", base_rot.x - 0.075, 0.06).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(pivot, "position:z", base_pos.z, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+		tw.parallel().tween_property(pivot, "rotation:x", base_rot.x, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	else:
+		var p := {"back": 0.12, "fwd": 0.36, "up": 0.18, "down": 0.18, "twist": 0.26, "dip": 0.05,
+			"windup": 0.09, "strike": 0.10, "settle": 0.30}
+		if kind == "ranged":
+			p = {"back": 0.17, "fwd": 0.09, "up": 0.11, "down": 0.12, "twist": 0.15, "dip": 0.04,
+				"windup": 0.13, "strike": 0.07, "settle": 0.26}
+		elif kind == "super":
+			p = {"back": 0.19, "fwd": 0.52, "up": 0.32, "down": 0.36, "twist": 0.46, "dip": 0.11,
+				"windup": 0.13, "strike": 0.12, "settle": 0.36}
+		elif kind in ["dragon", "storm", "shadow_dragon"]:
+			p = {"back": 0.13, "fwd": 0.38, "up": 0.12, "down": 0.24, "twist": 0.0, "dip": 0.06,
+				"windup": 0.10, "strike": 0.12, "settle": 0.30}
+		var swing := 0.0
+		if kind in ["melee", "super"]:
+			swing = 0.16 if kind == "melee" else 0.26
+		var tw := create_tween()
+		tw.tween_property(pivot, "position:z", base_pos.z - float(p["back"]), float(p["windup"])).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(pivot, "rotation:x", base_rot.x + float(p["up"]), float(p["windup"]))
+		tw.parallel().tween_property(pivot, "rotation:y", base_rot.y + float(p["twist"]), float(p["windup"]))
+		tw.parallel().tween_property(pivot, "position:x", base_pos.x - swing * 0.45, float(p["windup"]))
+		tw.tween_property(pivot, "position:z", base_pos.z + float(p["fwd"]), float(p["strike"])).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(pivot, "position:x", base_pos.x + swing, float(p["strike"]))
+		tw.parallel().tween_property(pivot, "rotation:x", base_rot.x - float(p["down"]), float(p["strike"]))
+		tw.parallel().tween_property(pivot, "rotation:y", base_rot.y - float(p["twist"]) * 1.5, float(p["strike"]))
+		tw.tween_property(pivot, "position:z", base_pos.z, float(p["settle"])).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		tw.parallel().tween_property(pivot, "position:x", base_pos.x, float(p["settle"]))
+		tw.parallel().tween_property(pivot, "rotation:x", base_rot.x, float(p["settle"]))
+		tw.parallel().tween_property(pivot, "rotation:y", base_rot.y, float(p["settle"]))
+	if kind == "ranged" or kind == "siege":
+		var ammo := (mdl as Node3D).get_node_or_null("ModelPivot/Ammo") as MeshInstance3D
+		if ammo != null:
+			ammo.visible = false
+			get_tree().create_timer(0.8).timeout.connect(func() -> void:
+				if is_instance_valid(ammo):
+					ammo.visible = true)
 
 
 func _find_ap(n: Node) -> AnimationPlayer:

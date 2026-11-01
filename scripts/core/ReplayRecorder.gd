@@ -451,6 +451,7 @@ func _sample(delta: float, finishing: bool) -> void:
 				int(mid), int(round(mp.x * 100.0)), int(round(mp.z * 100.0)),
 				maxi(0, int(round(m.health))), int(m.team),
 				int(TYPE_CODE.get(str(m.display_name), 0)), int(round(m.max_health)),
+				float(m.rotation.y), int(m.get("net_attack_seq")),
 			])
 		_mini_frames.append({"t": t_ms, "m": rows})
 		var jrows: Array = []
