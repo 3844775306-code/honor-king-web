@@ -121,256 +121,26 @@ func _latest_replay_path() -> String:
 # ---------------- 场景 ----------------
 
 func _build_world() -> void:
-	# 与对局同源：天空盒/光照/浮空岛地形/分路/高地/河道/装饰全部走 MapVisuals
-	MapVisuals.setup_environment(self)
-	_world = Node3D.new()
-	_world.name = "World"
-	add_child(_world)
-	# 1. 浮空岛顶面（岛外 discard，露出天空）
-	var wild := MeshInstance3D.new()
-	var wm := PlaneMesh.new()
-	wm.size = Vector2(220.0, 220.0)
-	wm.subdivide_width = 120
-	wm.subdivide_depth = 120
-	wild.mesh = wm
-	wild.position = Vector3(0.0, -0.02, 0.0)
-	wild.material_override = MapVisuals.island_ground_material()
-	_world.add_child(wild)
-	# 2. 分路（形状平面；土路由地面 shader 按世界坐标采样）
-	_add_lane_plane(Vector3(-55.0, 0.0, 0.0), Vector2(15.4, 126.0), false)
-	_add_lane_plane(Vector3(-30.0, 0.0, 30.0), Vector2(16.0, 84.85), true)
-	_add_lane_plane(Vector3(0.0, 0.0, 55.0), Vector2(126.0, 15.4), false)
-	_add_lane_plane(Vector3(55.0, 0.0, 0.0), Vector2(15.4, 126.0), false)
-	_add_lane_plane(Vector3(30.0, 0.0, -30.0), Vector2(16.0, 84.85), true)
-	_add_lane_plane(Vector3(0.0, 0.0, -55.0), Vector2(126.0, 15.4), false)
-	# 3. 高地青砖 + 外沿 + 泉水
-	_add_high_ground_fan(Vector3(-60.0, 0.2, 60.0), -90.0, 0.0)
-	_add_high_ground_fan(Vector3(60.0, 0.2, -60.0), 90.0, 180.0)
-	_add_high_ground_aprons(Vector3(-60.0, 0.0, 60.0), Vector3(-1, 0, 0), Vector3(0, 0, 1))
-	_add_high_ground_aprons(Vector3(60.0, 0.0, -60.0), Vector3(1, 0, 0), Vector3(0, 0, -1))
-	_add_high_ground_rim(Vector3(-60.0, 0.0, 60.0), -90.0, 0.0)
-	_add_high_ground_rim(Vector3(60.0, 0.0, -60.0), 90.0, 180.0)
-	_add_fountain(Vector3(-58.0, 0.3, 58.0), Color(0.2, 0.55, 1.0, 0.35))
-	_add_fountain(Vector3(58.0, 0.3, -58.0), Color(1.0, 0.25, 0.2, 0.35))
-	# 4. 河道 + 两岸
-	_add_river()
-	# 4.5 装饰（草丛/河岸石墙/陶罐，固定种子，与对局位置一致）
-	MapVisuals.scatter_decorations(_world)
-	# 4.6 浮空岛背景（岛缘/岛底/墙外树林）
-	MapVisuals.spawn_floating_island(_world)
-	# 5. 静态墙/草丛：录制时抓的对局布局，逐根重建
-	_statics = Node3D.new()
-	_statics.name = "Statics"
-	_world.add_child(_statics)
-	_build_statics()
-	# 相机
+	# 与真实对局完全一致：用 BattleManager 的「只建地图」模式生成地形/分路/高地/河道/
+	# 泉水/装饰/墙体/草丛（同一份代码，不存在两套地形）。
+	var bm := BattleManager.new()
+	bm.name = "ReplayMap"
+	bm.set_meta("map_only", true)
+	add_child(bm)
+	bm.remove_from_group("battle_manager")   # 别让 HUD/触控把它当成正在进行的对局
+	bm.set_process(false)
+	bm.set_physics_process(false)
+	bm.process_mode = Node.PROCESS_MODE_DISABLED
+	_world = bm
+	# 回放自己的相机
 	_cam = Camera3D.new()
+	_cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	_cam.fov = 70.0
 	_cam.near = 0.05
 	_cam.far = 4000.0
 	add_child(_cam)
 	_cam.make_current()
 	_update_camera()
-
-
-var _lane_idx := 0
-
-func _add_lane_plane(center: Vector3, size_v: Vector2, diag: bool) -> void:
-	var plane := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = size_v
-	plane.mesh = pm
-	if diag:
-		plane.rotation_degrees = Vector3(0.0, -45.0, 0.0)
-	plane.position = center + Vector3(0.0, 0.14 + 0.0012 * float(_lane_idx % 6), 0.0)
-	_lane_idx += 1
-	plane.material_override = MapVisuals.ground_material()
-	var curb_mat: Material = DecorMesh.rock_material()
-	var along_x: bool = size_v.x >= size_v.y
-	for sd in [-1.0, 1.0]:
-		var curb := MeshInstance3D.new()
-		var cm := BoxMesh.new()
-		if along_x:
-			cm.size = Vector3(size_v.x, 0.22, 0.6)
-			curb.position = Vector3(0.0, -0.04, (size_v.y * 0.5 + 0.25) * sd)
-		else:
-			cm.size = Vector3(0.6, 0.22, size_v.y)
-			curb.position = Vector3((size_v.x * 0.5 + 0.25) * sd, -0.04, 0.0)
-		curb.mesh = cm
-		curb.material_override = curb_mat
-		plane.add_child(curb)
-	_world.add_child(plane)
-
-
-func _add_high_ground_fan(center: Vector3, start_deg: float, end_deg: float) -> void:
-	var csg := CSGPolygon3D.new()
-	var poly := PackedVector2Array()
-	poly.append(Vector2.ZERO)
-	var steps := 32
-	for i in range(steps + 1):
-		var an := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
-		poly.append(Vector2(cos(an) * 35.0, sin(an) * 35.0))
-	csg.polygon = poly
-	csg.depth = 0.05
-	csg.position = center + Vector3(0.0, -0.025, 0.0)
-	csg.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	csg.material_override = MapVisuals.high_ground_material()
-	_world.add_child(csg)
-
-
-func _add_high_ground_aprons(center: Vector3, out_a: Vector3, out_b: Vector3) -> void:
-	var mat := MapVisuals.high_ground_material()
-	var inward_a := -out_a
-	var inward_b := -out_b
-	_add_flat_quad(center + out_a * 1.5 + inward_b * 17.5, Vector2(3.0, 35.0), mat, 0.177)
-	_add_flat_quad(center + out_b * 1.5 + inward_a * 17.5, Vector2(35.0, 3.0), mat, 0.177)
-	_add_flat_quad(center + out_a * 1.5 + out_b * 1.5, Vector2(3.0, 3.0), mat, 0.177)
-
-
-func _add_flat_quad(pos: Vector3, size_v: Vector2, mat: Material, y: float) -> void:
-	var mi := MeshInstance3D.new()
-	var pm := PlaneMesh.new()
-	pm.size = size_v
-	mi.mesh = pm
-	mi.position = Vector3(pos.x, y, pos.z)
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_world.add_child(mi)
-
-
-func _add_high_ground_rim(center: Vector3, start_deg: float, end_deg: float) -> void:
-	var steps := 48
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in steps:
-		var a0 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i) / float(steps))
-		var a1 := deg_to_rad(start_deg + (end_deg - start_deg) * float(i + 1) / float(steps))
-		var in0 := center + Vector3(cos(a0) * 34.7, 0.176, sin(a0) * 34.7)
-		var in1 := center + Vector3(cos(a1) * 34.7, 0.176, sin(a1) * 34.7)
-		var out0 := center + Vector3(cos(a0) * 36.4, 0.025, sin(a0) * 36.4)
-		var out1 := center + Vector3(cos(a1) * 36.4, 0.025, sin(a1) * 36.4)
-		st.add_vertex(in0); st.add_vertex(in1); st.add_vertex(out0)
-		st.add_vertex(in1); st.add_vertex(out1); st.add_vertex(out0)
-	st.generate_normals()
-	var mi := MeshInstance3D.new()
-	mi.name = "HighGroundRim"
-	mi.mesh = st.commit()
-	mi.material_override = _double_sided_rock()
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	_world.add_child(mi)
-
-
-func _double_sided_rock() -> ShaderMaterial:
-	var base := DecorMesh.rock_material()
-	var sh := (base.shader as Shader).duplicate() as Shader
-	sh.code = sh.code.replace(
-		"render_mode diffuse_burley, specular_schlick_ggx;",
-		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
-	var mat := ShaderMaterial.new()
-	mat.shader = sh
-	return mat
-
-
-func _add_fountain(center: Vector3, color: Color) -> void:
-	var disc := CSGPolygon3D.new()
-	var poly := PackedVector2Array()
-	poly.append(Vector2.ZERO)
-	for i in range(49):
-		var an2 := deg_to_rad(360.0 * float(i) / 48.0)
-		poly.append(Vector2(cos(an2) * 5.0, sin(an2) * 5.0))
-	disc.polygon = poly
-	disc.depth = 0.05
-	disc.position = center + Vector3(0.0, -0.025, 0.0)
-	disc.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-	var dm := StandardMaterial3D.new()
-	dm.albedo_color = color
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	disc.material_override = dm
-	_world.add_child(disc)
-	var ring := MeshInstance3D.new()
-	var tor := TorusMesh.new()
-	tor.inner_radius = 4.95
-	tor.outer_radius = 5.2
-	ring.mesh = tor
-	ring.position = center + Vector3(0.0, 0.1, 0.0)
-	var rm := StandardMaterial3D.new()
-	rm.albedo_color = color
-	rm.emission_enabled = true
-	rm.emission = color
-	rm.emission_energy_multiplier = 0.8
-	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring.material_override = rm
-	_world.add_child(ring)
-
-
-func _add_river() -> void:
-	var r := MeshInstance3D.new()
-	var rm := PlaneMesh.new()
-	rm.size = Vector2(20.0, 141.0)
-	rm.subdivide_width = 24
-	rm.subdivide_depth = 70
-	r.mesh = rm
-	r.rotation_degrees = Vector3(0.0, 45.0, 0.0)
-	r.position = Vector3(0.0, 0.02, 0.0)
-	r.material_override = MapVisuals.water_material()
-	_world.add_child(r)
-	MapVisuals.spawn_river_banks(_world)
-
-
-## 录制时抓下来的墙体/草丛布局：逐根重建（与对局同款模型）
-func _build_statics() -> void:
-	for w in _map.get("walls", []):
-		if w.size() < 3:
-			continue
-		var root := Node3D.new()
-		root.position = Vector3(float(w[0]), 0.0, float(w[1]))
-		root.rotation.y = float(w[2])
-		var hq: bool = w.size() > 3 and int(w[3]) == 1
-		var outer: bool = w.size() > 4 and int(w[4]) == 1
-		var olen: float = float(w[5]) if w.size() > 5 else 2.0
-		var pillar: bool = w.size() > 6 and int(w[6]) == 1
-		var cont: float = float(w[7]) if w.size() > 7 else 0.0
-		var thick: float = float(w[8]) if w.size() > 8 else 1.0
-		var seed_v: int = int(round(absf(root.position.x) * 10.0)) * 37 + int(round(absf(root.position.z) * 10.0)) * 91
-		var vis: Node3D = null
-		if pillar:
-			vis = DecorMesh.pillar_visual()
-		elif cont > 0.0:
-			vis = DecorMesh.outer_wall_visual(cont)
-			vis.scale = Vector3(1.0, 0.62, maxf(thick, 1.0))
-		elif outer:
-			vis = DecorMesh.outer_wall_visual(olen)
-		elif hq:
-			vis = DecorMesh.wall_visual_hq(seed_v)
-		else:
-			vis = DecorMesh.wall_visual(seed_v)
-		if vis == null:
-			continue
-		vis.position.y = DecorMesh.wall_ground_y(root.position)
-		_set_shadow_off(vis)
-		root.add_child(vis)
-		_statics.add_child(root)
-	for b in _map.get("bushes", []):
-		if b.size() < 2:
-			continue
-		var bp := Vector3(float(b[0]), 0.0, float(b[1]))
-		var bseed: int = int(round(absf(bp.x) * 10.0)) * 131 + int(round(absf(bp.z) * 10.0)) * 17
-		var bnode := Node3D.new()
-		bnode.position = bp
-		if b.size() > 2:
-			bnode.rotation.y = float(b[2])
-		bnode.add_child(DecorMesh.bush_visual(bseed))
-		bnode.add_child(DecorMesh.flower_visual(bseed))
-		_statics.add_child(bnode)
-
-
-func _set_shadow_off(n: Node) -> void:
-	if n is MeshInstance3D:
-		(n as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	for c in n.get_children():
-		_set_shadow_off(c)
 
 
 func _billboard_mat(col: Color) -> StandardMaterial3D:
@@ -1335,6 +1105,9 @@ func _select_follow(idx: int) -> void:
 func _clear_follow() -> void:
 	_follow_hero = -1
 	_manual_follow = -1
+	_cam_pitch = -60.0
+	_cam_dist = 62.0
+	_cam_target = Vector3.ZERO
 
 
 func _cycle_follow() -> void:
@@ -1423,12 +1196,17 @@ func _unhandled_input(event: InputEvent) -> void:
 func _update_camera() -> void:
 	if _cam == null:
 		return
-	# 主视角：俯视 60° 跟随英雄（与对局镜头一致）
+	# 主视角：完全照搬单机对局镜头（固定偏移 (0,12,8)、俯角 -60°、fov70、指数平滑 + 远距吸附）
 	if _follow_hero >= 0 and _follow_hero < _hero_pos.size():
-		var tp: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 1.2, 0.0)
-		_cam_target = _cam_target.lerp(tp, clampf(get_process_delta_time() * 8.0, 0.0, 1.0))
-		_cam_pitch = -60.0
-		_cam_dist = 52.0
+		var tgt: Vector3 = _hero_pos[_follow_hero] + Vector3(0.0, 12.0, 8.0)
+		var dlt: float = get_process_delta_time()
+		if _cam.global_position.distance_to(tgt) > 25.0:
+			_cam.global_position = tgt
+		else:
+			_cam.global_position = _cam.global_position.lerp(tgt, 1.0 - exp(-12.0 * dlt))
+		_cam.rotation_degrees = Vector3(-60.0, 0.0, 0.0)
+		_cam.fov = 70.0
+		return
 	# 手动跟随优先；否则击杀镜头短暂跟拍；都没有时保持自由视角
 	if _manual_follow >= 0 and _manual_follow < _hero_pos.size():
 		_cam_target = _cam_target.lerp(_hero_pos[_manual_follow], clampf(get_process_delta_time() * 8.0, 0.0, 1.0))

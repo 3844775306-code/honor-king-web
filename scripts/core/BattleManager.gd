@@ -181,6 +181,15 @@ func add_recall_line(hero: Hero, spring: Vector3):
 func remove_recall_line(hero: Hero):
 	recall_lines.erase(hero)
 func _ready():
+	# 录像回放用：只构建与对局完全一致的地形视觉（不跑任何对局逻辑）
+	if has_meta("map_only"):
+		# 录像回放用：与对局完全一致的地图（含野区弧形墙/龙坑墙）。
+		# 野怪只登记营地位置、不物化（game_time 恒 0），回放里的野怪由录像数据驱动。
+		MapVisuals.setup_environment(self)
+		_create_map()
+		_create_jungle()
+		_generate_jungle_arc_walls()
+		return
 	add_to_group("battle_manager")
 	Config.reset_player_team()
 	# 选人/加载阶段沿用大厅氛围音乐（真正开局 _start_game_body 会淡出；直接从本场景启动也有音乐）
