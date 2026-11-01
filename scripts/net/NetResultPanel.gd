@@ -13,11 +13,16 @@ var _payload: Dictionary = {}
 func _ready() -> void:
 	visible = false
 	process_mode = PROCESS_MODE_ALWAYS
+	# 联机：结算广播到达时先暂存，等终局演出播完再显示（与旧实现同语义）
+	if not NetSession.net_game_over.is_connected(_on_result):
+		NetSession.net_game_over.connect(_on_result)
 
 
 ## payload: {winner, dur, player_team, rows[], rank?, replay?}
 func _on_result(p: Dictionary) -> void:
 	_payload = p
+	if defer:
+		return
 	var rows: Array = p.get("rows", []) if p.get("rows", []) is Array else []
 	var pteam := int(p.get("player_team", Config.player_team))
 	var heroes: Array = []
@@ -55,4 +60,10 @@ func _on_result(p: Dictionary) -> void:
 ## 终局演出播完后再显示（联机/回放调用）
 func show_deferred() -> void:
 	defer = false
+	if _payload.is_empty():
+		visible = true
+		return
+	# 重放一次渲染（与旧实现一致：show_deferred 会按 payload 重新出界面）
+	_on_result(_payload)
 	visible = true
+
