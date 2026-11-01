@@ -309,8 +309,6 @@ func _draw() -> void:
 
 	# —— 视野迷雾（我方英雄/小兵/塔 + 泉水；未覆盖区域压暗）——
 	MinimapDraw.draw_fog(self, MinimapDraw.fog_grid(_fog_sources(), MAP_SIZE), MINIMAP_SIZE)
-	# —— 暴君/主宰 刷新倒计时 ——
-	MinimapDraw.draw_objectives(self, _obj_entries(), MINIMAP_SIZE)
 	# —— 全图技能：瞄准线 / 命中高亮 / 飞行子弹 / 命中反馈（迷雾之上）——
 	_draw_global_shots()
 	# —— 我方防御塔被攻击警告圈（最上层）——
@@ -538,13 +536,6 @@ func _fog_sources() -> Array:
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	return out
 
-func _obj_entries() -> Array:
-	if obj.size() < 4:
-		return []
-	return [
-		{"label": "暴君", "t": float(obj[0]), "alive": int(obj[1]) != 0, "color": Color(0.95, 0.6, 0.35)},
-		{"label": "主宰", "t": float(obj[2]), "alive": int(obj[3]) != 0, "color": Color(0.55, 0.8, 1.0)},
-	]
 # ---------- 静态地图缓存（草丛/墙体/血包，来自 host 地图 payload） ----------
 func _cache_static_map() -> void:
 	_static_done = true

@@ -9,6 +9,7 @@ static var _accent_mats: Dictionary = {}
 static var _crystal_mats: Dictionary = {}
 static var _shield_shell_mats: Dictionary = {}
 static var _shield_edge_mats: Dictionary = {}
+static var _base_brick_mat: StandardMaterial3D = null
 
 static func team_color(team: int) -> Color:
 	return Color(1.0, 0.32, 0.24) if team == 1 else Color(0.26, 0.58, 1.0)
@@ -42,10 +43,27 @@ static func crystal_material(team: int) -> StandardMaterial3D:
 	return m
 
 ## 构建一座塔的视觉节点（root 自带 "_fx_team_tint" 标记，阻止 UnitVisuals 二次染色）
+## 塔脚青白色地砖（独立材质/网格，塔身仍用原来的岩石色）
+static func base_brick_material() -> StandardMaterial3D:
+	if _base_brick_mat != null:
+		return _base_brick_mat
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.72, 0.92, 0.94)
+	m.roughness = 0.82
+	m.metallic = 0.04
+	_base_brick_mat = m
+	return m
+
 static func visual(tier: String, team: int) -> Node3D:
 	var root := Node3D.new()
 	root.name = "TurretVisual"
 	root.set_meta("_fx_team_tint", true)
+	var base := MeshInstance3D.new()
+	base.name = "BaseBricks"
+	base.mesh = _build_crystal_base() if tier == "crystal" else _build_tower_base()
+	base.material_override = base_brick_material()
+	base.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(base)
 	var stone := MeshInstance3D.new()
 	stone.name = "Stone"
 	stone.mesh = _build_crystal_stone() if tier == "crystal" else _build_tower_stone()
@@ -119,12 +137,18 @@ static func visual(tier: String, team: int) -> Node3D:
 
 # ==================== 普通塔 ====================
 
+# 塔脚两级台阶 + 地面砖盘（青白色独立网格）
+static func _build_tower_base() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_put(st, _cyl(1.02, 1.12, 0.30, 8), Vector3(0.0, 0.15, 0.0))
+	_put(st, _cyl(0.96, 1.06, 0.22, 8), Vector3(0.0, 0.40, 0.0))
+	st.append_from(_disc(1.22, 0.06, 10), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
+	return st.commit()
+
 static func _build_tower_stone() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# 八角基座（两级台阶）
-	_put(st, _cyl(1.02, 1.12, 0.30, 8), Vector3(0.0, 0.15, 0.0))
-	_put(st, _cyl(0.96, 1.06, 0.22, 8), Vector3(0.0, 0.40, 0.0))
 	# 塔身（下粗上细）
 	_put(st, _cyl(0.68, 0.84, 1.00, 8), Vector3(0.0, 0.98, 0.0))
 	_put(st, _cyl(0.52, 0.66, 0.95, 8), Vector3(0.0, 2.02, 0.0))
@@ -151,7 +175,6 @@ static func _build_tower_stone() -> ArrayMesh:
 		var rr: float = 0.11 + 0.05 * fmod(float(i) * 0.37, 1.0)
 		st.append_from(rock, 0, Transform3D(Basis().scaled(Vector3(rr, rr * 0.7, rr)),
 			Vector3(cos(a3) * 1.16, rr * 0.5, sin(a3) * 1.16)))
-	st.append_from(_disc(1.22, 0.06, 10), 0, Transform3D(Basis(), Vector3(0.0, 0.03, 0.0)))
 	return st.commit()
 
 static func _build_tower_accent() -> ArrayMesh:
@@ -164,13 +187,19 @@ static func _build_tower_accent() -> ArrayMesh:
 
 # ==================== 水晶 ====================
 
-static func _build_crystal_stone() -> ArrayMesh:
+# 水晶塔脚三级基座 + 地面砖盘（青白色独立网格）
+static func _build_crystal_base() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# 十二角基座（三级）
 	_put(st, _cyl(1.24, 1.36, 0.40, 12), Vector3(0.0, 0.20, 0.0))
 	_put(st, _cyl(1.06, 1.16, 0.26, 12), Vector3(0.0, 0.53, 0.0))
 	_put(st, _cyl(1.04, 1.14, 0.55, 12), Vector3(0.0, 0.94, 0.0))
+	st.append_from(_disc(1.54, 0.07, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.035, 0.0)))
+	return st.commit()
+
+static func _build_crystal_stone() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	# 六根立柱
 	var pillar := BoxMesh.new()
 	pillar.size = Vector3(0.20, 1.15, 0.20)
@@ -187,7 +216,6 @@ static func _build_crystal_stone() -> ArrayMesh:
 		var rr: float = 0.12 + 0.05 * fmod(float(i) * 0.41, 1.0)
 		st.append_from(rock, 0, Transform3D(Basis().scaled(Vector3(rr, rr * 0.7, rr)),
 			Vector3(cos(a2) * 1.44, rr * 0.5, sin(a2) * 1.44)))
-	st.append_from(_disc(1.54, 0.07, 12), 0, Transform3D(Basis(), Vector3(0.0, 0.035, 0.0)))
 	return st.commit()
 
 # ==================== 防御塔护盾 ====================

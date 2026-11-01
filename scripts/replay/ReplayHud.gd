@@ -239,12 +239,6 @@ func _draw_minimap() -> void:
 		var corners: PackedVector2Array = MinimapDrawScript.viewport_corners(cam, cb)
 		if corners.size() >= 3:
 			MinimapDrawScript.draw_viewport(self, corners, false)
-	# 暴君/主宰计时（小地图下方，与对局同款文字样式）
-	var objs: Array = st.get("objectives", [])
-	if not objs.is_empty():
-		draw_set_transform(inner.position, 0.0, Vector2.ONE)
-		MinimapDrawScript.draw_objectives(self, objs, inner.size.x)
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	UiKit.text(self, Vector2(rect.position.x + 10.0 * _s, rect.position.y + 18.0 * _s),
 		"小地图（拖动移视角）", int(round(13.0 * _s)), Color(0.78, 0.86, 0.98))
 

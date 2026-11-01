@@ -394,8 +394,6 @@ func _draw():
 		for _row in _fg:
 			_row.reverse()
 	MinimapDraw.draw_fog(self, _fg, MINIMAP_SIZE)
-	# 暴君 / 主宰 刷新倒计时
-	MinimapDraw.draw_objectives(self, _objective_entries(), MINIMAP_SIZE)
 	# ---- 全图技能：瞄准线 / 锁定高亮 / 飞行子弹 / 命中反馈（迷雾之上，避免被压暗） ----
 	_draw_global_shots()
 	# ---- 我方防御塔被攻击警告圈（绘制在最上层） ----
@@ -657,13 +655,6 @@ func _fog_sources() -> Array:
 	out.append({"p": Vector3(-53.0, 0.0, 53.0), "r": 18.0})
 	return out
 
-func _objective_entries() -> Array:
-	if battle == null:
-		return []
-	return [
-		{"label": "暴君", "t": battle.tyrant_timer, "alive": battle.tyrant_alive, "color": Color(0.95, 0.6, 0.35)},
-		{"label": "主宰", "t": battle.dragon_timer, "alive": battle.dragon_alive, "color": Color(0.55, 0.8, 1.0)},
-	]
 # ---------- 静态地图（草丛 / 墙体）缓存：小地图坐标为像素空间 ----------
 func _cache_static_map() -> void:
 	if battle == null or not is_instance_valid(battle):
