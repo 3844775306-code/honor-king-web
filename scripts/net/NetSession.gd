@@ -67,6 +67,9 @@ var net_test := false
 var cli_mode := false   # 命令行直连（--net-host/--net-join），跳过大厅场景
 var phase := Phase.LOBBY  # host=当前阶段；client=最近收到的主机阶段
 var players := {}   # peer_id(int) -> { "name": String }
+# 联机大厅准备状态：peer_id -> { "camp":int(0蓝/1红), "lane":String, "ready":bool }
+# 阵营确认 + 分路选择后 ready=true；房主必须等所有在线玩家 ready 才能开始选人/开局。
+var lobby_ready := {}
 var _picks := {}    # host：选人阶段 peer_id -> { "hero":String, "summoner":String, "role":String }
 # 顺序选人（host 权威，随大厅状态广播）：{ "step":int, "left":float, "turn":[team,seat], "picks":{ "team-seat":hero } }
 # 空字典 = 无顺序（旧端/未启用 → 退化为原来的同时选人）
@@ -265,6 +268,7 @@ func _setup_peer() -> void:
 				return
 			multiplayer.multiplayer_peer = peer
 			players[1] = { "name": "主机" if cli_mode else "房主" }
+			lobby_ready[1] = { "camp": 0, "lane": "", "ready": false }
 			multiplayer.peer_connected.connect(_on_peer_connected)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 			print("[Net] HOST 端口=", host_port, " 等待玩家加入…")
@@ -312,6 +316,7 @@ func _web_ws_url() -> String:
 
 func _on_peer_connected(id: int) -> void:
 	players[id] = { "name": "玩家%d" % id }
+	lobby_ready[id] = { "camp": 0, "lane": "", "ready": false }
 	print("[Net] 玩家上线 peer=", id, " 在线=", players.size())
 	_broadcast_lobby_state()
 	_update_overlay()
@@ -321,6 +326,7 @@ func _on_peer_disconnected(id: int) -> void:
 	if not players.has(id):
 		return
 	players.erase(id)
+	lobby_ready.erase(id)
 	if mode == Mode.CLIENT and id == 1:
 		print("[Net] 与主机断开连接")
 		_clear_overlay()
@@ -352,12 +358,41 @@ func _broadcast_lobby_state() -> void:
 	if mode != Mode.HOST:
 		return
 	var state := { "phase": phase, "players": players.duplicate(true), "picks": _picks.duplicate(true),
-		"draft": draft.duplicate(true) }
+		"draft": draft.duplicate(true), "ready": lobby_ready.duplicate(true) }
 	if multiplayer == null or multiplayer.multiplayer_peer == null:
 		net_lobby_state.emit(state)   # 无连接（单机探针/离线）时只本地 emit
 		return
 	rpc("_rpc_lobby_state", state)
 	net_lobby_state.emit(state)
+
+
+# 联机大厅准备：本机确认阵营/分路后上报房主；房主统一广播给所有人。
+func set_lobby_ready(camp: int, lane: String, ready: bool) -> void:
+	if mode == Mode.HOST:
+		_apply_lobby_ready(1, camp, lane, ready)
+		_broadcast_lobby_state()
+	elif mode == Mode.CLIENT:
+		rpc_id(1, "_rpc_lobby_ready", camp, lane, ready)
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_lobby_ready(camp: int, lane: String, ready: bool) -> void:
+	if mode != Mode.HOST:
+		return
+	var pid := multiplayer.get_remote_sender_id()
+	if not players.has(pid):
+		return
+	_apply_lobby_ready(pid, camp, lane, ready)
+	_broadcast_lobby_state()
+
+
+func _apply_lobby_ready(pid: int, camp: int, lane: String, ready: bool) -> void:
+	var lane_clean := str(lane).strip_edges()
+	lobby_ready[pid] = {
+		"camp": clampi(camp, 0, 1),
+		"lane": lane_clean,
+		"ready": bool(ready) and lane_clean != "",
+	}
 
 
 @rpc("any_peer", "reliable", "call_remote")
@@ -369,6 +404,12 @@ func _rpc_lobby_state(state: Dictionary) -> void:
 		players[int(id)] = state["players"][id]
 	phase = int(state.get("phase", Phase.LOBBY))
 	draft = state.get("draft", {})   # 旧端无此字段 → 空字典（退化同时选人）
+	lobby_ready.clear()
+	var rd = state.get("ready", {})
+	if rd is Dictionary:
+		for id in rd:
+			if rd[id] is Dictionary:
+				lobby_ready[int(id)] = rd[id].duplicate(true)
 	print("[Net] 大厅状态 phase=%d 在线=%d" % [phase, players.size()])
 	_update_overlay()
 	net_lobby_state.emit(state)
@@ -618,6 +659,7 @@ func disconnect_network() -> void:
 	phase = Phase.LOBBY
 	cli_mode = false
 	players.clear()
+	lobby_ready.clear()
 	_picks.clear()
 	draft.clear()
 	_manifest = {}

@@ -122,6 +122,10 @@ var _prev_chip_row: HBoxContainer = null
 var _lane_btns := {}                   # 分路 -> 菜单页芯片按钮
 var _lane_sub_lab: Label = null        # 菜单页「发育路 · 射手」副行
 var _lane_info: Label = null           # 房间页「本机分路：…」值
+var _room_lane_btns := {}             # 房间页分路选择按钮
+var _room_confirm_btn: Button = null  # 房间页「确认阵营与分路」
+var _room_ready_lab: Label = null     # 房间页本机确认状态
+var _room_camp_lab: Label = null      # 房间页阵营显示
 var _diff_btn: Button = null           # 菜单页「AI 难度」循环按钮
 var _lane_role := ""                   # 选人页本机分路对应职责
 var _lane_locked := false              # 选人页是否强制锁该职责（被队友占用则不锁）
@@ -323,6 +327,10 @@ func _clear_stack() -> void:
 	_lane_btns = {}
 	_lane_sub_lab = null
 	_lane_info = null
+	_room_lane_btns = {}
+	_room_confirm_btn = null
+	_room_ready_lab = null
+	_room_camp_lab = null
 	_lane_role = ""
 	_lane_locked = false
 	if _summ_tip != null and is_instance_valid(_summ_tip):
@@ -640,8 +648,68 @@ func _style_lane_btns() -> void:
 func _select_lane(lane: String) -> void:
 	PlayerPrefs.set_lane(lane)
 	_style_lane_btns()
+	_style_room_lane_btns()
 	if _tac_map != null and is_instance_valid(_tac_map):
 		_tac_map.set_lane(lane)
+	# 房间内改分路 = 重新进入待确认状态，必须重新点确认
+	if _ui == UIState.ROOM and NetSession.mode != NetSession.Mode.NONE:
+		NetSession.set_lobby_ready(0, lane, false)
+		_refresh_lane_info()
+		_refresh_room_ready_ui()
+
+
+func _style_room_lane_btns() -> void:
+	var cur := PlayerPrefs.get_lane()
+	for lane in _room_lane_btns:
+		var b: Button = _room_lane_btns[lane]
+		if not is_instance_valid(b):
+			continue
+		var on: bool = str(lane) == cur
+		b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", UiKit.C_GOLD, on))
+		b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, on))
+		b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_GOLD, true))
+		b.add_theme_color_override("font_color", Color.WHITE if on else COL_TEXT)
+		b.add_theme_color_override("font_hover_color", Color.WHITE)
+
+
+func _room_ready_entry() -> Dictionary:
+	return NetSession.lobby_ready.get(_self_peer(), {})
+
+
+func _all_lobby_ready() -> bool:
+	if NetSession.mode != NetSession.Mode.HOST:
+		return false
+	for pid in NetSession.players:
+		var r: Dictionary = NetSession.lobby_ready.get(int(pid), {})
+		if not bool(r.get("ready", false)) or str(r.get("lane", "")) == "":
+			return false
+	return true
+
+
+func _on_room_confirm() -> void:
+	var lane := PlayerPrefs.get_lane()
+	if lane == "":
+		if _room_ready_lab != null:
+			_room_ready_lab.text = "请先选择分路"
+			_room_ready_lab.add_theme_color_override("font_color", COL_ERR)
+		return
+	NetSession.set_lobby_ready(0, lane, true)
+	_refresh_room_ready_ui()
+
+
+func _refresh_room_ready_ui() -> void:
+	var lane := PlayerPrefs.get_lane()
+	var r := _room_ready_entry()
+	var ready := bool(r.get("ready", false))
+	if _room_ready_lab != null:
+		_room_ready_lab.text = ("已确认 · 蓝方 · %s" % lane) if ready else ("待确认 · 蓝方 · %s" % lane)
+		_room_ready_lab.add_theme_color_override("font_color", COL_OK if ready else COL_GOLD)
+	if _room_confirm_btn != null:
+		_room_confirm_btn.disabled = ready
+		_room_confirm_btn.text = "✓ 已确认阵营与分路" if ready else "✓ 确认阵营与分路"
+	if _guest_wait_lab != null:
+		_guest_wait_lab.text = "已确认，等待房主开始选人…" if ready else "请选择分路并确认阵营，等待房主开始"
+		_guest_wait_lab.add_theme_color_override("font_color", COL_OK if ready else COL_SUB)
 
 
 # AI 难度循环切换：青铜→白银→…→王者→青铜（本机偏好，联机时主机生效）
@@ -660,12 +728,12 @@ func _refresh_difficulty_btn() -> void:
 		]
 
 
-# 房间页：本机分路值（只读，回主菜单可改）
+# 房间页：本机分路值（房间内可直接点上方分路按钮更换）
 func _refresh_lane_info() -> void:
 	if _lane_info == null:
 		return
 	var lane := PlayerPrefs.get_lane()
-	_lane_info.text = "%s（%s）· 回主菜单可更换" % [lane, HeroPickData.lane_role(lane)]
+	_lane_info.text = "本机分路：%s（%s）" % [lane, HeroPickData.lane_role(lane)]
 
 
 func _status_text(text: String, color: Color) -> void:
@@ -1059,15 +1127,37 @@ func _show_room() -> void:
 	var st := _mk_label("房主操作" if _role == 0 else "等待房主", _fs(UiKit.FS_LG), COL_SUB)
 	rcol.add_child(st)
 
-	# 本机分路（读 PlayerPrefs；回主菜单可换）
-	var lane_row := HBoxContainer.new()
-	lane_row.add_theme_constant_override("separation", 6)
-	rcol.add_child(lane_row)
-	var lane_cap := _mk_label("本机分路：", _fs(UiKit.FS_SM), COL_GOLD)
-	lane_row.add_child(lane_cap)
-	_lane_info = _mk_label("", _fs(UiKit.FS_SM), COL_SUB)
-	lane_row.add_child(_lane_info)
+	# 阵营 + 分路：进入联机大厅后必须本机确认，全部在线玩家确认后房主才能开始
+	var camp_row := HBoxContainer.new()
+	camp_row.add_theme_constant_override("separation", 6)
+	rcol.add_child(camp_row)
+	var camp_cap := _mk_label("阵营：", _fs(UiKit.FS_SM), COL_GOLD)
+	camp_row.add_child(camp_cap)
+	_room_camp_lab = _mk_label("蓝方", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
+	camp_row.add_child(_room_camp_lab)
+	var lobby_rule := _mk_label("全员确认阵营与分路后，房主才能开始。", _fs(UiKit.FS_XS), COL_DIM)
+	lobby_rule.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rcol.add_child(lobby_rule)
+
+	var lane_pick := HBoxContainer.new()
+	lane_pick.add_theme_constant_override("separation", 4)
+	rcol.add_child(lane_pick)
+	_room_lane_btns.clear()
+	for lane in HeroPickData.LANES:
+		var lb := _mk_lane_btn(lane)
+		lb.custom_minimum_size = Vector2(102, 48)
+		lane_pick.add_child(lb)
+		_room_lane_btns[lane] = lb
+	_room_confirm_btn = _mk_btn("✓ 确认阵营与分路", UiKit.C_HEAL, true)
+	_room_confirm_btn.pressed.connect(_on_room_confirm)
+	rcol.add_child(_room_confirm_btn)
+	_room_ready_lab = _mk_label("尚未确认", _fs(UiKit.FS_XS), COL_DIM)
+	_room_ready_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rcol.add_child(_room_ready_lab)
+	_lane_info = _mk_label("", _fs(UiKit.FS_XS), COL_SUB)
+	rcol.add_child(_lane_info)
 	_refresh_lane_info()
+	_style_room_lane_btns()
 
 	var foot_text := "发起后本窗与每位已连玩家会各自弹出选人面板；全员锁齐后自动进入对局（无需点按钮）。"
 	if _role == 0:
@@ -1107,9 +1197,16 @@ func _refresh_room(state: Dictionary) -> void:
 	var names := _roster_text(state.get("players", {}))
 	if _roster_lab != null:
 		_roster_lab.text = names
+	_refresh_room_ready_ui()
 	if _start_btn != null:
-		_start_btn.text = "»  开始选人（在线 %d 人）" % count
-		_start_btn.disabled = count < 1
+		var all_ready := _all_lobby_ready()
+		var ready_n := 0
+		for pid in NetSession.players:
+			if bool(NetSession.lobby_ready.get(int(pid), {}).get("ready", false)):
+				ready_n += 1
+		_start_btn.text = "»  开始选人（%d/%d 已确认）" % [ready_n, count]
+		_start_btn.disabled = not all_ready
+		_start_btn.tooltip_text = "" if all_ready else "所有在线玩家确认阵营与分路后才能开始"
 
 
 func _roster_text(players: Dictionary) -> String:
@@ -1120,6 +1217,11 @@ func _roster_text(players: Dictionary) -> String:
 		var who := "房主" if int(id) == 1 else "玩家"
 		var nm: String = str(players[id].get("name", "玩家%d" % id))
 		var tag := "（本机）" if _self_peer() == int(id) else ""
+		var rr: Dictionary = NetSession.lobby_ready.get(int(id), {})
+		if bool(rr.get("ready", false)):
+			tag += " · ✓ %s/%s" % ["蓝方" if int(rr.get("camp", 0)) == 0 else "红方", str(rr.get("lane", ""))]
+		else:
+			tag += " · 待确认"
 		lines.append("  " + who + " · " + nm + tag)
 	if lines.is_empty():
 		return "  （暂无他人）"
@@ -1128,6 +1230,11 @@ func _roster_text(players: Dictionary) -> String:
 
 func _on_begin_pick() -> void:
 	if _role != 0:
+		return
+	if not _all_lobby_ready():
+		if _room_ready_lab != null:
+			_room_ready_lab.text = "还有玩家未确认阵营/分路"
+			_room_ready_lab.add_theme_color_override("font_color", COL_ERR)
 		return
 	_auto_start_done = false
 	_auto_start_wait = -1.0
