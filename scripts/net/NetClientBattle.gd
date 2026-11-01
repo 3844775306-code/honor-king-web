@@ -863,6 +863,20 @@ func _on_snapshot(snap: Array) -> void:
 				var mp = v.get("target", null)
 				if mp is Vector3:
 					_add_residual_vision(mp, 9.0, 1.0)
+			# 小兵/龙兵：先播放 host 同款「倒地后缓缓沉入地下」再释放（此前直接 queue_free，看起来凭空消失）
+			if int(v.get("type", -1)) == NET_MINION and not bool(v.get("sinking", false)):
+				var mn := str(v.get("name", ""))
+				var depth: float = 2.4 if mn in ["dragon", "storm", "shadow_dragon"] else 1.5
+				var nd = v.get("node")
+				if nd != null and is_instance_valid(nd):
+					v["sinking"] = true
+					var tw2 := create_tween()
+					tw2.tween_interval(0.62)   # 同 host Minion._start_sink_away：先倒地
+					tw2.tween_property(nd, "position:y", (nd as Node3D).position.y - depth, 0.88) \
+						.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+					tw2.tween_callback(nd.queue_free)
+				_views.erase(nid)
+				continue
 			if v.node != null and is_instance_valid(v.node):
 				v.node.queue_free()
 			_views.erase(nid)
@@ -4583,25 +4597,36 @@ func _tick_self_prediction(delta: float) -> void:
 
 # 预测方向：摇杆优先（同主机），其次键盘；转向模式沿 node 朝向走前后
 func _pred_dir(node: Node3D) -> Vector3:
-	# 红方相机绕 Y 轴 180°：本地预测方向必须与发送给主机的方向一致地翻转，
-	# 否则「本地预测往前走、主机往回走」，模型朝向与实际移动方向相反。
-	var flip := int(Config.player_team) == 1
 	var jv := _pad.get_move_vector() if _pad != null else Vector2.ZERO
-	if flip:
-		jv = -jv
-	if jv.length() > 0.1:
-		return Vector3(jv.x, 0.0, -jv.y)
 	var ax := Input.get_axis("ui_left", "ui_right")
 	var az := Input.get_axis("ui_down", "ui_up")
-	if flip:
-		ax = -ax
-		az = -az
-	if absf(ax) < 0.1 and absf(az) < 0.1:
-		return Vector3.ZERO
 	var mm := _pad.get_move_mode() if _pad != null else TouchController.MOVE_MODE_DIR
-	if mm == TouchController.MOVE_MODE_TURN:
+	# 转向模式：左右转向、前后沿人物朝向（同 host）
+	if mm == TouchController.MOVE_MODE_TURN and jv.length() <= 0.1:
+		if int(Config.player_team) == 1:
+			az = -az
 		return Vector3(sin(node.rotation.y), 0.0, cos(node.rotation.y)) * az
-	return Vector3(ax, 0.0, -az)
+	return _move_dir_from_input(ax, az, jv, mm)
+
+
+## 屏幕/摇杆输入 → 世界方向。第三人称按阵营 180° 翻转；第一人称按当前英雄朝向旋转，
+## 解决第一人称下“点左却往屏幕上/下走”的方向错乱。
+func _move_dir_from_input(ax: float, az: float, jv: Vector2, mm: int) -> Vector3:
+	var sx := ax
+	var sy := az
+	if jv.length() > 0.1:
+		sx = jv.x
+		sy = jv.y
+	if absf(sx) < 0.01 and absf(sy) < 0.01:
+		return Vector3.ZERO
+	var theta := 0.0
+	if _first_person:
+		theta = float(_own.get("ry", 0.0)) + PI
+	elif int(Config.player_team) == 1:
+		theta = PI
+	# 相机右向量 = (cosθ,0,-sinθ)，屏幕上方 = 相机 -Z 方向
+	return Vector3(cos(theta) * sx - sin(theta) * sy, 0.0,
+		-sin(theta) * sx - cos(theta) * sy)
 
 
 # 用相邻快照位移自校准移速（客户端没有 actual_move_speed；过滤静止与闪现/位移的异常值）
@@ -4641,11 +4666,16 @@ func _poll_touch_input() -> void:
 	var az := Input.get_axis("ui_down", "ui_up")
 	var jv := _pad.get_move_vector()
 	var mm := _pad.get_move_mode()
-	# 红方：屏幕/摇杆方向 → 世界方向需绕 180°（相机已翻转），否则移动方向相反
-	if int(Config.player_team) == 1:
-		ax = -ax
-		az = -az
-		jv = -jv
+	# 转向模式保留原始转向/前后语义；方向模式统一先换算成世界方向再发给 host。
+	if mm == TouchController.MOVE_MODE_TURN and jv.length() <= 0.1:
+		if int(Config.player_team) == 1:
+			ax = -ax
+			az = -az
+	else:
+		var world_dir := _move_dir_from_input(ax, az, jv, mm)
+		ax = world_dir.x
+		az = -world_dir.z
+		jv = Vector2(world_dir.x, -world_dir.z)
 	var changed := absf(ax - _d_ax) > 0.02 or absf(az - _d_az) > 0.02 \
 		or absf(jv.x - _d_jx) > 0.02 or absf(jv.y - _d_jy) > 0.02 or mm != _d_mode
 	var driving := absf(ax) > 0.02 or absf(az) > 0.02 or jv.length() > 0.02
