@@ -1205,9 +1205,14 @@ func _process_host(delta: float) -> void:
 		if players.size() > 1:
 			var bm := get_tree().get_first_node_in_group("battle_manager")
 			if bm != null:
-				var snap := _build_snapshot(bm)
-				if not snap.is_empty():
-					rpc("_rpc_snapshot", snap)
+				# 每个客户端按自己的阵营生成一份快照，红方不能复用药方的全局视野。
+				# host 自己(peer 1)直接操控战场，不需要收 RPC 快照。
+				for pid in players:
+					if int(pid) == 1:
+						continue
+					var snap := _build_snapshot(bm, _peer_camp(int(pid)))
+					if not snap.is_empty():
+						rpc_id(int(pid), "_rpc_snapshot", snap)
 	_prune_timer -= delta
 	if _prune_timer <= 0.0:
 		_prune_timer = 1.0
@@ -1238,7 +1243,8 @@ func _process_host(delta: float) -> void:
 			_attack_time.erase(pid)
 
 
-func _build_snapshot(bm: Node) -> Array:
+func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
+	var viewer := clampi(viewer_team, 0, 1)
 	var out: Array = []
 	var gtime: float = 0.0
 	if bm.get("game_time") != null:
@@ -1312,7 +1318,7 @@ func _build_snapshot(bm: Node) -> Array:
 		for ent in get_tree().get_nodes_in_group("entities"):
 			if not is_instance_valid(ent) or ent.health <= 0:
 				continue
-			if ent.team != TEAM_PLAYER:
+			if int(ent.team) != viewer:
 				continue
 			if ent is Hero or ent is Minion or ent is Turret:
 				sources.append(ent)
@@ -1321,7 +1327,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("heroes"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if _sees_unit(e, viewer, sources):
 			heroes.append(_pack_hero(e))
 	out.append(heroes)
 
@@ -1329,7 +1335,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("minions"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if _sees_unit(e, viewer, sources):
 			minions.append(_pack_unit(e, 1))
 	out.append(minions)
 
@@ -1360,7 +1366,7 @@ func _build_snapshot(bm: Node) -> Array:
 	for e in get_tree().get_nodes_in_group("jungle_monsters"):
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if is_pvp() or e.team == TEAM_PLAYER or e.visible or e.vision_expose_timer > 0.0:
+		if _sees_unit(e, viewer, sources):
 			jungles.append(_pack_unit(e, 3))
 	out.append(jungles)
 
@@ -1373,7 +1379,7 @@ func _build_snapshot(bm: Node) -> Array:
 		var bl: Bullet = pr as Bullet
 		if bl == null:
 			continue
-		if not is_pvp() and bl.team != TEAM_PLAYER \
+		if int(bl.team) != viewer \
 				and not _pos_in_vision(Vector3(bl.global_position.x, 0.0, bl.global_position.z), sources):
 			continue
 		var bsz := 0
@@ -1407,6 +1413,11 @@ func _build_snapshot(bm: Node) -> Array:
 		_fx_buf = keep
 	var fx_out: Array = [_fx_seq]
 	for e in _fx_buf:
+		# 按接收方阵营过滤：敌方远处的技能特效不下发，避免红方看到蓝方全图特效
+		if int(e[5]) != viewer:
+			var fp := Vector3(float(e[2]), float(e[3]), float(e[4]))
+			if not _pos_in_vision(fp, sources):
+				continue
 		# 末位补施法英雄名；再附加完整技能字段（旧客户端按行大小判断兼容）
 		var out_row := [e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[9]]
 		if e.size() > 10:
@@ -1447,6 +1458,8 @@ func _build_snapshot(bm: Node) -> Array:
 	for s in get_tree().get_nodes_in_group("vision_spirits"):
 		if not is_instance_valid(s):
 			continue
+		if int(s.get("team")) != viewer:
+			continue
 		vision_rows.append([int(s.get_instance_id()), s.global_position.x, s.global_position.z,
 			1 if s.vision_active else 0, s.get_net_progress(), s.get_net_state()])
 	out.append(vision_rows)
@@ -1466,6 +1479,18 @@ func _pos_in_vision(p: Vector3, sources: Array) -> bool:
 		if p.distance_to(src.global_position) <= 18.0:
 			return true
 	return false
+
+
+## 某阵营视角下单位是否可见：
+## - 同阵营恒可见；
+## - 蓝方（host 玩家视角）沿用 host 已有的 e.visible / 暴露计时；
+## - 红方没有 host 的视野状态，用红方自己的英雄/小兵/塔 18m 视野源判定。
+func _sees_unit(e: Node, viewer: int, sources: Array) -> bool:
+	if int(e.get("team")) == viewer:
+		return true
+	if viewer == TEAM_PLAYER and (bool(e.get("visible")) or float(e.get("vision_expose_timer")) > 0.0):
+		return true
+	return _pos_in_vision(e.global_position, sources)
 
 
 # 子弹「真模型」kind（与 host Bullet._ready 的弹道选型同款，客户端按 kind 挑 .glb/程序组装）：
@@ -2157,6 +2182,10 @@ func _pack_unit(e: Node, type_code: int, extra = null) -> Array:
 				atk = 1
 		row.append(yaw)
 		row.append(atk)
+		# idx12/13：服务器出手序号 + 攻击间隔（客户端按序号精确复刻出手节奏，不再自己猜）
+		row.append(int(e.get("anim_atk_seq")) if e.get("anim_atk_seq") != null else 0)
+		var aspd: float = float(e.get("attack_speed")) if e.get("attack_speed") != null else 1.0
+		row.append(1.0 / maxf(0.1, aspd))
 	return row
 
 # 李元芳暗印摘要：[[源英雄名, 层数, 预测实际伤害], …]（客户端血条黄段/层数文字 1:1 复刻主机）
