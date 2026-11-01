@@ -65,6 +65,7 @@ var _origin := Vector2.ZERO      # 按下起点（局部坐标）
 var _drag := Vector2.ZERO        # 当前拖拽偏移
 var _max_drag := 0.0             # 本次手势的最大拖拽距离
 var _press := 0.0
+var _flash_t := 0.0   # 回放外部触发的高亮残留时间
 var _held_time := 0.0            # 本次按住时长：读数只在真正瞄准时出现，避免点按闪字
 
 # 每帧由 TouchController 更新，用于绘制冷却/蓝量状态
@@ -97,6 +98,9 @@ func _ready():
 	set_process(true)
 
 func _process(delta: float) -> void:
+	if _flash_t > 0.0:
+		_flash_t = maxf(0.0, _flash_t - delta)
+		queue_redraw()
 	_held_time = _held_time + delta if _active else 0.0
 	if upgrade_ready:
 		_upgrade_ready_t += delta
@@ -142,7 +146,20 @@ func _process(delta: float) -> void:
 ## 回放/观战用：外部触发一次按下动效（不进入真实瞄准/施法）
 func flash_press() -> void:
 	_press = 1.0
+	_flash_t = 0.7
 	queue_redraw()
+
+
+func _draw_flash_fx(center: Vector2, radius: float) -> void:
+	if _flash_t <= 0.0:
+		return
+	var k := 1.0 - _flash_t / 0.7
+	var a := 1.0 - k
+	draw_circle(center, radius * (1.0 + 0.10 * k), Color(1.0, 0.95, 0.72, 0.16 * a))
+	draw_arc(center, radius * (1.12 + 0.55 * k), 0.0, TAU, 48,
+		Color(1.0, 0.92, 0.55, 0.92 * a), 4.0 + 6.0 * k, true)
+	draw_arc(center, radius * 0.98, 0.0, TAU, 48,
+		Color(1.0, 0.86, 0.42, 0.38 * a), 2.0, true)
 
 
 func is_held() -> bool:
@@ -325,6 +342,7 @@ func _draw():
 	if name_below and max_level > 0 and skill_level > 0 \
 			and _active and _held_time >= 0.15 and not in_window and not on_cd and not blocked:
 		_draw_skill_readout(center, radius, k)
+	_draw_flash_fx(center, radius)
 
 # 状态动效：可升级呼吸金环 / 冷却结束就绪波纹 / 升级瞬间金色爆闪
 func _draw_state_fx(center: Vector2, radius: float, k: float) -> void:

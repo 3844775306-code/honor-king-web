@@ -26,6 +26,7 @@ var toggled := false           # 开关选中态（推塔/小兵等模式键）�
 var _active := false
 var _active_touch := -1
 var _press := 0.0
+var _flash_t := 0.0   # 回放外部触发的高亮残留时间
 
 func _ready():
 	mouse_filter = MOUSE_FILTER_STOP
@@ -74,6 +75,9 @@ func _gui_input(event):
 		accept_event()
 
 func _process(delta: float) -> void:
+	if _flash_t > 0.0:
+		_flash_t = maxf(0.0, _flash_t - delta)
+		queue_redraw()
 	if glow:
 		_glow_t += delta
 		queue_redraw()
@@ -86,7 +90,20 @@ func _process(delta: float) -> void:
 ## 回放/观战用：外部触发一次按下动效
 func flash_press() -> void:
 	_press = 1.0
+	_flash_t = 0.7
 	queue_redraw()
+
+
+func _draw_flash_fx(center: Vector2, radius: float) -> void:
+	if _flash_t <= 0.0:
+		return
+	var k := 1.0 - _flash_t / 0.7
+	var a := 1.0 - k
+	draw_circle(center, radius * (1.0 + 0.10 * k), Color(1.0, 0.95, 0.72, 0.16 * a))
+	draw_arc(center, radius * (1.12 + 0.55 * k), 0.0, TAU, 48,
+		Color(1.0, 0.92, 0.55, 0.92 * a), 4.0 + 6.0 * k, true)
+	draw_arc(center, radius * 0.98, 0.0, TAU, 48,
+		Color(1.0, 0.86, 0.42, 0.38 * a), 2.0, true)
 
 
 func _draw():
@@ -95,6 +112,7 @@ func _draw():
 	var radius := minf(size.x, size.y) * 0.45 * (1.0 - p * 0.022)
 	if compact_badge:
 		_draw_compact_badge(center, radius, p)
+		_draw_flash_fx(center, radius)
 		return
 	var base_col := color if _active else color.darkened(0.25)
 	var accent := base_col.lightened(0.35)
@@ -118,6 +136,7 @@ func _draw():
 	if icon_kind != "":
 		IconArt.draw_icon(self, center, radius * 0.98, icon_kind, dimmed)
 		_draw_name(center, radius)
+		_draw_flash_fx(center, radius)
 		return
 	UiKit.touch_button_glass(self, center, radius, accent, p, dimmed)
 	var fs := int(label_font_size) if label_font_size > 0.0 else int(maxf(22.0, radius * 0.58))
@@ -129,6 +148,7 @@ func _draw():
 		baseline = center.y + fs * 0.36
 	var tc := Color(1.0, 0.92, 0.5, 1.0) if toggled else Color.WHITE
 	draw_string(UiKit.font(), Vector2(center.x - radius, baseline), label_text, HORIZONTAL_ALIGNMENT_CENTER, radius * 2.0, fs, tc)
+	_draw_flash_fx(center, radius)
 
 ## 紧凑升级徽章：小金色圆盘 + 细金环 + 柔和呼吸光，不再用 72px 大加号压满触摸键
 func _draw_compact_badge(center: Vector2, radius: float, p: float) -> void:

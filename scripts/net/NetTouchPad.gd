@@ -611,6 +611,8 @@ func consume_priority_press() -> int:
 func flash_skill(i: int) -> void:
 	if i >= 0 and i < _skill_btns.size() and is_instance_valid(_skill_btns[i]):
 		_skill_btns[i].call("flash_press")
+	elif i == 3 and _extra_skill_btn != null and is_instance_valid(_extra_skill_btn):
+		_extra_skill_btn.call("flash_press")
 
 
 func flash_attack() -> void:

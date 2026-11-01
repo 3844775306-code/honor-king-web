@@ -51,6 +51,7 @@ var _origin := Vector2.ZERO      # 按下起点（局部坐标）
 var _drag := Vector2.ZERO        # 当前拖拽偏移
 var _max_drag := 0.0             # 本次手势的最大拖拽距离
 var _press := 0.0
+var _flash_t := 0.0   # 回放外部触发的高亮残留时间
 var _held_until := 0             # 点按保持窗口（毫秒），避免极短触摸被物理帧漏掉
 
 func _ready():
@@ -58,11 +59,33 @@ func _ready():
 	set_process(true)
 
 func _process(delta: float) -> void:
+	if _flash_t > 0.0:
+		_flash_t = maxf(0.0, _flash_t - delta)
+		queue_redraw()
 	var target := 1.0 if _active else 0.0
 	if absf(_press - target) < 0.003:
 		return
 	_press = move_toward(_press, target, delta * 14.0)
 	queue_redraw()
+
+
+## 回放/观战用：外部触发一次按下动效
+func flash_press() -> void:
+	_press = 1.0
+	_flash_t = 0.7
+	queue_redraw()
+
+
+func _draw_flash_fx(center: Vector2, radius: float) -> void:
+	if _flash_t <= 0.0:
+		return
+	var k := 1.0 - _flash_t / 0.7
+	var a := 1.0 - k
+	draw_circle(center, radius * (1.0 + 0.10 * k), Color(1.0, 0.95, 0.72, 0.16 * a))
+	draw_arc(center, radius * (1.12 + 0.55 * k), 0.0, TAU, 48,
+		Color(1.0, 0.92, 0.55, 0.92 * a), 4.0 + 6.0 * k, true)
+	draw_arc(center, radius * 0.98, 0.0, TAU, 48,
+		Color(1.0, 0.86, 0.42, 0.38 * a), 2.0, true)
 
 func is_held() -> bool:
 	return _active or Time.get_ticks_msec() < _held_until
@@ -145,6 +168,7 @@ func _draw():
 		draw_arc(knob, kr, 0, TAU, 32, Color(1.0, 0.85, 0.3, 0.82), maxf(2.0, kr * 0.08), true)
 		draw_arc(knob - Vector2(0, kr * 0.18), kr * 0.74, -PI * 0.9, -PI * 0.1, 18,
 			Color(1, 1, 1, 0.30), maxf(1.5, kr * 0.08), true)
+	_draw_flash_fx(center, radius)
 
 # 普攻图标：交叉双剑（纯矢量，无美术资源）
 func _draw_attack_glyph(pc: Vector2, r: float, col: Color) -> void:
