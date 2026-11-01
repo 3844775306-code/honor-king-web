@@ -543,6 +543,9 @@ func _fog_sources() -> Array:
 			continue
 		if float(v.get("hp", 0.0)) <= 0.0:
 			continue
+		# 倒塌中的塔保留视图节点播动画，但绝不能再当视野源（否则塔毁后 2 秒仍亮一片）
+		if bool(v.get("dying", false)):
+			continue
 		var r := 16.0
 		if typ == NET_MINION:
 			r = 9.0

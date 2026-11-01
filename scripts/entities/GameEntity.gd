@@ -808,8 +808,11 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		wangzhaojun_combat_timer = 5.0
 	if source and source is Hero and source.display_name == "王昭君":
 		source.wangzhaojun_combat_timer = 5.0
-	# 攻击暴露视野：攻击者与被攻击者互相暴露2秒
-	if not source is JungleMonster and not self is JungleMonster:
+	# 攻击暴露视野：攻击者与被攻击者互相暴露2秒。
+	# 防御塔参与的战斗不挂 2 秒暴露：塔自身视野已经覆盖其射程，塔被摧毁后若攻击者/目标
+	# 仍带 expose 计时，会额外残留 2 秒视野（客户端尤其明显）。
+	if not source is JungleMonster and not self is JungleMonster \
+			and not source is Turret and not self is Turret:
 		source.vision_expose_timer = 2.0
 		vision_expose_timer = 2.0
 	# 李元芳被动·密探谛听：命中任意单位 → 以受害者为中心暴露草丛中敌方英雄1秒(每个英雄8s CD)
