@@ -5856,7 +5856,7 @@ func _process(delta):
 		_refresh_mvp()
 	_update_shadow_paths(delta)
 	_update_shadow_path_fades(delta)
-	# 集中式团队分推协调（4分钟后，每60s分配一次）
+	# 4分钟后团队任务协调；0–4分钟由HeroAI的本地行为（TaskExecutor）执行
 	if game_time >= 240 and team_tactics:
 		team_tactics_timer -= delta
 		var urgent := team_tactics.consume_replan_request()

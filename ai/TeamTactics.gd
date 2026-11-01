@@ -353,6 +353,8 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 			return not _enemy_tower_near(t.target_pos, 8.0, h.team)
 		TeamTask.Type.INVADE_JUNGLE:
 			return not _jungle_monster_near(t.target_pos, 15.0)
+		TeamTask.Type.JUNGLE_FARM:
+			return not _jungle_monster_near(t.target_pos, 20.0)
 	return false
 
 
@@ -515,17 +517,22 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	if invade_target_by_hero.has(h):
 		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 95, now, 20.0, "人数优势反野", role)
 		return t
-	if lane == AiConfig.Lane.JUNGLE:
-		# 开局/龙未刷新时只是“继续刷野”，不能把所有打野都派去一个不存在的龙坑。
-		if not _is_dragon_alive():
-			t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 25, now, 18.0, "刷野/回线", role)
-			return t
-		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
-		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
-		return t
 	if bool(defending.get(h.team, false)):
 		var dl: int = int(defend_lane_by_team.get(h.team, lane))
 		t.setup(TeamTask.Type.DEFEND_LANE, dl, _own_tower_pos(h.team, dl), null, 90, now, 18.0, "防守压力分路", role)
+		return t
+	if lane == AiConfig.Lane.JUNGLE:
+		if _is_dragon_alive():
+			var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
+			t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
+			return t
+		if _is_natural_jungler_of(h):
+			t.setup(TeamTask.Type.JUNGLE_FARM, lane, _own_jungle_target(h.team), null, 35, now, 30.0, "刷野发育", role)
+			return t
+		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 25, now, 18.0, "刷野/回线", role)
+		return t
+	if _is_natural_jungler_of(h):
+		t.setup(TeamTask.Type.JUNGLE_FARM, lane, _own_jungle_target(h.team), null, 35, now, 30.0, "刷野发育", role)
 		return t
 	if role == "辅助":
 		var carry := _find_carry(h.team)
@@ -536,7 +543,7 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 		var gp := _lane_front_pos(h.team, lane)
 		t.setup(TeamTask.Type.GANK, lane, gp, null, 55, now, 15.0, "抓单/切后", role)
 		return t
-	var push_pos := _lane_front_pos(h.team, lane)
+	var push_pos := _lane_push_pos(h.team, lane)
 	t.setup(TeamTask.Type.PUSH_LANE, lane, push_pos, null, 30, now, 25.0, "推进兵线", role)
 	return t
 
@@ -557,31 +564,46 @@ func ai_lane_of(h: Hero) -> int:
 
 func _find_natural_jungler(team: int) -> Hero:
 	for h in _get_ally_heroes(team):
-		if not h.is_ai:
-			continue
-		for child in h.get_children():
-			if child is HeroAI and (child as HeroAI)._is_natural_jungler:
-				return h
+		if _is_natural_jungler_of(h):
+			return h
 	return null
 
 
+func _is_natural_jungler_of(h: Hero) -> bool:
+	if h == null or not h.is_ai:
+		return false
+	for child in h.get_children():
+		if child is HeroAI and (child as HeroAI)._is_natural_jungler:
+			return true
+	return false
+
+
+# 推塔目标：每条路我方兵线前线总血量 >1000 时，选离该前线最近的敌方塔。
+# 无合格兵线则不返回目标，避免无兵线送塔。
 func _push_tower_target(team: int) -> Vector3:
-	var best: Turret = null
-	var best_hp := INF
-	for e in bm.get_tree().get_nodes_in_group("turrets"):
-		if not (e is Turret) or int((e as Turret).team) == team or (e as Turret).health <= 0:
+	var best := Vector3.ZERO
+	var best_score := INF
+	for lane in [AiConfig.Lane.FARM, AiConfig.Lane.MID, AiConfig.Lane.CLASH]:
+		var info := _lane_front_info(team, lane)
+		if float(info.get("hp", 0.0)) <= 1000.0:
 			continue
-		if (e as Turret).display_name == "crystal":
+		var front: Vector3 = info.get("pos", Vector3.ZERO)
+		var tower := _nearest_tower_in_lane(team, lane, front)
+		if tower == null:
 			continue
-		if (e as Turret).health < best_hp:
-			best_hp = (e as Turret).health
-			best = e as Turret
-	if best != null:
-		return best.global_position
-	for e in bm.get_tree().get_nodes_in_group("turrets"):
-		if e is Turret and int((e as Turret).team) != team and (e as Turret).health > 0:
-			return (e as Node3D).global_position
-	return Vector3.ZERO
+		var score := tower.global_position.distance_to(front)
+		if score < best_score:
+			best_score = score
+			best = tower.global_position
+	return best
+
+
+func _own_jungle_target(team: int) -> Vector3:
+	for p in bm.jungle_camp_positions:
+		var pos := p as Vector3
+		if not BattleManager.in_enemy_jungle_zone(pos, team):
+			return pos
+	return Vector3(-24, 0, 24) if team == Config.Team.PLAYER else Vector3(24, 0, -24)
 
 
 func _enemy_jungle_target(team: int) -> Vector3:
@@ -590,6 +612,55 @@ func _enemy_jungle_target(team: int) -> Vector3:
 		if BattleManager.in_enemy_jungle_zone(pos, team):
 			return pos
 	return Vector3(24, 0, -24) if team == Config.Team.PLAYER else Vector3(-24, 0, 24)
+
+
+func _lane_front_info(team: int, lane: int) -> Dictionary:
+	var own_crystal := Vector3(-53, 0, 53) if team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	var front := Vector3.ZERO
+	var front_d := -INF
+	for e in bm.get_tree().get_nodes_in_group("minions"):
+		if not (e is Minion) or int((e as Minion).team) != team or (e as Minion).health <= 0.0:
+			continue
+		if (e as Minion).line != lane:
+			continue
+		var d: float = own_crystal.distance_to((e as Node3D).global_position)
+		if d > front_d:
+			front_d = d
+			front = (e as Node3D).global_position
+	if front == Vector3.ZERO:
+		return {"pos": Vector3.ZERO, "hp": 0.0}
+	var hp := 0.0
+	for e in bm.get_tree().get_nodes_in_group("minions"):
+		if e is Minion and int((e as Minion).team) == team and (e as Minion).health > 0.0:
+			if (e as Node3D).global_position.distance_to(front) <= 8.0:
+				hp += (e as Minion).health
+	return {"pos": front, "hp": hp}
+
+
+func _nearest_tower_in_lane(team: int, lane: int, from: Vector3) -> Turret:
+	var best: Turret = null
+	var best_d := INF
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == team or (e as Turret).health <= 0:
+			continue
+		if (e as Turret).display_name == "crystal" or _get_turret_lane(e as Turret) != lane:
+			continue
+		var d: float = from.distance_to((e as Node3D).global_position)
+		if d < best_d:
+			best_d = d
+			best = e as Turret
+	return best
+
+
+func _lane_push_pos(team: int, lane: int) -> Vector3:
+	var info := _lane_front_info(team, lane)
+	if float(info.get("hp", 0.0)) > 1000.0:
+		var tower := _nearest_tower_in_lane(team, lane, info["pos"])
+		if tower != null:
+			return tower.global_position
+	if info["pos"] != Vector3.ZERO:
+		return info["pos"]
+	return _lane_front_pos(team, lane)
 
 
 func _lane_front_pos(team: int, lane: int) -> Vector3:
