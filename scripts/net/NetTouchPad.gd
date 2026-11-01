@@ -43,6 +43,16 @@ const PICKER_ANGLE_MAX := 76.0
 const PICKER_MAX := 5
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 
+# 键位自定义布局（同 host TouchController：拖动调位置 / ＋－ 调大小 / PlayerPrefs 持久化）
+const LAYOUT_SCALE_MIN := 0.55
+const LAYOUT_SCALE_MAX := 1.70
+const LAYOUT_LABELS := {
+	"joystick": "摇杆", "attack": "普攻", "tower": "推塔", "minion": "小兵",
+	"skill_1": "1技能", "skill_2": "2技能", "skill_3": "3技能", "skill_4": "4技能",
+	"summoner": "召唤师技能", "recover": "恢复", "recall": "回城",
+	"equip_1": "主动装1", "equip_2": "主动装2", "cancel": "取消施法",
+}
+
 # 单个索敌头像（头像 + 队伍环；锁定态金环；点按发 tapped）
 class NetEnemyAvatar extends Control:
 	var nid := -1
@@ -112,6 +122,12 @@ var _recall_btn: TouchActionButton = null
 var _active_btns: Array = []          # 主动装备钮 ×2（TouchActionButton）
 var _cancel_btn: CancelCastButton = null
 var _picker_root: Control = null
+var _layout_btns: Array = []
+var _edit_root: Control = null
+var _edit_sel: Control = null
+var _edit_hint: Label = null
+var _edit_drag_last := Vector2.ZERO
+var _edit_drag_moved := 0.0
 var _picker_btns: Array = []
 var _summoner_release_pending := {}   # 召唤师松手信息 {drag, cancel}；空=无
 var _recover_press_pending := false   # 恢复点按待消费
@@ -190,6 +206,7 @@ func _ready() -> void:
 	# —— P1c：召唤师 / 恢复 / 回城 / 主动装 / 取消施法（几何照抄 TouchController）——
 	_build_aux_cluster(root)
 	_build_enemy_picker(root)
+	_assign_layout_keys()
 
 	visible = false   # 接管且对局开始后才由 NetClientBattle 显示
 
@@ -334,6 +351,222 @@ func set_enemy_picker(list: Array) -> void:
 		av.hero_name = str(e[1])
 		av.locked = bool(e[2]) if e.size() > 2 else false
 		av.queue_redraw()
+
+
+# ---------------- 键位自定义布局（同 host TouchController 编辑器交互） ----------------
+
+func _assign_layout_keys() -> void:
+	var kv: Array = [
+		[_joystick, "joystick"], [_attack_btn, "attack"], [_tower_btn, "tower"], [_minion_btn, "minion"],
+		[_extra_skill_btn, "skill_4"], [_summoner_btn, "summoner"], [_recover_btn, "recover"],
+		[_recall_btn, "recall"], [_cancel_btn, "cancel"],
+	]
+	for i in range(_skill_btns.size()):
+		kv.append([_skill_btns[i], "skill_%d" % (i + 1)])
+	for i in range(_active_btns.size()):
+		kv.append([_active_btns[i], "equip_%d" % (i + 1)])
+	for pair in kv:
+		var c = pair[0]
+		if c == null or not is_instance_valid(c):
+			continue
+		c.set_meta("layout_key", str(pair[1]))
+		_register_layout(c)
+
+func _register_layout(ctrl: Control) -> void:
+	var key := str(ctrl.get_meta("layout_key", ""))
+	if key == "":
+		return
+	ctrl.set_meta("layout_def", [ctrl.offset_left, ctrl.offset_top, ctrl.offset_right, ctrl.offset_bottom])
+	if not _layout_btns.has(ctrl):
+		_layout_btns.append(ctrl)
+	var lay: Dictionary = PlayerPrefs.get_btn_layout()
+	_apply_layout_one(ctrl, lay.get(key, {}))
+
+func _apply_layout_one(ctrl: Control, e) -> void:
+	var entry: Dictionary = e if e is Dictionary else {}
+	var dx := float(entry.get("x", 0.0))
+	var dy := float(entry.get("y", 0.0))
+	var sc := clampf(float(entry.get("s", 1.0)), LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX)
+	if dx != 0.0 or dy != 0.0:
+		ctrl.offset_left += dx
+		ctrl.offset_right += dx
+		ctrl.offset_top += dy
+		ctrl.offset_bottom += dy
+	ctrl.pivot_offset = Vector2((ctrl.offset_right - ctrl.offset_left) * 0.5,
+		(ctrl.offset_bottom - ctrl.offset_top) * 0.5)
+	ctrl.scale = Vector2(sc, sc)
+
+## 进入键位编辑：不暂停联机对局（避免服务器超时），用全屏 STOP 层挡住战斗输入
+func enter_layout_edit() -> void:
+	if _edit_root != null and is_instance_valid(_edit_root):
+		return
+	_edit_root = Control.new()
+	_edit_root.name = "NetLayoutEdit"
+	_edit_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_edit_root.mouse_filter = Control.MOUSE_FILTER_STOP
+	_edit_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_edit_root)
+	var bar := Panel.new()
+	bar.mouse_filter = Control.MOUSE_FILTER_STOP
+	bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	bar.offset_left = -430.0; bar.offset_right = 430.0
+	bar.offset_top = 10.0; bar.offset_bottom = 118.0
+	bar.add_theme_stylebox_override("panel", UiKit.panel_style(0.96, 12.0))
+	_edit_root.add_child(bar)
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 14.0; vb.offset_right = -14.0
+	vb.offset_top = 8.0; vb.offset_bottom = -8.0
+	vb.add_theme_constant_override("separation", 6)
+	bar.add_child(vb)
+	_edit_hint = Label.new()
+	_edit_hint.text = "拖动按钮调整位置 · 点选后用 ＋/－ 调大小 · 保存后进入对局自动生效"
+	_edit_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_edit_hint.add_theme_font_override("font", UiKit.font())
+	_edit_hint.add_theme_font_size_override("font_size", 17)
+	_edit_hint.add_theme_color_override("font_color", UiKit.C_TEXT)
+	vb.add_child(_edit_hint)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	vb.add_child(row)
+	row.add_child(_layout_bar_btn("－ 缩小", UiKit.C_TEAM0, func(): _scale_layout_sel(-0.1)))
+	row.add_child(_layout_bar_btn("＋ 放大", UiKit.C_TEAM0, func(): _scale_layout_sel(0.1)))
+	row.add_child(_layout_bar_btn("保存", UiKit.C_GOLD, func(): _exit_layout_edit(true)))
+	row.add_child(_layout_bar_btn("重置", UiKit.C_DANGER, _reset_layout_edit))
+	row.add_child(_layout_bar_btn("取消", UiKit.C_PANEL_EDGE, func(): _exit_layout_edit(false)))
+	_edit_root.gui_input.connect(_on_layout_edit_input)
+	if not _layout_btns.is_empty():
+		select_layout_button(_layout_btns[0])
+
+func _layout_bar_btn(txt: String, col: Color, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = txt
+	b.custom_minimum_size = Vector2(150.0, 42.0)
+	b.add_theme_font_override("font", UiKit.font())
+	b.add_theme_font_size_override("font_size", 18)
+	b.add_theme_color_override("font_color", UiKit.C_TEXT)
+	for st in ["normal", "hover", "pressed"]:
+		b.add_theme_stylebox_override(st, UiKit.skin_button(st, col, false))
+	b.pressed.connect(cb)
+	return b
+
+func select_layout_button(ctrl: Control) -> void:
+	_edit_sel = ctrl
+	if _edit_hint != null and is_instance_valid(_edit_hint):
+		var key := str(ctrl.get_meta("layout_key", ""))
+		_edit_hint.text = "已选中「%s」（%.0f%%）· 拖动调整位置 · ＋/－ 调大小" % [
+			str(LAYOUT_LABELS.get(key, key)), ctrl.scale.x * 100.0]
+	if ctrl != null:
+		ctrl.grab_focus()
+
+func _scale_layout_sel(d: float) -> void:
+	if _edit_sel == null or not is_instance_valid(_edit_sel):
+		return
+	_edit_sel.scale = Vector2(clampf(_edit_sel.scale.x + d, LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX),
+		clampf(_edit_sel.scale.x + d, LAYOUT_SCALE_MIN, LAYOUT_SCALE_MAX))
+	select_layout_button(_edit_sel)
+
+func _on_layout_edit_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton:
+		var mb := ev as InputEventMouseButton
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return
+		if mb.pressed:
+			_edit_drag_last = mb.position
+			_edit_drag_moved = 0.0
+			var hit := _layout_hit(mb.position)
+			if hit != null:
+				select_layout_button(hit)
+			return
+		return
+	if ev is InputEventScreenTouch:
+		var st := ev as InputEventScreenTouch
+		if st.pressed:
+			_edit_drag_last = st.position
+			_edit_drag_moved = 0.0
+			var hit2 := _layout_hit(st.position)
+			if hit2 != null:
+				select_layout_button(hit2)
+		return
+	if ev is InputEventMouseMotion and (ev as InputEventMouseMotion).button_mask & MOUSE_BUTTON_MASK_LEFT:
+		_drag_sel((ev as InputEventMouseMotion).position)
+		return
+	if ev is InputEventScreenDrag:
+		_drag_sel((ev as InputEventScreenDrag).position)
+
+func _drag_sel(pos: Vector2) -> void:
+	if _edit_sel == null or not is_instance_valid(_edit_sel):
+		return
+	var d: Vector2 = pos - _edit_drag_last
+	_edit_drag_last = pos
+	_edit_sel.offset_left += d.x
+	_edit_sel.offset_right += d.x
+	_edit_sel.offset_top += d.y
+	_edit_sel.offset_bottom += d.y
+	_edit_drag_moved += d.length()
+
+func _layout_hit(pos: Vector2) -> Control:
+	for i in range(_layout_btns.size() - 1, -1, -1):
+		var c: Control = _layout_btns[i]
+		if is_instance_valid(c) and c.visible and c.get_global_rect().has_point(pos):
+			return c
+	return null
+
+func _reset_layout_edit() -> void:
+	PlayerPrefs.clear_btn_layout()
+	for c in _layout_btns:
+		if not is_instance_valid(c):
+			continue
+		var def = c.get_meta("layout_def", [])
+		if def is Array and def.size() == 4:
+			c.offset_left = float(def[0])
+			c.offset_top = float(def[1])
+			c.offset_right = float(def[2])
+			c.offset_bottom = float(def[3])
+		c.pivot_offset = Vector2.ZERO
+		c.scale = Vector2.ONE
+	if not _layout_btns.is_empty():
+		select_layout_button(_layout_btns[0])
+
+func _exit_layout_edit(save_it: bool) -> void:
+	if save_it:
+		var lay: Dictionary = {}
+		for c in _layout_btns:
+			if not is_instance_valid(c):
+				continue
+			var key := str(c.get_meta("layout_key", ""))
+			var def = c.get_meta("layout_def", [])
+			if key == "" or not (def is Array) or (def as Array).size() != 4:
+				continue
+			var dx: float = c.offset_left - float(def[0])
+			var dy: float = c.offset_top - float(def[1])
+			if absf(dx) < 0.5 and absf(dy) < 0.5 and absf(c.scale.x - 1.0) < 0.001:
+				continue
+			lay[key] = {"x": dx, "y": dy, "s": c.scale.x}
+		PlayerPrefs.set_btn_layout(lay)
+	else:
+		# 取消：重新套用已保存布局（丢弃本次拖动）
+		for c in _layout_btns:
+			if not is_instance_valid(c):
+				continue
+			var def2 = c.get_meta("layout_def", [])
+			if def2 is Array and (def2 as Array).size() == 4:
+				c.offset_left = float(def2[0])
+				c.offset_top = float(def2[1])
+				c.offset_right = float(def2[2])
+				c.offset_bottom = float(def2[3])
+			c.pivot_offset = Vector2.ZERO
+			c.scale = Vector2.ONE
+		var lay2: Dictionary = PlayerPrefs.get_btn_layout()
+		for c in _layout_btns:
+			if is_instance_valid(c):
+				_apply_layout_one(c, lay2.get(str(c.get_meta("layout_key", "")), {}))
+	if _edit_root != null and is_instance_valid(_edit_root):
+		_edit_root.queue_free()
+	_edit_root = null
+	_edit_sel = null
+	_edit_hint = null
 
 
 func _anchor_br(ctrl: Control, from_br: Vector2, size: Vector2, inset: Vector2 = TOUCH_CLUSTER_INSET) -> void:

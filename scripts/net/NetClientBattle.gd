@@ -3774,6 +3774,18 @@ func _build_settings() -> void:
 	_surrender_lab.add_theme_font_size_override("font_size", 18)
 	_surrender_lab.add_theme_color_override("font_color", UiKit.C_TEXT_DIM)
 	v.add_child(_surrender_lab)
+	# 键位自定义布局（同 host TouchController 编辑器：拖动/±大小/PlayerPrefs 持久化）
+	var lay_btn := Button.new()
+	lay_btn.text = "自定义键位布局"
+	lay_btn.custom_minimum_size = Vector2(0, 52)
+	for st2 in ["normal", "hover", "pressed"]:
+		lay_btn.add_theme_stylebox_override(st2, UiKit.skin_button(st2, UiKit.C_TEAM0, false))
+	lay_btn.add_theme_font_size_override("font_size", 22)
+	lay_btn.pressed.connect(func():
+		_set_panel.visible = false
+		if _pad != null:
+			_pad.enter_layout_edit())
+	v.add_child(lay_btn)
 
 
 func _toggle_settings() -> void:
