@@ -2378,11 +2378,11 @@ func _build_result_payload(bm: Node) -> Dictionary:
 			rows.append({
 				"name": h.display_name, "team": h.team, "lv": h.level,
 				"k": h.kills, "d": h.deaths, "a": h.assists,
-				"gold": int(h.gold), "dmg": int(h.damage_dealt_to_heroes),
+				"gold": int(h.gold), "dmg": float(h.damage_dealt_to_heroes),
 				"mvp": h.is_mvp, "mine": not h.is_ai,
 				"role": str(h.role), "lh": int(h.last_hits), "jungle": int(h.jungle_gold),
-				"taken": int(h.damage_taken_from_heroes), "heal": int(h.healing_done),
-				"cc": int(round(h.cc_duration_dealt * 10.0)), "turret": int(h.turret_damage),
+				"taken": float(h.damage_taken_from_heroes), "heal": float(h.healing_done),
+				"cc": int(round(h.cc_duration_dealt * 10.0)), "turret": float(h.turret_damage),
 				"equip": (h.equipment_slots.duplicate() if h.equipment_slots is Array else []),
 				"nick": str(h.player_name),          # 英雄卡显示「英雄名 · 昵称」
 				"tgold": int(h.total_gold_earned),   # 总经济（团队经济/评分口径）

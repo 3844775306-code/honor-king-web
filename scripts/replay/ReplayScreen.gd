@@ -1718,8 +1718,12 @@ func _start_postmatch() -> void:
 		"winner": int(_doc.get("meta", {}).get("winner", -1)),
 		"dur": _duration, "player_team": _me_team,
 		"rows": _result_rows(),
+		# 回放经济曲线：从逐帧 g=[我方总经济,敌方总经济] 按分钟取一个点
+		"gold_hist": _replay_gold_hist(),
 		"replay": true,
 	}
+
+
 	var entries: Array = []
 	var ally_ids: Array = []
 	for i in range(_heroes.size()):
@@ -1773,6 +1777,25 @@ func _start_postmatch() -> void:
 		0, {"own_team": _me_team})
 	_pm_view = _pm_stage_node.view
 
+
+func _replay_gold_hist() -> Array:
+	var out: Array = []
+	var last_min := -1
+	for fr in _frames:
+		if not (fr is Dictionary):
+			continue
+		var minute := int(float(fr.get("t", 0)) / 60000.0)
+		if minute == last_min:
+			continue
+		last_min = minute
+		var g = fr.get("g", [])
+		if g is Array and (g as Array).size() >= 2:
+			out.append(int(g[0]) - int(g[1]))
+	if out.is_empty():
+		out.append(0)
+	return out
+
+
 func _pm_detail_dict() -> Dictionary:
 	var row := _row_by_name(str((_pm_payload.get("rows", []) as Array)[0].get("name", ""))) if _pm_payload.has("rows") else {}
 	# 找到玩家自己的数据行
@@ -1789,7 +1812,7 @@ func _pm_detail_dict() -> Dictionary:
 		"medal": MatchResultScript.medal_by_rating(_pm_rating(row)),
 		"rows": [
 			["K / D / A", "%d / %d / %d" % [int(row.get("k", 0)), int(row.get("d", 0)), int(row.get("a", 0))]],
-			["总经济", "%d" % int(row.get("gold", 0))],
+			["总经济", "%d" % int(row.get("tgold", row.get("gold", 0)))],
 			["英雄伤害", "%d" % int(row.get("dmg", 0))],
 			["承受伤害", "%d" % int(row.get("taken", 0))],
 			["治疗量", "%d" % int(row.get("heal", 0))],

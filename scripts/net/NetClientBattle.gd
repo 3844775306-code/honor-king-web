@@ -4029,10 +4029,10 @@ func _my_result_row(p: Dictionary) -> Dictionary:
 			my_name = str(v.get("name", ""))
 			break
 	for r in _rows_of(p):
-		if bool((r as Dictionary).get("mine", false)):
+		if my_name != "" and str((r as Dictionary).get("name", "")) == my_name:
 			return r
 	for r in _rows_of(p):
-		if str((r as Dictionary).get("name", "")) == my_name:
+		if bool((r as Dictionary).get("mine", false)):
 			return r
 	return {}
 
@@ -4180,7 +4180,7 @@ func _pm_detail_dict() -> Dictionary:
 		"medal": _pm_medal(row),
 		"rows": [
 			["K / D / A", "%d / %d / %d" % [int(row.get("k", 0)), int(row.get("d", 0)), int(row.get("a", 0))]],
-			["总经济", "%d" % int(row.get("gold", 0))],
+			["总经济", "%d" % int(row.get("tgold", row.get("gold", 0)))],
 			["英雄伤害", "%d" % int(row.get("dmg", 0))],
 			["承受伤害", "%d" % int(row.get("taken", 0))],
 			["治疗量", "%d" % int(row.get("heal", 0))],

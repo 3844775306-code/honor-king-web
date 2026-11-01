@@ -44,8 +44,10 @@ static func stats_of(u) -> Dictionary:
 		return {
 			"name": str(r.get("name", "")), "team": int(r.get("team", -1)),
 			"k": int(r.get("k", 0)), "d": int(r.get("d", 0)), "a": int(r.get("a", 0)),
+			# 结算行同时带 gold（当前金币）和 tgold（本局总经济）；评分必须与单机 Hero 的
+			# total_gold_earned 同口径，否则客户端/回放评分会天然低于服务器。
 			"dmg": float(r.get("dmg", 0.0)), "taken": float(r.get("taken", 0.0)),
-			"gold": int(r.get("gold", 0)), "heal": float(r.get("heal", 0.0)),
+			"gold": int(r.get("tgold", r.get("gold", 0))), "heal": float(r.get("heal", 0.0)),
 			"last_hits": int(r.get("last_hits", 0)), "turret": float(r.get("turret", 0.0)),
 			"cc": float(r.get("cc", 0.0)), "jungle": int(r.get("jungle", 0)),
 		}

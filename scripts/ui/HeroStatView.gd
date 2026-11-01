@@ -40,7 +40,7 @@ static func from_row(r: Dictionary) -> HeroStatView:
 	v.damage_dealt_to_heroes = float(r.get("dmg", 0.0))
 	v.damage_taken_from_heroes = float(r.get("taken", 0.0))
 	v.healing_done = float(r.get("heal", 0.0))
-	v.total_gold_earned = int(r.get("gold", 0))
+	v.total_gold_earned = int(r.get("tgold", r.get("gold", 0)))
 	v.last_hits = int(r.get("lh", r.get("last_hits", 0)))
 	v.turret_damage = float(r.get("turret", 0.0))
 	v.cc_duration_dealt = float(r.get("cc", 0.0)) / 10.0 if float(r.get("cc", 0.0)) > 20.0 else float(r.get("cc", 0.0))

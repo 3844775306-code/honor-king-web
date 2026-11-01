@@ -27,16 +27,20 @@ func _on_result(p: Dictionary) -> void:
 	var pteam := int(p.get("player_team", Config.player_team))
 	var heroes: Array = []
 	var mine = null
+	# 联机结算行来自 host，所有真人行的 mine 都是 true；不能按行里的 mine 取最后一个人。
+	# 本机接管英雄名由 NetSession.current_manifest() 提供，优先精确匹配自己。
+	var local_name := str(NetSession.current_manifest().get("hero_name", ""))
 	for r in rows:
 		if not (r is Dictionary):
 			continue
 		var rd: Dictionary = r
 		var v = HeroStatViewScript.from_row(rd)
 		heroes.append(v)
-		var is_mine: bool = bool(rd.get("mine", false))
 		if mine == null:
 			mine = v
-		if is_mine:
+		if local_name != "" and str(rd.get("name", "")) == local_name:
+			mine = v
+		elif local_name == "" and bool(rd.get("mine", false)):
 			mine = v
 	if mine == null and not heroes.is_empty():
 		mine = heroes[0]
