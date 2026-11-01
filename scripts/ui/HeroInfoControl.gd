@@ -256,39 +256,16 @@ func _draw():
 			if child is HeroAI:
 				ai = child
 				break
-		if ai:
-			var state_name := ""
-			match ai.state:
-				0: state_name = "推线"
-				1: state_name = "打野"
-				2: state_name = "撤退"
-				5: state_name = "回城"
-				4: state_name = "防守"
-			match ai.state:
-				0: ai_col = Color(0.45, 0.90, 1.0)
-				1: ai_col = Color(0.72, 0.58, 1.0)
-				2: ai_col = Color(1.0, 0.46, 0.38)
-				4: ai_col = Color(1.0, 0.78, 0.34)
-				5: ai_col = Color(0.56, 0.70, 1.0)
-			var lane_name := ""
-			match ai.lane:
-				AiConfig.Lane.FARM: lane_name = "发育"
-				AiConfig.Lane.MID: lane_name = "中"
-				AiConfig.Lane.CLASH: lane_name = "对抗"
-				AiConfig.Lane.JUNGLE: lane_name = "野"
-			var phase_name := ""
-			if ai.state == 1:
-				match ai.jungle_strategy.current_phase:
-					0: phase_name = "发育路野区"
-					1: phase_name = "对抗路野区"
-					2: phase_name = "蹭线"
-			var parts: Array = []
-			if lane_name != "": parts.append(lane_name)
-			if state_name != "": parts.append(state_name)
-			if phase_name != "": parts.append(phase_name)
-			if hero.manual_target and is_instance_valid(hero.manual_target):
-				parts.append("→ " + str(hero.manual_target.display_name))
-			ai_label = " · ".join(parts)
+		if ai != null:
+			var ci: Dictionary = {}
+			if ai.has_method("debug_chip_info"):
+				ci = ai.call("debug_chip_info")
+			if not ci.is_empty():
+				ai_label = str(ci.get("line1", ""))
+				var l2 := str(ci.get("line2", ""))
+				if l2 != "":
+					ai_label += "\n" + l2
+				ai_col = Color(float(ci.get("r", 0.52)), float(ci.get("g", 0.78)), float(ci.get("b", 1.0)))
 	if not GameEntity.debug_show_ai_chip:
 		ai_label = ""
 	var name_fs := 28
@@ -301,20 +278,25 @@ func _draw():
 		size.x, name_fs, Color.WHITE, 4)
 	y = name_base + font.get_descent(name_fs) + 1.0
 
-	# ---- AI 决策胶囊：单行、限宽省略，和名字/血条之间各留 1~3px ----
+	# ---- AI 决策胶囊：两行简要思考信息（可增高加宽） ----
 	if ai_label != "":
-		var afs := 13
-		var chip_h := 19.0
-		var max_w := size.x - 10.0
-		var tw := font.get_string_size(ai_label, HORIZONTAL_ALIGNMENT_LEFT, -1, afs).x
-		var chip_w := minf(max_w, tw + 20.0)
-		ai_label = _ellipsize(ai_label, font, afs, chip_w - 20.0)
+		var afs := 12
+		var line_h := 15.0
+		var lines := ai_label.split("\n", false)
+		var chip_h := line_h * float(lines.size()) + 7.0
+		var max_w := size.x - 8.0
+		var tw := 0.0
+		for ln in lines:
+			tw = maxf(tw, font.get_string_size(str(ln), HORIZONTAL_ALIGNMENT_LEFT, -1, afs).x)
+		var chip_w := minf(max_w, tw + 24.0)
 		var cx0: float = center_x - chip_w * 0.5
-		draw_style_box(UiKit.flat(0.88, 9, 1, Color(ai_col.r, ai_col.g, ai_col.b, 0.45),
-			Color(0.035, 0.05, 0.085, 0.86), 0.0, 0.0), Rect2(cx0, y, chip_w, chip_h))
-		draw_circle(Vector2(cx0 + 9.0, y + chip_h * 0.5), 2.6, ai_col)
-		UiKit.text(self, Vector2(cx0 + 15.0, y + 13.5), ai_label, afs, Color(0.92, 0.95, 1.0),
-			HORIZONTAL_ALIGNMENT_LEFT, chip_w - 18.0)
+		draw_style_box(UiKit.flat(0.90, 9, 1, Color(ai_col.r, ai_col.g, ai_col.b, 0.55),
+			Color(0.035, 0.05, 0.085, 0.90), 0.0, 0.0), Rect2(cx0, y, chip_w, chip_h))
+		draw_circle(Vector2(cx0 + 9.0, y + line_h * 0.5 + 3.0), 2.8, ai_col)
+		for i in range(lines.size()):
+			var tline := _ellipsize(str(lines[i]), font, afs, chip_w - 20.0)
+			UiKit.text(self, Vector2(cx0 + 15.0, y + 3.0 + line_h * float(i) + 11.0), tline, afs,
+				Color(0.92, 0.95, 1.0), HORIZONTAL_ALIGNMENT_LEFT, chip_w - 18.0)
 		y += chip_h + 2.0
 
 	# ---- 复活倒计时条 ----

@@ -1846,42 +1846,15 @@ func _pack_ai_chip(e: Node) -> Array:
 			break
 	if ai == null:
 		return []
-	var state_name := ""
-	var ai_col := Color(0.52, 0.78, 1.0)
-	match int(ai.state):
-		0:
-			state_name = "推线"; ai_col = Color(0.45, 0.90, 1.0)
-		1:
-			state_name = "打野"; ai_col = Color(0.72, 0.58, 1.0)
-		2:
-			state_name = "撤退"; ai_col = Color(1.0, 0.46, 0.38)
-		4:
-			state_name = "防守"; ai_col = Color(1.0, 0.78, 0.34)
-		5:
-			state_name = "回城"; ai_col = Color(0.56, 0.70, 1.0)
-	var lane_name := ""
-	match int(ai.lane):
-		AiConfig.Lane.FARM: lane_name = "发育"
-		AiConfig.Lane.MID: lane_name = "中"
-		AiConfig.Lane.CLASH: lane_name = "对抗"
-		AiConfig.Lane.JUNGLE: lane_name = "野"
-	var phase_name := ""
-	if int(ai.state) == 1 and ai.jungle_strategy != null:
-		match int(ai.jungle_strategy.current_phase):
-			0: phase_name = "发育路野区"
-			1: phase_name = "对抗路野区"
-			2: phase_name = "蹭线"
-	var parts: Array = []
-	if lane_name != "": parts.append(lane_name)
-	if state_name != "": parts.append(state_name)
-	if phase_name != "": parts.append(phase_name)
-	var mt = e.get("manual_target")
-	if mt != null and is_instance_valid(mt):
-		parts.append("→ " + str(mt.display_name))
-	if parts.is_empty():
-		return []
-	return [" · ".join(parts), ai_col.r, ai_col.g, ai_col.b]
-
+	if ai.has_method("debug_chip_info"):
+		var ci: Dictionary = ai.call("debug_chip_info")
+		if not ci.is_empty():
+			var txt := str(ci.get("line1", ""))
+			var l2 := str(ci.get("line2", ""))
+			if l2 != "":
+				txt += "\n" + l2
+			return [txt, float(ci.get("r", 0.52)), float(ci.get("g", 0.78)), float(ci.get("b", 1.0))]
+	return []
 
 func _pack_hero(e: Node) -> Array:
 	# 尾字段 idx9.. = mana / maxmana / shield / exp / exp_to_next（客户端世界血条按主机
@@ -2899,6 +2872,3 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
-
-
-

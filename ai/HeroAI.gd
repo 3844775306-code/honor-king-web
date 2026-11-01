@@ -63,6 +63,8 @@ var _dbg_last_state := -1
 var _dbg_last_target := ""
 var _dbg_last_casting := false
 var _dbg_last_recall := false
+var _chip_cache: Dictionary = {}
+var _chip_next_t := 0.0
 
 func _ready():
 	if get_parent() is Hero:
@@ -803,6 +805,75 @@ func _nearest_desc(e) -> String:
 		return ""
 	var d: float = hero.global_position.distance_to(e.global_position)
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
+
+
+## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
+func debug_chip_info() -> Dictionary:
+	var now := Time.get_ticks_msec() * 0.001
+	if now < _chip_next_t and not _chip_cache.is_empty():
+		return _chip_cache
+	_chip_next_t = now + 0.25
+	var st_cn := ""
+	match state:
+		State.PUSH: st_cn = "推线"
+		State.FARM: st_cn = "打野" if lane == AiConfig.Lane.JUNGLE else "补刀"
+		State.RETREAT: st_cn = "撤退"
+		State.RECALL, State.RECALL_SAFE: st_cn = "回城"
+		State.AVOID: st_cn = "躲避"
+	var intent_cn := ""
+	match _debug_intent():
+		"push": intent_cn = "推线"
+		"farm": intent_cn = "补刀"
+		"jungle": intent_cn = "刷野"
+		"chase": intent_cn = "追击"
+		"fight": intent_cn = "对拼"
+		"kill": intent_cn = "收割"
+		"retreat": intent_cn = "撤退"
+		"recall": intent_cn = "回城"
+		"rotate": intent_cn = "支援"
+		"avoid": intent_cn = "躲技能"
+		_: intent_cn = _debug_intent()
+	var p1: Array = []
+	p1.append(_debug_lane())
+	if st_cn != "": p1.append(st_cn)
+	if state == State.FARM and lane == AiConfig.Lane.JUNGLE and jungle_strategy != null:
+		match int(jungle_strategy.current_phase):
+			0: p1.append("发育路野区")
+			1: p1.append("对抗路野区")
+			2: p1.append("蹭线")
+	if hero.manual_target != null and is_instance_valid(hero.manual_target):
+		p1.append("→ " + _safe_name(hero.manual_target))
+	var line1 := " · ".join(p1)
+	var p2: Array = []
+	p2.append("意图:" + intent_cn)
+	var en = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO)
+	if en != null and is_instance_valid(en):
+		var emx: float = maxf(1.0, float(en.get("max_health")))
+		p2.append("敌 %s %d%% %.1fm" % [_safe_name(en), int(round(float(en.health) / emx * 100.0)), hero.global_position.distance_to(en.global_position)])
+	p2.append("敌%d友%d" % [perception.count_enemy_heroes_near(12.0), perception.count_ally_heroes_near(12.0)])
+	var hmx: float = maxf(1.0, float(hero.actual_max_health))
+	p2.append("HP%d%%" % int(round(float(hero.health) / hmx * 100.0)))
+	if _chase_target != null and is_instance_valid(_chase_target):
+		p2.append("追 " + _safe_name(_chase_target))
+	if hero.is_recalling:
+		p2.append("回城中")
+	elif hero.is_teleporting:
+		p2.append("支援中")
+	if skill_tactics != null:
+		var td: Dictionary = skill_tactics.call("debug_snapshot")
+		var cl := int(td.get("combo_len", 0))
+		if cl > 1:
+			p2.append("连招%d/%d" % [int(td.get("combo_step", 0)) + 1, cl])
+	var line2 := " | ".join(p2)
+	var col := Color(0.52, 0.78, 1.0)
+	match state:
+		State.PUSH: col = Color(0.45, 0.90, 1.0)
+		State.FARM: col = Color(0.72, 0.58, 1.0)
+		State.RETREAT: col = Color(1.0, 0.46, 0.38)
+		State.RECALL, State.RECALL_SAFE: col = Color(0.56, 0.70, 1.0)
+		State.AVOID: col = Color(0.95, 0.78, 0.36)
+	_chip_cache = {"line1": line1, "line2": line2, "r": col.r, "g": col.g, "b": col.b}
+	return _chip_cache
 
 
 ## 单个 AI 的完整思考快照（JSON 安全；F3 与录像共用）

@@ -46,7 +46,8 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 	# AI 决策胶囊：单机画在「名字与血条之间」占 21px，此处同样让位，避免血条贴住名字
 	var _ai0: Dictionary = r.get("ai_chip", {}) if GameEntity.debug_show_ai_chip else {}
 	if not _ai0.is_empty() and str(_ai0.get("label", "")) != "":
-		by += 21.0
+		var _l0 := str(_ai0.get("label", "")).split("\n", false).size()
+		by += 21.0 + float(maxi(0, _l0 - 1)) * 15.0
 	by += 2.0
 	var bw := 280.0
 	var bh := 28.0
@@ -78,18 +79,23 @@ static func draw(ci: CanvasItem, f: Font, r: Dictionary) -> void:
 	# AI 决策胶囊（同 host：分路·状态·野区阶段·目标，一行限宽）
 	var _ai: Dictionary = r.get("ai_chip", {}) if GameEntity.debug_show_ai_chip else {}
 	if not _ai.is_empty() and str(_ai.get("label", "")) != "":
-		var _atxt := str(_ai["label"])
 		var _acol := Color(float(_ai.get("r", 0.52)), float(_ai.get("g", 0.78)), float(_ai.get("b", 1.0)))
-		var _afs := 15
-		var _atw := f.get_string_size(_atxt, HORIZONTAL_ALIGNMENT_LEFT, -1, _afs).x
-		var _chip_w := minf(320.0, _atw + 26.0)
+		var _lines := str(_ai.get("label", "")).split("\n", false)
+		var _afs := 13
+		var _line_h := 15.0
+		var _chip_h := _line_h * float(_lines.size()) + 6.0
+		var _atw := 0.0
+		for _ln in _lines:
+			_atw = maxf(_atw, f.get_string_size(str(_ln), HORIZONTAL_ALIGNMENT_LEFT, -1, _afs).x)
+		var _chip_w := minf(430.0, _atw + 26.0)
 		var _chip_y := _name_base + f.get_descent(int(name_fs)) + 1.0
 		var _cx0 := cx - _chip_w * 0.5
-		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, 20.0), Color(0.035, 0.05, 0.085, 0.86))
-		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, 20.0), Color(_acol.r, _acol.g, _acol.b, 0.45), false, 1.0)
-		ci.draw_circle(Vector2(_cx0 + 9.0, _chip_y + 10.0), 2.6, _acol)
-		ci.draw_string(f, Vector2(_cx0 + 15.0, _chip_y + 14.0), _atxt,
-			HORIZONTAL_ALIGNMENT_LEFT, _chip_w - 18.0, _afs, Color(0.92, 0.95, 1.0))
+		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, _chip_h), Color(0.035, 0.05, 0.085, 0.90))
+		ci.draw_rect(Rect2(_cx0, _chip_y, _chip_w, _chip_h), Color(_acol.r, _acol.g, _acol.b, 0.55), false, 1.0)
+		ci.draw_circle(Vector2(_cx0 + 9.0, _chip_y + _line_h * 0.5 + 3.0), 2.8, _acol)
+		for _i in range(_lines.size()):
+			ci.draw_string(f, Vector2(_cx0 + 15.0, _chip_y + 13.0 + _line_h * float(_i)), str(_lines[_i]),
+				HORIZONTAL_ALIGNMENT_LEFT, _chip_w - 18.0, _afs, Color(0.92, 0.95, 1.0))
 	# 投影（两层）
 	ci.draw_rect(Rect2(bx + 3.0, by + 5.0, bw, bh), Color(0, 0, 0, 0.22))
 	ci.draw_rect(Rect2(bx + 1.5, by + 2.5, bw, bh), Color(0, 0, 0, 0.34))
