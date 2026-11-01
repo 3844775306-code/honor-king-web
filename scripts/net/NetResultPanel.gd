@@ -51,6 +51,13 @@ func _on_result(p: Dictionary) -> void:
 			mine = v
 	if mine == null and not heroes.is_empty():
 		mine = heroes[0]
+	# 经济曲线：host 的 gold_hist 是「蓝(0) - 红(1)」；
+	# 红方客户端要展示「我方 - 敌方」，必须整体取反，否则曲线左右反了
+	var hist: Array = []
+	var raw_hist = p.get("gold_hist", [])
+	if raw_hist is Array:
+		for val in (raw_hist as Array):
+			hist.append(-float(val) if pteam == 1 else float(val))
 	var model := {
 		"heroes": heroes,
 		"hero": mine,
@@ -58,7 +65,7 @@ func _on_result(p: Dictionary) -> void:
 		"winner": int(p.get("winner", -1)),
 		"game_time": float(p.get("dur", 0.0)),
 		"rank_result": p.get("rank", {}) if p.get("rank", {}) is Dictionary else {},
-		"team_gold_diff_history": p.get("gold_hist", []) if p.get("gold_hist", []) is Array else [],
+		"team_gold_diff_history": hist,
 		"mode": "replay" if is_replay else "net",
 		# 回放没有真实排位结算，绝不能在这里写 rank.json
 		"suppress_rank": is_replay,
@@ -76,4 +83,5 @@ func show_deferred() -> void:
 	# 重放一次渲染（与旧实现一致：show_deferred 会按 payload 重新出界面）
 	_on_result(_payload)
 	visible = true
+
 

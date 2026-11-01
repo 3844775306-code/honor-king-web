@@ -33,7 +33,7 @@ static func from_row(r: Dictionary) -> HeroStatView:
 	v.player_name = str(r.get("nick", r.get("pname", "")))
 	v.role = str(r.get("role", ""))
 	v.team = int(r.get("team", 0))
-	v.level = int(r.get("level", r.get("lvl", 1)))
+	v.level = int(r.get("level", r.get("lvl", r.get("lv", 1))))
 	v.kills = int(r.get("k", 0))
 	v.deaths = int(r.get("d", 0))
 	v.assists = int(r.get("a", 0))
@@ -54,3 +54,4 @@ static func from_row(r: Dictionary) -> HeroStatView:
 	if items is Array:
 		v.equipment_slots = items.duplicate()
 	return v
+
