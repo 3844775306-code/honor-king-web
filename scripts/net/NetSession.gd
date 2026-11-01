@@ -429,11 +429,7 @@ func _apply_lobby_ready(pid: int, camp: int, lane: String, ready: bool) -> void:
 		"lane": lane_clean,
 		"ready": bool(ready) and lane_clean != "",
 	}
-	# 红方真人：确认后按分路自动配一名红方英雄（该英雄由 host 生成并交给其接管）
-	if mode == Mode.HOST and camp_v == 1 and bool(ready) and lane_clean != "":
-		_autofill_red_peer(int(pid), lane_clean)
-		if _picks.has(int(pid)):
-			_broadcast_lobby_state()
+	# 红方真人不再自动配英雄：和蓝方一样进入选人页手动选英雄/召唤师并锁定。
 
 
 ## 该 peer 的阵营（房主固定蓝方）
@@ -453,6 +449,24 @@ func _peer_camp(pid: int) -> int:
 	if r is Dictionary:
 		return clampi(int((r as Dictionary).get("camp", TEAM_PLAYER)), 0, 1)
 	return TEAM_PLAYER
+
+
+## 某阵营的真人席位序列（最多 5 人）；顺序沿用本局随机 seat_order。
+func camp_peers(camp: int) -> Array:
+	var out: Array = []
+	for p in get_seat_order():
+		if int(p) == 0:
+			continue
+		if _peer_camp(int(p)) == int(camp) and not out.has(int(p)):
+			out.append(int(p))
+	return out.slice(0, MAX_SIDE_PLAYERS)
+
+
+## peer 在本阵营内的 0-based 席位；-1=本阵营已满/旁观。
+func camp_seat_of(pid: int) -> int:
+	var arr: Array = camp_peers(_peer_camp(int(pid)))
+	var i := arr.find(int(pid))
+	return i
 
 
 ## 红方真人按分路自动选一个未被占用的英雄（无需手动 BP）
@@ -612,11 +626,11 @@ func host_force_pick(pid: int, hero: String, summoner: String = "flash") -> bool
 # 该 peer 是否正处在自己的顺序选人回合（host 判定/拒绝提示用）
 func _draft_is_turn_of(pid: int) -> bool:
 	var turn: Array = draft.get("turn", [])
-	if turn.size() < 2 or int(turn[0]) != 0:
+	if turn.size() < 2:
 		return false
-	var ids: Array = get_seat_order()
-	var seat := int(turn[1])
-	return seat < ids.size() and int(ids[seat]) == pid
+	if int(turn[0]) != _peer_camp(int(pid)):
+		return false
+	return int(turn[1]) == camp_seat_of(int(pid))
 
 
 # 顺序选人合法性：本回合玩家才可上报；展示阵容里的英雄/职责不重复
@@ -628,19 +642,16 @@ func _draft_allows(pid: int, hero: String) -> bool:
 	var turn: Array = draft.get("turn", [])
 	if turn.size() < 2:
 		return true
-	if int(turn[0]) != 0:
-		return false   # 红方/我方 AI 席位回合：不接受真人选人
-	var ids: Array = get_seat_order()
-	var seat := int(turn[1])
-	if seat >= ids.size() or int(ids[seat]) != pid:
-		return false
+	if int(turn[0]) != _peer_camp(int(pid)) or int(turn[1]) != camp_seat_of(int(pid)):
+		return false   # 不是本阵营本席位回合
 	var role := str(HeroPickData.HERO_ROLE.get(hero, ""))
 	var dp: Dictionary = draft.get("picks", {})
+	var prefix := "%d-" % _peer_camp(int(pid))
 	for k in dp:
 		if str(dp[k]) == hero:
 			return false   # 展示阵容已占该英雄（全局唯一）
-		if str(k).begins_with("0-") and str(HeroPickData.HERO_ROLE.get(str(dp[k]), "")) == role:
-			return false   # 我方 AI 已占该职责
+		if str(k).begins_with(prefix) and str(HeroPickData.HERO_ROLE.get(str(dp[k]), "")) == role:
+			return false   # 同阵营已有该职责
 	return true
 
 
@@ -686,8 +697,13 @@ func get_seat_order() -> Array:
 
 
 func _all_active_picked() -> bool:
-	for pid in active_player_ids():
-		if not _picks.has(pid):
+	for pid in players:
+		var p := int(pid)
+		if p == 1:
+			if not _picks.has(p):
+				return false
+			continue
+		if camp_seat_of(p) >= 0 and not _picks.has(p):
 			return false
 	return true
 
@@ -711,7 +727,7 @@ func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
 		summoner = "flash"
 	if pid != 1 and not players.has(pid):
 		return false
-	if pid not in active_player_ids():
+	if camp_seat_of(pid) < 0:
 		printerr("[Net] 选人拒绝：本方席位已满 peer=", pid)
 		return false
 	# 一人一职按阵营内去重（蓝/红双方各自阵容可同职责）
@@ -2804,6 +2820,3 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
-
-
-

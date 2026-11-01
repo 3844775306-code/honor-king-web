@@ -91,6 +91,7 @@ var _sel_sid := ""           # 其 SkillDatabase id
 var _pick_status: Label = null
 var _pick_summary: Label = null
 var _pick_confirm_btn: Button = null
+var _pick_confirm_center: Button = null   # 中央常驻锁定钮：保证房主/客户端选中英雄后都能看到锁定入口
 var _auto_start_lab: Label = null   # 底栏状态行：全员锁定后自动进入对局（原「开始对局」按钮位）
 var _auto_start_wait := -1.0        # host：全员就绪后的开局倒计时（<0 = 未就绪）
 var _auto_start_done := false       # host：已触发过自动开局（防重入）
@@ -323,6 +324,7 @@ func _clear_stack() -> void:
 	_pick_status = null
 	_pick_summary = null
 	_pick_confirm_btn = null
+	_pick_confirm_center = null
 	_auto_start_lab = null
 	_prev = null
 	_stage_title = null
@@ -1434,12 +1436,12 @@ func _draft_done() -> bool:
 func _draft_is_my_turn() -> bool:
 	if not _draft_active() or _draft_turn.size() < 2:
 		return false
-	return int(_draft_turn[0]) == 0 and int(_draft_turn[1]) == _my_seat - 1
+	return int(_draft_turn[0]) == _local_camp() and int(_draft_turn[1]) == _my_seat - 1
 
 
-# 我方第 seat 席（0-based）对应的 peer；超过真人数 = AI 席位（与 _seat_rows 同序、去重）
-func _seat_peer(seat: int) -> int:
-	var ids: Array = NetSession.get_seat_order()
+# 某阵营第 seat 席（0-based）对应的真人 peer；-1 = AI 补位
+func _seat_peer(team: int, seat: int) -> int:
+	var ids: Array = NetSession.camp_peers(team)
 	if seat < 0 or seat >= ids.size():
 		return -1
 	return int(ids[seat])
@@ -1491,8 +1493,8 @@ func _draft_pick_hero(team: int) -> String:
 			roles[str(HeroPickData.HERO_ROLE.get(h, ""))] = true
 	for pid in picks:
 		used[str(picks[pid].get("hero", ""))] = true
-		if team == 0:
-			roles[str(picks[pid].get("role", ""))] = true   # 敌方职责与本方独立
+		if int(picks[pid].get("team", 0)) == int(team):
+			roles[str(picks[pid].get("role", ""))] = true   # 双方职责各自独立
 	var pool: Array = []
 	var fallback: Array = []
 	for hn in HeroPickData.HERO_ROLE:
@@ -1501,7 +1503,7 @@ func _draft_pick_hero(team: int) -> String:
 			continue
 		fallback.append(h2)
 		var role := str(HeroPickData.HERO_ROLE[h2])
-		if roles.has(role) or (team == 0 and role == _lane_role):
+		if roles.has(role) or (team == _local_camp() and role == _lane_role):
 			continue
 		pool.append(h2)
 	if pool.is_empty():
@@ -1516,12 +1518,11 @@ func _draft_turn_label() -> String:
 		return ""
 	var team := int(_draft_turn[0])
 	var seat := int(_draft_turn[1])
-	if team == 1:
-		return "红方 %d 号位" % (seat + 1)
-	var pid := _seat_peer(seat)
+	var side := "我方" if team == _local_camp() else "敌方"
+	var pid := _seat_peer(team, seat)
 	if pid <= 0:
-		return "我方 %d 号位 · AI" % (seat + 1)
-	return "我方 %d 号位 · %s" % [seat + 1, _player_name(pid, _last_state)]
+		return "%s %d 号位 · AI" % [side, seat + 1]
+	return "%s %d 号位 · %s" % [side, seat + 1, _player_name(pid, _last_state)]
 
 
 func _draft_title_text() -> String:
@@ -1591,7 +1592,7 @@ func _host_draft_tick(delta: float) -> void:
 		return
 	var team := int(_draft_turn[0])
 	var seat := int(_draft_turn[1])
-	var pid := _seat_peer(seat) if team == 0 else -1
+	var pid := _seat_peer(team, seat)
 	if pid > 0:
 		# 真人回合：锁定后推进；剩 1s 仍没锁 → host 代选兜底（客户端自己 0s 会先自动选）
 		if NetSession.get_picks().has(pid):
@@ -1613,7 +1614,7 @@ func _host_auto_pick(pid: int) -> void:
 	if mine:
 		hero = _sel_hero if _hero_pickable(_sel_hero) else _random_lane_hero()
 	if hero == "":
-		hero = _draft_pick_hero(0)
+		hero = _draft_pick_hero(NetSession._peer_camp(pid))
 	if hero == "":
 		return
 	var summ := _sel_sid if (mine and _sel_sid != "") else "flash"
@@ -1673,34 +1674,45 @@ func _leave_room() -> void:
 # ---------- SELECT：大厅选人（host 与每个 client 各自窗口同屏） ----------
 
 func _seat_rows(state: Dictionary) -> Dictionary:
-	# 场上席顺序 = host 随机席位顺序（不固定房主 1 号）；前 5 在场，其余旁观
-	var ids: Array = NetSession.get_seat_order()
-	if ids.is_empty():
-		ids = [1]
+	# 按本机阵营分左右两列：左=我方真人/AI，右=敌方真人/AI。
+	# 席位顺序沿用 host 的随机 seat_order；每个阵营最多 5 个真人，空位由 AI 补。
+	var camp := _local_camp()
+	var picks: Dictionary = state.get("picks", {})
+	var all_ids: Array = NetSession.get_seat_order()
+	if all_ids.is_empty():
+		all_ids = [1]
 		var pl0: Dictionary = state.get("players", {})
 		for p in pl0:
-			if not ids.has(int(p)):
-				ids.append(int(p))
-		ids.sort()
-	var picks: Dictionary = state.get("picks", {})
+			if not all_ids.has(int(p)):
+				all_ids.append(int(p))
+		all_ids.sort()
 	var seats: Array = []
+	var enemy: Array = []
 	var spect: Array = []
-	var idx := 0
-	for pid in ids:
-		idx += 1
-		if idx > NetSession.MAX_SIDE_PLAYERS:
+	var used := {}
+	for side in [camp, 1 - camp]:
+		var side_seats: Array = []
+		for pid in NetSession.camp_peers(int(side)):
+			if used.has(int(pid)):
+				continue
+			used[int(pid)] = true
+			var pk: Dictionary = picks.get(pid, {})
+			side_seats.append({
+				"id": int(pid), "is_me": int(pid) == _self_peer(),
+				"name": _player_name(int(pid), state),
+				"hero": str(pk.get("hero", "")), "role": str(pk.get("role", "")),
+				"summoner": str(pk.get("summoner", "")), "team": int(side),
+			})
+		while side_seats.size() < NetSession.MAX_SIDE_PLAYERS:
+			side_seats.append({})
+		if int(side) == camp:
+			seats = side_seats
+		else:
+			enemy = side_seats
+	for pid in all_ids:
+		if not used.has(int(pid)):
 			spect.append(_player_name(int(pid), state))
-			continue
-		var pk: Dictionary = picks.get(pid, {})
-		seats.append({
-			"id": int(pid),
-			"is_me": int(pid) == _self_peer(),
-			"name": _player_name(int(pid), state),
-			"hero": str(pk.get("hero", "")),
-			"role": str(pk.get("role", "")),
-			"summoner": str(pk.get("summoner", "")),
-		})
-	return { "seats": seats, "spectators": spect }
+	return { "seats": seats, "enemy_seats": enemy, "spectators": spect }
 
 
 func _player_name(pid: int, state: Dictionary) -> String:
@@ -1745,16 +1757,18 @@ func _ensure_pick_ai_names() -> void:
 # 昵称 / 英雄名 / 职责 / 召唤师，供席位卡、mini 槽、中央预览共用。
 func _seat_view(i: int, actual: Dictionary, enemy: bool) -> Dictionary:
 	_ensure_pick_ai_names()
+	var camp := _local_camp()
+	var team := (1 - camp) if enemy else camp
 	var hero := str(actual.get("hero", ""))
 	if hero == "":
-		hero = str(_draft_picks.get("%d-%d" % [1 if enemy else 0, i], ""))
+		hero = str(_draft_picks.get("%d-%d" % [team, i], ""))
 	var role := str(actual.get("role", ""))
 	if role == "" and hero != "":
 		role = str(HeroPickData.HERO_ROLE.get(hero, ""))
 	var summ := str(actual.get("summoner", ""))
 	if summ == "" and hero != "":
 		summ = HeroPickData.recommended_summoner(hero)
-	var is_ai := actual.is_empty() or enemy
+	var is_ai := actual.is_empty()
 	var nm := str(actual.get("name", ""))
 	if bool(actual.get("is_me", false)):
 		nm = _local_nickname()
@@ -1763,7 +1777,7 @@ func _seat_view(i: int, actual: Dictionary, enemy: bool) -> Dictionary:
 		nm = str(_pick_ai_names[ai_i]) if ai_i < _pick_ai_names.size() else "AI %d" % (ai_i + 1)
 	return {
 		"name": nm, "hero": hero, "role": role, "summoner": summ,
-		"is_ai": is_ai, "is_me": bool(actual.get("is_me", false)), "enemy": enemy,
+		"is_ai": is_ai, "is_me": bool(actual.get("is_me", false)), "enemy": enemy, "team": team,
 	}
 
 
@@ -1836,18 +1850,23 @@ func _show_select(state: Dictionary) -> void:
 	_page.add_theme_constant_override("margin_top", 8 + int(round(UiKit.safe_top())))
 	_page.add_theme_constant_override("margin_bottom", 8 + int(round(UiKit.safe_bottom())))
 	var data := _seat_rows(state)
+	var camp := _local_camp()
 	_my_seat = 1
+	var _found_me := false
 	for s in data["seats"]:
-		if s.is_me:
+		if bool((s as Dictionary).get("is_me", false)):
+			_found_me = true
 			break
 		_my_seat += 1
+	if not _found_me:
+		_my_seat = NetSession.MAX_SIDE_PLAYERS + 1   # 本阵营已满：旁观
 	_blocked_roles = {}
 	for s in data["seats"]:
-		if s.is_me:
+		if bool((s as Dictionary).get("is_me", false)):
 			continue
-		if str(s.role) != "":
-			_blocked_roles[str(s.role)] = true
-	# 顺序选人的展示阵容（我方 AI/敌方席）也占英雄与职责：本机不可再选
+		if str((s as Dictionary).get("role", "")) != "":
+			_blocked_roles[str((s as Dictionary).get("role", ""))] = true
+	# 顺序选人的展示阵容（本阵营 AI 席）也占职责；双方英雄仍全局唯一
 	_draft_taken = {}
 	if _draft_step >= 0:
 		for k in _draft_picks:
@@ -1855,7 +1874,7 @@ func _show_select(state: Dictionary) -> void:
 			if dh == "" or not HeroPickData.HERO_ROLE.has(dh):
 				continue
 			_draft_taken[dh] = true
-			if str(k).begins_with("0-"):
+			if str(k).begins_with("%d-" % camp):
 				_blocked_roles[str(HeroPickData.HERO_ROLE[dh])] = true
 	# 分路以房间确认的 lobby_ready.lane 为准（同步到本地 PlayerPrefs，选人页与房间不再不一致）
 	var _room_r = _room_ready_entry()
@@ -1895,7 +1914,9 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var left := HBoxContainer.new()
 	left.add_theme_constant_override("separation", 8)
 	left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var lt := _mk_label("我方", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
+	var _lc: Color = UiKit.C_TEAM1 if _local_camp() == 1 else UiKit.C_TEAM0
+	var _ec: Color = UiKit.C_TEAM1 if _local_camp() == 0 else UiKit.C_TEAM0
+	var lt := _mk_label("我方", _fs(UiKit.FS_SM), _lc)
 	lt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	left.add_child(lt)
 	_my_slots = HBoxContainer.new()
@@ -1937,7 +1958,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 	var right := HBoxContainer.new()
 	right.add_theme_constant_override("separation", 8)
 	right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var rt := _mk_label("敌方", _fs(UiKit.FS_SM), UiKit.C_TEAM1)
+	var rt := _mk_label("敌方", _fs(UiKit.FS_SM), _ec)
 	rt.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	right.add_child(rt)
 	_enemy_slots = HBoxContainer.new()
@@ -1947,6 +1968,7 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 
 	# 填充 mini 槽（我方取真实席位，缺位 = AI 补齐；敌方 5 席 = AI；顺序选人时显示已选英雄）
 	var seats: Array = data["seats"]
+	var foe_seats: Array = data.get("enemy_seats", [])
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
 		var seat: Dictionary = seats[i] if i < seats.size() else {}
 		var ally := _seat_view(i, seat, false)
@@ -1954,12 +1976,13 @@ func _build_stage_bar(data: Dictionary, state: Dictionary) -> Control:
 		_my_slots.add_child(_mk_mini_slot(
 			"%d · %s" % [i + 1, str(ally.name)],
 			str(ally.hero) if str(ally.hero) != "" else "待选",
-			UiKit.C_TEAM0, mine))
-		var foe := _seat_view(i, {}, true)
+			_lc, mine))
+		var fs: Dictionary = foe_seats[i] if i < foe_seats.size() else {}
+		var foe := _seat_view(i, fs, true)
 		_enemy_slots.add_child(_mk_mini_slot(
 			"%d · %s" % [i + 1, str(foe.name)],
 			str(foe.hero) if str(foe.hero) != "" else "待选",
-			UiKit.C_TEAM1, false))
+			_ec, false))
 	return bar
 
 
@@ -2046,9 +2069,11 @@ func _build_select_main(data: Dictionary) -> Control:
 	_enemy_col.alignment = BoxContainer.ALIGNMENT_CENTER
 	_enemy_col.add_theme_constant_override("separation", 6)
 	main.add_child(_enemy_col)
+	# 右列 = 敌方真人/AI 席（不再固定虚空 AI，红方真人也能显示）
+	var enemy_seats: Array = data.get("enemy_seats", [])
 	for i in range(NetSession.MAX_SIDE_PLAYERS):
-		# 敌方虽然由 AI 操作，也显示 AI 昵称 + 顺序选人已选出的英雄名
-		_enemy_col.add_child(_mk_seat_card(i + 1, _seat_view(i, {}, true), true))
+		var es: Dictionary = enemy_seats[i] if i < enemy_seats.size() else {}
+		_enemy_col.add_child(_mk_seat_card(i + 1, _seat_view(i, es, true), true))
 	return main
 
 
@@ -2097,9 +2122,10 @@ func _build_center_stage() -> Control:
 	v.add_child(chip_row)
 
 	_prev_role_chip = PanelContainer.new()
-	_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(UiKit.C_TEAM0, 0.95, 12))
+	var _local_team_col: Color = UiKit.C_TEAM1 if _local_camp() == 1 else UiKit.C_TEAM0
+	_prev_role_chip.add_theme_stylebox_override("panel", UiKit.skin_chip(_local_team_col, 0.95, 12))
 	_prev_role_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_preview_role = _mk_label("定位 · —", _fs(UiKit.FS_SM), UiKit.C_TEAM0)
+	_preview_role = _mk_label("定位 · —", _fs(UiKit.FS_SM), _local_team_col)
 	_preview_role.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_role.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_prev_role_chip.add_child(_preview_role)
@@ -2135,6 +2161,11 @@ func _build_center_stage() -> Control:
 	_preview_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_preview_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(_preview_tip)
+	# 锁定入口放在中央预览底部，避免底栏在部分分辨率下被裁切；与右侧锁定钮共用同一回调
+	_pick_confirm_center = _mk_btn("√  锁定选择", UiKit.C_GOLD, true, Vector2(260, 58))
+	_pick_confirm_center.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	_pick_confirm_center.pressed.connect(_on_pick_confirm)
+	v.add_child(_pick_confirm_center)
 	return box
 
 
@@ -2144,7 +2175,9 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	var is_ai := bool(seat.get("is_ai", false))
 	var hero := str(seat.get("hero", ""))
 	var role := str(seat.get("role", ""))
-	var accent: Color = UiKit.C_TEAM1 if enemy else UiKit.C_TEAM0
+	var _lc: Color = UiKit.C_TEAM1 if _local_camp() == 1 else UiKit.C_TEAM0
+	var _ec: Color = UiKit.C_TEAM1 if _local_camp() == 0 else UiKit.C_TEAM0
+	var accent: Color = _ec if enemy else _lc
 	if hero != "":
 		accent = HeroPickData.ROLE_COLORS.get(role, accent)
 	var p := PanelContainer.new()
@@ -2382,7 +2415,8 @@ func _build_select_bottom() -> Control:
 	pick_layer.add_child(pick_center)
 	var pick_panel := PanelContainer.new()
 	pick_panel.custom_minimum_size = Vector2(minf(1560.0, get_viewport().get_visible_rect().size.x * 0.88), 0)
-	var pick_style := UiKit.skin_card(UiKit.C_TEAM0, false, 0.94)
+	var _pick_col: Color = UiKit.C_TEAM1 if _local_camp() == 1 else UiKit.C_TEAM0
+	var pick_style := UiKit.skin_card(_pick_col, false, 0.94)
 	pick_style.content_margin_left = 18
 	pick_style.content_margin_right = 18
 	pick_style.content_margin_top = 12
@@ -2628,6 +2662,9 @@ func _refresh_select(state: Dictionary, data: Dictionary) -> void:
 			_pick_summary.add_theme_color_override("font_color", COL_OK)
 	if _pick_confirm_btn != null:
 		_pick_confirm_btn.disabled = not _pick_ready()
+	if _pick_confirm_center != null:
+		_pick_confirm_center.disabled = not _pick_ready()
+		_pick_confirm_center.text = "√  已锁定" if (state.get("picks", {}).has(_self_peer())) else "√  锁定选择"
 	if _auto_start_lab != null:
 		var locked_n := 0
 		for s in data["seats"]:
@@ -2781,6 +2818,8 @@ func _hide_summ_tip() -> void:
 func _sync_pick_ui() -> void:
 	if _pick_confirm_btn != null:
 		_pick_confirm_btn.disabled = not _pick_ready()
+	if _pick_confirm_center != null:
+		_pick_confirm_center.disabled = not _pick_ready()
 	if _pick_summary != null and _sel_hero != "" and _sel_sid != "":
 		_pick_summary.text = "待锁定：%s · %s + %s" % [str(HeroPickData.HERO_ROLE[_sel_hero]), _sel_hero, _sel_summ]
 		_pick_summary.add_theme_color_override("font_color", COL_GOLD)
@@ -3297,6 +3336,15 @@ func _self_peer() -> int:
 	if NetSession.mode == NetSession.Mode.CLIENT:
 		return multiplayer.get_unique_id() if multiplayer != null else 2
 	return 1
+
+
+func _local_camp() -> int:
+	if _role == 0:
+		return 0
+	var r = NetSession.lobby_ready.get(_self_peer(), {})
+	if r is Dictionary:
+		return int(r.get("camp", 0))
+	return 0
 
 
 func _route_battle() -> void:
