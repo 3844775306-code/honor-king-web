@@ -20,6 +20,8 @@ const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")
 const ChatBoxScript = preload("res://scripts/ui/ChatBox.gd")
 const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
+const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
+const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
@@ -1601,39 +1603,18 @@ func _result_rows() -> Array:
 
 
 func _pm_rating(r: Dictionary) -> float:
-	var team: int = int(r.get("team", 0))
-	var mx_k := 1
-	var mx_dmg := 1.0
-	var mx_gold := 1
-	var mx_taken := 1.0
-	var tot_k := 0
-	var mx_d := 1
+	if r.is_empty():
+		return 0.0
+	var team := int(r.get("team", 0))
+	var team_rows: Array = []
 	for o in (_pm_payload.get("rows", []) as Array):
-		if int((o as Dictionary).get("team", -1)) != team:
-			continue
-		mx_k = maxi(mx_k, int(o.get("k", 0)))
-		mx_dmg = maxf(mx_dmg, float(o.get("dmg", 0)))
-		mx_gold = maxi(mx_gold, int(o.get("gold", 0)))
-		mx_taken = maxf(mx_taken, float(o.get("taken", 0)))
-		tot_k += int(o.get("k", 0))
-		mx_d = maxi(mx_d, int(o.get("d", 0)))
-	var kill_score := float(r.get("k", 0)) / float(mx_k) * 100.0
-	var assist_score := float(r.get("a", 0)) / float(maxi(1, tot_k)) * 100.0
-	var death_score := maxf(0.0, 1.0 - float(r.get("d", 0)) / float(maxi(1, mx_d))) * 100.0
-	var gold_score := float(r.get("gold", 0)) / float(mx_gold) * 100.0
-	var dmg_score := float(r.get("dmg", 0)) / mx_dmg * 100.0
-	var taken_score := float(r.get("taken", 0)) / mx_taken * 100.0
-	var part := float(int(r.get("k", 0)) + int(r.get("a", 0))) / float(maxi(1, tot_k)) * 100.0
-	return clampf(kill_score * 0.15 + assist_score * 0.10 + death_score * 0.05
-		+ gold_score * 0.15 + dmg_score * 0.25 + taken_score * 0.10 + part * 0.20, 0.0, 100.0)
+		if int((o as Dictionary).get("team", -1)) == team:
+			team_rows.append(o)
+	return MatchResultScript.rating(r, team_rows)
 
 
 func _pm_medal_by_rating(rr: float) -> int:
-	if rr >= 78.0: return 0
-	if rr >= 64.0: return 1
-	if rr >= 52.0: return 2
-	return -1
-
+	return MatchResultScript.medal_by_rating(rr)
 
 func _row_by_name(nm: String) -> Dictionary:
 	for o in (_pm_payload.get("rows", []) as Array):
@@ -1651,6 +1632,23 @@ func _begin_end_sequence() -> void:
 	_end_started = true
 	_playing = false
 	_end_cam_owned = true
+	# 1) 镜头锁到被摧毁的水晶，播终章爆炸（与单机/联机共用 CrystalFinale）
+	var crys_pos := _finale_crystal_pos(win)
+	var pitch := deg_to_rad(-58.0)
+	var yaw := deg_to_rad(_cam_yaw)
+	var off := Vector3(sin(yaw) * cos(pitch), -sin(pitch), cos(yaw) * cos(pitch)) * 30.0
+	_cam_target = crys_pos
+	_cam.position = crys_pos + off
+	_cam.look_at(crys_pos + Vector3(0, 1.6, 0), Vector3.UP)
+	var fx: Node = CrystalFinaleScript.new()
+	fx.name = "CrystalFinale"
+	add_child(fx)
+	fx.set("on_shake", Callable(self, "_shake"))
+	fx.call("play", crys_pos, win == _me_team)
+	# 2) 5 秒后终局横幅（与单机 tw.tween_interval(5.0) → EndBanner 同节奏）
+	await get_tree().create_timer(5.0).timeout
+	if not is_inside_tree():
+		return
 	# 终局横幅（与单机同款 EndBanner）
 	_banner_layer = CanvasLayer.new()
 	_banner_layer.layer = 200
@@ -1659,6 +1657,21 @@ func _begin_end_sequence() -> void:
 	_banner.won = win == _me_team
 	_banner_layer.add_child(_banner)
 	_banner.finished.connect(_start_postmatch)
+
+
+## 被摧毁水晶的世界坐标（输的一方的水晶；录像里塔坐标是厘米整数）
+func _finale_crystal_pos(win: int) -> Vector3:
+	var loser_team: int = (1 - win) if win == 0 or win == 1 else win
+	for t in _turrets:
+		if not (t is Dictionary):
+			continue
+		if str((t as Dictionary).get("type", "")) != "crystal":
+			continue
+		if int((t as Dictionary).get("team", -1)) != loser_team:
+			continue
+		return Vector3(float((t as Dictionary).get("x", 0)) / 100.0, 0.0,
+			float((t as Dictionary).get("z", 0)) / 100.0)
+	return Vector3(-53, 0, 53) if loser_team == Config.Team.PLAYER else Vector3(53, 0, -53)
 
 
 func _start_postmatch() -> void:
@@ -2867,4 +2880,6 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
+
 

@@ -1,6 +1,8 @@
 class_name ResultsPanel
 extends CanvasLayer
 
+const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
+
 # ==================== 常量 ====================
 # 阵营/强调色统一取 UiKit 色板（保留原变量名，避免各处引用改动）
 var BLUE_TEAM: Color = UiKit.C_TEAM0
@@ -125,7 +127,8 @@ func setup(battle: BattleManager):
 		var bonus := RankSystem.medal_bonus(medal) + (200 if rating > 90.0 else 0)
 		_rank_result = RankSystem.apply_result(Config.is_ally(bm.winner), _self_is_mvp, bonus)
 		_rank_result["medal"] = medal
-		_rank_result["medal_bonus"] = RankSystem.medal_bonus(medal)
+		_rank_result["medal_bonus"] = MatchResultScript.medal_bonus(medal)
+		_rank_result["top_bonus"] = MatchResultScript.top_bonus(rating)
 		_rank_result["top_bonus"] = 200 if rating > 90.0 else 0
 
 	_create_ui()
@@ -743,24 +746,13 @@ func _medal_index(hero: Hero) -> int:
 	if hero == null or not is_instance_valid(hero):
 		return -1
 	var s := _calculate_rating(hero)
-	if s >= 78.0: return 0
-	if s >= 64.0: return 1
-	if s >= 52.0: return 2
-	return -1
+	return MatchResultScript.medal_by_rating(s)
 
 func _medal_name(i: int) -> String:
-	match i:
-		0: return "金牌"
-		1: return "银牌"
-		2: return "铜牌"
-	return ""
+	return MatchResultScript.medal_name(i)
 
 func _medal_color(i: int) -> Color:
-	match i:
-		0: return Color(1.0, 0.84, 0.32)
-		1: return Color(0.86, 0.91, 1.0)
-		2: return Color(0.92, 0.64, 0.38)
-	return Color(0.7, 0.74, 0.84)
+	return MatchResultScript.medal_color(i)
 
 
 # ==================== Tab 2: 数据 ====================
@@ -1084,44 +1076,9 @@ func _find_mvp(heroes: Array) -> Hero:
 	return best
 
 func _calculate_rating(hero: Hero) -> float:
-	var team_heroes = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
-
-	var team_max_kills = 1
-	var team_max_damage = 1.0
-	var team_max_gold = 1
-	var team_max_taken = 1.0
-	var team_total_kills = 0
-	var max_deaths = 1
-
-	for h in team_heroes:
-		if h is Hero:
-			team_max_kills = max(team_max_kills, h.kills)
-			team_max_damage = max(team_max_damage, h.damage_dealt_to_heroes)
-			team_max_gold = max(team_max_gold, h.total_gold_earned)
-			team_max_taken = max(team_max_taken, h.damage_taken_from_heroes)
-			team_total_kills += h.kills
-			max_deaths = max(max_deaths, h.deaths)
-
-	var kill_score = (float(hero.kills) / team_max_kills) * 100.0 if team_max_kills > 0 else 0.0
-	var assist_score = (float(hero.assists) / max(1, team_total_kills)) * 100.0
-	var death_penalty = (1.0 - float(hero.deaths) / max(1, max_deaths)) * 100.0
-	var gold_score = (float(hero.total_gold_earned) / team_max_gold) * 100.0 if team_max_gold > 0 else 0.0
-	var damage_score = (hero.damage_dealt_to_heroes / team_max_damage) * 100.0 if team_max_damage > 0 else 0.0
-	var taken_score = (hero.damage_taken_from_heroes / team_max_taken) * 100.0 if team_max_taken > 0 else 0.0
-	var participation = (float(hero.kills + hero.assists) / max(1, team_total_kills)) * 100.0
-
-	var total = (
-		kill_score * 0.15 +
-		assist_score * 0.10 +
-		max(0, death_penalty) * 0.05 +
-		gold_score * 0.15 +
-		damage_score * 0.25 +
-		taken_score * 0.10 +
-		participation * 0.20
-	)
-
-	return clamp(total, 0.0, 100.0)
-
+	# 三端统一口径：MatchResult（与局内结算/联机/回放同一公式）
+	var team: Array = team_player_heroes if Config.is_ally(hero.team) else team_enemy_heroes
+	return MatchResultScript.rating(hero, team)
 # ==================== 内部类：英雄头像（程序化立绘）====================
 class HeroFace extends Control:
 	var hero_name: String = ""

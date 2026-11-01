@@ -1,4 +1,6 @@
 class_name NetResultPanel extends Control
+
+const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 ## 联机结算页：与单机 ResultsPanel 同版式（总览 / 数据 / 回放 三页签 + 双列英雄卡 + 中央 VS/MVP + 数据表）。
 ## 数据：host game_over 广播 rows（含昵称/总经济/装备/承伤/治疗/控制/推塔/野区/补刀）。
 ## rs 与 host ResultsPanel._ui_scale() 同公式 = clampf(视口宽/2400, 1.0, 1.2) * 1.7。
@@ -518,3 +520,4 @@ func _gui_input(ev: InputEvent) -> void:
 	if not panel.has_point(p):
 		visible = false
 		queue_redraw()
+

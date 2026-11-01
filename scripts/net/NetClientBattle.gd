@@ -19,6 +19,9 @@ const NetRecallScript = preload("res://scripts/net/NetRecall.gd")
 const NetDeathRecapScript = preload("res://scripts/net/NetDeathRecap.gd")
 const NetResultPanelScript = preload("res://scripts/net/NetResultPanel.gd")
 const PostMatchViewScript = preload("res://scripts/ui/PostMatchView.gd")
+const EndBannerScript = preload("res://scripts/ui/EndBanner.gd")
+const CrystalFinaleScript = preload("res://scripts/fx/CrystalFinale.gd")
+const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
@@ -3885,11 +3888,47 @@ func _build_result_panel() -> void:
 	cl.add_child(_go)
 	_go.defer = true   # 先播终局演出，播完再显示结算页
 
-# ==================== 终局演出（与单机 BattleManager._enter_post_match 同款） ====================
+# ==================== 终局演出（与单机 BattleManager._play_end_sequence 同一节奏） ====================
+# 水晶爆炸（共享 CrystalFinale）→ 5 秒 → EndBanner → 聚光灯舞台 → 个人表现 → 结算页
+var _finale_started := false
+
 func _on_net_game_over(p: Dictionary) -> void:
-	if _pm_started:
+	if _pm_started or _finale_started:
 		return
-	_start_post_match(p)
+	_finale_started = true
+	var won: bool = int(p.get("winner", -1)) == Config.player_team
+	var own_team: int = int(_manifest.get("team", TEAM_PLAYER))
+	var loser_team: int = (1 - own_team) if own_team == 0 else (1 - own_team)
+	var crys_pos := Vector3(-53, 0, 53) if loser_team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	for v in _views.values():
+		if str(v.get("name", "")) == "crystal" and v.get("node") != null and is_instance_valid(v.get("node")):
+			crys_pos = (v.get("node") as Node3D).global_position
+			break
+	# 1) 镜头先锁到水晶，再暂停世界（暂停后 _update_camera 不再跑，机位就停在爆炸点）
+	_cam_focus = crys_pos
+	_update_camera()
+	# 2) 终章爆炸：与单机/回放同一份实现
+	var fx: Node = CrystalFinaleScript.new()
+	fx.name = "CrystalFinale"
+	add_child(fx)
+	fx.set("on_shake", Callable(self, "_camera_shake"))
+	fx.set("on_flash", Callable(self, "_screen_flash"))
+	fx.call("play", crys_pos, won)
+	# 3) 5 秒后终局横幅（与单机 tw.tween_interval(5.0) → EndBanner 同节奏），横幅结束进聚光灯舞台
+	await get_tree().create_timer(5.0).timeout
+	if not is_inside_tree():
+		return
+	var banner: Control = EndBannerScript.new()
+	banner.name = "EndBanner"
+	banner.set("won", won)
+	var bl := CanvasLayer.new()
+	bl.layer = 200
+	add_child(bl)
+	bl.add_child(banner)
+	banner.finished.connect(func() -> void:
+		if is_instance_valid(bl):
+			bl.queue_free()
+		_start_post_match(p))
 
 
 func _rows_of(p: Dictionary) -> Array:
@@ -4111,35 +4150,16 @@ func _pm_medal(row: Dictionary) -> int:
 	return -1
 
 
-# 与 host BattleManager._pm_rating 完全同权重的队伍内归一化评分
+# 三端统一口径：评分/奖牌都委托 MatchResult（不要在这里再写第二份公式）
 func _pm_rating(r: Dictionary) -> float:
-	var mx_k := 1
-	var mx_dmg := 1.0
-	var mx_gold := 1
-	var mx_taken := 1.0
-	var tot_k := 0
-	var mx_d := 1
-	var team: int = int(r.get("team", 0))
+	if r.is_empty():
+		return 0.0
+	var team := int(r.get("team", 0))
+	var team_rows: Array = []
 	for o in _rows_of(_pm_payload):
-		if int((o as Dictionary).get("team", -1)) != team:
-			continue
-		mx_k = maxi(mx_k, int(o.get("k", 0)))
-		mx_dmg = maxf(mx_dmg, float(o.get("dmg", 0)))
-		mx_gold = maxi(mx_gold, int(o.get("gold", 0)))
-		mx_taken = maxf(mx_taken, float(o.get("taken", 0)))
-		tot_k += int(o.get("k", 0))
-		mx_d = maxi(mx_d, int(o.get("d", 0)))
-	# host：击杀 .15 / 助攻 .10 / 死亡 .05 / 经济 .15 / 输出 .25 / 承伤 .10 / 参与 .20
-	var kill_score := float(r.get("k", 0)) / float(mx_k) * 100.0
-	var assist_score := float(r.get("a", 0)) / float(maxi(1, tot_k)) * 100.0
-	var death_score := maxf(0.0, 1.0 - float(r.get("d", 0)) / float(maxi(1, mx_d))) * 100.0
-	var gold_score := float(r.get("gold", 0)) / float(mx_gold) * 100.0
-	var dmg_score := float(r.get("dmg", 0)) / mx_dmg * 100.0
-	var taken_score := float(r.get("taken", 0)) / mx_taken * 100.0
-	var part := float(int(r.get("k", 0)) + int(r.get("a", 0))) / float(maxi(1, tot_k)) * 100.0
-	return clampf(kill_score * 0.15 + assist_score * 0.10 + death_score * 0.05
-		+ gold_score * 0.15 + dmg_score * 0.25 + taken_score * 0.10 + part * 0.20, 0.0, 100.0)
-
+		if int((o as Dictionary).get("team", -1)) == team:
+			team_rows.append(o)
+	return MatchResultScript.rating(r, team_rows)
 
 func _row_by_name(nm: String) -> Dictionary:
 	for o in _rows_of(_pm_payload):
@@ -4149,13 +4169,7 @@ func _row_by_name(nm: String) -> Dictionary:
 
 
 func _pm_medal_by_rating(rr: float) -> int:
-	if rr >= 78.0:
-		return 0
-	if rr >= 64.0:
-		return 1
-	if rr >= 52.0:
-		return 2
-	return -1
+	return MatchResultScript.medal_by_rating(rr)
 
 
 func _on_pm_advance() -> void:
@@ -5785,3 +5799,5 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
+
