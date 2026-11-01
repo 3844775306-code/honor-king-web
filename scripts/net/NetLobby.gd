@@ -586,6 +586,9 @@ func _show_menu() -> void:
 	conn.add_child(port_edit)
 	_ip_edit = ip_edit
 	_port_edit = port_edit
+	# iOS/移动端：标准 LineEdit 触摸可能不弹系统键盘，绑定兜底输入
+	UiKit.bind_mobile_text_edit(ip_edit, "主机 IP（如 192.168.1.10）")
+	UiKit.bind_mobile_text_edit(port_edit, "房间端口（默认 7000）")
 
 	# 功能按钮拆成两行两列：原来 4 个挤一行，最小宽度会把右栏撑出屏幕
 	var act_row1 := HBoxContainer.new()
@@ -973,6 +976,7 @@ func _cloud_edit_row(label_txt: String, placeholder: String, value: String, secr
 	edit.add_theme_font_override("font", UiKit.font())
 	edit.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	edit.name = "edit"
+	UiKit.bind_mobile_text_edit(edit, label_txt)
 	row.add_child(edit)
 	return row
 

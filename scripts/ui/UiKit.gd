@@ -523,6 +523,29 @@ func damage_number_size(damage: float, is_crit: bool = false) -> int:
 	return clampi(int(round(px)), 16, 80)
 
 
+## 移动端输入：iOS 上 LineEdit 触摸不弹键盘时，Web 用 window.prompt 兜底，原生用显式虚拟键盘
+static func bind_mobile_text_edit(le: LineEdit, title: String = "请输入") -> void:
+	if le == null:
+		return
+	le.set("virtual_keyboard_enabled", true)
+	le.gui_input.connect(func(ev: InputEvent) -> void:
+		if not (ev is InputEventScreenTouch) or not (ev as InputEventScreenTouch).pressed:
+			return
+		if OS.has_feature("web"):
+			var res = JavaScriptBridge.eval("window.prompt(%s, %s)" % [
+				JSON.stringify(title), JSON.stringify(str(le.text))], true)
+			if res != null:
+				le.text = str(res).strip_edges()
+				le.caret_column = le.text.length()
+				le.accept_event()
+				return
+		# 原生 / prompt 不可用：聚焦并显式唤起虚拟键盘
+		le.grab_focus()
+		DisplayServer.virtual_keyboard_show(le.text)
+		le.accept_event()
+	)
+
+
 ## 安全区内缩（虚拟像素，Vector4: left/top/right/bottom）。
 ## 仅在移动端生效；桌面返回全 0，避免 Windows 上 safe_area 是整块屏幕导致误缩。
 func safe_insets() -> Vector4:
