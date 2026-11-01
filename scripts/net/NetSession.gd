@@ -1322,6 +1322,13 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 				continue
 			if ent is Hero or ent is Minion or ent is Turret:
 				sources.append(ent)
+		# 死亡视野残留：塔 2 秒 / 小兵 1 秒，按查看方阵营取 host 的计时
+		if bm.has_method("get_dead_visions"):
+			for d in bm.get_dead_visions(viewer):
+				sources.append({
+					"pos": d.get("pos", Vector3.ZERO),
+					"r": 18.0 if str(d.get("kind", "")) == "turret" else 9.0,
+				})
 
 	var heroes: Array = []
 	for e in get_tree().get_nodes_in_group("heroes"):
@@ -1476,7 +1483,14 @@ func _turret_in_vision(t: Node, sources: Array) -> bool:
 
 func _pos_in_vision(p: Vector3, sources: Array) -> bool:
 	for src in sources:
-		if p.distance_to(src.global_position) <= 18.0:
+		var sp: Vector3
+		var rr := 18.0
+		if src is Dictionary:
+			sp = src.get("pos", Vector3.ZERO)
+			rr = float(src.get("r", 18.0))
+		else:
+			sp = src.global_position
+		if p.distance_to(sp) <= rr:
 			return true
 	return false
 

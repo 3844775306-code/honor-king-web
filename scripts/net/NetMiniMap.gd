@@ -27,6 +27,7 @@ const NET_JUNGLE := 3
 
 var player_team := TEAM_PLAYER
 var views := {}              # net_id -> view（NetClientBattle 每帧整体替换引用）
+var residual_vision: Array = []   # 死亡视野残留 [{pos, r, until}，塔2s/小兵1s]
 var vision_rows: Array = []  # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 var self_net := -1
 var own_recalling := 0       # 自己英雄回城中（画回城黄线）
@@ -543,9 +544,6 @@ func _fog_sources() -> Array:
 			continue
 		if float(v.get("hp", 0.0)) <= 0.0:
 			continue
-		# 倒塌中的塔保留视图节点播动画，但绝不能再当视野源（否则塔毁后 2 秒仍亮一片）
-		if bool(v.get("dying", false)):
-			continue
 		var r := 16.0
 		if typ == NET_MINION:
 			r = 9.0
@@ -555,6 +553,10 @@ func _fog_sources() -> Array:
 	for row in vision_rows:
 		if int(row[3]) == 1:
 			out.append({"p": Vector3(float(row[1]), 0.0, float(row[2])), "r": 20.0})
+	var now := Time.get_ticks_msec() * 0.001
+	for d in residual_vision:
+		if float(d.get("until", 0.0)) > now:
+			out.append({"p": d.get("pos", Vector3.ZERO), "r": float(d.get("r", 9.0))})
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	return out
 

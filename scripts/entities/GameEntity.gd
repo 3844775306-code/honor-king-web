@@ -808,11 +808,8 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		wangzhaojun_combat_timer = 5.0
 	if source and source is Hero and source.display_name == "王昭君":
 		source.wangzhaojun_combat_timer = 5.0
-	# 攻击暴露视野：攻击者与被攻击者互相暴露2秒。
-	# 防御塔参与的战斗不挂 2 秒暴露：塔自身视野已经覆盖其射程，塔被摧毁后若攻击者/目标
-	# 仍带 expose 计时，会额外残留 2 秒视野（客户端尤其明显）。
-	if not source is JungleMonster and not self is JungleMonster \
-			and not source is Turret and not self is Turret:
+	# 攻击暴露视野：攻击者与被攻击者互相暴露2秒
+	if not source is JungleMonster and not self is JungleMonster:
 		source.vision_expose_timer = 2.0
 		vision_expose_timer = 2.0
 	# 李元芳被动·密探谛听：命中任意单位 → 以受害者为中心暴露草丛中敌方英雄1秒(每个英雄8s CD)
@@ -1398,6 +1395,12 @@ func die(killer):
 	_nav_index = 0
 	_nav_target = Vector3.ZERO
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	# 死亡视野残留：防御塔 2 秒、小兵 1 秒（单机/联机 host 共用同一份计时）
+	if bm != null:
+		if self is Turret:
+			bm.register_dead_vision("turret", team, global_position)
+		elif self is Minion:
+			bm.register_dead_vision("minion", team, global_position)
 	if (self is Minion or JungleMonster) :
 		bm.distribute_experience(self,killer)
 		bm.distribute_gold(self,killer)

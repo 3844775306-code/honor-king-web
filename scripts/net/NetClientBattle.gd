@@ -198,6 +198,7 @@ var _rtime := -1.0        # 渲染插值时钟（游戏秒）：收到首个快�
                           # 相邻两个快照样本之间逐帧匀速扫过，杜绝 15Hz 离散目标"追赶→被拽走"的一顿一顿
 
 var _views := {}          # net_id -> {node, type, team, name, hp, maxhp, bar_off, target, set}
+var _residual_vision: Array = []   # 死亡视野残留 [{pos,r,until}]：塔2s / 小兵1s
 var _vision_views := {}   # iid -> VisionSpirit（联机客户端表现副本）
 var _tower_locks := {}      # 防御塔锁定光束：key(塔位) -> {mesh, from, to, cur, t}
 var _map_applied := false
@@ -541,6 +542,7 @@ func _process(delta: float) -> void:
 		_mm.player_team = Config.player_team
 		_mm.self_net = _self_net
 		_mm.views = _views
+		_mm.residual_vision = _prune_residual_vision()
 		_mm.active = _owned and _state == 1 and not _first_person
 		_mm.obj = _obj
 		_mm.jg = _jg
@@ -800,6 +802,8 @@ func _on_snapshot(snap: Array) -> void:
 					# 与单机 TurretWreck 同款的灰色残骸减速环（客户端只复刻视觉，减速仍由 host 结算）
 					if str(v.get("name", "")) != "crystal":
 						_spawn_tower_wreck_visual(v.node.global_position, int(v.team))
+					if int(v.team) == int(Config.player_team):
+						_add_residual_vision(v.node.global_position, 18.0, 2.0)
 					v.dying_until = Time.get_ticks_msec() + 2400
 			elif ent.size() > 8:
 				v.lyf = ent[8]
@@ -832,6 +836,11 @@ func _on_snapshot(snap: Array) -> void:
 			var v: Dictionary = _views[nid]
 			if now_ms < int(v.get("dying_until", 0)):
 				continue
+			# 己方小兵死亡后保留 1 秒原位置视野（塔由倒塌分支单独记 2 秒）
+			if int(v.get("type", -1)) == NET_MINION and int(v.get("team", -1)) == int(Config.player_team):
+				var mp = v.get("target", null)
+				if mp is Vector3:
+					_add_residual_vision(mp, 9.0, 1.0)
 			if v.node != null and is_instance_valid(v.node):
 				v.node.queue_free()
 			_views.erase(nid)
@@ -965,6 +974,23 @@ func _mm_global_bullet_rows() -> Array:
 		out.append([Vector3(float(b.x), float(b.y), float(b.z)),
 			Vector3(float(b.vx), 0.0, float(b.vz)), gs])
 	return out
+
+
+func _add_residual_vision(pos: Vector3, radius: float, life: float) -> void:
+	_residual_vision.append({
+		"pos": Vector3(pos.x, 0.0, pos.z), "r": radius,
+		"until": Time.get_ticks_msec() * 0.001 + life,
+	})
+
+
+func _prune_residual_vision() -> Array:
+	var now := Time.get_ticks_msec() * 0.001
+	var keep: Array = []
+	for d in _residual_vision:
+		if float(d.get("until", 0.0)) > now:
+			keep.append(d)
+	_residual_vision = keep
+	return _residual_vision
 
 
 func _spawn_tower_wreck_visual(pos: Vector3, team: int) -> void:

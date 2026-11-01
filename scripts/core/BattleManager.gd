@@ -5817,6 +5817,35 @@ func _seen_by_vision_spirit(pos: Vector3, spirits: Array) -> bool:
 
 # ---- vision update: enemy entities visible only within friendly vision ----
 var _vision_timer: float = 0.0
+# 死亡视野残留：防御塔倒后 2 秒、小兵死后 1 秒仍提供原半径视野（单机/联机 host 共用）
+var _dead_visions: Array = []
+
+func register_dead_vision(kind: String, team: int, pos: Vector3) -> void:
+	var life: float = 2.0 if kind == "turret" else 1.0
+	_dead_visions.append({
+		"kind": kind, "team": int(team), "pos": pos,
+		"until": Time.get_ticks_msec() * 0.001 + life,
+	})
+
+func get_dead_visions(team: int = -1) -> Array:
+	var now := Time.get_ticks_msec() * 0.001
+	var out: Array = []
+	var keep: Array = []
+	for d in _dead_visions:
+		if float(d.get("until", 0.0)) <= now:
+			continue
+		keep.append(d)
+		if team < 0 or int(d.get("team", -1)) == team:
+			out.append(d)
+	_dead_visions = keep
+	return out
+
+func _seen_by_dead_vision(pos: Vector3, team: int) -> bool:
+	for d in get_dead_visions(team):
+		var vr: float = 10.0 if str(d.get("kind", "")) == "turret" else 8.0
+		if (d.get("pos") as Vector3).distance_to(pos) <= vr:
+			return true
+	return false
 
 func _update_vision(delta: float) -> void:
 	_vision_timer -= delta
@@ -5871,6 +5900,8 @@ func _update_vision(delta: float) -> void:
 				in_vision = true
 				break
 		if not in_vision:
+			in_vision = _seen_by_dead_vision(entity.global_position, player_team)
+		if not in_vision:
 			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision
 
@@ -5904,6 +5935,8 @@ func _update_vision(delta: float) -> void:
 			if src.global_position.distance_to(entity.global_position) <= vr:
 				in_vision = true
 				break
+		if not in_vision:
+			in_vision = _seen_by_dead_vision(entity.global_position, player_team)
 		if not in_vision:
 			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision
@@ -5952,6 +5985,8 @@ func _update_vision(delta: float) -> void:
 			if src.global_position.distance_to(entity.global_position) <= vr:
 				in_vision = true
 				break
+		if not in_vision:
+			in_vision = _seen_by_dead_vision(entity.global_position, player_team)
 		if not in_vision:
 			in_vision = _seen_by_vision_spirit(entity.global_position, spirit_sources)
 		entity.visible = in_vision

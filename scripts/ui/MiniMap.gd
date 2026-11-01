@@ -651,6 +651,10 @@ func _fog_sources() -> Array:
 		for s in battle.get_tree().get_nodes_in_group("vision_spirits"):
 			if is_instance_valid(s) and s.team == player_team and s.vision_active:
 				out.append({"p": s.global_position, "r": 20.0})
+		if battle.has_method("get_dead_visions"):
+			for d in battle.get_dead_visions(player_team):
+				out.append({"p": d.get("pos", Vector3.ZERO),
+					"r": 18.0 if str(d.get("kind", "")) == "turret" else 9.0})
 	out.append({"p": Vector3(-58.0, 0.0, 58.0), "r": 24.0})
 	out.append({"p": Vector3(-53.0, 0.0, 53.0), "r": 18.0})
 	return out
