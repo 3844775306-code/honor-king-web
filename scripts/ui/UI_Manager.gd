@@ -2138,15 +2138,23 @@ func _settings_label(txt: String, size: int, col: Color) -> Label:
 	l.add_theme_color_override("font_color", col)
 	return l
 
+var settings_layer: CanvasLayer = null
+
 func _open_settings() -> void:
 	if settings_panel != null and is_instance_valid(settings_panel):
 		settings_panel.visible = true
 		return
 	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	# 设置面板必须高于触控层(100)/死亡回放(105)：之前挂在 UI_Manager 本层(20)会被上层触控按钮抢点击
+	if settings_layer == null or not is_instance_valid(settings_layer):
+		settings_layer = CanvasLayer.new()
+		settings_layer.name = "SettingsLayer"
+		settings_layer.layer = 300
+		add_child(settings_layer)
 	settings_panel = Control.new()
 	settings_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(settings_panel)
+	settings_layer.add_child(settings_panel)
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.55)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

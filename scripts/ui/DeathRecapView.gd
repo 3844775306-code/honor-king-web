@@ -23,6 +23,7 @@ const C_PANEL_BG := Color(0.045, 0.055, 0.085, 0.97)
 
 var data: Dictionary = {}
 var card_h := 640.0
+var _close_btn: Button = null   # 真实 Button 接管 × 点击（自定义 _gui_input 在桌面模拟触摸下可能收不到 Mouse 事件）
 var _tick_acc := 0.0
 var _expanded := -1          # 当前展开的伤害来源行（-1=未展开）
 var _hit_page := 0           # 展开列表页码（最近一次伤害在前）
@@ -31,6 +32,14 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 	set_process(false)
+	_close_btn = Button.new()
+	_close_btn.name = "CloseBtn"
+	_close_btn.flat = true
+	_close_btn.focus_mode = Control.FOCUS_NONE
+	_close_btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_close_btn.add_theme_color_override("font_color", Color(0.82, 0.88, 1.0, 0.95))
+	_close_btn.pressed.connect(_close_by_user)
+	add_child(_close_btn)
 
 func set_data(d: Dictionary) -> void:
 	data = d
@@ -39,6 +48,7 @@ func set_data(d: Dictionary) -> void:
 	card_h = maxf(float(_layout()["h"]), CARD_H_MIN)
 	var s := _s()
 	size = Vector2(CARD_W * s, card_h * s)
+	_place_close_btn()
 	visible = true
 	set_process(true)
 	UiKit.show_panel(self, 0.16)
@@ -107,6 +117,7 @@ func _resize_keep_top() -> void:
 	var top_left := global_position.round()
 	card_h = maxf(float(_layout()["h"]), CARD_H_MIN)
 	size = Vector2(CARD_W * s, card_h * s)
+	_place_close_btn()
 	var vp := get_viewport().get_visible_rect().size
 	var max_y := maxf(8.0, vp.y - 8.0 - size.y)
 	top_left.y = clampf(top_left.y, 8.0, max_y)
@@ -384,6 +395,23 @@ func _divider(y: float) -> void:
 func _label(x: float, baseline: float, txt: String, fs: int, col: Color) -> void:
 	UiKit.text(self, Vector2(x, baseline), txt, _font(fs), col)
 
+func _place_close_btn() -> void:
+	if _close_btn == null:
+		return
+	var s := _s()
+	var r := _close_rect()
+	_close_btn.position = r.position * s
+	_close_btn.size = r.size * s
+	_close_btn.add_theme_font_size_override("font_size", int(round(20.0 * s)))
+
+
+func _close_by_user() -> void:
+	closed_by_user.emit()
+	UiKit.hide_panel(self, 0.10)
+	visible = false
+	set_process(false)
+
+
 func _close_rect() -> Rect2:
 	return Rect2(CARD_W - 44.0, 10.0, 30.0, 26.0)
 
@@ -408,10 +436,7 @@ func _gui_input(ev: InputEvent) -> void:
 	var p: Vector2 = (ev as InputEventMouse).position / _s() if ev is InputEventMouse \
 		else (ev as InputEventScreenTouch).position / _s()
 	if _close_rect().has_point(p):
-		closed_by_user.emit()
-		UiKit.hide_panel(self, 0.10)
-		visible = false
-		set_process(false)
+		_close_by_user()
 		accept_event()
 		return
 	# 展开区翻页

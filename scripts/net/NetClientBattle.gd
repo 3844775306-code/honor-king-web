@@ -4093,6 +4093,15 @@ func _build_settings() -> void:
 		if _pad != null:
 			_pad.enter_layout_edit())
 	v.add_child(lay_btn)
+	# 关闭按钮（此前联机设置只能再点齿轮关闭，补一个显式关闭）
+	var close_btn := Button.new()
+	close_btn.text = "关闭"
+	close_btn.custom_minimum_size = Vector2(0, 48)
+	for st3 in ["normal", "hover", "pressed"]:
+		close_btn.add_theme_stylebox_override(st3, UiKit.skin_button(st3, UiKit.C_TEAM0, false))
+	close_btn.add_theme_font_size_override("font_size", 22)
+	close_btn.pressed.connect(func(): _set_panel.visible = false)
+	v.add_child(close_btn)
 
 
 func _toggle_settings() -> void:
