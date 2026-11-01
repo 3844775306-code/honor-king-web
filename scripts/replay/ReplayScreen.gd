@@ -6,6 +6,8 @@ const Repo = preload("res://scripts/core/ReplayRecorder.gd")
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const HeroArt = preload("res://scripts/ui/HeroArt.gd")
 const WorldBarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
+const DeathRecapViewScript = preload("res://scripts/ui/DeathRecapView.gd")
+const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -50,6 +52,13 @@ var _world: Node3D = null
 var _hud_layer: CanvasLayer = null
 var _hud_root: Control = null
 var _bars: Control = null
+var _dr_view = null
+var _dr_layer: CanvasLayer = null
+var _buff_frames: Array = []
+var _buff_defs: Dictionary = {}
+var _buff_ptr := 0
+var _buff_view = null
+var _buff_sig := ""
 var _hero_uis: Array = []          # [{info, fake, i}]
 var _hero_state: Array = []        # 每帧英雄状态（血/蓝/等级/经验/位置）
 var _unit_world: Array = []        # 本帧需要画血条的单位（世界坐标）
@@ -115,6 +124,8 @@ func _ready() -> void:
 	_jungle_meta = _doc.get("jungle_meta", [])
 	_bullets = _doc.get("bullets", [])
 	_popups_data = _doc.get("popups", [])
+	_buff_frames = _doc.get("buff_frames", [])
+	_buff_defs = _doc.get("buff_defs", {})
 	# 飘字/音效并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
 	var _combined: Array = (_doc.get("events", []) as Array).duplicate()
 	_combined.append_array(_popups_data)
@@ -352,6 +363,13 @@ func _build_hud() -> void:
 		_hero_uis.append({"info": info, "fake": fake})
 	_hud2 = ReplayHudScript.new()
 	_hud_root.add_child(_hud2)
+	# 回放 BUFF 图标行：复用联机客户端同一份 NetBuffRow（数据来自录制 buff_frames）
+	var bcl := CanvasLayer.new()
+	bcl.layer = UiKit.LAYER_HUD + 40
+	add_child(bcl)
+	_buff_view = NetBuffRowScript.new()
+	bcl.add_child(_buff_view)
+	_buff_view.refresh({})
 
 
 func _update_world_hud(t: float) -> void:
@@ -548,6 +566,7 @@ func _update_world_hud(t: float) -> void:
 			"feed": feed_st, "objectives": obj_st,
 		}
 		_hud2.queue_redraw()
+		_update_buff_row()
 
 
 func _build_ui() -> void:
@@ -1166,6 +1185,90 @@ func _apply_markers(fake: Hero, txt: String) -> void:
 
 
 ## PostFX：跟随英雄的受击红晕 / 低血红屏 / 阵亡灰屏（与对局同源）
+## 回放死亡回放面板：跟随英雄阵亡时弹出，复活自动收起（同 host 自动展示）
+func _show_death_recap(d) -> void:
+	if not (d is Dictionary) or (d as Dictionary).is_empty():
+		return
+	if _dr_layer == null:
+		_dr_layer = CanvasLayer.new()
+		_dr_layer.layer = 141
+		add_child(_dr_layer)
+		_dr_view = DeathRecapViewScript.new()
+		_dr_layer.add_child(_dr_view)
+		_dr_view.closed_by_user.connect(func():
+			if _dr_view != null:
+				_dr_view.visible = false)
+	_dr_view.set_data(_json_unsafe(d))
+
+
+func _json_unsafe(v):
+	if v is Dictionary:
+		var d: Dictionary = v as Dictionary
+		if d.has("__c") and d["__c"] is Array and (d["__c"] as Array).size() >= 3:
+			var ca: Array = d["__c"]
+			return Color(float(ca[0]), float(ca[1]), float(ca[2]), float(ca[3]) if ca.size() > 3 else 1.0)
+		if d.has("__v2") and d["__v2"] is Array:
+			var v2: Array = d["__v2"]
+			return Vector2(float(v2[0]), float(v2[1]))
+		if d.has("__v3") and d["__v3"] is Array:
+			var v3: Array = d["__v3"]
+			return Vector3(float(v3[0]), float(v3[1]), float(v3[2]))
+		var out: Dictionary = {}
+		for k in d.keys():
+			out[k] = _json_unsafe(d[k])
+		return out
+	if v is Array:
+		var arr: Array = []
+		for it in v:
+			arr.append(_json_unsafe(it))
+		return arr
+	return v
+
+
+## 回放 BUFF 图标行：找最近一次 ≤t 的采样，按剩余时间回推，喂给 NetBuffRow（与联机同一份绘制）
+func _update_buff_row() -> void:
+	if _buff_view == null or _buff_frames.is_empty():
+		return
+	var fi: int = int(_follow_hero)
+	if fi < 0:
+		if _buff_sig != "":
+			_buff_view.refresh({})
+			_buff_sig = ""
+		return
+	var t_ms: int = int(round(_t * 1000.0))
+	while _buff_ptr + 1 < _buff_frames.size() and int(_buff_frames[_buff_ptr + 1].get("t", 0)) <= t_ms:
+		_buff_ptr += 1
+	if int(_buff_frames[_buff_ptr].get("t", 0)) > t_ms and _buff_ptr > 0:
+		_buff_ptr -= 1
+	var fr: Dictionary = _buff_frames[_buff_ptr]
+	var elapsed: float = maxf(0.0, (t_ms - int(fr.get("t", 0))) / 1000.0)
+	var top: Array = []
+	var bot: Array = []
+	for ent in (fr.get("b", []) as Array):
+		if int((ent as Array)[0]) != fi:
+			continue
+		for tier in [0, 1]:
+			var dst: Array = top if tier == 0 else bot
+			for row in ((ent as Array)[1 + tier] as Array):
+				var key := str((row as Array)[0])
+				var def: Array = _buff_defs.get(key, [])
+				if def.is_empty():
+					continue
+				var rem: float = maxf(0.0, float((row as Array)[1]) / 1000.0 - elapsed)
+				var tot: float = maxf(0.001, float((row as Array)[2]) / 1000.0)
+				dst.append([key, str(def[0]), def[1], str(def[2]), str(def[3]), rem, tot, false, str((row as Array)[3])])
+	if top.is_empty() and bot.is_empty():
+		if _buff_sig != "":
+			_buff_view.refresh({})
+			_buff_sig = ""
+		return
+	var sig := "%d|%d" % [fi, int(ceil(_t))]
+	if sig == _buff_sig:
+		return
+	_buff_sig = sig
+	_buff_view.refresh({"top": top, "bot": bot})
+
+
 func _update_postfx(delta: float) -> void:
 	if _follow_hero < 0 or _follow_hero >= _hero_state.size():
 		return
@@ -1177,6 +1280,8 @@ func _update_postfx(delta: float) -> void:
 		PostFX.set_low_hp(0.0)
 		return
 	PostFX.set_dead(false)
+	if _dr_view != null and _dr_view.visible:
+		_dr_view.visible = false   # 复活：收起死亡回放（同 host 复活自动关闭）
 	var mx: float = maxf(1.0, float(st.get("mx", 1.0)))
 	PostFX.set_low_hp(clampf((float(st.get("hp", 0.0)) + float(st.get("shield", 0.0))) / mx, 0.0, 1.0))
 
@@ -1572,6 +1677,11 @@ func _push_event(ev: Dictionary) -> void:
 					SfxManager.play_announce(key, false)
 				else:
 					SfxManager.call("_play_sfx", key, float(ev.get("v", 0.0)))
+		return
+	if kind0 == "dr":
+		var hi_dr := int(ev.get("a", -1))
+		if _playing and _follow_hero == hi_dr:
+			_show_death_recap(ev.get("d", {}))
 		return
 	if kind0 == "item":
 		var evt5: float = float(ev.get("t", 0)) / 1000.0

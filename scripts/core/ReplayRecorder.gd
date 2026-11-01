@@ -4,6 +4,8 @@ extends Node
 ## 创建：BattleManager._create_player_hero() 里 ReplayScript.ensure(self)
 
 const GROUP := "replay_recorder"
+const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
+
 const DIR := "user://replays"
 const DEV_DIR := "res://replays"          # user:// 不可写时（沙箱/只读环境）退到工程目录
 const INDEX_PATH := "user://replays/index.json"
@@ -47,6 +49,9 @@ const POPUP_MAX := 30000
 var _last_kills: Array = []
 var _last_levels: Array = []
 var _last_deaths: Array = []
+var _buff_frames: Array = []      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
+var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
+var _sample_n := 0
 var _last_turrets_alive := -1
 var _last_crystal := -1
 var _finished := false
@@ -224,8 +229,39 @@ func _sample(delta: float, finishing: bool) -> void:
 				_last_kills[idx] = int(h.kills)
 			if int(h.deaths) > int(_last_deaths[idx]):
 				_events.append({"t": t_ms, "k": "d", "a": int(idx)})
+				# 回放死亡回放面板：抓死亡瞬间的近 7 秒承伤聚合（与 host DeathRecapView 同一份构建）
+				var _drp = DeathRecapView.build(h, bm)
+				if _drp is Dictionary and not (_drp as Dictionary).is_empty():
+					_events.append({"t": t_ms, "k": "dr", "a": int(idx), "d": _json_safe(_drp)})
 				_last_deaths[idx] = int(h.deaths)
 	# 子弹（普攻/直线技能弹道）：10Hz 采样，回放里插值移动
+	# BUFF 图标行：2Hz 采样（仅记录有 buff 的英雄；定义去重进 _buff_defs）
+	_sample_n += 1
+	if _sample_n % 2 == 0:
+		var bents: Array = []
+		for hb in get_tree().get_nodes_in_group("heroes"):
+			if not (hb is Hero):
+				continue
+			var hidx = _hero_ids.get(hb.get_instance_id())
+			if hidx == null:
+				continue
+			var rows = UiManager.collect_buff_rows(hb)
+			var top: Array = []
+			var bot: Array = []
+			for tier in ["top", "bot"]:
+				var dst: Array = top if tier == "top" else bot
+				for c in rows[tier]:
+					var key := str(c["key"])
+					if not _buff_defs.has(key):
+						var tint: Color = c["tint"]
+						_buff_defs[key] = [str(c["glyph"]), [tint.r, tint.g, tint.b],
+							str(c["name"]), str(c["desc"])]
+					dst.append([key, int(round(float(c["remaining"]) * 1000.0)),
+						int(round(float(c["total"]) * 1000.0)), str(c["sub"])])
+			if not top.is_empty() or not bot.is_empty():
+				bents.append([int(hidx), top, bot])
+		if not bents.is_empty():
+			_buff_frames.append({"t": t_ms, "b": bents})
 	var brows: Array = []
 	for b in get_tree().get_nodes_in_group("projectiles"):
 		if not is_instance_valid(b):
@@ -499,6 +535,27 @@ func _crystal_alive() -> int:
 	return n
 
 
+## 把 payload 里的 Color / Vector 转成 JSON 可存结构（回放文件是 JSON）
+func _json_safe(v):
+	if v is Color:
+		return {"__c": [v.r, v.g, v.b, v.a]}
+	if v is Vector2:
+		return {"__v2": [v.x, v.y]}
+	if v is Vector3:
+		return {"__v3": [v.x, v.y, v.z]}
+	if v is Array:
+		var arr: Array = []
+		for it in v:
+			arr.append(_json_safe(it))
+		return arr
+	if v is Dictionary:
+		var d: Dictionary = {}
+		for k in v.keys():
+			d[str(k)] = _json_safe(v[k])
+		return d
+	return v
+
+
 func _save() -> void:
 	_saved = true
 	if _frames.size() < 20:
@@ -541,6 +598,8 @@ func _save() -> void:
 		"jungle_meta": _jungle_meta,
 		"map": _map_meta,
 		"events": _events,
+		"buff_frames": _buff_frames,
+		"buff_defs": _buff_defs,
 	}
 	var f := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:
