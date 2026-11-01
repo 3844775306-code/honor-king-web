@@ -325,6 +325,14 @@ func _draw_roster() -> void:
 		var kda := "K/D/A %d/%d/%d" % [int(h.get("k", 0)), int(h.get("d", 0)), int(h.get("a", 0))]
 		UiKit.text(self, Vector2(row.position.x + 190.0 * _s, row.position.y + 20.0 * _s), kda,
 			int(round(13.0 * _s)), Color(0.78, 0.84, 0.94))
+		# 阵亡：头像上盖复活倒计时（与对局复活读秒一致）
+		if int(h.get("alive", 1)) == 0:
+			var rv: float = float(h.get("revive", 0.0))
+			draw_circle(pc, pr + 2.0 * _s, Color(0.02, 0.03, 0.06, 0.72))
+			draw_arc(pc, pr + 2.0 * _s, -PI * 0.5, -PI * 0.5 + TAU * clampf(rv / 10.0, 0.0, 1.0),
+				28, Color(1.0, 0.85, 0.35, 0.95), 2.6 * _s, true)
+			UiKit.text(self, pc + Vector2(-pr, 7.0 * _s), "%d" % int(ceil(rv)), int(round(22.0 * _s)),
+				Color(1.0, 0.95, 0.85), HORIZONTAL_ALIGNMENT_CENTER, pr * 2.0)
 		# 血条
 		var bw: float = row.size.x - 58.0 * _s
 		var bh: float = 9.0 * _s

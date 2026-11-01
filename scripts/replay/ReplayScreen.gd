@@ -60,6 +60,7 @@ var _hud_turrets: Array = []
 var _hud_minions: Array = []
 var _hud_jungle: Array = []
 var _mm_drag := false
+var _spectate_origin := -1
 var _mm_target := Vector3.ZERO
 var _mm_was_follow := -1
 var _statics: Node3D = null
@@ -689,6 +690,7 @@ func _process(delta: float) -> void:
 			_hint_label.text = "集锦播放完毕（点 ◆ 集锦 重看，或拖时间轴回到完整回放）"
 			_t = _duration
 	_apply_frame(_t)
+	_auto_spectate()
 	_update_popups(delta)
 	_update_postfx(delta)
 	_update_ui()
@@ -739,6 +741,24 @@ func _apply_frame(t: float) -> void:
 			node["root"].position.y = -minf(0.5, dage * 1.2)
 			if dage > 1.1:
 				node["root"].visible = false
+			# 阵亡也要更新状态（复活倒计时/观战/名册都需要）
+			while _hero_state.size() <= i:
+				_hero_state.append({})
+			_hero_state[i] = {
+				"hp": 0.0, "mx": maxf(1.0, float(row_a[5] if row_a.size() > 5 else 1)),
+				"lvl": int(row_a[6]) if row_a.size() > 6 else 1,
+				"mana": 0.0, "max_mana": 1.0, "exp": 0.0, "exp_to_next": 1.0,
+				"k": int(row_a[12]) if row_a.size() > 12 else 0,
+				"d": int(row_a[13]) if row_a.size() > 13 else 0,
+				"a": int(row_a[14]) if row_a.size() > 14 else 0,
+				"ad": 0, "ap": 0, "armor": 0, "mr": 0, "ms": 0, "as": 0,
+				"cds": [], "slevels": [], "yaw": float(row_a[3]) if row_a.size() > 3 else 0.0,
+				"shield": 0.0, "stun": 0.0, "knock": 0.0, "froze": 0.0, "suppress": 0.0,
+				"silence": 0.0, "slow": 0.0, "slow_amt": 0.0, "bt": 0.0, "wd": 0.0,
+				"revive": float(row_a[40]) / 100.0 if row_a.size() > 40 else 0.0,
+				"markers": "", "mvp": int(row_a[42]) if row_a.size() > 42 else 0,
+				"pos": Vector3(x, 0.0, z), "alive": false, "invis": true,
+			}
 			continue
 		if bool(node.get("dying", false)):
 			node["dying"] = false
@@ -880,6 +900,11 @@ func _apply_frame(t: float) -> void:
 			if node3 == null:
 				node3 = _make_minion(int(r[3]), int(r[4]))
 				_mini_nodes[id] = node3
+				# 兵线出生光效（与对局兵线刷出时的落地波一致）
+				var spawn_p := Vector3(float(r[1]), 0.2, float(r[2]))
+				var spawn_col: Color = Color(0.0, 0.886, 1.0) if Config.is_ally(int(r[4])) else Color(1.0, 0.33, 0.264)
+				Vfx.shockwave(spawn_p, 1.4, spawn_col, 0.32)
+				Vfx.cast_glow(spawn_p + Vector3.UP * 0.4, spawn_col, 0.9, 0.3)
 			node3.visible = true
 			node3.set_meta("dying", false)
 			# 朝向移动方向 + 行走动画（上下踏步 + 左右摆）
@@ -1242,6 +1267,41 @@ func _shake_vec(delta: float) -> Vector3:
 	if _shake_t <= 0.0:
 		_shake_amp = 0.0
 	return Vector3(sin(now * 61.0), sin(now * 47.0) * 0.6, cos(now * 53.0)) * a
+
+
+## 阵亡观战（与对局一致）：主视角英雄阵亡 → 自动跟最近存活友方；复活自动切回
+func _auto_spectate() -> void:
+	if _follow_hero < 0 or _follow_hero >= _hero_state.size():
+		_spectate_origin = -1
+		return
+	var st: Dictionary = _hero_state[_follow_hero]
+	if st.is_empty():
+		return
+	if not bool(st.get("alive", false)):
+		if _spectate_origin < 0 or _spectate_origin != _follow_hero:
+			_spectate_origin = _follow_hero
+		var src_pos: Vector3 = st.get("pos", Vector3.ZERO)
+		var best := -1
+		var best_d := 1e9
+		for i in range(_heroes.size()):
+			if i == _follow_hero:
+				continue
+			if i >= _hero_state.size():
+				continue
+			var si: Dictionary = _hero_state[i]
+			if si.is_empty() or not bool(si.get("alive", false)):
+				continue
+			if str((_heroes[i] as Dictionary).get("team", "")) != str((_heroes[_follow_hero] as Dictionary).get("team", "")):
+				continue
+			var d: float = (si.get("pos", Vector3.ZERO) as Vector3).distance_to(src_pos)
+			if d < best_d:
+				best_d = d
+				best = i
+		if best >= 0 and best != _follow_hero:
+			_follow_hero = best
+	elif _spectate_origin >= 0 and _spectate_origin != _follow_hero:
+		_follow_hero = _spectate_origin
+		_spectate_origin = -1
 
 
 func _update_recall_fx(i: int, pos: Vector3, alive: bool, st: Dictionary) -> void:
@@ -1737,6 +1797,7 @@ func _select_follow(idx: int) -> void:
 		return
 	_follow_hero = idx
 	_manual_follow = idx
+	_spectate_origin = -1
 	_kill_cam_t = 0.0
 	_cam_pitch = -60.0
 	_cam_dist = 52.0
