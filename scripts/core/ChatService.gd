@@ -174,7 +174,8 @@ func _ensure_ui() -> void:
 		return
 	_layer = CanvasLayer.new()
 	_layer.name = "ChatLayer"
-	_layer.layer = 45
+	# 聊天按钮必须在最上层（高于触控层/对局信息带/灵宝 130 层），否则左下角按钮点不到
+	_layer.layer = 400
 	host.add_child(_layer)
 	_box = BoxScript.new()
 	_layer.add_child(_box)

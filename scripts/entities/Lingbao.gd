@@ -487,6 +487,9 @@ func _talk(text: String, dur: float) -> void:
 		_bubble.text = text
 		_bubble.visible = true
 		_bubble_t = dur
+	var _vs = get_node_or_null("/root/VoiceService")
+	if _vs != null and text != "":
+		_vs.call("speak", text, "灵宝")
 
 
 ## 外部（聊天里 @灵宝）调用：气泡 + 聊天频道都说一句

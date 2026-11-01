@@ -156,6 +156,10 @@ func _say(text: String, dur: float = 3.4) -> void:
 	var t := str(text).strip_edges()
 	if t == "" or _bubble == null:
 		return
+	# 灵宝说话（气泡/打招呼/拖动回应）统一走语音
+	var _vs = get_node_or_null("/root/VoiceService")
+	if _vs != null:
+		_vs.call("speak", t, "灵宝")
 	var fs := int(round(22.0 * UiKit.scale()))
 	_bubble_label.add_theme_font_size_override("font_size", fs)
 	_bubble_label.text = t
