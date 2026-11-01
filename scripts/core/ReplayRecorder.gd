@@ -335,7 +335,7 @@ func _sample(delta: float, finishing: bool) -> void:
 				if _rb_last.get(uidx, "") != sig:
 					_rb_last[uidx] = sig
 					rb = nrb
-			urow.append([int(uidx), int(hu.gold), tgt_row, rb, det])
+			urow.append([int(uidx), int(hu.gold), tgt_row, rb, det, int(hu.total_gold_earned), (hu.equipment_slots.duplicate() if hu.equipment_slots is Array else [])])
 		if not urow.is_empty():
 			var tt := []
 			if NetSession.mode == NetSession.Mode.HOST and NetSession.has_method("_pack_team_tactics"):

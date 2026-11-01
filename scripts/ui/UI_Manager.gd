@@ -3292,7 +3292,7 @@ func _roster_row(h: Hero, battle) -> Dictionary:
 	var equips: Array = []
 	for item_id in h.equipment_slots:
 		var it: Dictionary = ItemDatabase.get_item(item_id)
-		equips.append([str(it.get("name", item_id)), int(it.get("tier", 1))])
+		equips.append([str(it.get("name", item_id)), int(it.get("tier", 1)), str(item_id)])
 	var lane := -1
 	if battle != null and battle.team_tactics != null:
 		lane = int(battle.team_tactics.assignments.get(h, -1))

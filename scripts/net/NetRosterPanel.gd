@@ -73,7 +73,7 @@ func _row_from_net(r: Array) -> Dictionary:
 	var eq: Array = []
 	for item_id in (r[10] as Array):
 		var it: Dictionary = ItemDatabase.get_item(str(item_id))
-		eq.append([str(it.get("name", item_id)), int(it.get("tier", 1))])
+		eq.append([str(it.get("name", item_id)), int(it.get("tier", 1)), str(item_id)])
 	var hp := float(r[4])
 	var mhp := float(r[5])
 	return {
@@ -112,3 +112,5 @@ func _draw() -> void:
 	if not visible:
 		return
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.4))
+
+

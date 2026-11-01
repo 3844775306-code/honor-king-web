@@ -30,6 +30,17 @@ var hud_info: Dictionary = {}   # 顶部附加战况（如主宰先锋波数）
 var mode := "attr"
 var panel_h := 1200.0
 var _row_h := 200.0
+# —— 装备悬浮详情（三端共用）：_draw 时记录每格装备的未缩放矩形与 item_id ——
+var _equip_hits: Array = []          # [{rect:Rect2, id:String, name:String, tier:int}]
+var _tip_hit: Dictionary = {}        # 当前悬浮的装备格（空=不显示）
+var _tip_anchor := Vector2.ZERO      # 悬浮时鼠标/图标在图内的屏幕像素锚点
+const ITEM_STATS := [
+	["attack", "攻击"], ["ability_power", "法强"], ["health", "生命"], ["armor", "物防"],
+	["magic_resist", "法防"], ["attack_speed", "攻速%"], ["crit_chance", "暴击%"],
+	["crit_damage", "暴伤%"], ["lifesteal", "吸血%"], ["spell_vamp", "法吸%"],
+	["cooldown", "冷缩%"], ["speed", "移速"], ["per_speed", "移速%"], ["mana", "蓝量"],
+	["hp_regen", "回血"], ["armor_pen_percent", "物穿%"], ["magic_pen", "法穿"],
+]
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -83,6 +94,7 @@ func _layout() -> Dictionary:
 	return {"s": s, "ph": ph, "rh": rh, "w": w, "h": h, "o": ((avail - Vector2(w, h)) * 0.5).floor()}
 
 func _draw() -> void:
+	_equip_hits.clear()
 	var L := _layout()
 	var s: float = L.s
 	panel_h = L.ph
@@ -111,10 +123,13 @@ func _draw() -> void:
 	UiKit.text(self, Vector2(cr.position.x, cr.position.y + cr.size.y * 0.74), "×", 27,
 		Color.WHITE, HORIZONTAL_ALIGNMENT_CENTER, cr.size.x)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_item_tip(L)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		queue_redraw()
+	elif what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
+		_tip_hit = {}
 
 func _header() -> void:
 	var split := _split()
@@ -265,7 +280,13 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 		var ir := Rect2(eq_x + float(i) * (eq_s + eq_gap), band_cy - eq_s * 0.5, eq_s, eq_s)
 		if i < eq.size():
 			var e: Array = eq[i]
-			UiKit.item_icon(self, ir, int(e[1]) if e.size() > 1 else 1, str(e[0]))
+			var e_tier := int(e[1]) if e.size() > 1 else 1
+			var e_name := str(e[0])
+			var e_id := str(e[2]) if e.size() > 2 else ""
+			if e_id == "":
+				e_id = _item_id_by_name(e_name)
+			UiKit.item_icon(self, ir, e_tier, e_name)
+			_equip_hits.append({"rect": ir, "id": e_id, "name": e_name, "tier": e_tier})
 		else:
 			draw_style_box(UiKit.flat(0.5, 5, 1, Color(0.30, 0.36, 0.46, 0.5), Color(0.06, 0.07, 0.10, 0.55), 0.0, 0.0), ir)
 	# 属性徽章：剩余宽度内换行画「全部」属性（含魔抗），不再只显示前 4 条
@@ -351,6 +372,108 @@ func _glyph(c: Vector2, r: float, id: String, col: Color) -> void:
 		_:
 			draw_circle(c, r * 0.55, col)
 
+# ==================== 装备悬浮详情（三端统一：C/T 面板） ====================
+
+func _item_id_by_name(nm: String) -> String:
+	if nm == "":
+		return ""
+	if ItemDatabase == null:
+		return ""
+	var all = ItemDatabase.get("items")
+	if all is Dictionary:
+		for iid in (all as Dictionary).keys():
+			if str(((all as Dictionary)[iid] as Dictionary).get("name", "")) == nm:
+				return str(iid)
+	return ""
+
+
+func _equip_at(p_un: Vector2) -> Dictionary:
+	for h in _equip_hits:
+		if (h["rect"] as Rect2).has_point(p_un):
+			return h
+	return {}
+
+
+func _set_equip_hover(hit: Dictionary, local_px: Vector2) -> void:
+	if hit.is_empty():
+		if not _tip_hit.is_empty():
+			_tip_hit = {}
+			queue_redraw()
+		return
+	_tip_anchor = local_px
+	if str(hit.get("id", "")) == str(_tip_hit.get("id", "")) and (hit.get("rect", Rect2()) as Rect2) == (_tip_hit.get("rect", Rect2()) as Rect2):
+		return
+	_tip_hit = hit
+	queue_redraw()
+
+
+func _hide_item_tip() -> void:
+	if not _tip_hit.is_empty():
+		_tip_hit = {}
+		queue_redraw()
+
+
+func _draw_item_tip(_L: Dictionary) -> void:
+	if _tip_hit.is_empty():
+		return
+	var iid := str(_tip_hit.get("id", ""))
+	var it: Dictionary = ItemDatabase.get_item(iid) if iid != "" else {}
+	if it.is_empty():
+		return
+	var tier := int(it.get("tier", int(_tip_hit.get("tier", 1))))
+	var qcol: Color = UiKit.QUALITY_COLORS[clampi(tier, 1, 5)]
+	var cls_map := {"attack": "物理", "magic": "法术", "defense": "防御", "boots": "鞋子",
+		"jungle": "打野", "support": "游走", "survival": "保命", "attack_speed": "攻速"}
+	var cls := str(it.get("class", ""))
+	var meta := "T%d · %d 金" % [tier, int(it.get("cost", 0))]
+	if cls != "":
+		meta += " · " + str(cls_map.get(cls, cls))
+	var parts: Array = []
+	for pair in ITEM_STATS:
+		var val := int(it.get(str(pair[0]), 0))
+		if val != 0:
+			parts.append("%s+%d" % [str(pair[1]), val])
+	var lines: Array = []
+	lines.append([str(it.get("name", iid)), qcol.lightened(0.25), 22])
+	lines.append([meta, Color(0.62, 0.70, 0.82), 16])
+	if not parts.is_empty():
+		lines.append(["属性：" + " · ".join(parts), Color(0.88, 0.93, 1.0), 16])
+	var passive := str(it.get("passive", ""))
+	if passive != "":
+		lines.append(["被动：" + passive, Color(0.98, 0.86, 0.45), 16])
+	var active := str(it.get("active", ""))
+	if active != "":
+		lines.append(["主动：" + active, Color(0.55, 0.88, 1.0), 16])
+	var reqs: Array = it.get("requires", [])
+	if not reqs.is_empty():
+		var names: Array = []
+		for rid in reqs:
+			names.append(str(ItemDatabase.get_item(str(rid)).get("name", rid)))
+		lines.append(["合成：" + " + ".join(names), Color(0.62, 0.70, 0.82), 16])
+	var f := UiKit.font()
+	var pad := 14.0
+	var lh := 26.0
+	var w := 360.0
+	for ln in lines:
+		var fs := int(ln[2])
+		var tw := f.get_string_size(str(ln[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		w = maxf(w, tw + pad * 2.0)
+	var h := pad * 2.0 + lh * float(lines.size())
+	var vp := get_viewport_rect().size if get_viewport() != null else Vector2(2400.0, 1400.0)
+	var pos := _tip_anchor + Vector2(18.0, 10.0)
+	if pos.x + w > vp.x - 12.0:
+		pos.x = _tip_anchor.x - w - 18.0
+	if pos.y + h > vp.y - 12.0:
+		pos.y = _tip_anchor.y - h - 10.0
+	pos.x = clampf(pos.x, 12.0, maxf(12.0, vp.x - w - 12.0))
+	pos.y = clampf(pos.y, 12.0, maxf(12.0, vp.y - h - 12.0))
+	draw_style_box(UiKit.flat(0.98, 10, 1, Color(qcol.r, qcol.g, qcol.b, 0.75), Color(0.03, 0.04, 0.07, 0.97), 0.0, 8.0), Rect2(pos, Vector2(w, h)))
+	draw_rect(Rect2(pos + Vector2(0.0, 2.0), Vector2(3.0, h - 4.0)), qcol)
+	var y := pos.y + pad + 18.0
+	for ln in lines:
+		draw_string(f, Vector2(pos.x + pad, y), str(ln[0]), HORIZONTAL_ALIGNMENT_LEFT, w - pad * 2.0, int(ln[2]), ln[1])
+		y += lh
+
 func _close_rect() -> Rect2:
 	return Rect2(PANEL_W - 92.0, 14.0, 40.0, 34.0)
 
@@ -360,6 +483,15 @@ func _fmt_gold(v: int) -> String:
 	return str(v)
 
 func _gui_input(ev: InputEvent) -> void:
+	var L0 := _layout()
+	var s0: float = L0.s
+	var origin0: Vector2 = L0.o
+	# —— 鼠标悬浮装备：显示装备详情（三端统一） ——
+	if ev is InputEventMouseMotion:
+		var lp: Vector2 = (ev as InputEventMouse).position
+		var p_un: Vector2 = (lp - origin0) / s0
+		_set_equip_hover(_equip_at(p_un), lp)
+		return
 	var press := (ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed
 		and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT) \
 		or (ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed)
@@ -370,6 +502,14 @@ func _gui_input(ev: InputEvent) -> void:
 	var origin: Vector2 = L.o
 	var p: Vector2 = ((ev as InputEventMouse).position - origin) / s if ev is InputEventMouse \
 		else ((ev as InputEventScreenTouch).position - origin) / s
+	# 触屏：点装备格 = 查看详情（不关闭面板）
+	var eq_hit := _equip_at(p)
+	if not eq_hit.is_empty():
+		var lp2: Vector2 = origin + (eq_hit["rect"] as Rect2).get_center() * s
+		_set_equip_hover(eq_hit, lp2)
+		accept_event()
+		return
+	_hide_item_tip()
 	var in_panel := Rect2(0.0, 0.0, PANEL_W, float(L.ph)).has_point(p)
 	if _close_rect().has_point(p) or not in_panel:
 		closed_by_user.emit()
@@ -382,5 +522,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 		return
 	if ev is InputEventKey and (ev as InputEventKey).pressed and (ev as InputEventKey).keycode == KEY_ESCAPE:
 		closed_by_user.emit()
+		_hide_item_tip()
 		visible = false
 		get_viewport().set_input_as_handled()
+
+
+
+
