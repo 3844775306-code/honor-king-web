@@ -5259,6 +5259,10 @@ func _log_early_game_metrics() -> void:
 			"damage_taken": roundi(h.damage_taken_from_heroes),
 			"turret_damage": roundi(h.turret_damage),
 			"jungle_gold": h.jungle_gold,
+			"trade_attempts": (ai_node.trade_planner.attempts if ai_node != null and ai_node.trade_planner != null else 0),
+			"trade_wins": (ai_node.trade_planner.wins if ai_node != null and ai_node.trade_planner != null else 0),
+			"trade_damage_out": roundi(ai_node.trade_planner.damage_out) if ai_node != null and ai_node.trade_planner != null else 0,
+			"trade_damage_in": roundi(ai_node.trade_planner.damage_in) if ai_node != null and ai_node.trade_planner != null else 0,
 		}
 		rows.append(row)
 		totals[team_key]["kills"] += h.kills

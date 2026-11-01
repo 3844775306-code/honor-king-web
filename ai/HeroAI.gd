@@ -17,6 +17,8 @@ var skill_tactics: SkillTactics
 var summoner_tactics: SummonerTactics
 var item_tactics: ItemActiveTactics
 var brain: HeroBrain
+var threat_model: ThreatModel
+var trade_planner: TradePlanner
 var think_timer: float = 0.0
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
@@ -52,6 +54,8 @@ func _ready():
 				hero = child
 				break
 	perception = AiPerception.new(hero)
+	threat_model = ThreatModel.new(hero)
+	trade_planner = TradePlanner.new(hero, threat_model, perception)
 	skill_tactics = SkillTactics.new(hero, perception)
 	summoner_tactics = SummonerTactics.new(hero, perception)
 	item_tactics = ItemActiveTactics.new(hero, perception)
@@ -575,6 +579,12 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	# 威胁记忆与换血状态每帧维护：视野消失的敌人仍保留最后位置/血量，不直接消失。
+	var _bm_now = get_tree().get_first_node_in_group("battle_manager")
+	var _gt_now: float = float(_bm_now.game_time) if _bm_now != null else 0.0
+	threat_model.update(_gt_now)
+	trade_planner.update(delta, _gt_now)
+
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
 	skill_tactics.update_combo(delta)
 
@@ -712,6 +722,28 @@ func _decide():
 			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
 		state = State.RETREAT
 		return
+
+	# 主动换血：满足威胁/血量/技能/控制条件才进场；进场后由 TradePlanner 控制退出。
+	var trade_intent: Dictionary = trade_planner.evaluate()
+	if not trade_intent.is_empty():
+		var tact := str(trade_intent.get("action", ""))
+		if tact == "enter" or tact == "hold":
+			var tt = trade_intent.get("target")
+			if tt != null and is_instance_valid(tt) and (tt as Hero).health > 0.0:
+				hero.manual_target = tt
+				hero.move_target = Vector3.ZERO
+				state = State.PUSH
+				return
+		elif tact == "exit":
+			hero.manual_target = null
+			var safe_dest: Vector3 = trade_intent.get("pos", Vector3.ZERO)
+			if safe_dest == Vector3.ZERO:
+				var own_turret: Turret = perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_FAR)
+				if own_turret != null:
+					safe_dest = own_turret.global_position
+			hero.move_target = safe_dest
+			state = State.RETREAT
+			return
 
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt := bm.game_time if bm else 0.0
