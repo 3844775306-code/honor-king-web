@@ -49,7 +49,8 @@ static func from_row(r: Dictionary) -> HeroStatView:
 	v.max_health = float(r.get("maxhp", 1.0))
 	v.is_ai = bool(r.get("ai", true))
 	v.is_mvp = bool(r.get("mvp", false))
-	var items = r.get("items", r.get("equips", []))
+	# 单机/联机/回放三种行字段名历史上分别为 items/equips/equip，统一兼容
+	var items = r.get("items", r.get("equips", r.get("equip", [])))
 	if items is Array:
 		v.equipment_slots = items.duplicate()
 	return v
