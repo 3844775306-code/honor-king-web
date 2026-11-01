@@ -96,6 +96,9 @@ func say_lingbao(text: String, broadcast: bool = false) -> void:
 		return
 	_post("灵宝", Config.player_team, t, false)
 	lingbao_said.emit(t)
+	var _vs2 = get_node_or_null("/root/VoiceService")
+	if _vs2 != null:
+		_vs2.call("speak", t, "灵宝")
 	if broadcast and NetSession.mode == NetSession.Mode.HOST:
 		NetSession.broadcast_chat("灵宝", Config.player_team, t)
 
@@ -186,6 +189,11 @@ func _on_net_chat(from_name: String, team: int, text: String) -> void:
 
 
 func _post(from_name: String, team: int, text: String, is_self: bool) -> void:
+	# AI 英雄发言自动语音播报（玩家自己/系统/灵宝不在这里读，灵宝在 say_lingbao 里单独读）
+	if not is_self and from_name != "灵宝" and from_name != "系统" and _is_ai_speaker_name(from_name):
+		var _vs = get_node_or_null("/root/VoiceService")
+		if _vs != null:
+			_vs.call("speak", text, from_name)
 	message.emit(from_name, team, text, is_self)
 
 
@@ -319,6 +327,15 @@ func _llm_user_prompt(text: String) -> String:
 	if nm == "":
 		nm = "玩家"
 	return "玩家「%s」：%s" % [nm, text]
+
+
+func _is_ai_speaker_name(nm: String) -> bool:
+	if nm == "":
+		return false
+	for h in get_tree().get_nodes_in_group("heroes"):
+		if is_instance_valid(h) and str(h.display_name) == nm and bool(h.get("is_ai")):
+			return true
+	return false
 
 
 func _ai_speakers() -> Array:
