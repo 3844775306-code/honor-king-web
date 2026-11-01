@@ -34,6 +34,7 @@ func _load_cfg() -> void:
 	var key := OS.get_environment("HONORKING_LLM_KEY")
 	var url := OS.get_environment("HONORKING_LLM_URL")
 	var model := OS.get_environment("HONORKING_LLM_MODEL")
+	var cfg_enabled := true
 	# 先读工程根目录（开发期方便），再读 user://（打包后放外面，别把 key 提交进仓库）
 	for p in CFG_PATHS:
 		var cf := ConfigFile.new()
@@ -42,13 +43,14 @@ func _load_cfg() -> void:
 		key = str(cf.get_value("llm", "api_key", key))
 		url = str(cf.get_value("llm", "base_url", url if url != "" else DEF_URL))
 		model = str(cf.get_value("llm", "model", model if model != "" else DEF_MODEL))
+		cfg_enabled = bool(cf.get_value("llm", "enabled", cfg_enabled))
 		break
 	_key = key.strip_edges()
 	if url != null and str(url).strip_edges() != "":
 		_url = str(url).strip_edges()
 	if model != null and str(model).strip_edges() != "":
 		_model = str(model).strip_edges()
-	enabled = _key != ""
+	enabled = _key != "" and cfg_enabled
 
 
 ## 问一句：ctx 里带英雄/局势信息；回调收到一句台词，失败给空串
