@@ -12,6 +12,7 @@ var _msgs: Array = []       # {name, text, col, t}
 var _edit: LineEdit = null
 var _chat_btn: Button = null
 var _mic_btn: Button = null
+var _voice_btn: Button = null
 var _close_btn: Button = null
 var _mobile := false
 var _btn_size := Vector2(88, 42)
@@ -42,6 +43,18 @@ func _build_widgets() -> void:
 	_mic_btn.tooltip_text = "语音输入（Windows 语音识别）"
 	_mic_btn.pressed.connect(func(): ChatService.listen_voice())
 	add_child(_mic_btn)
+	# 语音播报开关（AI 聊天 / 灵宝）：有 TTS 用 TTS，无 TTS 自动降级为拟声语音
+	_voice_btn = _mk_btn("🔊", fs, UiKit.C_TEAM0)
+	_voice_btn.name = "ChatSpeech"
+	_voice_btn.tooltip_text = "语音播报开关（AI 聊天/灵宝）"
+	_voice_btn.pressed.connect(func():
+		var vs = get_node_or_null("/root/VoiceService")
+		if vs != null:
+			vs.set("enabled", not bool(vs.get("enabled")))
+			if not bool(vs.get("enabled")):
+				vs.call("stop")
+		_refresh_voice_btn())
+	add_child(_voice_btn)
 	_close_btn = _mk_btn("✕", fs, UiKit.C_TEAM1)
 	_close_btn.name = "ChatClose"
 	_close_btn.visible = false
@@ -62,6 +75,14 @@ func _build_widgets() -> void:
 	_edit.text_submitted.connect(func(t): _submit(t))
 	_edit.gui_input.connect(_on_edit_input)
 	add_child(_edit)
+
+
+func _refresh_voice_btn() -> void:
+	if _voice_btn == null:
+		return
+	var vs = get_node_or_null("/root/VoiceService")
+	var on: bool = true if vs == null else bool(vs.get("enabled"))
+	_voice_btn.text = "🔊" if on else "🔇"
 
 
 func _mk_btn(txt: String, fs: int, col: Color) -> Button:
@@ -93,6 +114,8 @@ func _process(_delta: float) -> void:
 			54.0 if _mobile else 46.0)
 		x += _edit.size.x + 8.0
 	_mic_btn.position = Vector2(x, row_y)
+	x += step
+	_voice_btn.position = Vector2(x, row_y)
 	x += step
 	_close_btn.position = Vector2(x, row_y)
 	# 消息老化
