@@ -3402,18 +3402,8 @@ func _apply_map_if_ready() -> void:
 		_net_set_shadow_off(wall_model)
 		_static_root.add_child(root)
 		# 程序化石墙已自带基底碎石与苔藓（与主机同源），不再叠加旧装饰
-	for c in camps:
-		if c.size() < 2:
-			continue
-		var cx := float(c[0])
-		var cz := float(c[1])
-		# 野怪营地范围圈：黄环半径≈4（同主机 _materialize_jungle_group 的 ring 尺寸），
-		# 按营地出生时间门控：角落(±58,±58)空间之灵 60s，其余普通营地 30s 首刷才亮
-		var ring := _make_flat_ring(3.9, 4.1, Color(1.0, 0.85, 0.2, 0.25))
-		ring.position = Vector3(cx, 0.02, cz)
-		ring.visible = false
-		_static_root.add_child(ring)
-		_camp_rings.append([ring, 60.0 if (abs(cx) > 50.0 and abs(cz) > 50.0) else 30.0])
+	# 野怪活动范围圈不预生成：与单机一致，只有"本端玩家正在攻击该野怪"时由
+	# _update_epic_rings / _update_jungle_rings 逐只显示（此前的常显黄圈是多余表现）
 	print("[NetClient] 静态地图已应用 bushes=", bushes.size(), " walls=", walls.size(), " camps=", camps.size())
 
 func _build_camera() -> void:
@@ -5442,10 +5432,10 @@ class Hud:
 		for r in widget_rows:
 			if r.size() < 10:
 				continue
-			if int(r[1]) == 0:
-				row1.append(r)   # 我方（蓝）整排：含残血/复活读秒，恒显
+			if int(r[1]) == int(Config.player_team):
+				row1.append(r)   # 我方整排：含残血/复活读秒，恒显（红方玩家时=红方）
 			else:
-				row2.append(r)   # 敌方（红）：host 只在阵亡时下发，复活自动消失
+				row2.append(r)   # 敌方：host 只在阵亡时下发，复活自动消失
 		var rows_all: Array = [row1]
 		if not row2.is_empty():
 			rows_all.append(row2)
@@ -5465,13 +5455,14 @@ class Hud:
 		var team := int(r[1])
 		var is_ai := int(r[6]) == 1
 		var dead := int(r[7]) == 1
+		var ally := Config.is_ally(team)
 		var bg := Color(1.0, 0.33, 0.264)
-		if team == 0:
+		if ally:
 			bg = Color(0.0, 0.886, 1.0) if is_ai else Color(0.0, 0.886, 0.431)
 		if dead:
-			bg = Color(0.32, 0.05, 0.07) if team == 1 else Color(0.04, 0.05, 0.07)
+			bg = Color(0.04, 0.05, 0.07) if ally else Color(0.32, 0.05, 0.07)
 		# 专属英雄徽记头像（同 host RespawnWidget；r[2]=英雄名）
-		var team_tint := Color(1.0, 0.33, 0.264) if team == 1 else (Color(0.0, 0.886, 1.0) if is_ai else Color(0.0, 0.886, 0.431))
+		var team_tint := (Color(0.0, 0.886, 1.0) if is_ai else Color(0.0, 0.886, 0.431)) if ally else Color(1.0, 0.33, 0.264)
 		HeroArt.draw_portrait(self, center, ring_r, str(r[2]), team_tint, dead)
 		draw_arc(center, ring_r + 3.75, 0.0, TAU, 48, Color.BLACK, 5.0)
 		if dead:
