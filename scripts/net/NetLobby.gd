@@ -76,6 +76,7 @@ var _role := -1              # -1=无；0=房主；1=玩家（guest）
 var _connecting := false
 var _menu_btns: Array[Button] = []
 var _tac_map = null          # 主菜单战术沙盘（点图选分路）
+var _addr_lab: Label = null           # 房间页顶部：本局房间地址（IP:端口）
 var _ip_edit: LineEdit = null
 var _port_edit: LineEdit = null
 var _status: Label = null    # MENU 下的状态行
@@ -1162,6 +1163,12 @@ func _show_room() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	lcol.add_child(sub)
 
+	# 房间地址：房主显示本机局域网 IP:端口（告诉同网络的队友）；客户端显示已连接的主机地址
+	_addr_lab = _mk_label(_room_address_text(), _fs(UiKit.FS_MD), COL_GOLD)
+	_addr_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_addr_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lcol.add_child(_addr_lab)
+
 	_head_lab = _mk_label("", _fs(UiKit.FS_LG), COL_OK)
 	_head_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	lcol.add_child(_head_lab)
@@ -1269,6 +1276,39 @@ func _show_room() -> void:
 	_leave_btn = _mk_btn("离开房间", UiKit.C_DANGER)
 	_leave_btn.pressed.connect(_leave_room)
 	rcol.add_child(_leave_btn)
+
+
+## 房间地址文本：房主显示本机局域网 IPv4:端口；客户端显示已连接地址
+func _room_address_text() -> String:
+	var port: int = int(NetSession.host_port)
+	if NetSession.mode == NetSession.Mode.HOST:
+		var ip := _lan_ipv4()
+		if ip == "":
+			return "房间地址：本机 IP 未识别（请确认已连 Wi-Fi/热点），端口 %d" % port
+		return "房间地址：%s:%d（同一 Wi-Fi/热点下的手机填这个）" % [ip, port]
+	if NetSession.mode == NetSession.Mode.CLIENT:
+		return "已连接主机：%s:%d" % [str(NetSession.join_address), port]
+	return ""
+
+
+## 本机局域网 IPv4（优先 192.168/10./172.16-31），找不到返回空串
+func _lan_ipv4() -> String:
+	var fallback := ""
+	for ip in IP.get_local_addresses():
+		var a := str(ip)
+		if a.find(":") >= 0:
+			continue    # IPv6 跳过
+		if a.begins_with("127.") or a.begins_with("169.254."):
+			continue
+		if a.begins_with("192.168.") or a.begins_with("10."):
+			return a
+		if a.begins_with("172."):
+			var seg := a.split(".")
+			if seg.size() > 1 and int(seg[1]) >= 16 and int(seg[1]) <= 31:
+				return a
+		if fallback == "":
+			fallback = a
+	return fallback
 
 
 func _refresh_room_local() -> void:
