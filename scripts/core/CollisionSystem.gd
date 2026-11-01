@@ -109,7 +109,9 @@ func apply_collision_pushback(entities: Array, delta: float):
 		if not is_instance_valid(ent) or ent.health <= 0 or not ent.get("can_move"): continue
 		if ent.collision_layer == 0: continue   # 隐身/筋斗云等无碰撞状态不参与墙体推离
 		var ep: Vector3 = ent.global_position
-		var min_dist: float = ent.body_radius + 0.4
+		# 与 PathFinder 3×3 实心区（离墙心约 1.5m）对齐：+0.05 留一点余量，
+		# 过大的 +0.4 会把单位从合法路点持续推离，表现为贴墙抖动/卡墙
+		var min_dist: float = ent.body_radius + 0.05
 		var ck := _cell_key(ep.x, ep.z)
 		for ox in range(-1, 2):
 			for oz in range(-1, 2):

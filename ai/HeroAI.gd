@@ -43,6 +43,14 @@ var _defending_high_turret: Turret = null
 var _chase_target: Hero = null
 var _chase_time: float = 0.0
 
+# --- 追击不可达放弃：目标隔墙/卡墙时不要一直撞墙 ---
+var _stall_id: int = -1
+var _stall_t: float = 0.0
+var _stall_best: float = 1e9
+var _stall_pos: Vector3 = Vector3.ZERO
+var _stall_cd: float = 0.0
+var _stall_ban: Dictionary = {}
+
 func _ready():
 	if get_parent() is Hero:
 		hero = get_parent() as Hero
@@ -220,7 +228,8 @@ func _try_travel_dash():
 	var end := _resolve_dash_end(hero.global_position, dir, sk.self_displacement)
 	if end == Vector3.ZERO:
 		return
-	hero._start_casting(idx, sk, dest)
+	# 传校验后的落点，避免“校验用 end、实际施法用 dest”导致落进墙圈
+	hero._start_casting(idx, sk, end)
 
 
 # 选择赶路用位移技能：只在 1/2 技能位找，大招(3)与特殊槽(隐身/恢复等)不用于赶路
@@ -629,6 +638,8 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	_update_stall_abandon(delta)
+
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
 	skill_tactics.update_combo(delta)
 
@@ -1016,6 +1027,62 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if target.global_position.distance_to(entity.global_position) < AiConfig.FRIENDLY_TURRET_CLOSE:
 			return true
 	return false
+
+
+# 追击卡墙保护：2 秒内既没靠近目标、自己也没怎么移动 → 判定不可达，拉黑 3 秒换目标/回线
+func _update_stall_abandon(delta: float) -> void:
+	if _stall_cd > 0.0:
+		_stall_cd -= delta
+	if not _stall_ban.is_empty():
+		var now_ms := Time.get_ticks_msec() * 0.001
+		for k in _stall_ban.keys():
+			if float(_stall_ban[k]) <= now_ms:
+				_stall_ban.erase(k)
+	var t = hero.manual_target
+	if t == null or not is_instance_valid(t) or float(t.health) <= 0.0:
+		_stall_id = -1
+		_stall_t = 0.0
+		_stall_best = 1e9
+		return
+	var id := int(t.get_instance_id())
+	if _stall_ban.has(id):
+		hero.manual_target = null
+		hero.move_target = Vector3.ZERO
+		_stall_id = -1
+		_stall_t = 0.0
+		_stall_best = 1e9
+		return
+	var dist: float = hero.global_position.distance_to(t.global_position)
+	var aa: float = hero.attack_range * 0.01
+	if dist <= aa + 1.0 or hero.is_recalling or hero.casting_skill:
+		_stall_id = -1
+		_stall_t = 0.0
+		_stall_best = dist
+		return
+	if id != _stall_id:
+		_stall_id = id
+		_stall_t = 0.0
+		_stall_best = dist
+		_stall_pos = hero.global_position
+		return
+	_stall_t += delta
+	_stall_best = minf(_stall_best, dist)
+	var walked: float = _stall_pos.distance_to(hero.global_position)
+	if walked > 0.8:
+		# 人在跑（追移动靶），不算卡墙
+		_stall_pos = hero.global_position
+		_stall_t = 0.0
+		_stall_best = dist
+		return
+	if _stall_t > 2.0 and dist > _stall_best - 0.4:
+		_stall_ban[id] = Time.get_ticks_msec() * 0.001 + 3.0
+		hero.manual_target = null
+		hero.move_target = Vector3.ZERO
+		_chase_target = null
+		_chase_time = 0.0
+		_stall_id = -1
+		_stall_t = 0.0
+		_stall_best = 1e9
 
 
 # ==================== 残血追击（收人头） ====================

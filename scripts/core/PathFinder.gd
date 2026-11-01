@@ -134,7 +134,8 @@ func _mark_base_weight(wx: float, wz: float, radius: float) -> void:
 func _mark_solid(wx: float, wz: float) -> void:
 	var cx = int(floor(wx / CELL_SIZE))
 	var cz = int(floor(wz / CELL_SIZE))
-	# 墙周围 5×5 区域标记为不可通行（Hero body_radius=1.5 + wall=0.4 = 1.9m < 2.5m 安全距离）
+	# 墙周围 3×3 区域标记为不可通行（与原有地图可走性一致；不能扩到 5×5，
+	# 本图 765 面墙会把整张网格铺满导致 A* 无路可走）
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			var cell = Vector2i(cx + dx, cz + dz)
@@ -158,6 +159,7 @@ func find_path(from: Vector3, to: Vector3, bias_dir: Vector3 = Vector3.ZERO, tea
 	from_cell = from_cell.clamp(Vector2i(CELL_MIN, CELL_MIN), Vector2i(CELL_MAX, CELL_MAX))
 	to_cell = to_cell.clamp(Vector2i(CELL_MIN, CELL_MIN), Vector2i(CELL_MAX, CELL_MAX))
 
+	var to_outside: bool = not _is_in_bounds(to_cell)
 	var to_was_solid = astar.is_point_solid(to_cell)
 	var from_was_solid = astar.is_point_solid(from_cell)
 
@@ -217,7 +219,12 @@ func find_path(from: Vector3, to: Vector3, bias_dir: Vector3 = Vector3.ZERO, tea
 		path_3d[0] = from
 		# 攻击型寻路：终点已在攻击范围内，不替换为原始目标
 		if attack_range <= 0.0 or attack_target == Vector3.ZERO:
-			path_3d[path_3d.size() - 1] = to
+			if to_was_solid or to_outside:
+				# 目标不可站立：终点评分用就近可站格，否则最后一段会直接朝墙/墙里走
+				var tc: Vector2i = to_cell
+				path_3d[path_3d.size() - 1] = Vector3(float(tc.x) * CELL_SIZE, 0.0, float(tc.y) * CELL_SIZE)
+			else:
+				path_3d[path_3d.size() - 1] = to
 
 	# 恢复塔危险区域网格
 	if team >= 0:
