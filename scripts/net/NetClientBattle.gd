@@ -992,6 +992,13 @@ func _apply_fx(snap: Array) -> void:
 		if life <= 0.0:
 			life = 0.5
 		var caster := str(row[9]) if row.size() > 9 else ""
+		# 技能类：直接调用 host 同款 Vfx 原语（cast_burst / cast_glow / shockwave / pillar），
+		# 与单机技能特效同一套实现（原先客户端自绘简化球+环，观感不一致）
+		if kind == FX_SKILL_BURST or kind == FX_SKILL_DASH or kind == FX_SKILL_ULT \
+				or kind == FX_SKILL_GLOW or kind == FX_PILLAR:
+			_spawn_host_skill_fx(kind, Vfx.ground_pos(p), team, rr, life, caster)
+			_fx_seen_fid[fid] = true
+			continue
 		var n: Node3D = _build_fx(kind, team, rr, life, caster)
 		# 主机推送的贴地特效 y 可能为 0；客户端统一抬到所有地面类型之上
 		n.position = Vfx.ground_pos(p)
@@ -1140,6 +1147,28 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 
 # 技能视觉轻量还原（≤2 MeshInstance）：host VfxFactory 插桩的通用技能事件；
 # 元素色优先（caster 由快照行末位带过来），缺失退回阵营色。
+# 联机技能视觉 → host Vfx 同款原语（与单机技能特效同源，不再简化自绘）
+func _spawn_host_skill_fx(kind: int, p: Vector3, team: int, r: float, life: float, caster: String) -> void:
+	if get_tree() == null:
+		return
+	var col: Color = Vfx.color_for_hero(caster) if caster != "" else Vfx.team_color(team)
+	match kind:
+		FX_PILLAR:
+			Vfx.pillar(p, col, maxf(r, 0.8), maxf(r * 3.0, 4.0), maxf(life, 0.5))
+		FX_SKILL_DASH:
+			Vfx.cast_glow(p, col, maxf(r, 0.8), maxf(life, 0.3))
+			Vfx.shockwave(p, maxf(r, 1.0), col, maxf(life, 0.3))
+		FX_SKILL_GLOW:
+			Vfx.cast_glow(p, col, maxf(r, 0.8), maxf(life, 0.3))
+		FX_SKILL_ULT:
+			Vfx.cast_burst(caster, p, Vector3.UP, 2.0)
+			Vfx.shockwave(p, maxf(r, 2.0), col, maxf(life, 0.6))
+			Vfx.pillar(p, col, maxf(r * 0.5, 0.8), maxf(r * 2.4, 4.0), maxf(life, 0.6))
+		_:
+			Vfx.cast_burst(caster, p, Vector3.UP, 1.2)
+			Vfx.shockwave(p, maxf(r, 1.0), col, maxf(life, 0.4))
+
+
 func _build_skill_fx(kind: int, team: int, r: float, caster: String) -> Node3D:
 	var root := Node3D.new()
 	var col: Color = COL_ALLY_DIM if team != TEAM_ENEMY else COL_ENEMY
@@ -1683,6 +1712,8 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 			_proc_death(v)
 		elif act == NetSession.ACT_ATTACK_MELEE:
 			_proc_recoil(v, yaw)   # 无骨骼动画的模型（攻城车/程序化兵种）：程序化动作
+		if act == NetSession.ACT_ATTACK_MELEE:
+			_net_melee_slash(v, yaw)
 		return
 	var nn: Node3D = v.node
 	if nn != null and is_instance_valid(nn):
@@ -1730,12 +1761,30 @@ func _apply_hero_act(nid: int, act: int, yaw: float) -> void:
 		v.att_until = 0
 	else:
 		v.att_until = now + 620
+	if act == NetSession.ACT_ATTACK_MELEE:
+		_net_melee_slash(v, yaw)
 	# 攻击特效：host 远程普攻的枪口粒子（Hero._perform_attack 里 Vfx.cast_burst）不进 FX 流，
 	# 客户端本地补一次；只对英雄远程普攻加，其余保持与 host 一致。
 	if is_hero and act == NetSession.ACT_ATTACK_SHOOT and nn != null and is_instance_valid(nn):
 		var fwd2 := Vector3(sin(yaw), 0.0, cos(yaw))
 		Vfx.cast_burst(str(v.get("name", "")),
 			nn.global_position + Vector3.UP * 1.2 + fwd2 * 0.65, fwd2, 0.5)
+
+
+# 近战出手挥砍光弧（复刻 host Hero/Minion 攻击里的 Vfx.weapon_hit，仅近处可见）
+func _net_melee_slash(v: Dictionary, yaw: float) -> void:
+	var nn: Node3D = v.get("node")
+	if nn == null or not is_instance_valid(nn):
+		return
+	var sp := _self_pos()
+	var is_hero: bool = int(v.get("type", -1)) == NET_HERO
+	if nn.global_position.distance_to(sp) > (30.0 if is_hero else 20.0):
+		return
+	var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
+	var c: Color = Vfx.color_for_hero(str(v.get("name", ""))) if is_hero else Vfx.team_color(int(v.get("team", 0)))
+	var from := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.85) + fwd * 0.25
+	var to := nn.global_position + Vector3.UP * (1.2 if is_hero else 0.9) + fwd * (2.0 if is_hero else 1.5)
+	Vfx.weapon_hit(from, to, c, Color(1.0, 0.96, 0.86), 1.1 if is_hero else 0.9)
 
 
 func _tick_hero_anims(delta: float) -> void:
@@ -1948,17 +1997,19 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 	$Entities.add_child(node)
 	# 行走质感：客户端同样用步频起伏（dust=false，粒子只在 host 生成，避免双端预算翻倍）
 	if model_ref != null:
-		var wopts := {"stride": 1.6, "bob": 0.05, "sway": 0.035, "lean": 0.05, "dust": false}
+		# 与 host 各类型 _walk_opts 逐参数对齐（含脚步扬尘 dust_size；龙兵与 host 一样不出尘）
+		var wopts := {"stride": 1.6, "bob": 0.045, "sway": 0.03, "lean": 0.045, "dust_size": 0.26}   # 野怪
 		if typ == NET_HERO:
-			wopts = {"stride": 1.9, "bob": 0.055, "sway": 0.028, "lean": 0.075, "dust": false}
+			wopts = {"stride": 1.9, "bob": 0.055, "sway": 0.028, "lean": 0.075, "dust_size": 0.24}
 		elif typ == NET_MINION:
-			# 客户端与主机同源：地面兵给双腿枢轴、龙兵给双翼枢轴，步频按实际位移推进
 			if name in ["dragon", "storm", "shadow_dragon"]:
 				wopts = {"stride": 1.7, "bob": 0.075, "sway": 0.036, "lean": 0.05, "dust": false,
 					"wings": [model_ref.get_node_or_null("ModelPivot/WingL"),
 						model_ref.get_node_or_null("ModelPivot/WingR")]}
+			elif name == "siege":
+				wopts = {"stride": 1.3, "bob": 0.022, "sway": 0.03, "lean": 0.02, "dust_size": 0.16}
 			else:
-				wopts = {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust": false,
+				wopts = {"stride": 1.06, "bob": 0.045, "sway": 0.032, "lean": 0.06, "dust_size": 0.18,
 					"legs": [model_ref.get_node_or_null("ModelPivot/LegL"),
 						model_ref.get_node_or_null("ModelPivot/LegR")],
 					"leg_swing": 0.52 if name == "super" else 0.62}
