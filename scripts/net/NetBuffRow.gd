@@ -26,7 +26,8 @@ func _us() -> float:
 	return UiKit.scale()
 
 func _build() -> void:
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# PASS：本层全屏但不拦截事件（IGNORE 会让子节点 BuffIcon 永远收不到点击）
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var us := _us()
 	# 详情弹层（同主机 BuffInfoPanel：_apply_panel_style(0.88) 纯黑半透明，标题金字 + 说明白字）
@@ -118,8 +119,7 @@ func _apply_row(c: Array, cur: Dictionary) -> void:
 		node = UI_Manager.BuffIcon.new()
 		node.key = key
 		add_child(node)
-		node.mouse_filter = Control.MOUSE_FILTER_STOP   # BuffIcon._ready 置 IGNORE，此处开启点按
-		node.gui_input.connect(_on_icon_input.bind(key))
+		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_nodes[key] = node
 	var rgb: Array = c[2]
 	node.apply({
@@ -134,10 +134,34 @@ func _apply_row(c: Array, cur: Dictionary) -> void:
 	})
 	cur[key] = node
 
-func _on_icon_input(ev: InputEvent, key: String) -> void:
-	var press := (ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT) or (ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed)
-	if not press:
+## 统一点击入口：本层全屏（PASS）但子控件在 IGNORE 父层下收不到 GUI 事件，
+## 所以在 _input 阶段自己做命中检测（鼠标左键/触屏按下），命中即弹详情并吃掉事件。
+func _input(event: InputEvent) -> void:
+	if not visible or _nodes.is_empty():
 		return
+	var pressed := false
+	var pos := Vector2.ZERO
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		pressed = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+		pos = mb.position
+	elif event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		pressed = st.pressed
+		pos = st.position
+	if not pressed:
+		return
+	for key in _nodes.keys():
+		var node = _nodes[key]
+		if node == null or not is_instance_valid(node) or not node.visible:
+			continue
+		if node.get_global_rect().has_point(pos):
+			_toggle_key(str(key))
+			get_viewport().set_input_as_handled()
+			return
+
+
+func _toggle_key(key: String) -> void:
 	if _sel_key == key:
 		_close_info()
 	else:
@@ -145,6 +169,12 @@ func _on_icon_input(ev: InputEvent, key: String) -> void:
 		var node = _nodes.get(key)
 		if node:
 			_update_info(node, get_viewport().get_visible_rect().size.x)
+
+func _on_icon_input(ev: InputEvent, key: String) -> void:
+	var press := (ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT) or (ev is InputEventScreenTouch and (ev as InputEventScreenTouch).pressed)
+	if not press:
+		return
+	_toggle_key(key)
 
 func _close_info() -> void:
 	_sel_key = ""
@@ -177,6 +207,7 @@ func _update_info(node, vw: float) -> void:
 		_info_desc.size = Vector2(text_w, desc_h)
 		_info_desc.position = Vector2(15, 10.0 + title_h + 4.0)
 	_info.visible = true
+	_info.move_to_front()
 	_position_info(node, vw)
 
 func _position_info(node, vw: float) -> void:
@@ -189,4 +220,6 @@ func _position_info(node, vw: float) -> void:
 	if py < 96.0:
 		py = float(node.position.y) + float(node.size.y) + 12.0
 	_info.position = Vector2(cx - half, py)
+
+
 
