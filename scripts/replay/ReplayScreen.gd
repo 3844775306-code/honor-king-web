@@ -2874,6 +2874,19 @@ func _push_event(ev: Dictionary) -> void:
 			SkillFxPresenter.spawn_kind(int(ev.get("kind", 24)), fp, int(ev.get("tm", 0)),
 				float(ev.get("r", 1.0)), float(ev.get("life", 0.5)), str(ev.get("caster", "")))
 		return
+	if kind0 == "hitfx":
+		var evt_h: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt_h - _t) < 0.9:
+			var hp2 := Vector3(float(ev.get("x", 0)) / 100.0, float(ev.get("y", 0)) / 100.0,
+				float(ev.get("z", 0)) / 100.0)
+			var hd := Vector3(float(ev.get("dx", 0)), float(ev.get("dy", 0)), float(ev.get("dz", 1)))
+			var hc1: Array = ev.get("c1", [])
+			var hc2: Array = ev.get("c2", [])
+			var hc1c := Color(float(hc1[0]), float(hc1[1]), float(hc1[2])) if hc1.size() >= 3 else Color.WHITE
+			var hc2c := Color(float(hc2[0]), float(hc2[1]), float(hc2[2])) if hc2.size() >= 3 else Color.WHITE
+			Vfx.hit_impact(hp2, hd, hc1c, hc2c, float(ev.get("sf", 1.0)),
+				str(ev.get("tk", "hero")), str(ev.get("sk", "hero")), int(ev.get("crit", 0)) == 1)
+		return
 	if kind0 == "cast" or kind0 == "atk":
 		var evt0: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt0 - _t) < 0.9:

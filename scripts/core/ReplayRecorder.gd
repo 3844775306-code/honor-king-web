@@ -575,6 +575,21 @@ func note_fx(kind: int, pos: Vector3, team: int, r: float, life: float, caster: 
 		"caster": str(caster)})
 
 
+## 弹体命中特效（Bullet.on_hit → Vfx.hit_impact）：回放按同参数重放
+func note_hit_impact(pos: Vector3, dir: Vector3, c1: Color, c2: Color, scale_f: float = 1.0,
+		target_kind: String = "hero", source_kind: String = "hero", crit: bool = false) -> void:
+	if _saved or not _started:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_events.append({"t": int(round(gt * 1000.0)), "k": "hitfx",
+		"x": int(round(pos.x * 100.0)), "y": int(round(pos.y * 100.0)), "z": int(round(pos.z * 100.0)),
+		"dx": snappedf(dir.x, 0.01), "dy": snappedf(dir.y, 0.01), "dz": snappedf(dir.z, 0.01),
+		"c1": [snappedf(c1.r, 0.01), snappedf(c1.g, 0.01), snappedf(c1.b, 0.01)],
+		"c2": [snappedf(c2.r, 0.01), snappedf(c2.g, 0.01), snappedf(c2.b, 0.01)],
+		"sf": snappedf(float(scale_f), 0.01), "tk": str(target_kind), "sk": str(source_kind),
+		"crit": 1 if crit else 0})
+
+
 ## 普攻出手（Hero._perform_attack 里调用）：按英雄限流，避免每帧刷爆事件表
 func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: Color,
 		is_melee: bool = false, target_kind: String = "", target_r: float = 0.85, target_h: float = 1.15) -> void:

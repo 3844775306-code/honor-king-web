@@ -161,6 +161,9 @@ func hit_impact(pos: Vector3, dir: Vector3, c1: Color, c2: Color, scale_f: float
 		target_kind: String = "hero", source_kind: String = "hero", crit: bool = false) -> void:
 	if quality <= 0 or get_tree() == null:
 		return
+	var _rec_h = get_tree().get_first_node_in_group("replay_recorder")
+	if _rec_h != null and _rec_h.has_method("note_hit_impact"):
+		_rec_h.call("note_hit_impact", pos, dir, c1, c2, scale_f, target_kind, source_kind, crit)
 	var near := _near_local(pos, 30.0)
 	# 只做本地玩家视野内的命中特效（远处对射看不到，省移动端粒子预算）
 	if not near:
