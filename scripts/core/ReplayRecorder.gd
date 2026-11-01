@@ -394,7 +394,10 @@ func _sample(delta: float, finishing: bool) -> void:
 			lock_on = 1
 			ltx = int(round(lt.global_position.x * 100.0))
 			ltz = int(round(lt.global_position.z * 100.0))
-		trow[int(tidx)] = [hp2, 1 if hp2 > 0 else 0, ltx, ltz, lock_on]
+		trow[int(tidx)] = [hp2, 1 if hp2 > 0 else 0, ltx, ltz, lock_on,
+			1 if bool(t.tower_shield_active) else 0,
+			int(round(float(t.tower_shield) * 10.0)),
+			1 if bool(t.shield_protected_no_minion) else 0]
 	_frames.append({
 		"t": t_ms, "h": hero_row, "tn": trow,
 		"g": [int(round(float(bm.get("team_player_gold")))), int(round(float(bm.get("team_enemy_gold"))))],
