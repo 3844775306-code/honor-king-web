@@ -104,6 +104,10 @@ var _route_hold := 0.0              # 加载层满格后额外停留（客户端
 var _route_count := 0               # 已触发的切场景次数（探针/防重入）
 var _blocked_roles := {}     # 本机不可选的职责（他人已占）
 var _my_seat := 1            # 本机在场席位下标（1..5；>5 即旁观）
+var _my_seat_avatar = null   # 本机席位头像/英雄名/昵称，选中时即时刷新
+var _my_seat_hero_lab: Label = null
+var _my_seat_nick_lab: Label = null
+var _my_seat_sub_lab: Label = null
 var _prev: HeroPreview = null      # 中央 3D 立绘
 var _stage_title: Label = null     # 顶部阶段标题
 var _countdown_lab: Label = null   # 倒计时环内数字
@@ -357,6 +361,10 @@ func _clear_stack() -> void:
 	_room_camp_lab = null
 	_room_camp = 0
 	_room_camp_btns = {}
+	_my_seat_avatar = null
+	_my_seat_hero_lab = null
+	_my_seat_nick_lab = null
+	_my_seat_sub_lab = null
 	_lane_role = ""
 	_lane_locked = false
 	if _summ_tip != null and is_instance_valid(_summ_tip):
@@ -1832,12 +1840,15 @@ func _seat_view(i: int, actual: Dictionary, enemy: bool) -> Dictionary:
 	var hero := str(actual.get("hero", ""))
 	if hero == "":
 		hero = str(_draft_picks.get("%d-%d" % [team, i], ""))
+	# 本机尚未锁定时，侧边席位卡也即时显示正在选择的英雄（与单机预览一致）
+	if hero == "" and bool(actual.get("is_me", false)) and _sel_hero != "":
+		hero = _sel_hero
 	var role := str(actual.get("role", ""))
 	if role == "" and hero != "":
 		role = str(HeroPickData.HERO_ROLE.get(hero, ""))
 	var summ := str(actual.get("summoner", ""))
 	if summ == "" and hero != "":
-		summ = HeroPickData.recommended_summoner(hero)
+		summ = _sel_sid if (bool(actual.get("is_me", false)) and _sel_sid != "") else HeroPickData.recommended_summoner(hero)
 	var is_ai := actual.is_empty()
 	var nm := str(actual.get("name", ""))
 	if bool(actual.get("is_me", false)):
@@ -2291,9 +2302,14 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	p.add_child(row)
-	row.add_child(SelectArt.Avatar.new(hero, accent, 76))
+	var av = SelectArt.Avatar.new(hero, accent, 76)
+	row.add_child(av)
+	if mine:
+		_my_seat_avatar = av
 	var v := VBoxContainer.new()
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.custom_minimum_size = Vector2(120, 0)
 	v.add_theme_constant_override("separation", 1)
 	row.add_child(v)
 
@@ -2321,7 +2337,11 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 		UiKit.C_GOLD if mine else (COL_TEXT if hero != "" else COL_DIM))
 	hero_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	hero_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	hero_lab.clip_text = false
 	v.add_child(hero_lab)
+	if mine:
+		_my_seat_hero_lab = hero_lab
+		_my_seat_nick_lab = pname
 
 	var sub_txt := "红方 · 电脑控制"
 	if hero != "":
@@ -2335,6 +2355,8 @@ func _mk_seat_card(idx: int, seat: Dictionary, enemy: bool) -> PanelContainer:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	sub.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	v.add_child(sub)
+	if mine:
+		_my_seat_sub_lab = sub
 	return p
 
 
@@ -2929,7 +2951,21 @@ func _sync_pick_ui() -> void:
 	if _pick_summary != null and _sel_hero != "" and _sel_sid != "":
 		_pick_summary.text = "待锁定：%s · %s + %s" % [str(HeroPickData.HERO_ROLE[_sel_hero]), _sel_hero, _sel_summ]
 		_pick_summary.add_theme_color_override("font_color", COL_GOLD)
+	_refresh_my_seat_live()
 	_refresh_preview()
+
+
+func _refresh_my_seat_live() -> void:
+	if _my_seat_nick_lab != null and is_instance_valid(_my_seat_nick_lab):
+		_my_seat_nick_lab.text = "我 · %s" % _local_nickname()
+	if _my_seat_hero_lab != null and is_instance_valid(_my_seat_hero_lab):
+		_my_seat_hero_lab.text = _sel_hero if _sel_hero != "" else "选择中"
+		_my_seat_hero_lab.add_theme_color_override("font_color", COL_GOLD if _sel_hero != "" else COL_DIM)
+	if _my_seat_sub_lab != null and is_instance_valid(_my_seat_sub_lab):
+		var role := str(HeroPickData.HERO_ROLE.get(_sel_hero, ""))
+		_my_seat_sub_lab.text = ("%s · %s" % [role, _sel_summ]) if _sel_hero != "" else "职责未定"
+	if _my_seat_avatar != null and is_instance_valid(_my_seat_avatar):
+		_my_seat_avatar.set_hero(_sel_hero)
 
 
 # 中栏立绘/覆盖层：随本机草稿实时刷新（未选 = 提示胶囊，已选 = 3D 模型 + 职责色 + chip 行）
