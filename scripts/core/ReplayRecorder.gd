@@ -51,7 +51,9 @@ var _last_kills: Array = []
 var _last_levels: Array = []
 var _last_deaths: Array = []
 var _buff_frames: Array = []
-var _last_hit_ms := {}   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
+var _ui_frames: Array = []      # 回放 HUD：每英雄 [gold, 目标摘要, 推荐装bundle]（2Hz）
+var _last_hit_ms := {}
+var _rb_last := {}   # hero idx -> 上次推荐装 bundle（变化才记录）   # 受击反馈事件节流（每英雄 100ms）      # 回放 BUFF 图标行：[{t, b:[[hero_idx, top, bot],…]}]（2Hz）
 var _buff_defs: Dictionary = {}   # buff key -> [glyph,[r,g,b],name,desc]
 var _sample_n := 0
 var _last_turrets_alive := -1
@@ -148,12 +150,21 @@ func _try_start() -> void:
 			elif _si == 4 and h.skills.size() > 4 and h.skills[4] != null:
 				_tot = maxf(0.001, float(h.skills[4].cooldown))
 			_sd.append(_tot)
+		var _sk_names: Array = []
+		for _si2 in range(mini(4, h.skills.size())):
+			_sk_names.append(str(h.skills[_si2].skill_name) if h.skills[_si2] != null else "")
 		_hero_meta.append({
 			"name": str(h.display_name),
 			"team": int(h.team),
 			"ai": bool(h.is_ai),
 			"nick": str(h.player_name),
 			"sd": _sd,
+			"role": str(h.role),
+			"skills": _sk_names,
+			"summoner": str(h.summoner_skill.skill_name) if h.summoner_skill != null else "",
+			"summoner_cd": float(h.summoner_cooldown),
+			"summoner_cdmax": float(h.summoner_skill.cooldown) if h.summoner_skill != null else 1.0,
+			"has4": 1 if (h.skills.size() > 3 and h.skills[3] != null) else 0,
 		})
 		_last_kills.append(int(h.kills))
 		_last_levels.append(int(h.level))
@@ -264,6 +275,34 @@ func _sample(delta: float, finishing: bool) -> void:
 				bents.append([int(hidx), top, bot])
 		if not bents.is_empty():
 			_buff_frames.append({"t": t_ms, "b": bents})
+	# 回放 HUD 数据（2Hz）：金币 / 当前目标摘要 / 推荐装 bundle（仅真人英雄，AI 为空）
+	_sample_n += 1
+	if _sample_n % 2 == 0:
+		var urow: Array = []
+		for hu in get_tree().get_nodes_in_group("heroes"):
+			if not (hu is Hero):
+				continue
+			var uidx = _hero_ids.get(hu.get_instance_id())
+			if uidx == null:
+				continue
+			var tgt_row: Array = []
+			var tgt = hu.current_target
+			if tgt == null or not is_instance_valid(tgt) or tgt.health <= 0.0:
+				tgt = hu.manual_target
+			if tgt != null and is_instance_valid(tgt) and tgt.health > 0.0:
+				tgt_row = [0, int(tgt.team), str(tgt.display_name), int(tgt.level),
+					int(round(tgt.health)), int(round(_maxhp_of_ent(tgt))),
+					int(round(tgt.attack)), 0, int(round(tgt.armor)), int(round(tgt.magic_resist))]
+			var rb = null
+			if _sample_n % 4 == 0:
+				var nrb = UiManager._compute_recommended_bundle(hu, true)
+				var sig := str(nrb)
+				if _rb_last.get(uidx, "") != sig:
+					_rb_last[uidx] = sig
+					rb = nrb
+			urow.append([int(uidx), int(hu.gold), tgt_row, rb])
+		if not urow.is_empty():
+			_ui_frames.append({"t": t_ms, "h": urow})
 	var brows: Array = []
 	for b in get_tree().get_nodes_in_group("projectiles"):
 		if not is_instance_valid(b):
@@ -461,6 +500,16 @@ func note_attack(hero_name: String, from_pos: Vector3, to_pos: Vector3, color: C
 	})
 
 
+func _maxhp_of_ent(e) -> float:
+	if e == null:
+		return 1.0
+	if e.get("actual_max_health") != null:
+		return float(e.actual_max_health)
+	if e.get("max_health") != null:
+		return float(e.max_health)
+	return 1.0
+
+
 func _markers_to_str(h) -> String:
 	var parts: Array = []
 	for src in h.get_marker_sources():
@@ -627,6 +676,7 @@ func _save() -> void:
 		"events": _events,
 		"buff_frames": _buff_frames,
 		"buff_defs": _buff_defs,
+		"ui_frames": _ui_frames,
 	}
 	var f := FileAccess.open_compressed(path, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:

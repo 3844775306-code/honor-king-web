@@ -11,6 +11,10 @@ const NetBuffRowScript = preload("res://scripts/net/NetBuffRow.gd")
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")   # 三端共享动画 clip 映射
 const ProjectilePresenter = preload("res://scripts/presentation/ProjectilePresenter.gd")   # 三端共享子弹表现
 const SkillFxPresenter = preload("res://scripts/presentation/SkillFxPresenter.gd")   # 三端共享技能特效
+const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
+const NetRecommendBarScript = preload("res://scripts/net/NetRecommendBar.gd")
+const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
+const RosterViewScript = preload("res://scripts/ui/RosterView.gd")
 const HeroInfoControlScript = preload("res://scripts/ui/HeroInfoControl.gd")
 const ReplayHudScript = preload("res://scripts/replay/ReplayHud.gd")
 const TEAM_COL := [Color(0.28, 0.72, 1.0), Color(1.0, 0.36, 0.30)]
@@ -62,6 +66,15 @@ var _buff_defs: Dictionary = {}
 var _buff_ptr := 0
 var _buff_view = null
 var _buff_sig := ""
+var _ui_frames: Array = []
+var _ui_ptr := 0
+var _pad = null
+var _rec_bar = null
+var _tgt_panel = null
+var _rview = null
+var _rview_layer: CanvasLayer = null
+var _last_hero_rows: Array = []
+var _rb_cache := {}   # hero idx -> 最近一次推荐装 bundle（录像变化才记录，播放时续用）
 var _hero_uis: Array = []          # [{info, fake, i}]
 var _hero_state: Array = []        # 每帧英雄状态（血/蓝/等级/经验/位置）
 var _unit_world: Array = []        # 本帧需要画血条的单位（世界坐标）
@@ -129,6 +142,7 @@ func _ready() -> void:
 	_popups_data = _doc.get("popups", [])
 	_buff_frames = _doc.get("buff_frames", [])
 	_buff_defs = _doc.get("buff_defs", {})
+	_ui_frames = _doc.get("ui_frames", [])
 	# 飘字/音效并入事件流（按时间排序），回放时与击杀/技能共用同一套推进逻辑
 	var _combined: Array = (_doc.get("events", []) as Array).duplicate()
 	_combined.append_array(_popups_data)
@@ -373,6 +387,27 @@ func _build_hud() -> void:
 	_buff_view = NetBuffRowScript.new()
 	bcl.add_child(_buff_view)
 	_buff_view.refresh({})
+	# —— 主视角操作键（与单机完全同布局的 NetTouchPad，回放只显示不响应）——
+	var pcl := CanvasLayer.new()
+	pcl.layer = 100
+	add_child(pcl)
+	_pad = NetTouchPadScript.new()
+	pcl.add_child(_pad)
+	_pad.touch_active = false
+	_pad.visible = false
+	# —— 目标单位信息框（复用联机同款 NetTargetPanel）——
+	var tcl := CanvasLayer.new()
+	tcl.layer = 122
+	add_child(tcl)
+	_tgt_panel = NetTargetPanelScript.new()
+	tcl.add_child(_tgt_panel)
+	# —— 金币/推荐装购买卡片（复用联机同款 NetRecommendBar）——
+	var rcl := CanvasLayer.new()
+	rcl.layer = 65
+	add_child(rcl)
+	_rec_bar = NetRecommendBarScript.new()
+	rcl.add_child(_rec_bar)
+	_rec_bar.visible = false
 
 
 func _update_world_hud(t: float) -> void:
@@ -569,7 +604,9 @@ func _update_world_hud(t: float) -> void:
 			"feed": feed_st, "objectives": obj_st,
 		}
 		_hud2.queue_redraw()
+		_last_hero_rows = heroes_st
 		_update_buff_row()
+		_update_replay_controls()
 
 
 func _build_ui() -> void:
@@ -1284,6 +1321,120 @@ func _update_buff_row() -> void:
 		return
 	_buff_sig = sig
 	_buff_view.refresh({"top": top, "bot": bot})
+
+
+## 回放操作盘/目标框/推荐装：完全复刻单机布局与数据来源（NetTouchPad / NetTargetPanel / NetRecommendBar）
+func _update_replay_controls() -> void:
+	if _pad == null:
+		return
+	var fi: int = int(_follow_hero)
+	if fi < 0 or fi >= _heroes.size() or fi >= _hero_state.size():
+		_pad.visible = false
+		if _tgt_panel != null:
+			_tgt_panel.refresh([])
+		if _rec_bar != null:
+			_rec_bar.visible = false
+		return
+	_pad.visible = true
+	var meta: Dictionary = _heroes[fi] if _heroes[fi] is Dictionary else {}
+	var hs: Dictionary = _hero_state[fi] if _hero_state[fi] is Dictionary else {}
+	var cds: Array = hs.get("cds", [])
+	var totals: Array = hs.get("cd_total", [])
+	var levels: Array = hs.get("slevels", [])
+	var sk_names: Array = meta.get("skills", [])
+	for i in range(3):
+		_pad.set_skill_state(i, {
+			"name": str(sk_names[i]) if i < sk_names.size() else "",
+			"level": int(levels[i]) if i < levels.size() else 0,
+			"max_level": 6 if i < 2 else 3,
+			"cd": float(cds[i]) if i < cds.size() else 0.0,
+			"cdmax": float(totals[i]) if i < totals.size() else 1.0,
+			"mana_ok": true,
+		})
+		_pad.set_upgrade_visible(i, false)
+	if int(meta.get("has4", 0)) == 1:
+		_pad.set_extra_skill_visible(true)
+		_pad.set_extra_skill_state({
+			"name": str(sk_names[3]) if sk_names.size() > 3 else "",
+			"level": 1, "max_level": 1,
+			"cd": float(cds[3]) if cds.size() > 3 else 0.0,
+			"cdmax": float(totals[3]) if totals.size() > 3 else 1.0,
+			"mana_ok": true,
+		})
+	else:
+		_pad.set_extra_skill_visible(false)
+	_pad.set_summoner_state({"name": str(meta.get("summoner", "")), "cd": 0.0,
+		"cdmax": float(meta.get("summoner_cdmax", 1.0))})
+	_pad.set_recover_state({"cd": float(cds[4]) if cds.size() > 4 else 0.0, "cdmax": 60.0})
+	for i in range(2):
+		_pad.set_active_visible(i, false)
+	_pad.set_enemy_picker([])
+	var ui_row := _ui_row_for(fi)
+	if _tgt_panel != null:
+		var tr: Array = ui_row.get("tgt", []) if ui_row is Dictionary else []
+		_tgt_panel.refresh(tr)
+	if _rec_bar != null:
+		var rb = ui_row.get("rb", null) if ui_row is Dictionary else null
+		if rb is Dictionary:
+			_rec_bar.feed({"gold": int(ui_row.get("gold", 0)), "rb": rb})
+			_rec_bar.visible = true
+		else:
+			_rec_bar.visible = false
+
+
+## 取某英雄最近的 ui 采样（金币/目标/推荐装）
+func _ui_row_for(idx: int) -> Dictionary:
+	if _ui_frames.is_empty():
+		return {}
+	var tms: int = int(round(_t * 1000.0))
+	while _ui_ptr + 1 < _ui_frames.size() and int(_ui_frames[_ui_ptr + 1].get("t", 0)) <= tms:
+		_ui_ptr += 1
+	if int(_ui_frames[_ui_ptr].get("t", 0)) > tms and _ui_ptr > 0:
+		_ui_ptr -= 1
+	var fr: Dictionary = _ui_frames[_ui_ptr]
+	for row in (fr.get("h", []) as Array):
+		if int((row as Array)[0]) == idx:
+			var rb = (row as Array)[3]
+			if rb is Dictionary:
+				_rb_cache[idx] = rb
+			else:
+				rb = _rb_cache.get(idx, null)
+			return {"gold": int((row as Array)[1]), "tgt": (row as Array)[2], "rb": rb}
+	return {}
+
+
+## 点顶部战况带 → 打开全局英雄信息面板（同单机 C 面板，复用 RosterView）
+func _toggle_global_panel() -> void:
+	if _rview == null:
+		_rview_layer = CanvasLayer.new()
+		_rview_layer.layer = 142
+		add_child(_rview_layer)
+		_rview = RosterViewScript.new()
+		_rview_layer.add_child(_rview)
+		_rview.closed_by_user.connect(func():
+			if _rview != null:
+				_rview.visible = false)
+	if _rview.visible:
+		_rview.visible = false
+		return
+	var rows: Array = []
+	for i in range(_heroes.size()):
+		var meta: Dictionary = _heroes[i] if _heroes[i] is Dictionary else {}
+		var hs: Dictionary = _hero_state[i] if i < _hero_state.size() and _hero_state[i] is Dictionary else {}
+		var ui := _ui_row_for(i)
+		var mx: float = maxf(1.0, float(hs.get("mx", 1.0)))
+		rows.append({
+			"name": str(meta.get("name", "")), "hero": str(meta.get("name", "")),
+			"team": int(meta.get("team", 0)), "level": int(hs.get("lvl", 1)),
+			"own": i == int(_follow_hero), "hp_ratio": clampf(float(hs.get("hp", 0.0)) / mx, 0.0, 1.0),
+			"k": int(hs.get("k", 0)), "d": int(hs.get("d", 0)), "a": int(hs.get("a", 0)),
+			"gold": int(ui.get("gold", 0)), "is_ai": bool(meta.get("ai", true)),
+			"role": str(meta.get("role", "")), "dead": int(hs.get("alive", 1)) == 0,
+			"respawn": float(hs.get("revive", 0.0)),
+			"chips": [], "skills": [], "lane": -1, "mark": 0, "equips": [],
+		})
+	_rview.set_rows(rows, "attr")
+	_rview.visible = true
 
 
 func _update_postfx(delta: float) -> void:
@@ -2103,6 +2254,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed and _hud2 != null:
 			var hitd: Dictionary = _hud2.call("hit", mb.position)
 			var hk := str(hitd.get("type", ""))
+			if hk == "band":
+				_toggle_global_panel()
+				return
 			if hk == "map":
 				_mm_drag = true
 				_mm_was_follow = _follow_hero

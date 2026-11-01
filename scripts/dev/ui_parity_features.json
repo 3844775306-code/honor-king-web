@@ -735,6 +735,58 @@
           "death_overlay|_death"
         ]
       }
+    },
+    {
+      "id": "replay_touch_pad",
+      "name": "回放主视角操作键(技能/普攻/回城/恢复/推塔/小兵/召唤)",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "NetTouchPad"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_target_panel",
+      "name": "回放目标单位信息框",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "NetTargetPanel"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_rec_bar",
+      "name": "回放金币/推荐装购买卡片",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "NetRecommendBar"
+        ]
+      },
+      "accepted": {}
+    },
+    {
+      "id": "replay_global_panel",
+      "name": "回放点击战况带打开全局信息面板",
+      "target": [
+        "replay"
+      ],
+      "patterns": {
+        "replay": [
+          "RosterView"
+        ]
+      },
+      "accepted": {}
     }
   ]
 }

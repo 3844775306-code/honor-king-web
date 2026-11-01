@@ -41,8 +41,11 @@ func _roster_rect() -> Rect2:
 	return Rect2(40.0 + UiKit.safe_left(), top, w, h)
 
 
-## 命中测试：返回 {type:"map", x, z} / {type:"hero", idx} / {}
+## 命中测试：返回 {type:"map", x, z} / {type:"hero", idx} / {type:"band"} / {}
 func hit(pos: Vector2) -> Dictionary:
+	var W: float = size.x if size.x > 1.0 else _vp().x
+	if Rect2(W - 781.0, 6.0, 410.0, 190.0).has_point(pos) or Rect2(W - 776.0, 8.0, 250.0, 44.0).has_point(pos):
+		return {"type": "band"}
 	var mr := _minimap_rect()
 	if mr.has_point(pos):
 		var fx: float = clampf((pos.x - mr.position.x) / mr.size.x, 0.0, 1.0)
@@ -72,7 +75,7 @@ func _draw() -> void:
 	var follow: int = int(st.get("follow", -1))
 	if follow >= 0:
 		_draw_attrs(follow)
-	_draw_skills(follow)
+	# 技能键由真实操作盘（NetTouchPad，与单机同布局）负责，这里不再自绘
 
 
 # ---------------- 对战信息 ----------------
