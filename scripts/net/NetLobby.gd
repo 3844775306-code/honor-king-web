@@ -145,6 +145,7 @@ var _select_pick_layer = null
 var _select_pick_summary = null
 var _select_nick_edit = null
 var _draft_turn: Array = []        # 当前步 [team, seat]
+var _draft_order: Array = []       # host：本局随机化的 10 步选人顺序
 var _draft_picks := {}             # "team-seat" -> 英雄名（我方 AI/敌方席位也按顺序自动选，用于展示/占位）
 var _draft_taken := {}             # 展示阵容/他人已选英雄（本机不可再选）
 var _draft_ai_timer := 0.0         # host：AI/敌方席位自动选人等待计时
@@ -1588,9 +1589,12 @@ func _tick_draft_ui() -> void:
 
 
 func _host_draft_reset() -> void:
+	# 房主每局随机化 10 个席位的选人顺序（不再固定蓝方/房主先选）
+	_draft_order = SEL_DRAFT_ORDER.duplicate(true)
+	_draft_order.shuffle()
 	_draft_step = 0
 	_draft_left = SEL_DRAFT_TURN_TIME
-	_draft_turn = SEL_DRAFT_ORDER[0]
+	_draft_turn = _draft_order[0]
 	_draft_picks = {}
 	_draft_taken = {}
 	_draft_ai_timer = 0.0
@@ -1611,7 +1615,7 @@ func _host_draft_advance() -> void:
 	_draft_left = SEL_DRAFT_TURN_TIME
 	_draft_ai_timer = 0.0
 	_draft_ai_wait = randf_range(1.2, 2.2)
-	_draft_turn = SEL_DRAFT_ORDER[_draft_step] if _draft_step < SEL_DRAFT_ORDER.size() else []
+	_draft_turn = _draft_order[_draft_step] if _draft_step < _draft_order.size() else []
 	_host_draft_push()
 
 
@@ -2758,10 +2762,7 @@ func _pick_hero(hname: String) -> void:
 			_pick_status.text = "本机分路：%s · 只能选择%s" % [PlayerPrefs.get_lane(), _lane_role]
 			_pick_status.add_theme_color_override("font_color", COL_ERR)
 		return
-	# 顺序选人：非本机回合全部不可选；展示阵容/他人已选的英雄不可再选
-	if _draft_active() and not _draft_is_my_turn():
-		_show_pick_error("还没轮到你 · 等待 %s" % _draft_turn_label())
-		return
+	# 英雄可随时预选/查看；只有锁定受自己的选人回合限制（避免非当前回合误锁）
 	if _draft_done():
 		return
 	if _draft_taken.has(hname):
