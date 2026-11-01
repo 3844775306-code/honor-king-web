@@ -43,6 +43,14 @@ func _ready() -> void:
 	_edge.connect("done", Callable(self, "_on_edge_done"))
 	_edge.connect("failed", Callable(self, "_on_edge_failed"))
 	_fallback_blip = true
+	# 本地 TTS 走 Windows WinRT 语音合成（SAPI/WinRT SpeechSynthesis）。在没有中文语音包、
+	# 精简版系统或受限环境下，引擎内部会抛 winrt::hresult_error 且未捕获，直接把进程打崩
+	# （表现为「导出的 exe 双击打不开 / 一闪退」，headless 不崩是因为没有 TTS 设备）。
+	# 因此本地 TTS 默认关闭、按需在 player_prefs 里把 op_tts_local 打开；语音播报仍走 Edge 在线语音。
+	if not PlayerPrefs.opt_bool("tts_local", false):
+		if OS.is_debug_build():
+			print("[VOICE] 本地 TTS 未启用（op_tts_local=false），跳过 WinRT 语音枚举")
+		return
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_TEXT_TO_SPEECH):
 		return
 	if not DisplayServer.has_method("tts_speak") or not DisplayServer.has_method("tts_get_voices"):
