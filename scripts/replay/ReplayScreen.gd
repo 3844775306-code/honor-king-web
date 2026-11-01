@@ -1493,6 +1493,11 @@ func _push_event(ev: Dictionary) -> void:
 				else:
 					SfxManager.call("_play_sfx", key, float(ev.get("v", 0.0)))
 		return
+	if kind0 == "item":
+		var evt5: float = float(ev.get("t", 0)) / 1000.0
+		if _playing and absf(evt5 - _t) < 0.9:
+			_play_item_fx(str(ev.get("n", "")), str(ev.get("c", "")), str(ev.get("i", "")))
+		return
 	if kind0 == "feed":
 		var evt4: float = float(ev.get("t", 0)) / 1000.0
 		if _playing and absf(evt4 - _t) < 0.9:
@@ -1579,9 +1584,44 @@ func _play_cast_fx(ev: Dictionary) -> void:
 	sk.self_displacement = float(skd.get("self_displacement", -1.0))
 	sk.is_channeling = bool(skd.get("is_channeling", false))
 	Vfx.play_spell(nm, int(ev.get("s", 0)), cp + Vector3.UP * 1.2 + fd * 0.65, tp, sk, fd, true)
+	# 技能持续区域（甄姬水区/周瑜火区这类）：用对局同一套 ground_zone 复现
+	if int(skd.get("type", 1)) != 4 and sk.radius >= 2.0 and sk.duration >= 0.6:
+		var zn := Vfx.ground_zone(sk.radius, int(ev.get("tm", 0)), nm, maxf(0.8, sk.duration))
+		if zn != null and is_instance_valid(zn):
+			zn.position = Vector3(tp.x, 0.06, tp.z)
+			add_child(zn)
 
 
 ## 普攻出手特效：枪口闪光 + 命中火花（与对局同一套 Vfx）
+## 装备主动：按类别用与对局同源的 Vfx 表现（主动装备本体特效较少，主要是光环/爆发）
+func _play_item_fx(nm: String, cat: String, _item: String) -> void:
+	var hi: int = _hero_index_by_name(nm)
+	if hi < 0 or hi >= _hero_pos.size():
+		return
+	var p: Vector3 = _hero_pos[hi] + Vector3.UP * 0.15
+	var col := Color(0.6, 0.85, 1.0)
+	match cat:
+		"df":
+			col = Color(0.7, 0.95, 1.0)
+		"haste":
+			col = Color(0.45, 0.95, 1.0)
+		"range":
+			col = Color(1.0, 0.86, 0.45)
+		"thorn":
+			col = Color(0.85, 0.6, 0.4)
+		"blood":
+			col = Color(1.0, 0.32, 0.28)
+		"ice":
+			col = Color(0.6, 0.85, 1.0)
+		"stasis":
+			col = Color(1.0, 0.88, 0.4)
+	Vfx.cast_glow(p + Vector3.UP * 1.0, col, 1.4, 0.6)
+	Vfx.sigil(p, col, 2.2, 0.55)
+	Vfx.shockwave(p, 2.0, col, 0.4)
+	if cat == "stasis":
+		Vfx.pillar(p, col, 1.2, 5.0, 0.8)
+
+
 func _play_attack_fx(ev: Dictionary) -> void:
 	var nm := str(ev.get("n", ""))
 	var from_p := Vector3(float(ev.get("cx", 0)) / 100.0, 1.2, float(ev.get("cz", 0)) / 100.0)

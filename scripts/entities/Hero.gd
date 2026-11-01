@@ -4574,7 +4574,7 @@ func _finish_casting():
 	var _replay_rec = get_tree().get_first_node_in_group("replay_recorder")
 	if _replay_rec != null:
 		_replay_rec.call("note_cast", display_name, pending_skill_index,
-			global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, _cast_fwd, skill)
+			global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, _cast_fwd, skill, int(team))
 	match skill.type:
 		0:
 			# 优先使用瞄准时选中的目标（拖拽吸附 / 悬停锁定 / 联机 C_CAST 传入实体）；

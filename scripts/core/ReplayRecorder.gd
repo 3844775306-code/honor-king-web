@@ -341,8 +341,17 @@ func note_feed(actor: String, actor_team: int, desc: String, victim: String, vic
 		"d": str(desc), "v": str(victim), "vt": int(victim_team), "as": assists})
 
 
+## 装备主动（由 SfxManager.try_item_active_sfx 在真实对局中回调）
+func note_item_active(hero_name: String, item_id: String, cat: String) -> void:
+	if _saved or not _started:
+		return
+	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
+	_events.append({"t": int(round(gt * 1000.0)), "k": "item", "n": str(hero_name),
+		"i": str(item_id), "c": str(cat)})
+
+
 func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Vector3,
-		facing: Vector3, skill) -> void:
+		facing: Vector3, skill, team: int = 0) -> void:
 	if _saved or not _started:
 		return
 	var gt: float = float(bm.get("game_time")) if bm != null and is_instance_valid(bm) else 0.0
@@ -360,7 +369,7 @@ func note_cast(hero_name: String, slot: int, caster_pos: Vector3, target_pos: Ve
 		"cx": int(round(caster_pos.x * 100.0)), "cz": int(round(caster_pos.z * 100.0)),
 		"tx": int(round(target_pos.x * 100.0)), "tz": int(round(target_pos.z * 100.0)),
 		"fx": snappedf(facing.x, 0.001), "fz": snappedf(facing.z, 0.001),
-		"sk": skd,
+		"sk": skd, "tm": int(team),
 	})
 
 

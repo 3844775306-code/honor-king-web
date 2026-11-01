@@ -510,6 +510,9 @@ func try_crit_sfx(hero_name: String) -> void:
 
 # 装备主动：item_id 唯一变调 + 类别音色（df/haste/range/thorn/blood/ice/stasis）
 func try_item_active_sfx(hero_name: String, item_id: String, cat: String) -> void:
+	var _rrec_item = get_tree().get_first_node_in_group("replay_recorder")
+	if _rrec_item != null:
+		_rrec_item.call("note_item_active", hero_name, item_id, cat)
 	if _is_own(hero_name):
 		_play_sfx("item:%s:%s" % [item_id, cat])
 
