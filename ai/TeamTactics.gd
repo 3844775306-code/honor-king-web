@@ -1,13 +1,16 @@
 class_name TeamTactics
 extends RefCounted
 # 4分钟后团队分推协调（集中式，由 BattleManager 统一调用）
-# 每60秒计算一次双方队伍的分路分配，结果分发到各 HeroAI
+# 每10秒/事件触发重算双方队伍任务，结果分发到各 HeroAI
 
 enum SplitMode { DRAGON, FOUR_ONE, ONE_THREE_ONE, DEFEND }
 
 var bm: BattleManager
 var current_mode: int = SplitMode.FOUR_ONE
-var assignments: Dictionary = {}       # {Hero: int} 映射
+var assignments: Dictionary = {}       # {Hero: int} 映射（兼容旧分路）
+var tasks: Dictionary = {}             # {Hero: TeamTask} 团队主线任务
+var feedback: Dictionary = {}           # {Hero: HeroAI.task_feedback()}
+var _urgent_replan := false
 var dragon_pos: Vector3 = Vector3.ZERO
 var dragon_pos_by_team: Dictionary = {}  # {int: Vector3} 每队各自最近的龙位置
 var defending: Dictionary = {}           # {int: bool} 本秒该队是否收缩防守
@@ -120,6 +123,13 @@ func _enemy_team(team: int) -> int:
 # 己方高地为防守核心：水晶告急 / 敌方兵力压到水晶附近 / 经济大幅落后且塔数劣势 → 全队收缩
 func _should_defend(team: int) -> bool:
 	if _base_threatened(team):
+		return true
+	# 英雄回传：多人残血/需要支援时收缩，而不是只靠经济/塔数全知判断
+	var need_help := 0
+	for h in feedback:
+		if is_instance_valid(h) and int((h as Hero).team) == team and bool((feedback[h] as Dictionary).get("need_help", false)):
+			need_help += 1
+	if need_help >= 2:
 		return true
 	var gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
 	return gold_diff <= -AiConfig.GOLD_GAP_DEFEND and _count_turrets_total(team) < _count_turrets_total(_enemy_team(team))
@@ -269,11 +279,56 @@ func _allocate_team(team: int, mode: int, out_assignments: Dictionary) -> void:
 
 
 
-# 主入口：计算双方队伍的分路分配
+# 开局 0–4 分钟也下发一次基础主线任务：分路/保护射手/打野抓人。
+# 之后由英雄层局部策略执行，4 分钟后改由周期性团队指挥官重规划。
+func create_initial_tasks() -> Dictionary:
+	tasks.clear()
+	assignments.clear()
+	feedback.clear()
+	for team in [Config.Team.PLAYER, Config.Team.ENEMY]:
+		for h in _get_ally_heroes(team):
+			if not h.is_ai:
+				continue
+			var ai: HeroAI = null
+			for child in h.get_children():
+				if child is HeroAI:
+					ai = child
+					break
+			if ai == null:
+				continue
+			assignments[h] = ai.lane
+			tasks[h] = _make_task_for(h, ai.lane)
+	return tasks
+
+
+func request_replan() -> void:
+	_urgent_replan = true
+
+
+func consume_replan_request() -> bool:
+	var v := _urgent_replan
+	_urgent_replan = false
+	return v
+
+
+# 主入口：计算双方队伍的分路分配与 TeamTask
 func allocate_all() -> Dictionary:
-	# 根据游戏时间确定性选择分推模式
-	var minute := int(bm.game_time / 60.0)
+	_urgent_replan = false
+	tasks.clear()
+	feedback.clear()
+	# 重规划时先收一遍英雄反馈，避免指挥官完全靠全知数据判断。
+	for team in [Config.Team.PLAYER, Config.Team.ENEMY]:
+		for h in _get_ally_heroes(team):
+			if not h.is_ai:
+				continue
+			for child in h.get_children():
+				if child is HeroAI:
+					feedback[h] = (child as HeroAI).task_feedback()
+					break
+	# 根据局势选择分推模式（同一局保持模式连续性，避免每10秒随机换策略）
 	var default_mode := SplitMode.FOUR_ONE if randi() % 2 == 0 else SplitMode.ONE_THREE_ONE
+	if current_mode == SplitMode.FOUR_ONE or current_mode == SplitMode.ONE_THREE_ONE:
+		default_mode = current_mode
 	current_mode = default_mode
 	dragon_pos_by_team.clear()
 	defending.clear()
@@ -317,4 +372,80 @@ func allocate_all() -> Dictionary:
 		_allocate_team(team, default_mode, result)
 
 	assignments = result
+	# 把分路结果翻译成结构化主线任务；英雄层不再只收到一个 lane。
+	for h in result:
+		if is_instance_valid(h) and (h as Hero).is_ai:
+			tasks[h] = _make_task_for(h, int(result[h]))
 	return result
+
+
+func _make_task_for(h: Hero, lane: int) -> TeamTask:
+	var t := TeamTask.new()
+	var now := bm.game_time
+	var role := str(h.role)
+	if lane == AiConfig.Lane.JUNGLE:
+		# 开局/龙未刷新时只是“继续刷野”，不能把所有打野都派去一个不存在的龙坑。
+		if not _is_dragon_alive():
+			t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 25, now, 18.0, "刷野/回线", role)
+			return t
+		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
+		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
+		return t
+	if bool(defending.get(h.team, false)):
+		var dl: int = int(defend_lane_by_team.get(h.team, lane))
+		t.setup(TeamTask.Type.DEFEND_LANE, dl, _own_tower_pos(h.team, dl), null, 90, now, 18.0, "防守压力分路", role)
+		return t
+	if role == "辅助":
+		var carry := _find_carry(h.team)
+		if carry != null:
+			t.setup(TeamTask.Type.PEEL, lane, carry.global_position, carry, 45, now, 20.0, "保护射手", role)
+			return t
+	if role == "刺客" and current_mode == SplitMode.ONE_THREE_ONE:
+		var gp := _lane_front_pos(h.team, lane)
+		t.setup(TeamTask.Type.GANK, lane, gp, null, 55, now, 15.0, "抓单/切后", role)
+		return t
+	var push_pos := _lane_front_pos(h.team, lane)
+	t.setup(TeamTask.Type.PUSH_LANE, lane, push_pos, null, 30, now, 25.0, "推进兵线", role)
+	return t
+
+
+func _find_carry(team: int) -> Hero:
+	for h in _get_ally_heroes(team):
+		if str(h.role) == "射手":
+			return h
+	return null
+
+
+func _lane_front_pos(team: int, lane: int) -> Vector3:
+	var enemy_crystal := Vector3(53, 0, -53) if team == Config.Team.PLAYER else Vector3(-53, 0, 53)
+	var best: Turret = null
+	var best_d := 99999.0
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0 or int((e as Turret).team) == team:
+			continue
+		if _get_turret_lane(e as Turret) != lane:
+			continue
+		var d: float = (e as Node3D).global_position.distance_to(enemy_crystal)
+		if d < best_d:
+			best_d = d
+			best = e as Turret
+	if best != null:
+		return best.global_position
+	match lane:
+		AiConfig.Lane.FARM: return Vector3(30, 0, 30)
+		AiConfig.Lane.MID: return Vector3(0, 0, 0)
+		AiConfig.Lane.CLASH: return Vector3(-30, 0, -30)
+	return Vector3.ZERO
+
+
+func _own_tower_pos(team: int, lane: int) -> Vector3:
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0 or int((e as Turret).team) != team:
+			continue
+		if _get_turret_lane(e as Turret) == lane:
+			return (e as Node3D).global_position
+	match lane:
+		AiConfig.Lane.FARM: return Vector3(-40, 0, 40)
+		AiConfig.Lane.MID: return Vector3(0, 0, 0)
+		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
+	return Vector3.ZERO

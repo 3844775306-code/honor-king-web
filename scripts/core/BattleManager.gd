@@ -72,10 +72,14 @@ var _last_recorded_minute: int = 0
 # 前4分钟 AI 评估快照（t=240s 打印/写 user://；供阶段化调参对比）
 var _early_metrics_logged := false
 var early_game_metrics: Dictionary = {}
+var _last_turret_count_p := -1
+var _last_turret_count_e := -1
+var _last_dragon_alive := false
 # 前4分钟 AI 无头基准：--ai-bench / --ai-bench-seed=N / --ai-bench-speed=N
 var _ai_benchmark := false
 var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
+var _ai_benchmark_keep := false
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -518,6 +522,7 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	# 无头 AI 基准：--ai-bench 会把玩家英雄也交给 AI，固定随机种子并加速到 4 分钟后退出。
 	var _bench_args := OS.get_cmdline_user_args()
 	_ai_benchmark = "--ai-bench" in _bench_args
+	_ai_benchmark_keep = "--ai-bench-keep" in _bench_args
 	if _ai_benchmark:
 		for a in _bench_args:
 			if str(a).begins_with("--ai-bench-seed="):
@@ -585,6 +590,10 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 
 	# 重建A*导航网格（包含野区墙体）
 	PathFinder.build_navigation_map()
+	# 0–4 分钟也先下发一次团队基础任务：分路/保护射手/抓人。
+	if team_tactics != null:
+		team_tactics.create_initial_tasks()
+		_distribute_lane_assignments(team_tactics.assignments)
 	await _load_step(0.96)
 	await _load_step(1.0)
 	# 加载完成后停留 2 秒（进度条 100% 展示完整）再进入战斗
@@ -5279,7 +5288,7 @@ func _log_early_game_metrics() -> void:
 	if f != null:
 		f.store_string(JSON.stringify(doc, "\t"))
 		f.close()
-	if _ai_benchmark:
+	if _ai_benchmark and not _ai_benchmark_keep:
 		get_tree().quit()
 
 
@@ -5785,6 +5794,17 @@ func _process(delta):
 		_update_team_stats()
 		_apply_natural_experience()
 		_apply_natural_gold()
+		# 团队事件：塔数变化 / 龙存活变化时立即请求重规划，而不是等10秒兜底
+		if team_tactics != null and game_time >= 240.0:
+			var tp_now := _count_alive_turrets(Config.player_team)
+			var te_now := _count_alive_turrets(Config.foe_team())
+			if (_last_turret_count_p >= 0 and tp_now != _last_turret_count_p) \
+					or (_last_turret_count_e >= 0 and te_now != _last_turret_count_e) \
+					or dragon_alive != _last_dragon_alive:
+				team_tactics.request_replan()
+			_last_turret_count_p = tp_now
+			_last_turret_count_e = te_now
+			_last_dragon_alive = dragon_alive
 		if not _early_metrics_logged and game_time >= 240.0:
 			_log_early_game_metrics()
 		# 赛后统计：每分钟记录金币
@@ -5809,9 +5829,10 @@ func _process(delta):
 	# 集中式团队分推协调（4分钟后，每60s分配一次）
 	if game_time >= 240 and team_tactics:
 		team_tactics_timer -= delta
-		if team_tactics_timer <= 0:
+		var urgent := team_tactics.consume_replan_request()
+		if team_tactics_timer <= 0 or urgent:
 			team_tactics_timer = AiConfig.TEAM_ALLOCATION_INTERVAL
-			print("[BattleManager] t=%.0f 执行团队分路分配（模式=%s）" % [game_time, team_tactics.get_mode_name()])
+			print("[BattleManager] t=%.0f 执行团队任务重规划（模式=%s，urgent=%s）" % [game_time, team_tactics.get_mode_name(), urgent])
 			var assignments := team_tactics.allocate_all()
 			_distribute_lane_assignments(assignments)
 	# 小兵生成
@@ -5856,9 +5877,13 @@ func _distribute_lane_assignments(assignments: Dictionary) -> void:
 				break
 		if not hero_ai:
 			continue
+		var task: TeamTask = team_tactics.tasks.get(hero, null)
+		if task != null:
+			hero_ai.assign_team_task(task)
+			continue
 		var lane := assignments[hero] as int
 		if lane == AiConfig.Lane.JUNGLE:
-			# 集合打龙
+			# 旧分路兜底：集合打龙
 			hero_ai.is_dragon_rally = true
 			hero_ai.dragon_rally_pos = team_tactics.dragon_pos_by_team.get(hero.team, team_tactics.dragon_pos)
 			print("[BattleManager] t=%.0f %s 收到打龙指令，集合点=%s" % [game_time, hero.display_name, hero_ai.dragon_rally_pos])
