@@ -53,6 +53,7 @@ var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
 static var debug_show_path: bool = false
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
+const DEBUG_PATH_Y := 0.22          # 抬到兵线面(0.14)/高地砖(0.177)之上，否则路径被地面盖住看不见
 var _astar_log_cd: float = 0.0
 
 # ---------- 状态效果 ----------
@@ -1306,7 +1307,7 @@ func _update_debug_path_visual():
 	# 方针：把调试「霓虹线+发光球」改成贴地的旧地图路标——低饱和队伍色混一点羊皮纸金，
 	# 半透明窄带 + 终点圆环，避免亮青/亮橙在绿色地形上像 UI 叠加层。
 	var path_color := team_color.lerp(Color(0.72, 0.66, 0.50), 0.45)
-	path_color.a = 0.58
+	path_color.a = 0.72
 	# A*失败（空路径）：脚边暗红圆环，不再在头顶挂高亮球
 	if _nav_path.is_empty():
 		var fail_mesh = TorusMesh.new()
@@ -1323,7 +1324,7 @@ func _update_debug_path_visual():
 		var fail_mi = MeshInstance3D.new()
 		fail_mi.mesh = fail_mesh
 		fail_mi.material_override = fail_mat
-		fail_mi.position = global_position + Vector3(0, 0.035, 0)
+		fail_mi.position = global_position + Vector3(0, DEBUG_PATH_Y, 0)
 		fail_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(fail_mi)
 		_debug_path_nodes.append(fail_mi)
@@ -1335,9 +1336,9 @@ func _update_debug_path_visual():
 	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	line_mat.emission_enabled = true
 	line_mat.emission = path_color * 0.10
-	var pts: Array[Vector3] = [global_position + Vector3(0, 0.045, 0)]
+	var pts: Array[Vector3] = [global_position + Vector3(0, DEBUG_PATH_Y, 0)]
 	for i in range(_nav_index, _nav_path.size()):
-		pts.append(_nav_path[i] + Vector3(0, 0.045, 0))
+		pts.append(_nav_path[i] + Vector3(0, DEBUG_PATH_Y, 0))
 	var has_segment := false
 	for i in range(pts.size() - 1):
 		if pts[i].distance_squared_to(pts[i + 1]) > 0.0001:
@@ -1347,7 +1348,7 @@ func _update_debug_path_visual():
 		var imm = ImmediateMesh.new()
 		imm.surface_begin(Mesh.PRIMITIVE_TRIANGLES, line_mat)
 		for i in range(pts.size() - 1):
-			_add_path_ribbon(imm, pts[i], pts[i + 1], 0.18)
+			_add_path_ribbon(imm, pts[i], pts[i + 1], 0.24)
 		imm.surface_end()
 		var line_mi = MeshInstance3D.new()
 		line_mi.mesh = imm
@@ -1370,7 +1371,7 @@ func _update_debug_path_visual():
 		var end_mi = MeshInstance3D.new()
 		end_mi.mesh = end_mesh
 		end_mi.material_override = end_mat
-		end_mi.position = _nav_path[_nav_path.size() - 1] + Vector3(0, 0.045, 0)
+		end_mi.position = _nav_path[_nav_path.size() - 1] + Vector3(0, DEBUG_PATH_Y, 0)
 		end_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(end_mi)
 		_debug_path_nodes.append(end_mi)
