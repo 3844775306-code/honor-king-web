@@ -1171,7 +1171,7 @@ func _show_room() -> void:
 	_addr_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_addr_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lcol.add_child(_addr_lab)
-	var _conn_hint := _mk_label("连不上？确认两台设备在同一 Wi-Fi/热点；关闭手机 VPN；iOS 首次需在 设置→隐私→本地网络 允许本 App；浏览器网页版客户端与原生主机协议不同，请用 App 连接。", _fs(UiKit.FS_XS), COL_DIM)
+	var _conn_hint := _mk_label("连不上？确认两台设备在同一 Wi-Fi/热点；关闭手机 VPN；iOS 首次需在 设置→隐私→本地网络 允许本 App/浏览器；网页版可直接填这个地址加入（主机已开 WebSocket）。", _fs(UiKit.FS_XS), COL_DIM)
 	_conn_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lcol.add_child(_conn_hint)
 
@@ -1293,7 +1293,7 @@ func _room_address_text() -> String:
 			lines.append("  %s %s%s" % [str(it[0]), str(it[1]), str(it[2])])
 		if lines.is_empty():
 			return "房间地址：未识别到局域网 IPv4（请先连 Wi-Fi/热点），端口 %d" % port
-		return "房间地址（端口 %d）：\n%s" % [port, "\n".join(lines)]
+		return "房间地址（WebSocket，端口 %d）：\n%s" % [port, "\n".join(lines)]
 	if NetSession.mode == NetSession.Mode.CLIENT:
 		return "已连接主机：%s:%d" % [str(NetSession.join_address), port]
 	return ""

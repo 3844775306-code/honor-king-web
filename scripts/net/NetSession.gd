@@ -259,14 +259,15 @@ func _setup_peer() -> void:
 	match mode:
 		Mode.HOST:
 			if is_web:
-				# 浏览器内无法监听 UDP/WS 端口：网页版只能当客户端，房间由桌面主机开
-				printerr("[Net] 网页版不支持创建房间，请用桌面版当主机")
+				# 浏览器内无法监听端口：网页版只能当客户端，房间由桌面/原生主机开
+				printerr("[Net] 网页版不支持创建房间，请用桌面/手机原生版当主机")
 				mode = Mode.NONE
 				return
-			var peer := ENetMultiplayerPeer.new()
-			var err := peer.create_server(host_port, 8)
+			# 统一用 WebSocket 主机：桌面/手机原生开 WS 服务，网页/iOS 浏览器客户端也能直接连
+			var peer := WebSocketMultiplayerPeer.new()
+			var err := peer.create_server(host_port)
 			if err != OK:
-				printerr("[Net] 主机创建失败 err=", err)
+				printerr("[Net] 主机创建失败(WS) err=", err)
 				mode = Mode.NONE
 				return
 			multiplayer.multiplayer_peer = peer
@@ -274,35 +275,34 @@ func _setup_peer() -> void:
 			lobby_ready[1] = { "camp": 0, "lane": "", "ready": false }
 			multiplayer.peer_connected.connect(_on_peer_connected)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-			print("[Net] HOST 端口=", host_port, " 等待玩家加入…")
+			print("[Net] HOST(WS) 端口=", host_port, " 等待玩家加入…")
 		Mode.CLIENT:
-			var mp: MultiplayerPeer
-			var err: int
-			if is_web:
-				# 网页版：浏览器只支持 WebSocket，连桌面主机的 WS 服务
-				var ws := WebSocketMultiplayerPeer.new()
-				err = ws.create_client(_web_ws_url())
-				mp = ws
-			else:
-				var enet := ENetMultiplayerPeer.new()
-				err = enet.create_client(join_address, host_port)
-				mp = enet
+			# 统一 WebSocket 客户端：网页/原生都连 ws://host:port（网页版地址可用 ?host=ip:port 覆盖）
+			var ws := WebSocketMultiplayerPeer.new()
+			var err := ws.create_client(_web_ws_url())
 			if err != OK:
-				printerr("[Net] 客户端创建失败 err=", err)
+				printerr("[Net] 客户端创建失败(WS) err=", err)
 				mode = Mode.NONE
 				return
-			multiplayer.multiplayer_peer = mp
+			multiplayer.multiplayer_peer = ws
 			multiplayer.connected_to_server.connect(_on_connected_to_server)
 			multiplayer.connection_failed.connect(_on_connection_failed)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-			print("[Net] CLIENT 连接 ", join_address, ":", host_port, " …")
+			print("[Net] CLIENT(WS) 连接 ", join_address, ":", host_port, " …")
 			_ensure_overlay()
 		_:
 			return
 
-# 网页版联机地址：ws://host:port，可用页面 URL 参数 ?host=ip:port 覆盖
+# 联机地址：ws://host:port；Web 版可用页面 URL 参数 ?host=ip:port 覆盖
 func _web_ws_url() -> String:
-	var addr := join_address
+	var addr := join_address.strip_edges()
+	# 容错：用户可能把 ws:// / http:// 一起粘进来
+	for pre in ["ws://", "wss://", "http://", "https://"]:
+		if addr.begins_with(pre):
+			addr = addr.substr(pre.length())
+			break
+	if addr.ends_with("/"):
+		addr = addr.substr(0, addr.length() - 1)
 	var port := host_port
 	if OS.has_feature("web"):
 		var q := str(JavaScriptBridge.eval("window.location.search", true))
