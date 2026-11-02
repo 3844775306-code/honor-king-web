@@ -285,7 +285,8 @@ func _allocate_team(team: int, mode: int, out_assignments: Dictionary) -> void:
 					out_assignments[h] = main_lane
 
 		SplitMode.ONE_THREE_ONE:
-			# 先确定坦克/战士去的相邻分路
+			# 4分钟后 1-3-1：优先选择「敌方小兵离自己最近」的分路；
+			# 某条路没有敌方小兵时，才回退到主路/相邻路角色分配。
 			var tank_lane: int = -1
 			for h in heroes:
 				if not h.is_ai:
@@ -300,6 +301,10 @@ func _allocate_team(team: int, mode: int, out_assignments: Dictionary) -> void:
 
 			for h in heroes:
 				if not h.is_ai:
+					continue
+				var nearest_lane := _nearest_enemy_minion_lane(team, h)
+				if nearest_lane >= 0:
+					out_assignments[h] = nearest_lane
 					continue
 				var role := h.role
 				if role == "刺客":
@@ -618,6 +623,22 @@ func _enemy_tower_count_in_lane(team: int, lane: int) -> int:
 				and (e as Turret).display_name != "crystal" and _get_turret_lane(e as Turret) == lane:
 			n += 1
 	return n
+
+
+func _nearest_enemy_minion_lane(team: int, h: Hero) -> int:
+	var best_lane := -1
+	var best_d := INF
+	for e in bm.get_tree().get_nodes_in_group("minions"):
+		if not (e is Minion) or int((e as Minion).team) == team or (e as Minion).health <= 0:
+			continue
+		var m := e as Minion
+		if m.line != AiConfig.Lane.FARM and m.line != AiConfig.Lane.MID and m.line != AiConfig.Lane.CLASH:
+			continue
+		var d: float = h.global_position.distance_to(m.global_position)
+		if d < best_d:
+			best_d = d
+			best_lane = m.line
+	return best_lane
 
 
 func _find_carry(team: int) -> Hero:
