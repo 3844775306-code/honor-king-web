@@ -18,8 +18,6 @@ var active_time := 0.0
 var exit_timer := 0.0
 var cooldown := 0.0
 var safe_pos := Vector3.ZERO
-var micro_retreat_timer := 0.0    # 换血时血量低于目标：远离目标 1 秒
-var micro_retreat_pos := Vector3.ZERO
 
 # 供 240 秒指标读取
 var attempts := 0
@@ -40,8 +38,6 @@ func _init(p_hero: Hero, p_threat: ThreatModel, p_perception: AiPerception) -> v
 
 
 func update(delta: float, _game_time: float) -> void:
-	if micro_retreat_timer > 0.0:
-		micro_retreat_timer = maxf(0.0, micro_retreat_timer - delta)
 	if exit_timer > 0.0:
 		exit_timer = maxf(0.0, exit_timer - delta)
 	if cooldown > 0.0:
@@ -51,9 +47,6 @@ func update(delta: float, _game_time: float) -> void:
 	active_time += delta
 	if not is_instance_valid(active_target) or active_target.health <= 0.0:
 		_finish(true)
-		return
-	# 血量比目标少 → 正在远离目标的 1 秒窗口：不推翻、不提前结束换血
-	if micro_retreat_timer > 0.0:
 		return
 	if hero == null or not is_instance_valid(hero) or hero.is_dead:
 		deaths += 1
@@ -71,12 +64,6 @@ func evaluate() -> Dictionary:
 		if not is_instance_valid(active_target) or active_target.health <= 0.0:
 			_finish(true)
 			return {}
-		if micro_retreat_timer > 0.0:
-			return {"action": "exit", "pos": micro_retreat_pos, "target": active_target, "micro": true}
-		# 只要自己血量比换血目标少：立刻往远离目标的方向移动 1 秒；否则继续攻击
-		if hero.health < active_target.health:
-			_start_micro_retreat(active_target)
-			return {"action": "exit", "pos": micro_retreat_pos, "target": active_target, "micro": true}
 		return {"action": "hold", "target": active_target}
 	if exit_timer > 0.0 or cooldown > 0.0 or hero == null or not is_instance_valid(hero) or hero.is_dead:
 		if exit_timer > 0.0:
@@ -116,18 +103,10 @@ func _finish(win: bool) -> void:
 	cooldown = maxf(cooldown, 1.0)
 
 
-## 血量低于换血目标：朝远离目标方向走 1 秒（按当前移速折算距离）
-func _start_micro_retreat(target: Hero) -> void:
-	var away := hero.global_position - target.global_position
-	away.y = 0.0
-	if away.length() < 0.01:
-		away = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
-	var step: float = maxf(3.0, hero.actual_move_speed * 1.0)
-	micro_retreat_pos = hero.global_position + away.normalized() * step
-	micro_retreat_timer = 1.0
-
 func _should_exit() -> bool:
 	if active_time > TRADE_MAX_TIME:
+		return true
+	if hero.health <= hero.actual_max_health * 0.38:
 		return true
 	if active_target == null or not is_instance_valid(active_target):
 		return true
@@ -136,9 +115,18 @@ func _should_exit() -> bool:
 		return true
 	if _is_under_enemy_tower(active_target):
 		return true
-	# 血量比较改由 evaluate 的「1 秒远离」微操处理，这里不再直接退出
+	# 对方恢复健康且我方没有血量优势：不继续纠缠
+	var my_ratio := hero.health / maxf(1.0, hero.actual_max_health)
+	var t_ratio := active_target.health / maxf(1.0, active_target.actual_max_health)
+	if t_ratio > my_ratio + 0.08 and active_time > 0.8:
+		return true
 	# 敌方增援导致威胁明显恶化
 	if threat.threat_balance() < -0.8:
+		return true
+	# 本次换血已打出正向交换且目标不是残血可收：主动收手，避免追进危险区
+	var cur_out := hero.damage_dealt_to_heroes - _start_damage_out
+	var cur_in := hero.damage_taken_from_heroes - _start_damage_in
+	if active_time > 0.9 and cur_out > cur_in + 300.0 and t_ratio > 0.22:
 		return true
 	return false
 
@@ -226,5 +214,3 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if cover < 500.0:
 			return true
 	return false
-
-

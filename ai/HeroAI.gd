@@ -26,6 +26,8 @@ var _temp_clearing: bool = false
 var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
+var _retreat_away_t := 0.0     # 撤退：远离最近敌方英雄的 1 秒计时
+var _retreat_away_from: Hero = null
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -362,9 +364,6 @@ func _try_travel_dash():
 	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.froze_timer > 0.0 \
 			or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
 		return
-	# 有攻击目标（正在接战/推进/追人）→ 位移留给作战连招，不赶路
-	if is_instance_valid(hero.manual_target) and hero.manual_target.health > 0:
-		return
 	var dest := hero.move_target
 	if dest == Vector3.ZERO:
 		return
@@ -375,11 +374,14 @@ func _try_travel_dash():
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return
-	# 召唤师疾跑：赶路距离超过普攻距离就交，不再额外判断敌人/最短距离。
-	if _try_travel_sprint():
-		return
 	var idx := _pick_travel_dash_skill()
 	if idx < 0:
+		var acc_idx := _pick_acceleration_skill()
+		if acc_idx >= 0:
+			hero._start_casting(acc_idx, hero.skills[acc_idx], dest)
+			return
+		if _try_travel_sprint():
+			return
 		return
 	var sk: Skill = hero.skills[idx]
 	if sk == null:
@@ -404,6 +406,28 @@ func _try_travel_sprint() -> bool:
 		return false
 	hero._use_summoner()
 	return true
+
+
+func _pick_acceleration_skill() -> int:
+	for i in range(mini(3, hero.skills.size())):
+		if i >= hero.skill_levels.size() or hero.skill_levels[i] <= 0:
+			continue
+		if i < hero.skill_cooldowns.size() and hero.skill_cooldowns[i] > 0.0:
+			continue
+		var sk: Skill = hero.skills[i]
+		if sk == null:
+			continue
+		if sk.restore > 0.0 and (i >= hero.skill_restores.size() or hero.skill_restores[i] <= 0):
+			continue
+		var mcost := sk.mana_cost - sk.power_bonus * maxi(hero.skill_levels[i] - 1, 0)
+		if hero.mana < mcost or hero.skill_prereq_blocked(i):
+			continue
+		# Skill 资源没有移速字段；用技能展示数据中的 selfspeed/msup 标签识别加速技能。
+		var info := SkillDatabase.get_skill_fx(hero, i)
+		for fx in info.get("fx", []):
+			if fx is Dictionary and str(fx.get("t", "")) in ["selfspeed", "msup"]:
+				return i
+	return -1
 
 
 func _pick_travel_dash_skill() -> int:
@@ -925,7 +949,7 @@ func _process(delta):
 		AIAction.Type.SAFE_RECALL:
 			_recall_safe_behavior(delta)
 		AIAction.Type.RETURN_TO_BASE:
-			_retreat_behavior()
+			_retreat_behavior(delta)
 	if _is_action(AIAction.Type.SAFE_RECALL) or _is_action(AIAction.Type.RETURN_TO_BASE):
 		return
 
@@ -1758,15 +1782,31 @@ func _move_to_friendly_turret() -> void:
 
 
 # 撤退行为：仅在 TradePlanner 退出后执行，只去它给的安全点；威胁降到低即完成。
-func _retreat_behavior() -> void:
+func _retreat_behavior(delta: float = 0.0) -> void:
 	hero.manual_target = null
-	var goal := Vector3.ZERO
-	if current_action != null and current_action.data.has("pos"):
-		goal = current_action.data.get("pos", Vector3.ZERO)
-	if goal != Vector3.ZERO:
-		_follow_safe_route(goal)
-	else:
+	# 撤退门控：只在自己血量低于「最近的敌方英雄」时撤退，否则跳过撤退状态
+	var nearest: Hero = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO) if perception != null else null
+	if nearest == null or quest_health_not_lower(nearest):
+		_retreat_away_t = 0.0
+		_retreat_away_from = null
 		hero.move_target = Vector3.ZERO
+		_finish_current_action()
+		return
+	if _retreat_away_from != nearest or _retreat_away_t <= 0.0:
+		_retreat_away_from = nearest
+		_retreat_away_t = 1.0
+	_retreat_away_t = maxf(0.0, _retreat_away_t - delta)
+	# 朝远离最近敌方英雄的方向移动 1 秒；期间若血量仍低会继续重新计时
+	var away: Vector3 = hero.global_position - nearest.global_position
+	away.y = 0.0
+	if away.length() < 0.05:
+		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+	hero.move_target = hero.global_position + away.normalized() * 4.0
+
+
+## 撤退门控：自己血量是否不低于该敌方英雄
+func quest_health_not_lower(enemy: Hero) -> bool:
+	return enemy == null or not is_instance_valid(enemy) or hero.health >= enemy.health
 
 
 # 选撤退目标：己方塔 + 泉水，按 A* 路径风险和距离评分。
@@ -2593,3 +2633,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
