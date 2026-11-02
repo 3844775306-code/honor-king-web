@@ -23,6 +23,9 @@ var team_task: TeamTask = null
 var think_timer: float = 0.0
 var _frame_delta: float = 0.0
 var _temp_clearing: bool = false
+var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
+var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
+var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -935,6 +938,8 @@ func _process(delta):
 			_try_use_skills(hero.manual_target)
 	else:
 		hero.manual_target = null
+	# 普攻间隙随机走A：绕目标小步横移，保持普攻距离，降低被敌方技能命中
+	_ai_strafe(delta)
 
 
 
@@ -946,6 +951,53 @@ func _process(delta):
 # ==================== 决策 ====================
 # 每个 think tick 评估一次：先处理高地/塔防御与撤退/回城，再交给分路/打野策略
 # ==================== 调试：思考过程 ====================
+
+## 普攻间隙随机走A：以目标为圆心横移一小段，半径始终限制在普攻距离内
+func _ai_strafe(delta: float) -> void:
+	if hero == null or not is_instance_valid(hero) or hero.is_dead:
+		return
+	if _strafe_cd > 0.0:
+		_strafe_cd = maxf(0.0, _strafe_cd - delta)
+	if _strafe_t > 0.0:
+		_strafe_t -= delta
+		var tt: GameEntity = hero.manual_target
+		if tt == null or not is_instance_valid(tt) or tt.health <= 0.0:
+			_strafe_t = 0.0
+			return
+		var aa: float = hero.attack_range * 0.01
+		var d: float = hero.global_position.distance_to(tt.global_position)
+		if d > aa + 0.8 or hero.casting_skill or hero.is_recalling:
+			_strafe_t = 0.0
+			return
+		var rx: float = hero.global_position.x - tt.global_position.x
+		var rz: float = hero.global_position.z - tt.global_position.z
+		var r: float = clampf(sqrt(rx * rx + rz * rz), 1.2, maxf(1.3, aa - 0.15))
+		var ang: float = atan2(rx, rz) + _strafe_side * 1.7 * delta
+		hero.move_target = tt.global_position + Vector3(sin(ang) * r, 0.0, cos(ang) * r)
+		return
+	if _strafe_cd > 0.0:
+		return
+	_strafe_cd = randf_range(0.45, 0.9)
+	var t: GameEntity = hero.manual_target
+	if t == null or not is_instance_valid(t) or not (t is Hero) or t.health <= 0.0:
+		return
+	if hero.attack_timer <= 0.0 or hero.casting_skill or hero.is_recalling or hero.is_teleporting:
+		return
+	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
+		return
+	if current_action != null:
+		var ty: int = int(current_action.type)
+		if ty in [AIAction.Type.SAFE_RECALL, AIAction.Type.RETURN_TO_BASE, AIAction.Type.TOWER_ESCAPE,
+				AIAction.Type.DODGE, AIAction.Type.HEALTH_PACK, AIAction.Type.TEMP_CLEAR, AIAction.Type.VISION_SPIRIT]:
+			return
+	var aa2: float = hero.attack_range * 0.01
+	var dist: float = hero.global_position.distance_to(t.global_position)
+	if dist < 1.4 or dist > aa2 - 0.15:
+		return
+	if randf() > 0.42:
+		return
+	_strafe_t = randf_range(0.16, 0.3)
+	_strafe_side = 1.0 if randf() < 0.5 else -1.0
 
 func _debug_lane() -> String:
 	match lane:
@@ -1696,6 +1748,8 @@ func _move_to_friendly_turret() -> void:
 		var turret := perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_FAR)
 		if turret and is_instance_valid(turret):
 			goal = turret.global_position
+	if goal == Vector3.ZERO:
+		goal = Vector3(-62, 0, 62) if hero.team == Config.Team.PLAYER else Vector3(62, 0, -62)
 	_follow_safe_route(goal)
 
 
@@ -1768,7 +1822,7 @@ func _path_risk(goal: Vector3) -> float:
 	for i in range(path.size()):
 		var p: Vector3 = path[i]
 		if i % 2 == 0:
-			risk += float(perception.count_enemy_heroes_near_center(p, 8.0)) * 4.0
+			risk += _recall_memory_risk(p, 8.0) * 4.0
 		for e in hero.get_tree().get_nodes_in_group("turrets"):
 			if e is Turret and int((e as Turret).team) != int(hero.team) and (e as Turret).health > 0:
 				if p.distance_to((e as Turret).global_position) <= (e as Turret).attack_range * 0.01 + 2.0:
@@ -2075,9 +2129,8 @@ func _recall_safe_behavior(delta):
 		if _fully_recovered():
 			_assign_lane()
 		return
-	# 读条中敌人压过来（AI 读条期间不能动）：立刻取消，换到别的安全点再回城
-	if hero.is_recalling \
-			and perception.count_enemy_heroes_near(AiConfig.RECALL_DANGER_RADIUS) > 0:
+	# 读条中敌人/兵线压过来（AI 读条期间不能动）：立刻取消，换到别的安全点再回城
+	if hero.is_recalling and _recall_point_threatened(hero.global_position):
 		hero.cancel_recall()
 	var safe_pos = _find_safe_recall_spot()
 	if safe_pos == Vector3.ZERO:
@@ -2163,7 +2216,10 @@ func _enemy_tower_containing(pos: Vector3) -> Turret:
 func _find_safe_recall_spot() -> Vector3:
 	var now := Time.get_ticks_msec() * 0.001
 	if _recall_spot_cache != Vector3.ZERO and now - _recall_spot_time < 0.8:
-		return _recall_spot_cache
+		# 缓存点也要重新验证：敌人记忆/兵线/路线变化时立即换点。
+		if not _recall_point_threatened(_recall_spot_cache) and not _recall_path_threatened(_recall_spot_cache):
+			return _recall_spot_cache
+		_recall_spot_cache = Vector3.ZERO
 	# 只在塔区/草丛附近没有敌方英雄时选点：读条 7 秒，敌人贴脸就会被打断甚至带走
 	var turret := _pick_safe_recall_turret()
 	if turret and is_instance_valid(turret):
@@ -2182,6 +2238,18 @@ func _find_safe_recall_spot() -> Vector3:
 
 
 # 回城塔：离自己最近、且塔周围没有敌方英雄
+func _recall_tower_under_minions(t: Turret) -> bool:
+	var enemy_minions := 0.0
+	for m in hero.get_tree().get_nodes_in_group("minions"):
+		if not (m is Minion) or (m as Minion).health <= 0:
+			continue
+		if int((m as Minion).team) == int(hero.team):
+			continue
+		if (m as Minion).global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+			enemy_minions += (m as Minion).health
+	return enemy_minions >= 300.0
+
+
 func _pick_safe_recall_turret() -> Turret:
 	var tree := hero.get_tree()
 	if tree == null:
@@ -2199,9 +2267,22 @@ func _pick_safe_recall_turret() -> Turret:
 			continue
 		if _recall_point_threatened(t.global_position):
 			continue
+		# 塔正在被敌方小兵攻击，或没有己方小兵掩护，不选为回城塔。
+		if _recall_tower_under_minions(t):
+			continue
 		var spot: Vector3 = t.global_position + (hero.global_position - t.global_position).normalized() * 2.0
 		# 用实际 A* 路线风险选塔，而不是只比较直线距离
 		var score := _path_risk(spot) * 10.0 + d * 0.15
+		score += _recall_memory_risk(spot, AiConfig.RECALL_SPOT_CLEAR) * 8.0
+		score += _recall_enemy_minions_near(spot, 12.0) * 3.0
+		# 回城塔附近没有己方小兵掩护时略降优先级
+		var cover := 0.0
+		for m in hero.get_tree().get_nodes_in_group("minions"):
+			if m is Minion and int((m as Minion).team) == int(hero.team) and (m as Minion).health > 0 \
+					and m.global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+				cover += (m as Minion).health
+		if cover < 500.0:
+			score += 4.0
 		if score < best_score:
 			best_score = score
 			best = t
@@ -2210,31 +2291,55 @@ func _pick_safe_recall_turret() -> Turret:
 
 # 回城路径是否穿过敌人/敌塔危险区：沿英雄→安全点分段采样，避免"点安全但路上被截"
 func _recall_path_threatened(target: Vector3) -> bool:
-	var start: Vector3 = hero.global_position
-	var total: float = start.distance_to(target)
-	if total < 0.5:
-		return false
-	var steps: int = maxi(2, int(ceil(total / 5.0)))
-	var tree := hero.get_tree()
-	for i in range(steps + 1):
-		var p: Vector3 = start.lerp(target, float(i) / float(steps))
-		if perception.count_enemy_heroes_near_center(p, AiConfig.RECALL_DANGER_RADIUS) > 0:
+	# 用真实 A* 路线判断，而不是英雄→目标直线。
+	var path := PathFinder.find_path(hero.global_position, target, Vector3.ZERO, hero.team)
+	if path.is_empty():
+		return true
+	for i in range(path.size()):
+		var p: Vector3 = path[i]
+		if _recall_memory_risk(p, AiConfig.RECALL_DANGER_RADIUS) > 0.0:
 			return true
-		if tree == null:
-			continue
-		for ent in tree.get_nodes_in_group("turrets"):
-			if not (ent is Turret) or ent.health <= 0.0 or ent.team == hero.team:
+		if i % 2 == 0 and _recall_enemy_minions_near(p, 8.0) > 0:
+			return true
+		for e in hero.get_tree().get_nodes_in_group("turrets"):
+			if not (e is Turret) or (e as Turret).health <= 0 or (e as Turret).team == hero.team:
 				continue
-			var t := ent as Turret
-			var reach: float = t.attack_range * 0.01 + 2.0
-			if p.distance_to(t.global_position) <= reach:
+			var t := e as Turret
+			if p.distance_to(t.global_position) <= t.attack_range * 0.01 + 2.0:
 				return true
 	return false
 
 
+# 回城安全评估：可见敌人 + ThreatModel 最后视野记忆（按时间衰减）。
+func _recall_memory_risk(pos: Vector3, radius: float) -> float:
+	if threat_model == null:
+		return 0.0
+	var now := Time.get_ticks_msec() * 0.001
+	var risk := 0.0
+	for rec in threat_model.memory.values():
+		var age := now - float(rec.get("seen", now))
+		if age > ThreatModel.MEMORY_MAX_AGE:
+			continue
+		var ep: Vector3 = rec.get("pos", Vector3.ZERO)
+		var d: float = pos.distance_to(ep)
+		if d > radius:
+			continue
+		var decay := exp(-age / 5.0)
+		var hp_ratio := clampf(float(rec.get("hp", 1.0)) / maxf(1.0, float(rec.get("max_hp", 1.0))), 0.0, 1.0)
+		risk += (1.0 - d / maxf(0.1, radius)) * decay * (0.4 + hp_ratio * 0.6)
+	return risk
+
+
+func _recall_enemy_minions_near(pos: Vector3, radius: float) -> int:
+	return perception.count_enemy_minions_near(pos, radius)
+
+
 # 该位置附近（RECALL_SPOT_CLEAR 内）有没有敌方英雄
 func _recall_point_threatened(pos: Vector3) -> bool:
-	return perception.count_enemy_heroes_near_center(pos, AiConfig.RECALL_SPOT_CLEAR) > 0
+	if _recall_memory_risk(pos, AiConfig.RECALL_SPOT_CLEAR) > 0.0:
+		return true
+	# 兵线压到回城点也算不安全：避免在没有敌方英雄时站在敌方小兵堆里读条。
+	return _recall_enemy_minions_near(pos, 10.0) > 0
 
 
 # 己方塔区全被敌人压着：背向最近的敌人退开，等敌人走了再回城（不原地读条送人头）
@@ -2484,4 +2589,5 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
