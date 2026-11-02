@@ -807,71 +807,118 @@ func _nearest_desc(e) -> String:
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
 
 
+## 胶囊威胁指标：ThreatModel 的敌方/我方威胁值（血量×距离×视野衰减）
+func _chip_threat() -> String:
+	if threat_model == null:
+		return "敌0.00/我0.00(低)"
+	var et: float = threat_model.enemy_threat()
+	var at: float = threat_model.ally_threat()
+	var bal: float = at - et
+	var lvl := "低"
+	if et >= 1.2 or bal <= -1.0:
+		lvl = "高"
+	elif et >= 0.35:
+		lvl = "中"
+	return "敌%.2f/我%.2f(%s)" % [et, at, lvl]
+
+
+## 胶囊换血层：TradePlanner 当前状态
+func _chip_trade() -> String:
+	if trade_planner == null:
+		return "待机"
+	if trade_planner.active_target != null and is_instance_valid(trade_planner.active_target):
+		return "对拼中"
+	if trade_planner.exit_timer > 0.0:
+		return "退出"
+	if trade_planner.cooldown > 0.0:
+		return "冷却"
+	return "待机"
+
+
+## 胶囊执行动作：与团队任务区分，粒度到下一步要干什么
+func _chip_action() -> String:
+	if hero.is_recalling:
+		return "回城"
+	if hero.is_teleporting:
+		return "支援"
+	if _chase_target != null and is_instance_valid(_chase_target):
+		return "追击"
+	var mt = hero.manual_target
+	if mt != null and is_instance_valid(mt):
+		var d: float = hero.global_position.distance_to(mt.global_position)
+		var reach: float = hero.attack_range * 0.01 + float(mt.get("body_radius") if mt.get("body_radius") != null else 1.0)
+		if d <= reach + 1.0:
+			return "攻击"
+		return "接近"
+	match state:
+		State.RETREAT: return "撤离"
+		State.AVOID: return "躲技能"
+		State.RECALL, State.RECALL_SAFE: return "回城"
+		State.FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
+		State.PUSH:
+			var mn = perception.find_nearest_enemy_minion(AiConfig.PUSH_TARGET_RANGE)
+			if mn != null and is_instance_valid(mn):
+				return "清兵"
+			var tr = perception.find_nearest_enemy_turret(AiConfig.PUSH_TARGET_RANGE)
+			if tr != null and is_instance_valid(tr):
+				return "点塔"
+			return "赶路"
+	return "待命"
+
+
+## 胶囊当前任务：只保留团队任务/目标级任务，本地行为交给“意图”字段，避免重复
+func _chip_task() -> String:
+	if team_task != null and is_instance_valid(team_task) and team_task.is_active():
+		return team_task.label()
+	if _defending_high_turret != null and is_instance_valid(_defending_high_turret):
+		return "守高地"
+	if is_dragon_rally:
+		return "龙团集合"
+	if hero.is_recalling:
+		return "回城"
+	if hero.is_teleporting:
+		return "支援"
+	return ""
+
+
 ## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
 func debug_chip_info() -> Dictionary:
 	var now := Time.get_ticks_msec() * 0.001
 	if now < _chip_next_t and not _chip_cache.is_empty():
 		return _chip_cache
 	_chip_next_t = now + 0.25
-	var st_cn := ""
-	match state:
-		State.PUSH: st_cn = "推线"
-		State.FARM: st_cn = "打野" if lane == AiConfig.Lane.JUNGLE else "补刀"
-		State.RETREAT: st_cn = "撤退"
-		State.RECALL, State.RECALL_SAFE: st_cn = "回城"
-		State.AVOID: st_cn = "躲避"
-	var intent_cn := ""
-	match _debug_intent():
-		"push": intent_cn = "推线"
-		"farm": intent_cn = "补刀"
-		"jungle": intent_cn = "刷野"
-		"chase": intent_cn = "追击"
-		"fight": intent_cn = "对拼"
-		"kill": intent_cn = "收割"
-		"retreat": intent_cn = "撤退"
-		"recall": intent_cn = "回城"
-		"rotate": intent_cn = "支援"
-		"avoid": intent_cn = "躲技能"
-		_: intent_cn = _debug_intent()
 	var p1: Array = []
-	p1.append(_debug_lane())
-	if st_cn != "": p1.append(st_cn)
-	if state == State.FARM and lane == AiConfig.Lane.JUNGLE and jungle_strategy != null:
-		match int(jungle_strategy.current_phase):
-			0: p1.append("发育路野区")
-			1: p1.append("对抗路野区")
-			2: p1.append("蹭线")
+	p1.append("分路:" + _debug_lane())
+	var task := _chip_task()
+	if task != "":
+		p1.append("任务:" + task)
+	var tgt := ""
 	if hero.manual_target != null and is_instance_valid(hero.manual_target):
-		p1.append("→ " + _safe_name(hero.manual_target))
+		tgt = _safe_name(hero.manual_target)
+	elif team_task != null and is_instance_valid(team_task) and team_task.target_hero != null and is_instance_valid(team_task.target_hero):
+		tgt = _safe_name(team_task.target_hero)
+	elif _chase_target != null and is_instance_valid(_chase_target):
+		tgt = _safe_name(_chase_target)
+	if tgt != "":
+		p1.append("目标:" + tgt)
 	var line1 := " · ".join(p1)
-	var p2: Array = []
-	p2.append("意图:" + intent_cn)
-	var en = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO)
-	if en != null and is_instance_valid(en):
-		var emx: float = maxf(1.0, float(en.get("max_health")))
-		p2.append("敌 %s %d%% %.1fm" % [_safe_name(en), int(round(float(en.health) / emx * 100.0)), hero.global_position.distance_to(en.global_position)])
-	p2.append("敌%d友%d" % [perception.count_enemy_heroes_near(12.0), perception.count_ally_heroes_near(12.0)])
-	var hmx: float = maxf(1.0, float(hero.actual_max_health))
-	p2.append("HP%d%%" % int(round(float(hero.health) / hmx * 100.0)))
-	if _chase_target != null and is_instance_valid(_chase_target):
-		p2.append("追 " + _safe_name(_chase_target))
-	if hero.is_recalling:
-		p2.append("回城中")
-	elif hero.is_teleporting:
-		p2.append("支援中")
-	if skill_tactics != null:
-		var td: Dictionary = skill_tactics.call("debug_snapshot")
-		var cl := int(td.get("combo_len", 0))
-		if cl > 1:
-			p2.append("连招%d/%d" % [int(td.get("combo_step", 0)) + 1, cl])
-	var line2 := " | ".join(p2)
+	var threat_txt := _chip_threat()
+	var act := _chip_action()
+	# 任务与动作相同时只保留任务，避免同一词出现两次
+	if act == task:
+		act = ""
+	var p2: Array = ["威胁:" + threat_txt]
+	if act != "":
+		p2.append("意图:" + act)
+	var trade := _chip_trade()
+	if trade != "待机":
+		p2.append("换血:" + trade)
+	var line2 := " · ".join(p2)
 	var col := Color(0.52, 0.78, 1.0)
-	match state:
-		State.PUSH: col = Color(0.45, 0.90, 1.0)
-		State.FARM: col = Color(0.72, 0.58, 1.0)
-		State.RETREAT: col = Color(1.0, 0.46, 0.38)
-		State.RECALL, State.RECALL_SAFE: col = Color(0.56, 0.70, 1.0)
-		State.AVOID: col = Color(0.95, 0.78, 0.36)
+	if threat_txt.ends_with("(高)"):
+		col = Color(1.0, 0.46, 0.38)
+	elif threat_txt.ends_with("(中)"):
+		col = Color(1.0, 0.78, 0.34)
 	_chip_cache = {"line1": line1, "line2": line2, "r": col.r, "g": col.g, "b": col.b}
 	return _chip_cache
 
@@ -931,6 +978,11 @@ func debug_snapshot() -> Dictionary:
 		"items": {"last": str(item_tactics.last_action)},
 		"summoner": {"last": str(summoner_tactics.last_action)},
 		"brain": brain_path,
+		"threat": {
+			"enemy": snappedf(threat_model.enemy_threat(), 0.01) if threat_model != null else 0.0,
+			"ally": snappedf(threat_model.ally_threat(), 0.01) if threat_model != null else 0.0,
+			"balance": snappedf(threat_model.threat_balance(), 0.01) if threat_model != null else 0.0,
+		},
 		"strategy": {"lane": lane_txt, "jungle": jungle_txt},
 		"chip": debug_chip_info(),
 		"log": _dbg_log.duplicate(),
