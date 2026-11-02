@@ -190,6 +190,15 @@ func _row(e: Dictionary) -> Control:
 		ReplayScreenScript.set_pending_file(file)
 		get_tree().change_scene_to_file("res://scenes/replay.tscn"))
 	hb.add_child(play)
+	var up := _btn("上传云端", Color(0.62, 0.55, 1.0))
+	up.pressed.connect(func() -> void:
+		if _status != null:
+			_status.text = "上传录像中…"
+		CloudSync.upload_replay(get_tree(), e, func(ok: bool, code: int, msg: String) -> void:
+			if _status == null:
+				return
+			_status.text = "已上传，所有玩家可在「云端存档 → 云端录像」看到" if ok else "上传失败（%d）%s" % [code, msg.left(80)]))
+	hb.add_child(up)
 	var exp := _btn("导出", Color(0.55, 0.8, 0.65))
 	exp.pressed.connect(func() -> void:
 		var p := Repo.export_replay(e)
@@ -224,4 +233,5 @@ func _btn(text: String, accent: Color) -> Button:
 	b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", accent, false))
 	b.focus_mode = Control.FOCUS_NONE
 	return b
+
 

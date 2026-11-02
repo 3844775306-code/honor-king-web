@@ -26,6 +26,7 @@ const MenuBackdropScript = preload("res://scripts/ui/MenuBackdrop.gd")
 const TacticalMapScript = preload("res://scripts/ui/TacticalMap.gd")
 const ReplayBrowserPanelScript = preload("res://scripts/ui/ReplayBrowserPanel.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
+const ReplayScreenScript = preload("res://scripts/replay/ReplayScreen.gd")
 const BootIntroScript = preload("res://scripts/ui/GameBootIntro.gd")
 const BootIntro3DScript = preload("res://scripts/ui/GameBootIntro3D.gd")
 const LoginPanelScript = preload("res://scripts/ui/LoginPanel.gd")
@@ -940,6 +941,74 @@ func _cloud_startup_sync() -> void:
 
 # ---------- 云端存档（段位 + 对战纪录；需自备 HTTP 服务） ----------
 
+## 云端录像列表：所有玩家上传，可播放/保存到本机
+func _cloud_load_replays(box: VBoxContainer, status: Label) -> void:
+	for ch in box.get_children():
+		ch.queue_free()
+	status.text = "读取云端录像…"
+	CloudSyncScript.list_cloud_replays(get_tree(), func(ok: bool, code: int, rows: Array) -> void:
+		if not ok:
+			status.text = "云端录像还没初始化：在 Supabase SQL Editor 执行 docs 里的 hk_replay_meta / hk_replays SQL（%d）" % code
+			return
+		if rows.is_empty():
+			status.text = "云端还没有录像：去「录像回放」列表里点「上传云端」"
+			return
+		for r in rows:
+			box.add_child(_cloud_replay_row(r as Dictionary, status))
+		status.text = "云端共 %d 个录像" % rows.size())
+
+
+func _cloud_replay_row(r: Dictionary, status: Label) -> Control:
+	var row := Panel.new()
+	row.custom_minimum_size = Vector2(0, 54)
+	row.add_theme_stylebox_override("panel",
+		UiKit.flat(0.85, 10, 1, Color(0.45, 0.62, 1.0, 0.22), Color(0.07, 0.09, 0.14, 0.92), 12.0, 0.0))
+	var hb := HBoxContainer.new()
+	hb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hb.offset_left = 12.0
+	hb.offset_right = -12.0
+	hb.add_theme_constant_override("separation", 12)
+	row.add_child(hb)
+	var win := int(r.get("winner", -1))
+	var my_team := int(r.get("player_team", -1))
+	var res_txt := "胜利" if win >= 0 and win == my_team else ("失败" if win >= 0 else "—")
+	var info := Label.new()
+	info.text = "%s · %s  %s · %s · %02d:%02d · %s" % [
+		str(r.get("uploader", "")), str(r.get("hero", "")), res_txt,
+		str(r.get("mode", "")), int(float(r.get("duration", 0.0))) / 60,
+		int(float(r.get("duration", 0.0))) % 60, _fmt_cloud_time(str(r.get("time", "")))]
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	info.add_theme_color_override("font_color", Color(0.86, 0.92, 1.0))
+	info.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hb.add_child(info)
+	var b_play := _mk_btn("播放", UiKit.C_TEAM0, false, Vector2(86, 40))
+	b_play.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	b_play.pressed.connect(func() -> void:
+		status.text = "下载录像中…"
+		CloudSyncScript.download_cloud_replay(get_tree(), r, false, func(ok: bool, code: int, path: String) -> void:
+			if not ok:
+				status.text = "播放失败（%d）" % code
+				return
+			ReplayScreenScript.set_pending_file(path)
+			get_tree().change_scene_to_file("res://scenes/replay.tscn")))
+	hb.add_child(b_play)
+	var b_save := _mk_btn("保存", UiKit.C_TEAM1, false, Vector2(86, 40))
+	b_save.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	b_save.pressed.connect(func() -> void:
+		status.text = "保存录像中…"
+		CloudSyncScript.download_cloud_replay(get_tree(), r, true, func(ok: bool, code: int, _path: String) -> void:
+			status.text = "已保存到本机「录像回放」列表" if ok else "保存失败（%d）" % code))
+	hb.add_child(b_save)
+	return row
+
+
+func _fmt_cloud_time(stamp: String) -> String:
+	if stamp.length() < 13:
+		return stamp
+	return "%s-%s-%s %s:%s" % [stamp.substr(0, 4), stamp.substr(4, 2), stamp.substr(6, 2),
+		stamp.substr(9, 2), stamp.substr(11, 2)]
+
 func _open_cloud() -> void:
 	if _connecting:
 		return
@@ -1001,15 +1070,23 @@ func _open_cloud() -> void:
 		CloudSyncScript.download(get_tree(), func(ok: bool, code: int, msg: String) -> void:
 			status.text = msg + "（重启游戏后生效）" if ok else "下载失败（%d）%s" % [code, msg.left(60)]))
 	act.add_child(b_down)
-	var b_rep := _mk_btn("上传最近录像", UiKit.C_TEAM1, false, Vector2(240, 60))
-	b_rep.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	b_rep.pressed.connect(func() -> void:
-		CloudSyncScript.ensure_defaults()
-		status.text = "上传录像中…"
-		CloudSyncScript.upload_latest_replay(get_tree(), func(ok: bool, code: int, msg: String) -> void:
-			status.text = msg if ok else "录像上传失败（%d）%s" % [code, msg.left(60)]))
-	act.add_child(b_rep)
 
+	col.add_child(_mk_label("云端录像（所有玩家共享，点「播放」直接看、点「保存」进本机列表）", _fs(UiKit.FS_MD), COL_TEXT))
+	var cr_status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
+	col.add_child(cr_status)
+	var cr_scroll := ScrollContainer.new()
+	cr_scroll.custom_minimum_size = Vector2(0, 300)
+	cr_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(cr_scroll)
+	var cr_box := VBoxContainer.new()
+	cr_box.add_theme_constant_override("separation", 6)
+	cr_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cr_scroll.add_child(cr_box)
+	var b_refresh := _mk_btn("刷新云端录像", UiKit.C_TEAM1, false, Vector2(220, 46))
+	b_refresh.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_refresh.pressed.connect(func() -> void: _cloud_load_replays(cr_box, cr_status))
+	col.add_child(b_refresh)
+	_cloud_load_replays(cr_box, cr_status)
 	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
 	back.pressed.connect(_show_menu)
 	col.add_child(back)
@@ -1114,6 +1191,22 @@ func _open_controls() -> void:
 	lay_btn.disabled = true
 	lay_row.add_child(lay_btn)
 
+	col.add_child(_mk_label("云端录像（所有玩家共享，点「播放」直接看、点「保存」进本机列表）", _fs(UiKit.FS_MD), COL_TEXT))
+	var cr_status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
+	col.add_child(cr_status)
+	var cr_scroll := ScrollContainer.new()
+	cr_scroll.custom_minimum_size = Vector2(0, 300)
+	cr_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_child(cr_scroll)
+	var cr_box := VBoxContainer.new()
+	cr_box.add_theme_constant_override("separation", 6)
+	cr_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cr_scroll.add_child(cr_box)
+	var b_refresh := _mk_btn("刷新云端录像", UiKit.C_TEAM1, false, Vector2(220, 46))
+	b_refresh.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_refresh.pressed.connect(func() -> void: _cloud_load_replays(cr_box, cr_status))
+	col.add_child(b_refresh)
+	_cloud_load_replays(cr_box, cr_status)
 	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
 	back.pressed.connect(_show_menu)
 	col.add_child(back)
@@ -3628,5 +3721,4 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
-
 

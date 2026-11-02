@@ -52,6 +52,29 @@ create policy hk_accounts_read   on public.hk_accounts for select using (true);
 create policy hk_accounts_insert on public.hk_accounts for insert with check (true);
 create policy hk_accounts_update on public.hk_accounts for update using (true) with check (true);
 
+-- 云端录像元数据（所有玩家共享的录像列表）
+create table if not exists public.hk_replay_meta (
+  id text primary key,
+  object text not null,
+  pid text not null,
+  name text not null,
+  uploader text default '',
+  hero text default '',
+  nick text default '',
+  mode text default '',
+  duration double precision default 0,
+  winner int default -1,
+  player_team int default 0,
+  partial int default 0,
+  time text default '',
+  size bigint default 0,
+  created bigint default 0
+);
+alter table public.hk_replay_meta enable row level security;
+create policy hk_replay_meta_read   on public.hk_replay_meta for select using (true);
+create policy hk_replay_meta_insert on public.hk_replay_meta for insert with check (true);
+create policy hk_replay_meta_update on public.hk_replay_meta for update using (true) with check (true);
+
 -- 录像手动上传用的存储桶（10MB 级 .rep）
 insert into storage.buckets (id, name, public)
 values ('hk_replays', 'hk_replays', false)
@@ -111,6 +134,7 @@ cd cloudflare/cloud-save
 CLOUD_TOKEN=dev-token node dev-server.mjs
 # 游戏内地址 http://127.0.0.1:8788，口令 dev-token
 ```
+
 
 
 

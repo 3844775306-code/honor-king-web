@@ -17,6 +17,7 @@ const BMOB_BASE := "https://api.bmob.cn/1"
 const BMOB_CLASS := "/classes/CloudSave"
 const SUPA_TABLE := "/rest/v1/cloud_saves"
 const ACCOUNTS_TABLE := "/rest/v1/hk_accounts"
+const REPLAY_META := "/rest/v1/hk_replay_meta"
 const STORAGE_BUCKET := "hk_replays"
 # 内置云端账号（玩家无需填写）：Supabase 免费档项目
 const DEFAULT_URL := "https://oewvixujojsbqwxfnkfk.supabase.co"
@@ -108,6 +109,7 @@ static func payload() -> Dictionary:
 		"pid": player_id(),
 		"ts": int(Time.get_unix_time_from_system()),
 		"files": bundle(),
+		"rank": RankSystem.state(),
 	}
 
 
@@ -352,6 +354,128 @@ static func _supabase_download(tree: SceneTree, cb: Callable) -> void:
 			var merged := apply_remote(data as Dictionary)
 			_cb(cb, true, code, "已同步" if merged else "云端无有效数据")
 	)
+
+## —— 云端录像：Storage 桶 hk_replays + hk_replay_meta 表 ——
+
+static func _storage_headers(cfg: Dictionary, upsert: bool = false) -> PackedStringArray:
+	var key := str(cfg.get("app_key", "")).strip_edges()
+	var h := PackedStringArray(["apikey: " + key, "Authorization: Bearer " + key])
+	if upsert:
+		h.append("x-upsert: true")
+	return h
+
+
+static func _meta_url(cfg: Dictionary) -> String:
+	return str(cfg.get("url", "")).strip_edges().trim_suffix("/") + REPLAY_META
+
+
+## 把本地某个录像条目上传到云端（Storage + 元数据表）
+static func upload_replay(tree: SceneTree, entry: Dictionary, cb: Callable = Callable()) -> void:
+	ensure_defaults()
+	if not is_configured() or backend() != BACKEND_SUPABASE:
+		_cb(cb, false, 0, "未配置云端")
+		return
+	var path := str(entry.get("file", ""))
+	if path == "" or not FileAccess.file_exists(path):
+		_cb(cb, false, 0, "录像文件不存在")
+		return
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var fname := path.get_file()
+	var pid := player_id()
+	var obj := "%s/%s/%s" % [STORAGE_BUCKET, pid, fname]
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var base := str(cfg.get("url", "")).strip_edges().trim_suffix("/")
+	var obj_url := "%s/storage/v1/object/%s/%s/%s" % [base, STORAGE_BUCKET, pid, fname.uri_encode()]
+	var hdr := _storage_headers(cfg, true)
+	hdr.append("Content-Type: application/octet-stream")
+	_do_bytes(tree, HTTPClient.METHOD_POST, obj_url, bytes, hdr,
+		func(ok: bool, code: int, resp: String) -> void:
+			if not ok:
+				_cb(cb, false, code, "录像上传失败：" + resp.left(120))
+				return
+			var meta := {
+				"id": obj, "object": obj, "pid": pid, "name": fname,
+				"uploader": NameStore.player_name(), "hero": str(entry.get("hero", "")),
+				"nick": str(entry.get("nick", "")), "mode": str(entry.get("mode", "")),
+				"duration": float(entry.get("duration", 0.0)),
+				"winner": int(entry.get("winner", -1)),
+				"player_team": int(entry.get("player_team", 0)),
+				"partial": int(entry.get("partial", 0)),
+				"time": str(entry.get("time", "")), "size": bytes.size(),
+				"created": int(Time.get_unix_time_from_system()),
+			}
+			var h2 := _supabase_headers(cfg)
+			h2.append("Prefer: resolution=merge-duplicates")
+			_do_headers(tree, HTTPClient.METHOD_POST, _meta_url(cfg) + "?on_conflict=id",
+				JSON.stringify(meta), h2,
+				func(ok2: bool, code2: int, resp2: String) -> void:
+					_cb(cb, ok2, code2, "录像已上传" if ok2 else resp2.left(160)))
+	)
+
+
+## 云端录像列表（所有玩家上传的，按时间倒序）
+static func list_cloud_replays(tree: SceneTree, cb: Callable) -> void:
+	ensure_defaults()
+	if not is_configured() or backend() != BACKEND_SUPABASE:
+		_cb(cb, false, 0, "未配置云端")
+		return
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var url := _meta_url(cfg) + "?select=*&order=created.desc&limit=100"
+	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
+		func(ok: bool, code: int, body: String) -> void:
+			cb.call(ok, code, _results_of(body) if ok else [])
+	)
+
+
+## 下载云端录像到本地；save_to_index=true 时同时插入本机录像列表
+static func download_cloud_replay(tree: SceneTree, row: Dictionary, save_to_index: bool,
+		cb: Callable = Callable()) -> void:
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var obj := str(row.get("object", ""))
+	var base := str(cfg.get("url", "")).strip_edges().trim_suffix("/")
+	if obj == "":
+		_cb(cb, false, 0, "录像信息不完整")
+		return
+	var url := "%s/storage/v1/object/%s" % [base, obj]
+	_do_download(tree, url, _storage_headers(cfg),
+		func(ok: bool, code: int, bytes: PackedByteArray) -> void:
+			if not ok or bytes.is_empty():
+				_cb(cb, false, code, "录像下载失败")
+				return
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://replays"))
+			var fname := str(row.get("name", "cloud.rep"))
+			var dst := "user://replays/" + fname
+			if FileAccess.file_exists(dst):
+				dst = "user://replays/%s_%d.rep" % [fname.get_basename(), Time.get_ticks_msec()]
+			var f := FileAccess.open(dst, FileAccess.WRITE)
+			if f == null:
+				_cb(cb, false, 0, "保存录像失败")
+				return
+			f.store_buffer(bytes)
+			f.close()
+			if save_to_index:
+				ReplayRepo.import_entry(row, dst)
+			_cb(cb, true, code, dst)
+	)
+
+
+static func _do_download(tree: SceneTree, url: String, headers: PackedStringArray, cb: Callable) -> void:
+	if tree == null:
+		_cb(cb, false, 0, "无场景树")
+		return
+	var req := HTTPRequest.new()
+	req.timeout = 60.0
+	tree.root.add_child(req)
+	var err := req.request_raw(url, headers, HTTPClient.METHOD_GET, PackedByteArray())
+	if err != OK:
+		req.queue_free()
+		_cb(cb, false, 0, "请求失败（%d）" % err)
+		return
+	req.request_completed.connect(func(result: int, code: int, _h: PackedStringArray, resp: PackedByteArray) -> void:
+		if is_instance_valid(req):
+			req.queue_free()
+		var ok := result == HTTPRequest.RESULT_SUCCESS and code >= 200 and code < 300
+		cb.call(ok, code, resp), CONNECT_ONE_SHOT)
 
 ## —— 云端账号（跨设备登录用）：hk_accounts 表 ——
 
@@ -638,6 +762,8 @@ static func _do_headers(tree: SceneTree, method: int, url: String, body: String,
 			req.queue_free()
 		var ok := result == HTTPRequest.RESULT_SUCCESS and code >= 200 and code < 300
 		_cb(cb, ok, code, resp.get_string_from_utf8()), CONNECT_ONE_SHOT)
+
+
 
 
 

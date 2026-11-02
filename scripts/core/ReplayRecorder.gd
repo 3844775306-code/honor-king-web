@@ -1001,6 +1001,31 @@ static func _write_index(arr: Array) -> void:
 		f.close()
 
 
+## 云端下载保存到本地后，把条目插进录像索引（去重）
+static func import_entry(entry: Dictionary, local_path: String) -> void:
+	if local_path == "" or not FileAccess.file_exists(local_path):
+		return
+	var arr: Array = load_index()
+	for e in arr:
+		if e is Dictionary and str((e as Dictionary).get("file", "")) == local_path:
+			return
+	arr.push_front({
+		"file": local_path,
+		"time": str(entry.get("time", "")),
+		"duration": float(entry.get("duration", 0.0)),
+		"mode": str(entry.get("mode", "")),
+		"hero": str(entry.get("hero", "")),
+		"nick": str(entry.get("nick", "")),
+		"winner": int(entry.get("winner", -1)),
+		"player_team": int(entry.get("player_team", 0)),
+		"partial": int(entry.get("partial", 0)),
+		"size": FileAccess.get_file_as_bytes(local_path).size(),
+	})
+	while arr.size() > MAX_REPLAYS:
+		var drop: Dictionary = arr.pop_back()
+		_delete_file(str(drop.get("file", "")))
+	_write_index(arr)
+
 static func delete_replay(entry: Dictionary) -> void:
 	var arr: Array = load_index()
 	var out: Array = []
@@ -1047,4 +1072,5 @@ static func load_replay(path: String) -> Dictionary:
 	f.close()
 	var data = JSON.parse_string(txt)
 	return data if data is Dictionary else {}
+
 
