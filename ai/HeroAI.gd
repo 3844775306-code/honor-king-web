@@ -167,6 +167,8 @@ func _action_is_complete(action: AIAction) -> bool:
 			return _temp_clear_retarget_or_done()
 		AIAction.Type.TEAM_TASK:
 			return team_task == null or not team_task.is_active()
+		AIAction.Type.OBJECTIVE:
+			return not is_dragon_rally or not _is_dragon_alive()
 		AIAction.Type.SAFE_RECALL:
 			return _fully_recovered()
 		AIAction.Type.RETURN_TO_BASE:
@@ -243,6 +245,7 @@ func _sync_ai_movement() -> void:
 
 
 func _assign_lane():
+	_finish_current_action()
 	match hero.role:
 		"射手": lane = AiConfig.Lane.FARM
 		"法师": lane = AiConfig.Lane.MID
