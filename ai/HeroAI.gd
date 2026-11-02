@@ -107,6 +107,7 @@ func _set_action(action_type: int, priority: int = 0, pause_class: int = AIActio
 			return
 		current_action.mark(AIAction.Status.INTERRUPTED)
 	current_action = AIAction.new(action_type, priority, pause_class, reason)
+
 	if pause_class == AIAction.PauseClass.NONE:
 		_task_pause_active = false
 	if current_action.pause_class != AIAction.PauseClass.NONE and team_task != null and team_task.is_active():
@@ -163,7 +164,7 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.TEAM_TASK:
 			return team_task == null or not team_task.is_active()
 		AIAction.Type.SAFE_RECALL:
-			return hero.is_in_own_fountain() and _fully_recovered()
+			return _fully_recovered()
 		AIAction.Type.RETURN_TO_BASE:
 			return _is_under_own_tower() and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) == 0
 		AIAction.Type.DEFEND_TOWER:
@@ -1956,6 +1957,15 @@ func _recall_safe_behavior(delta):
 			return
 	# 英雄特判（孙悟空筋斗云飞行中/已在泉水）→ 本英雄自行处理
 	if brain.handle_recall_safe():
+		return
+	# 已回满：不管是否还在泉水判定圈内，都结束回城，避免走出泉边后又去安全点二次回城。
+	if _fully_recovered():
+		if hero.is_recalling:
+			hero.cancel_recall()
+		hero.move_target = Vector3.ZERO
+		hero.manual_target = null
+		_finish_current_action()
+		_assign_lane()
 		return
 	# 已在自家泉水：养伤到血/蓝回到阈值才出门；未回满则原地待着（别走去“安全点”或重复回城）
 	if hero.is_in_own_fountain():
