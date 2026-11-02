@@ -16,6 +16,7 @@ enum Type {
 	VISION_SPIRIT,
 	TRIPOD,
 	TEAM_TASK,
+	OBJECTIVE,
 	ROTATE,
 	DODGE,
 	TOWER_ESCAPE,
@@ -67,6 +68,7 @@ func label() -> String:
 		Type.VISION_SPIRIT: return "视野之灵"
 		Type.TRIPOD: return "大禹鼎"
 		Type.TEAM_TASK: return "团队任务"
+		Type.OBJECTIVE: return "打龙/资源"
 		Type.ROTATE: return "传送转线"
 		Type.DODGE: return "躲避"
 		Type.TOWER_ESCAPE: return "塔下逃生"

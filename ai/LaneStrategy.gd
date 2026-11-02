@@ -397,8 +397,12 @@ func decide(force_push: bool = false) -> void:
 		hero.move_target = forward_minion
 		hero.manual_target = null
 	elif force_push:
-		# 推线任务没有己方前排兵：原地等下一波，不退回己方最前线塔。
-		hero.move_target = hero.global_position
+		# 推线任务没有己方前排兵：不在本路时先回本路等待，已在路上则原地等下一波。
+		var lane_goal := _get_lane_default_pos()
+		if lane_goal != Vector3.ZERO and hero.global_position.distance_to(lane_goal) > 12.0:
+			hero.move_target = lane_goal
+		else:
+			hero.move_target = hero.global_position
 		hero.manual_target = null
 	elif default_bush_pos != Vector3.ZERO:
 		hero.move_target = default_bush_pos

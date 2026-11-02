@@ -1372,7 +1372,9 @@ func _execute_local_task(jungle: bool) -> void:
 			_assign_lane()
 		else:
 			_dragon_rally_behavior()
-			_set_action(AIAction.Type.PUSH_LANE)
+			if is_dragon_rally:
+				_set_action(AIAction.Type.OBJECTIVE, 80, AIAction.PauseClass.NONE, "打龙")
+				_sync_ai_movement()
 			return
 	if lane_strategy:
 		lane_strategy.update_time(gt)
