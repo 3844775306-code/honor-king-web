@@ -2879,6 +2879,30 @@ func _update_ui() -> void:
 
 
 ## 旧录像/旧采样没有 chip 字段时，从完整快照反推两行胶囊
+## 回放里让 AI 胶囊的「任务倒计时」按回放时间流逝（录像是 0.5s 采样的冻结文本）
+func _chip_with_task_left(chip: Dictionary, snap: Dictionary, frame_ms: int, target_ms: int) -> Dictionary:
+	var task_txt := str(snap.get("task", ""))
+	if task_txt == "":
+		return chip
+	var left0 := float(snap.get("task_left", -1.0))
+	if left0 < 0.0:
+		return chip
+	var elapsed := maxf(0.0, float(target_ms - frame_ms) / 1000.0)
+	var left := maxf(0.0, left0 - elapsed)
+	if bool(snap.get("task_paused", false)):
+		task_txt += "(暂停)"
+	else:
+		task_txt += " %ds" % int(ceil(left))
+	var parts: Array = str(chip.get("line1", "")).split(" · ", false)
+	var out: Array = []
+	for p in parts:
+		if not str(p).begins_with("任:"):
+			out.append(str(p))
+	out.append("任:" + task_txt)
+	var c := chip.duplicate()
+	c["line1"] = " · ".join(out)
+	return c
+
 func _chip_from_snapshot(snap: Dictionary) -> Dictionary:
 	var it_cn := ""
 	match str(snap.get("intent", "")):
@@ -2936,6 +2960,7 @@ func _apply_replay_ai_chips() -> void:
 			if not (chip is Dictionary) or (chip as Dictionary).is_empty():
 				chip = _chip_from_snapshot(snap)
 			if chip is Dictionary and not (chip as Dictionary).is_empty():
+				chip = _chip_with_task_left(chip as Dictionary, snap, int(best.get("t", 0)), target_ms)
 				chips["%s|%d" % [str(snap.get("name", "")), int(snap.get("team", 0))]] = chip
 	for i in range(_hero_uis.size()):
 		if i >= _heroes.size():
@@ -3823,6 +3848,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 
