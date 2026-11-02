@@ -242,6 +242,35 @@ func _mount_boot_intro(layer: CanvasLayer, use_3d: bool) -> void:
 		_mount_boot_intro(layer, not use_3d))
 
 
+## 大厅内切换账号：弹登录表单，取消不影响当前会话；登录成功才切换数据目录
+func _open_switch_account() -> void:
+	if _login_layer != null and is_instance_valid(_login_layer):
+		return
+	_login_layer = CanvasLayer.new()
+	_login_layer.name = "SwitchAccountLayer"
+	_login_layer.layer = 160
+	add_child(_login_layer)
+	var panel: Control = LoginPanelScript.new()
+	panel.switch_mode = true
+	panel.name = "SwitchAccountPanel"
+	_login_layer.add_child(panel)
+	panel.start_requested.connect(func() -> void:
+		if _login_layer != null and is_instance_valid(_login_layer):
+			_login_layer.queue_free()
+			_login_layer = null
+		_login_completed = true
+		PlayerPrefs.reload()
+		RankSystem.reload()
+		HeroBuildStore.reload()
+		if _stack == null:
+			_build_base()
+			_connect_signals()
+		_show_menu())
+	panel.canceled.connect(func() -> void:
+		if _login_layer != null and is_instance_valid(_login_layer):
+			_login_layer.queue_free()
+			_login_layer = null)
+
 func _show_login_panel() -> void:
 	if _login_completed:
 		return
@@ -1139,6 +1168,10 @@ func _open_cloud() -> void:
 	CloudSyncScript.ensure_defaults()
 	var pid_lab := _mk_label("云端账号：已自动连接（Supabase 免费档）\n玩家 ID：%s" % CloudSyncScript.player_id(), _fs(UiKit.FS_SM), COL_TEXT)
 	col.add_child(pid_lab)
+	var b_switch := _mk_btn("切换账号", UiKit.C_TEAM0, false, Vector2(240, 52))
+	b_switch.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_switch.pressed.connect(_open_switch_account)
+	col.add_child(b_switch)
 	var status := _mk_label("云端数据会自动同步；换机/重装后启动会自动拉取（录像需手动上传）。", _fs(UiKit.FS_SM), COL_GOLD)
 	col.add_child(status)
 

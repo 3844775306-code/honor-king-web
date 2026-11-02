@@ -3,6 +3,7 @@ extends Control
 ## 同设备同一账号在 30 天内免登录；登录后显示「开始游戏」，由大厅接 2D 过渡动画进主菜单。
 
 signal start_requested
+signal canceled
 
 var _user: LineEdit
 var _pass: LineEdit
@@ -16,6 +17,8 @@ var _start_box: VBoxContainer
 var _welcome: Label
 var _busy := false
 var _mode_new := false
+var switch_mode := false   # 大厅内「切换账号」：显示登录表单 + 取消，不影响当前会话直到登录成功
+var _cancel_btn: Button = null
 
 
 func _ready() -> void:
@@ -23,10 +26,13 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_index = 1000
 	_build()
-	if AccountService.has_valid_session():
-		_show_start(AccountService.session_username(), true)
-	else:
+	if switch_mode:
 		_show_form(AccountService.last_username())
+	else:
+		if AccountService.has_valid_session():
+			_show_start(AccountService.session_username(), true)
+		else:
+			_show_form(AccountService.last_username())
 
 
 func _build() -> void:
@@ -97,6 +103,10 @@ func _build() -> void:
 	_switch = _btn("新建账号", UiKit.C_TEAM0, false)
 	_switch.pressed.connect(_toggle_mode)
 	btn_row.add_child(_switch)
+	_cancel_btn = _btn("取消", UiKit.C_TEAM0, false)
+	_cancel_btn.visible = false
+	_cancel_btn.pressed.connect(func() -> void: canceled.emit())
+	btn_row.add_child(_cancel_btn)
 	_status = _lab("", 16, UiKit.C_DANGER)
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -125,6 +135,8 @@ func _build() -> void:
 
 func _show_form(prefill: String = "") -> void:
 	_busy = false
+	if _cancel_btn != null:
+		_cancel_btn.visible = switch_mode
 	_form_box.visible = true
 	_start_box.visible = false
 	_mode_new = false
@@ -138,6 +150,8 @@ func _show_form(prefill: String = "") -> void:
 
 func _show_start(username: String, remembered: bool) -> void:
 	_busy = false
+	if _cancel_btn != null:
+		_cancel_btn.visible = false
 	_form_box.visible = false
 	_start_box.visible = true
 	_title.text = "欢迎回来" if remembered else "登录成功"
@@ -198,6 +212,8 @@ func _on_auth_result(ok: bool, msg: String) -> void:
 		return
 	_show_start(_user.text.strip_edges(), false)
 	_status.text = msg
+	if switch_mode:
+		start_requested.emit()
 
 
 func _set_enabled(v: bool) -> void:
@@ -260,3 +276,5 @@ func _btn(txt: String, accent: Color, filled: bool) -> Button:
 	b.add_theme_color_override("font_hover_color", Color(0.06, 0.05, 0.02) if filled else Color.WHITE)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return b
+
+
