@@ -186,6 +186,27 @@ func _finish_current_action() -> void:
 	_task_pause_active = false
 
 
+## 朝指定点走（A* 绕墙；泉水养伤/回城落点用）
+func _walk_to(goal: Vector3) -> void:
+	var now := _game_time()
+	if _ai_path.is_empty() or _ai_path_goal.distance_to(goal) > 1.5 \
+			or now - _ai_path_time > 0.8 or _ai_path_index >= _ai_path.size():
+		_ai_path_goal = goal
+		_ai_path = MovementPlanner.plan(hero, goal, threat_model)
+		_ai_path_time = now
+		_ai_path_index = 0
+		_ai_path_len = MovementPlanner.path_length(_ai_path)
+		_ai_path_risk = MovementPlanner.path_risk(hero, _ai_path, threat_model)
+	if _ai_path.is_empty():
+		_ai_path_len = 0.0
+		_ai_path_risk = 0.0
+		hero.move_target = goal
+		return
+	while _ai_path_index < _ai_path.size() - 1 \
+			and hero.global_position.distance_to(_ai_path[_ai_path_index]) < 1.2:
+		_ai_path_index += 1
+	hero.move_target = _ai_path[_ai_path_index]
+
 func _sync_ai_movement() -> void:
 	var t = hero.manual_target
 	if t == null or not is_instance_valid(t) or t.health <= 0.0:
@@ -789,9 +810,10 @@ func _process(delta):
 		if hero.is_recalling:
 			hero.cancel_recall()
 		if spring_dist > 3.0:
-			hero.move_target = spring
+			_walk_to(spring)   # PathFinder 已挖开泉水入口走廊，A* 可直达泉心
 		else:
 			hero.move_target = Vector3.ZERO
+			_ai_path.clear()
 		if hero.is_in_own_fountain():
 			_recall_safe_behavior(delta)
 		return

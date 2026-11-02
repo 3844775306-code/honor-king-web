@@ -1162,8 +1162,11 @@ func _avoid_walls(move_dir: Vector3, delta: float, destination: Vector3 = Vector
 	# AI 被碰撞推到地图边缘（|x|/|z| ≥ 60 是 A* 实心墙格）时先夹回可行走区，
 	# 否则 A* 起点在实心格，寻路反复失败/卡墙，AI 会贴边撞墙甚至绕向敌塔。
 	if self is Hero and (self as Hero).is_ai:
-		global_position.x = clampf(global_position.x, -59.0, 59.0)
-		global_position.z = clampf(global_position.z, -59.0, 59.0)
+		# 泉水在 |坐标|≥60 的地图角外；靠泉 8m 内不夹回，否则 AI 永远走不进泉池（回城后也会被夹出来）
+		var spring := Vector3(-62.0, 0.0, 62.0) if int(team) == int(Config.Team.PLAYER) else Vector3(62.0, 0.0, -62.0)
+		if global_position.distance_to(spring) > 8.0:
+			global_position.x = clampf(global_position.x, -59.0, 59.0)
+			global_position.z = clampf(global_position.z, -59.0, 59.0)
 	# 卡墙检测：无目的地（玩家直控）时用位移判据；有目的地时用「沿目标方向的真实前进量」，
 	# 避免 CollisionSystem 每帧推离造成的来回抖动把卡墙计时器一直骗重置。
 	if destination == Vector3.ZERO:

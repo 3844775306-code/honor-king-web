@@ -22,6 +22,19 @@ func _is_in_bounds(cell: Vector2i) -> bool:
 	return cell.x >= CELL_MIN and cell.x <= CELL_MAX and cell.y >= CELL_MIN and cell.y <= CELL_MAX
 
 
+## 把某点周围 3×3 格恢复为可通行（挖泉水入口走廊用）
+func _clear_solid(x: float, z: float) -> void:
+	if astar == null:
+		return
+	var cx := int(floor(x / CELL_SIZE))
+	var cz := int(floor(z / CELL_SIZE))
+	for i in range(cx - 1, cx + 2):
+		for j in range(cz - 1, cz + 2):
+			var cell := Vector2i(i, j)
+			if _is_in_bounds(cell):
+				astar.set_point_solid(cell, false)
+
+
 func build_navigation_map() -> void:
 	astar = AStarGrid2D.new()
 	astar.region = Rect2i(-GRID_HALF, -GRID_HALF, GRID_HALF * 2, GRID_HALF * 2)
@@ -36,6 +49,7 @@ func build_navigation_map() -> void:
 		if not is_instance_valid(wall):
 			continue
 		_mark_solid(wall.global_position.x, wall.global_position.z)
+
 
 
 	# 塔基：不写死为不可通行（单位可走进来，由 CollisionSystem 推挤挡开），但给高权重让 A* 优先绕行
@@ -54,6 +68,29 @@ func build_navigation_map() -> void:
 			if absi(i) >= half or absi(j) >= half:
 				astar.set_point_solid(Vector2i(i, j), true)
 
+
+	# 泉水在 |坐标|≥60 之外，地图边界封边会把整个泉池标成不可通行 → AI 只能走到池外。
+	# 这里把泉池圆盘 + 朝地图内的开口走廊挖回来，让 A* 能真正走进/走出泉水。
+	for spring in [Vector2(-62.0, 62.0), Vector2(62.0, -62.0)]:
+		# 泉池圆盘（半径 5.2：池沿 3.5 + 石环 4.35 + 余量）
+		var rr := int(ceil(5.2 / CELL_SIZE))
+		var scx := int(floor(spring.x / CELL_SIZE))
+		var scz := int(floor(spring.y / CELL_SIZE))
+		for i in range(scx - rr, scx + rr + 1):
+			for j in range(scz - rr, scz + rr + 1):
+				var cell := Vector2i(i, j)
+				if not _is_in_bounds(cell):
+					continue
+				var wx := (float(i) + 0.5) * CELL_SIZE
+				var wz := (float(j) + 0.5) * CELL_SIZE
+				if Vector2(wx, wz).distance_to(spring) <= 5.2:
+					astar.set_point_solid(cell, false)
+		# 朝地图内的径向走廊（穿透 270° 石环的 90° 开口）
+		var inward: Vector2 = (Vector2.ZERO - spring).normalized()
+		var d := 0.0
+		while d <= 8.0:
+			_clear_solid(spring.x + inward.x * d, spring.y + inward.y * d)
+			d += 0.4
 
 	initialized = true
 
