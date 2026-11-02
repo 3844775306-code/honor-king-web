@@ -27,6 +27,7 @@ var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
+var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -2239,6 +2240,22 @@ func _try_use_recover():
 
 # ==================== 安全回城 ====================
 func _recall_safe_behavior(delta):
+	# 回城中血量恢复到 30% 以上并持续 2.5 秒 → 主动退出回城
+	if hero.is_recalling:
+		if hero.health >= hero.actual_max_health * 0.30:
+			_recall_recover_t += delta
+			if _recall_recover_t >= 2.5:
+				_recall_recover_t = 0.0
+				hero.cancel_recall()
+				hero.move_target = Vector3.ZERO
+				hero.manual_target = null
+				_finish_current_action()
+				_assign_lane()
+				return
+		else:
+			_recall_recover_t = 0.0
+	else:
+		_recall_recover_t = 0.0
 	# 孙悟空：飞行中/已在泉水由这里统一处理——必须血蓝全满才出泉，且不在泉里反复起飞
 	if hero.display_name == "孙悟空":
 		if hero.wukong_cloud_flying:
@@ -2286,7 +2303,16 @@ func _recall_safe_behavior(delta):
 				or _recall_path_threatened(safe_pos):
 			_leave_recall_spot()
 			return
-		_follow_safe_route(safe_pos)
+		# 回城点在塔后侧：直线会撞塔 → 离点够近就直接读条，避免被塔身卡住
+		var dist_sp: float = hero.global_position.distance_to(safe_pos)
+		if dist_sp <= 4.5 and _recall_blocked_by_friendly_tower(safe_pos):
+			hero.start_recall()
+			return
+		var detour := _recall_detour_point(safe_pos)
+		if detour != Vector3.ZERO and hero.global_position.distance_to(detour) > 1.5:
+			_follow_safe_route(detour)
+		else:
+			_follow_safe_route(safe_pos)
 	elif not hero.is_recalling and not _fully_recovered():
 		hero.start_recall()
 
@@ -2358,6 +2384,57 @@ func _enemy_tower_containing(pos: Vector3) -> Turret:
 
 
 ## 己方水晶位置（优先真实水晶塔，兜底固定坐标）
+## 点到水平线段的 XZ 距离
+func _dist_to_segment_h(p: Vector3, a: Vector3, b: Vector3) -> float:
+	var ab := Vector3(b.x - a.x, 0.0, b.z - a.z)
+	var ap := Vector3(p.x - a.x, 0.0, p.z - a.z)
+	var l2 := ab.length_squared()
+	var t: float = 0.0
+	if l2 > 0.0001:
+		t = clampf(ap.dot(ab) / l2, 0.0, 1.0)
+	var proj := a + ab * t
+	return Vector2(p.x - proj.x, p.z - proj.z).length()
+
+
+## hero→回城点直线被己方塔挡住（回城点在塔后侧）
+func _recall_blocked_by_friendly_tower(spot: Vector3) -> bool:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) != int(hero.team) or (e as Turret).health <= 0.0:
+			continue
+		var tp: Vector3 = (e as Turret).global_position
+		if tp.distance_to(spot) > 4.0:
+			continue
+		if _dist_to_segment_h(tp, hero.global_position, spot) <= 2.8:
+			return true
+	return false
+
+## 回城点在塔后侧导致直线撞塔时：返回塔侧面绕行点（无阻挡返回 ZERO）
+func _recall_detour_point(spot: Vector3) -> Vector3:
+	var tower: Turret = null
+	var best := 4.0
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) != int(hero.team) or (e as Turret).health <= 0.0:
+			continue
+		var d: float = (e as Turret).global_position.distance_to(spot)
+		if d < best:
+			best = d
+			tower = e as Turret
+	if tower == null:
+		return Vector3.ZERO
+	# 直线 hero→spot 是否会撞塔（塔碰撞半径约 2.5m）
+	if _dist_to_segment_h(tower.global_position, hero.global_position, spot) > 3.0:
+		return Vector3.ZERO
+	var inward: Vector3 = spot - tower.global_position
+	inward.y = 0.0
+	if inward.length() < 0.1:
+		return Vector3.ZERO
+	inward = inward.normalized()
+	var side := Vector3(inward.z, 0.0, -inward.x)
+	var hero_side: float = (hero.global_position - tower.global_position).dot(side)
+	if absf(hero_side) < 0.2:
+		hero_side = 1.0
+	return tower.global_position + side * (3.2 * signf(hero_side))
+
 func _own_crystal_pos() -> Vector3:
 	for e in hero.get_tree().get_nodes_in_group("turrets"):
 		if e is Turret and int((e as Turret).team) == int(hero.team) and str((e as Turret).display_name) == "crystal" and (e as Turret).health > 0.0:
@@ -2752,4 +2829,7 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
+
+
 
