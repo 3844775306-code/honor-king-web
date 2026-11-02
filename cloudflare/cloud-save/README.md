@@ -13,14 +13,29 @@ GET  /health
 
 ## 一、部署（5 分钟，只需一次）
 
-```bash
-cd cloudflare/cloud-save
-npx wrangler login                                   # 浏览器授权 Cloudflare 账号（免费）
-npx wrangler d1 create honorking-saves               # 输出里复制 database_id
-#   把 database_id 填进 wrangler.toml 的 REPLACE_WITH_YOUR_D1_ID
-npx wrangler d1 execute honorking-saves --remote --file=./schema.sql
-npx wrangler secret put CLOUD_TOKEN                  # 输入朋友共用的口令，例如 honorking-friends
-npx wrangler deploy
+Windows CMD 先进入项目目录（路径按你本机实际位置改）：
+
+```bat
+cd /d C:\Users\18749\Documents\honor-king\cloudflare\cloud-save
+```
+
+然后**一条一条执行、等上一条跑完再贴下一条**（`npx --yes` 会自动安装 wrangler，不再问 y/N）：
+
+```bat
+npx --yes wrangler@latest login
+npx --yes wrangler@latest d1 create honorking-saves
+:: 把上面输出的 database_id 填进 wrangler.toml 的 REPLACE_WITH_YOUR_D1_ID
+npx --yes wrangler@latest d1 execute honorking-saves --remote --file=./schema.sql
+npx --yes wrangler@latest secret put CLOUD_TOKEN
+:: 提示 Value 时输入朋友共用的口令，回车
+npx --yes wrangler@latest deploy
+```
+
+也可以先装一次全局，之后把 `npx --yes wrangler@latest` 换成 `wrangler`：
+
+```bat
+npm i -g wrangler
+wrangler login
 ```
 
 部署成功会得到一个地址，例如：
@@ -69,3 +84,4 @@ npx wrangler d1 execute honorking-saves --remote --command "SELECT pid,ts,update
 - 口令是**全朋友共用一个**的简单鉴权，别公开贴到网上；要更严可后续加设备级 token
 - 只同步段位和对战纪录；10MB 级录像 `.rep` 没有上传（需要的话另加 R2/KV 方案）
 - 数据在 Cloudflare D1（海外节点）；国内访问延迟约 100–300ms，存档 KB 级基本无感
+
