@@ -376,8 +376,8 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 		TeamTask.Type.PUSH_TOWER:
 			return false
 		TeamTask.Type.INVADE_JUNGLE:
-			# 反野完成：目标野怪区域周围 20m 内已无存活野怪
-			return not _jungle_monster_near(t.target_pos, 20.0)
+			# 反野完成：目标野怪区域周围 20m 内已无「敌方半区」存活野怪
+			return not _enemy_jungle_monster_near(t.target_pos, 20.0, h.team)
 	return false
 
 
@@ -404,6 +404,17 @@ func _enemies_near(pos: Vector3, radius: float, team: int) -> int:
 			if (e as Node3D).global_position.distance_to(pos) <= radius:
 				n += 1
 	return n
+
+
+func _enemy_jungle_monster_near(pos: Vector3, radius: float, team: int) -> bool:
+	for e in bm.get_tree().get_nodes_in_group("jungle_monsters"):
+		if not is_instance_valid(e):
+			continue
+		if e is JungleMonster and (e as JungleMonster).health > 0:
+			var ep: Vector3 = (e as Node3D).global_position
+			if BattleManager.in_enemy_jungle_zone(ep, team) and ep.distance_to(pos) <= radius:
+				return true
+	return false
 
 
 func _jungle_monster_near(pos: Vector3, radius: float) -> bool:

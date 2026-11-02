@@ -43,9 +43,9 @@ func _push_tower_task(task: TeamTask) -> Dictionary:
 
 
 func _invade_task(task: TeamTask) -> Dictionary:
-	# 动态目标：敌方半区里离自己最近的存活野怪（目标会随野怪移动/刷新更新）
+	# 目标死亡后：在旧目标 20m 内继续找敌方半区存活野怪接替；附近没有才会判定完成
 	var best = null
-	var best_d := INF
+	var best_d := 20.0
 	for e in hero.get_tree().get_nodes_in_group("jungle_monsters"):
 		if not is_instance_valid(e):
 			continue
@@ -53,7 +53,7 @@ func _invade_task(task: TeamTask) -> Dictionary:
 			var ep := (e as Node3D).global_position
 			if not BattleManager.in_enemy_jungle_zone(ep, hero.team):
 				continue
-			var d := hero.global_position.distance_to(ep)
+			var d := task.target_pos.distance_to(ep)
 			if d < best_d:
 				best_d = d
 				best = e

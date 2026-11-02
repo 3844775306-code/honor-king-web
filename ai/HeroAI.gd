@@ -160,7 +160,7 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.FINISH_CHASE:
 			return _chase_target == null or not is_instance_valid(_chase_target) or _chase_target.health <= 0.0
 		AIAction.Type.TEMP_CLEAR:
-			return not _temp_clearing or hero.manual_target == null 				or not is_instance_valid(hero.manual_target) or hero.manual_target.health <= 0.0
+			return _temp_clear_retarget_or_done()
 		AIAction.Type.TEAM_TASK:
 			return team_task == null or not team_task.is_active()
 		AIAction.Type.SAFE_RECALL:
@@ -796,9 +796,7 @@ func _process(delta):
 			_recall_safe_behavior(delta)
 		return
 	_sync_ai_movement()
-	if _temp_clearing and (hero.manual_target == null or not is_instance_valid(hero.manual_target) \
-			or hero.manual_target.health <= 0.0):
-		_temp_clearing = false
+	# 目标死亡后的“附近是否还有其他小兵”交给 _action_is_complete 的 TEMP_CLEAR 分支处理
 	_debug_track()
 
 	# 威胁记忆与换血状态每帧维护：视野消失的敌人仍保留最后位置/血量，不直接消失。
@@ -1433,6 +1431,24 @@ func _try_temp_clear() -> bool:
 	hero.move_target = Vector3.ZERO
 	_set_action(AIAction.Type.TEMP_CLEAR, 850, AIAction.PauseClass.ENVIRONMENT, "临时清兵")
 	_temp_clearing = true
+	return true
+
+
+func _temp_clear_retarget_or_done() -> bool:
+	if not _temp_clearing:
+		return true
+	var t = hero.manual_target
+	if t != null and is_instance_valid(t) and t.health > 0.0:
+		return false
+	# 原目标死亡/失效：在英雄附近继续找敌方小兵接替，直到附近没有小兵才算清完
+	var next := _find_temp_clear_target()
+	if next != null:
+		hero.manual_target = next
+		hero.move_target = Vector3.ZERO
+		_ai_path.clear()
+		_temp_clearing = true
+		return false
+	_temp_clearing = false
 	return true
 
 
