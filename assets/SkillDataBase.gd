@@ -3894,9 +3894,10 @@ func get_skill(skill_id: String) -> Skill:
 ## len=最大飞行距离；hit_r=判定半径基数（与单位 body_radius 相加）；only_hero=只命中英雄。
 static func global_shot_profile(hero_name: String, slot: int) -> Dictionary:
 	if hero_name == "鲁班七号" and slot == 1:
-		return {"len": 160.0, "hit_r": 0.6, "only_hero": false, "speed": 35.0,
+		return {"len": 160.0, "hit_r": 0.6, "only_hero": true, "speed": 35.0,
 			"color": Color(0.42, 0.95, 0.72)}
 	if hero_name == "后羿" and slot == 2:
 		return {"len": 160.0, "hit_r": 1.2, "only_hero": true, "speed": 20.0,
 			"color": Color(1.0, 0.62, 0.14)}
 	return {}
+

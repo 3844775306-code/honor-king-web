@@ -178,8 +178,7 @@ func set_linear(dir: Vector3, distance: float):
 func set_goal(pos):
 	goal = pos
 
-# 鲁班七号2技能：只有「身边」的小兵/野怪可被命中；离鲁班超过3米的非英雄目标直接穿过。
-# 英雄不受距离限制（全图炮的核心用途）。
+# 鲁班七号2技能：只命中英雄；小兵/野怪/塔一律穿过（全图炮只打英雄）。
 ## 鲁班2/后羿R 的侦察视野：命中点周围敌方单位强制可见 2 秒
 func _reveal_enemies_around(center: Vector3, radius: float) -> void:
 	if source == null or not is_instance_valid(source):
@@ -204,13 +203,8 @@ func _reveal_enemies_around(center: Vector3, radius: float) -> void:
 func _luban_w_can_hit(entity) -> bool:
 	if not luban_w_knockback:
 		return true
-	if entity is Hero:
-		return true
-	if not (entity is Minion or entity is JungleMonster):
-		return false
-	if source == null or not is_instance_valid(source):
-		return false
-	return source.global_position.distance_to(entity.global_position) <= 3.0
+	# 鲁班2（W）：只打英雄，小兵/野怪/塔全部穿过
+	return entity is Hero
 # 弹体朝向：偏航跟随飞行方向；箭矢类（BOLT/ARROW）再加俯仰，箭头才不会平飞
 func _aim_visual(dir: Vector3) -> void:
 	if visual_mesh == null or not is_instance_valid(visual_mesh):
@@ -327,7 +321,7 @@ func _physics_process(delta):
 			if entity in attacked:continue
 			# 后羿R：仅命中英雄，穿过后排小兵/野怪/塔
 			if is_houyi_ult and not (entity is Hero):continue
-			# 鲁班W：远处小兵/野怪不被命中，飞过去只打英雄
+			# 鲁班W：只打英雄，小兵/野怪/塔穿过
 			if not _luban_w_can_hit(entity):continue
 			var hr: float = radius if hit_radius <= 0.0 else hit_radius
 			var dist = global_position.distance_to(entity.global_position) - hr - entity.body_radius
@@ -708,7 +702,7 @@ func on_hit():
 			if entity == source or not is_instance_valid(entity): continue
 			if entity.team == team: continue
 			if entity in attacked: continue
-			# 鲁班W的溅射同样遵守「3米内才可命中非英雄」
+			# 鲁班W的溅射同样只命中英雄
 			if not _luban_w_can_hit(entity): continue
 			var dist = global_position.distance_to(entity.global_position) - radius - entity.body_radius
 			if dist <= damage_range:
@@ -792,3 +786,4 @@ func _recursive_set_shadow(node: Node, mode: int):
 		node.cast_shadow = mode
 	for child in node.get_children():
 		_recursive_set_shadow(child, mode)
+
