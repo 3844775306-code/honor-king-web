@@ -13,7 +13,6 @@ enum Type {
 	RETREAT,
 	PUSH_TOWER,
 	INVADE_JUNGLE,
-	SUPPORT,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, EXPIRED, REASSIGNED }
@@ -81,5 +80,4 @@ func label() -> String:
 		Type.RETREAT: return "撤退"
 		Type.PUSH_TOWER: return "抱团推塔"
 		Type.INVADE_JUNGLE: return "反野"
-		Type.SUPPORT: return "支援"
 	return "待命"

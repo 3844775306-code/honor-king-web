@@ -22,7 +22,6 @@ var invade_target_by_hero: Dictionary = {} # {Hero: Vector3} 人数优势时反�
 var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
 var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
 var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
-var support_target_by_hero: Dictionary = {} # {Hero: Hero} 支援接取者 -> 被支援队友
 
 func _init(p_bm: BattleManager) -> void:
 	bm = p_bm
@@ -372,7 +371,7 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 			if t.target_hero == null:
 				return false
 			return not is_instance_valid(t.target_hero) or (t.target_hero as Hero).health <= 0.0
-		TeamTask.Type.PEEL, TeamTask.Type.SUPPORT:
+		TeamTask.Type.PEEL:
 			return false
 		TeamTask.Type.PUSH_TOWER:
 			return false
@@ -475,7 +474,6 @@ func allocate_all() -> Dictionary:
 	defend_assignees.clear()
 	defend_target_by_team.clear()
 	gank_target_by_hero.clear()
-	support_target_by_hero.clear()
 
 	var result: Dictionary = {}
 	var dragon_alive := _is_dragon_alive()
@@ -548,7 +546,7 @@ func allocate_all() -> Dictionary:
 				print("[TeamTactics] t=%.0f %s 经济差不足，不打龙" % [bm.game_time, team_label])
 		# 不打龙 → 正常分推（使用 default_mode，不受另一队DRAGON影响）
 		_allocate_team(team, default_mode, result)
-		_build_gank_support(team)
+		_build_gank(team)
 
 	assignments = result
 	# 把分路结果翻译成结构化主线任务；英雄层不再只收到一个 lane。
@@ -584,10 +582,6 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	if gank_target_by_hero.has(h):
 		var gt: Hero = gank_target_by_hero[h]
 		t.setup(TeamTask.Type.GANK, lane, gt.global_position, gt, 70, now, 25.0, "组团抓落单", role)
-		return t
-	if support_target_by_hero.has(h):
-		var st: Hero = support_target_by_hero[h]
-		t.setup(TeamTask.Type.SUPPORT, lane, st.global_position, st, 60, now, 15.0, "支援高威胁队友", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE:
 		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
@@ -650,40 +644,13 @@ func _find_gank_target(team: int) -> Hero:
 	return best
 
 
-func _find_support_target(team: int) -> Hero:
-	var best: Hero = null
-	var best_score := INF
-	for h in _get_ally_heroes(team):
-		if not h.is_ai:
-			continue
-		var score := h.health / maxf(1.0, h.actual_max_health)
-		var nearby := 0
-		for e in _get_ally_heroes(team):
-			if e != h and e.global_position.distance_to(h.global_position) <= 30.0:
-				nearby += 1
-		if nearby == 0:
-			continue
-		for e in _get_enemy_heroes(team):
-			if e.global_position.distance_to(h.global_position) <= 10.0:
-				score -= 0.2
-		if score < best_score:
-			best_score = score
-			best = h
-	return best
-
-
-func _build_gank_support(team: int) -> void:
+func _build_gank(team: int) -> void:
 	if bm.game_time >= 360.0:
 		var gank_target := _find_gank_target(team)
 		if gank_target != null:
 			for h in _get_ally_heroes(team):
 				if h.is_ai and h.global_position.distance_to(gank_target.global_position) <= 40.0:
 					gank_target_by_hero[h] = gank_target
-	var support_target := _find_support_target(team)
-	if support_target != null:
-		for h in _get_ally_heroes(team):
-			if h.is_ai and h != support_target and h.global_position.distance_to(support_target.global_position) <= 30.0:
-				support_target_by_hero[h] = support_target
 
 
 func _find_natural_jungler(team: int) -> Hero:

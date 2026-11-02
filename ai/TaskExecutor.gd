@@ -26,7 +26,7 @@ func execute(task: TeamTask, now: float) -> Dictionary:
 			return _objective_task(task)
 		TeamTask.Type.GANK:
 			return _gank_task(task)
-		TeamTask.Type.PEEL, TeamTask.Type.SUPPORT:
+		TeamTask.Type.PEEL:
 			return _peel_task(task)
 		TeamTask.Type.RETREAT:
 			return {"move_target": task.target_pos, "manual_target": null, "state": "retreat"}
