@@ -48,22 +48,77 @@ func modify_skill_score(_skill_index: int, _base_score: float) -> float:
 
 # 获取英雄连招列表
 # 返回 Array[Dictionary]: [{name, skills:[idx,...], priority:0.8}]
+# 默认按“英雄自己的技能构成”自适应生成，不再所有英雄统一 [2,0,1]/[0,1]。
 func get_combos(_target: GameEntity) -> Array:
-	# 默认连招: 有技能就按 2(大招)→0→1 顺序释放
-	var combos := []
-	if hero.skills.size() >= 3:
-		combos.append({
-			"name": "burst",
-			"skills": [2, 0, 1],
-			"priority": 0.5,
-		})
-	# 常规消耗: 0→1
+	var combos: Array = []
+	var order: Array = []
+	var setup: Array = []
+	var finishers: Array = []
+	var ult_finisher := false
+	for i in range(mini(3, hero.skills.size())):
+		var sk: Skill = hero.skills[i]
+		if sk == null:
+			continue
+		var ss := _combo_setup_score(sk)
+		if ss > 0.0:
+			setup.append({"i": i, "s": ss})
+		elif i == 2:
+			ult_finisher = true
+		else:
+			finishers.append({"i": i, "d": float(sk.damage)})
+	setup.sort_custom(func(a, b): return float(a.s) > float(b.s))
+	finishers.sort_custom(func(a, b): return float(a.d) > float(b.d))
+	for e in setup:
+		order.append(int(e.i))
+	for e in finishers:
+		order.append(int(e.i))
+	# 大招没有起手价值时放在最后，作为终结技
+	if ult_finisher:
+		order.append(2)
+	if order.is_empty():
+		return combos
 	combos.append({
-		"name": "poke",
-		"skills": [0, 1],
-		"priority": 0.3,
+		"name": "adaptive_burst",
+		"skills": order,
+		"priority": _combo_priority_by_role(),
 	})
+	# 消耗连招：只收有伤害的技能，按射程从远到近
+	var poke: Array = []
+	for i in range(mini(3, hero.skills.size())):
+		var sk2: Skill = hero.skills[i]
+		if sk2 != null and sk2.damage > 0.0:
+			poke.append({"i": i, "r": float(sk2.cast_range)})
+	poke.sort_custom(func(a, b): return float(a.r) > float(b.r))
+	var poke_order: Array = []
+	for e in poke:
+		poke_order.append(int(e.i))
+	if not poke_order.is_empty():
+		combos.append({"name": "adaptive_poke", "skills": poke_order, "priority": 0.3})
 	return combos
+
+
+# 起手价值：控制 > 位移 > 增益 > AoE；没有起手价值就归为伤害/终结技
+func _combo_setup_score(sk: Skill) -> float:
+	var s := 0.0
+	if sk.applies_stun > 0.0 or sk.applies_knockup > 0.0 or sk.applies_slow > 0.0:
+		s += 3.0
+	if sk.type == 4 or sk.self_displacement > 0.0:
+		s += 2.5
+	if sk.type == 2:
+		s += 1.5
+	if sk.type == 1:
+		s += 0.5
+	return s
+
+
+func _combo_priority_by_role() -> float:
+	match str(hero.role):
+		"刺客": return 0.70
+		"战士": return 0.60
+		"法师": return 0.55
+		"射手": return 0.50
+		"辅助": return 0.45
+	return 0.5
 
 
 # 工厂方法：根据英雄名创建对应的 Brain

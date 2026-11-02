@@ -82,7 +82,7 @@ func _ready():
 	trade_planner = TradePlanner.new(hero, threat_model, perception)
 	task_executor = TaskExecutor.new(hero, perception)
 	skill_tactics = SkillTactics.new(hero, perception)
-	summoner_tactics = SummonerTactics.new(hero, perception)
+	summoner_tactics = SummonerTactics.new(hero, perception, trade_planner)
 	item_tactics = ItemActiveTactics.new(hero, perception)
 	brain = HeroBrain.create(hero.display_name, hero, perception, skill_tactics)
 	skill_tactics.brain = brain   # 技能层走英雄特判钩子（后羿大招/刘禅拆塔），不再硬编码名字
@@ -145,13 +145,10 @@ func _try_upgrade_skills():
 
 
 # ==================== 赶路位移（非战斗位移技能） ====================
-# 让 AI 在「走过去」而非接战/撤退时用位移类技能(技能类型4/self_displacement>0，如孙尚香Q翻滚、
-# 马可波罗W漫游)沿 move_target 方向瞬移一段，加快回线/转线/刷野。仅当直线无墙(网格逐格采样)、
-# 附近无可见敌英雄/不在敌塔射程内才施放，避免把位移浪费在战斗外/跳进墙里。
+# 位移/加速赶路：只要离 move_target 超过普攻距离就尝试（技能类型4/self_displacement>0，如孙尚香Q翻滚、
+# 马可波罗W漫游）；施法/受控/回城/有锁定目标时不触发。闪现只用于追击/逃跑，不用于赶路。
 func _try_travel_dash():
-	# 只在推进/刷野这类「走路」状态下赶路；撤退/回城/躲避交给各自逻辑处理
-	if state != State.PUSH and state != State.FARM:
-		return
+	# 位移/加速：只要离目标点超过普攻距离就使用（不再限制 PUSH/FARM/9m/附近敌人）
 	if not is_instance_valid(hero) or hero.is_dead or hero.is_reviving:
 		return
 	# 施法/引导/传送/回城等动作中不赶路
@@ -169,14 +166,9 @@ func _try_travel_dash():
 	if dest == Vector3.ZERO:
 		return
 	var dist := hero.global_position.distance_to(dest)
-	if dist < AiConfig.TRAVEL_DASH_MIN_DIST:
+	if dist <= hero.attack_range * 0.01:
 		return
-	# 附近有可见敌方英雄：位移保留给先手/逃生
-	if perception.find_nearest_enemy_hero(AiConfig.TRAVEL_DASH_ENEMY_GUARD) != null:
-		return
-	# 召唤师闪现穿墙赶路（只有明显省路时才交，平时留着逃生）
-	if _try_flash_travel(dest):
-		return
+	# 闪现只在追击/逃跑时使用，不用于赶路
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return

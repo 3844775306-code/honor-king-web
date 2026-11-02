@@ -69,6 +69,8 @@ func _can_execute_combo(combo: Dictionary, target: GameEntity) -> bool:
 			return false
 		if hero.mana < hero.skills[idx].mana_cost:
 			return false
+		if idx == 2 and not _ult_allowed(target):
+			return false
 		if not _can_use_skill_on(idx, target):
 			return false
 	return true
@@ -110,6 +112,7 @@ func update_combo(delta: float) -> bool:
 			or hero.skill_levels[idx] <= 0 or hero.skill_cooldowns[idx] > 0.0 \
 			or hero.mana < hero.skills[idx].mana_cost \
 			or hero.global_position.distance_to(_combo_target.global_position) > AiConfig.SKILL_USE_RANGE \
+			or (idx == 2 and not _ult_allowed(_combo_target)) \
 			or not _can_use_skill_on(idx, _combo_target):
 		_clear_combo()
 		return false
@@ -190,7 +193,7 @@ func _get_candidates(target: GameEntity = null) -> Array:
 		if not _can_use_skill_on(i, target):
 			continue
 		var sk: Skill = hero.skills[i]
-		var score := _score_skill(sk, i)
+		var score := _score_skill(sk, i, target)
 		result.append({"index": i, "skill": sk, "score": score})
 	return result
 
@@ -206,34 +209,39 @@ func _can_use_skill_on(index: int, target: GameEntity) -> bool:
 func _turret_blocked(target: GameEntity) -> bool:
 	return target is Turret and not (brain and brain.can_cast_on_turret())
 
-func _score_skill(sk: Skill, index: int) -> float:
+func _score_skill(sk: Skill, index: int, target: GameEntity = null) -> float:
 	var score := 1.0
 
 	# 基础分：有伤害加分
 	if sk.damage > 0:
-		score += min(sk.damage / 500.0, 2.0)
+		score += minf(sk.damage / 500.0, 2.0)
 
-	# 控制技能加分
-	match sk.type:
-		1:  # AoE → 范围内敌人多则加分
-			var enemy_count = perception.count_enemy_heroes_near(sk.radius if sk.radius > 0 else AiConfig.ENGAGE_RANGE)
-			score += enemy_count * 0.5
-		4:  # 位移 → 危险时加分，安全时减分
-			if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW:
-				score += 1.5
-			else:
-				score -= 0.5
-		6:  # 护盾 → 低血量加分
-			if hero.health < hero.actual_max_health * AiConfig.HEALTH_DEFEND:
-				score += 1.0
+	# 控制/增益对团战和换血的价值
+	var rng := _skill_radius(sk)
+	if sk.type == 1:
+		# AoE：范围内敌人多则加分
+		score += perception.count_enemy_heroes_near(rng) * 0.5
+	elif sk.type == 2:
+		# 增益：身边有敌人时说明即将接战/正在换血
+		score += perception.count_enemy_heroes_near(rng) * 0.5
+	if _has_control(sk):
+		# 控制技能：附近每有 1 个友方英雄配合 +0.5
+		score += perception.count_ally_heroes_near(rng) * 0.5
+	if sk.type == 6:
+		# 护盾：低血量加分
+		if hero.health < hero.actual_max_health * AiConfig.HEALTH_DEFEND:
+			score += 1.0
 
-	# 指向性技能/直线技能基础可靠
-	if sk.type == 0 or sk.type == 3:
-		score += 0.3
-
-	# 大招优先对重要目标
+	# 大招：无人时不放；只有打“正在攻击我方塔的敌方小兵”时例外
 	if index == 2:
-		score += 0.5
+		var enemy_heroes := perception.count_enemy_heroes_near(rng)
+		if enemy_heroes <= 0:
+			var minion_bonus := _ult_minion_tower_bonus(sk, target)
+			if minion_bonus < 0.0:
+				return 0.0
+			score += minion_bonus
+		else:
+			score += float(enemy_heroes) * 1.0
 
 	# 难度决策随机性：低难度评分抖动大，技能选择更“随意”
 	var j: float = AiConfig.score_jitter()
@@ -241,6 +249,57 @@ func _score_skill(sk: Skill, index: int) -> float:
 		score += randf_range(-1.0, 1.0) * j * maxf(absf(score), 1.0)
 
 	return score
+
+
+## 技能有效范围：优先半径，其次施法距离，最后按交战距离兜底
+func _skill_radius(sk: Skill) -> float:
+	if sk == null:
+		return AiConfig.ENGAGE_RANGE
+	if sk.radius > 0.0:
+		return sk.radius
+	if sk.cast_range > 0.0:
+		return sk.cast_range
+	return AiConfig.ENGAGE_RANGE
+
+
+## 大招使用门槛：半径内有敌方英雄，或例外（敌方小兵打我方塔且 HP>1000）
+func _ult_allowed(target: GameEntity) -> bool:
+	if hero.skills.size() <= 2 or hero.skills[2] == null:
+		return true
+	var sk: Skill = hero.skills[2]
+	var rng := _skill_radius(sk)
+	if perception.count_enemy_heroes_near(rng) > 0:
+		return true
+	return _ult_minion_tower_bonus(sk, target) >= 0.0
+
+
+## 是否带控制效果（眩晕/击飞/减速）
+func _has_control(sk: Skill) -> bool:
+	if sk == null:
+		return false
+	return sk.applies_stun > 0.0 or sk.applies_knockup > 0.0 or sk.applies_slow > 0.0
+
+
+## 大招打小兵的例外：目标敌方小兵 HP>1000 且正在攻击我方防御塔；
+## 返回 附近敌方小兵总血量/2500（上限 2.0），不满足返回 -1。
+func _ult_minion_tower_bonus(sk: Skill, target: GameEntity) -> float:
+	if target == null or not is_instance_valid(target) or not (target is Minion):
+		return -1.0
+	if float(target.health) <= 1000.0:
+		return -1.0
+	var ct = target.get("current_target")
+	if ct == null or not is_instance_valid(ct) or not (ct is Turret):
+		return -1.0
+	if int((ct as Turret).team) != int(hero.team):
+		return -1.0
+	var r := maxf(_skill_radius(sk), AiConfig.TOWER_ATTACK_RANGE)
+	var total := 0.0
+	for m in hero.get_tree().get_nodes_in_group("minions"):
+		if not (m is Minion) or int((m as Minion).team) == int(hero.team) or (m as Minion).health <= 0.0:
+			continue
+		if (m as Minion).global_position.distance_to(target.global_position) <= r:
+			total += float((m as Minion).health)
+	return minf(total / 2500.0, 2.0)
 
 
 # 瞄准点：按难度加预判提前量 + 落点误差（低难度技能会偏）

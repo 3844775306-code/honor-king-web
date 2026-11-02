@@ -5,12 +5,14 @@ var hero: Hero
 var perception: AiPerception
 var state: int
 var lane: int
+var trade_planner: TradePlanner = null
 var last_action := ""
 
 
-func _init(p_hero: Hero, p_perception: AiPerception) -> void:
+func _init(p_hero: Hero, p_perception: AiPerception, p_trade: TradePlanner = null) -> void:
 	hero = p_hero
 	perception = p_perception
+	trade_planner = p_trade
 
 
 func try_use(p_state: int, p_lane: int) -> bool:
@@ -60,15 +62,35 @@ func _try_teleport() -> bool:
 	return false
 
 
+## 追击：推进状态且交战范围内有敌方英雄
+func _in_chase() -> bool:
+	return state == HeroAI.State.PUSH and perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE) != null
+
+
+## 逃跑：撤退/安全回城，或血量偏低且敌人已进入撤退距离
+func _in_flee() -> bool:
+	if state == HeroAI.State.RETREAT or state == HeroAI.State.RECALL_SAFE:
+		return true
+	return hero.health < hero.actual_max_health * AiConfig.HEALTH_DEFEND \
+		and perception.find_nearest_enemy_hero(AiConfig.RETREAT_RANGE) != null
+
+
+## 换血窗口：TradePlanner 正在主动换血（无 planner 时用近身交战兜底）
+func _in_trade() -> bool:
+	if trade_planner != null:
+		return trade_planner.active_target != null and is_instance_valid(trade_planner.active_target)
+	return state == HeroAI.State.PUSH and perception.find_nearest_enemy_hero(AiConfig.MELEE_RANGE) != null
+
+
 func _try_sprint() -> bool:
-	if state == HeroAI.State.PUSH:
+	if _in_chase() or _in_flee():
 		hero._use_summoner()
 		return true
 	return false
 
 
 func _try_frenzy() -> bool:
-	if perception.count_enemy_heroes_near(AiConfig.ENGAGE_RANGE) >= AiConfig.FLEE_ENEMY_COUNT:
+	if _in_trade():
 		hero._use_summoner()
 		return true
 	return false
@@ -82,7 +104,7 @@ func _try_cleanse() -> bool:
 
 
 func _try_weaken() -> bool:
-	if perception.count_enemy_heroes_near(AiConfig.MELEE_RANGE) >= AiConfig.WEAKEN_ENEMY_COUNT:
+	if _in_trade():
 		hero._use_summoner()
 		return true
 	return false
@@ -119,28 +141,38 @@ func _do_flash(end: Vector3) -> void:
 
 
 func _try_flash() -> bool:
-	# 危险逃离
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_CRITICAL \
-			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) >= AiConfig.FLEE_ENEMY_COUNT:
-		var enemy_near = perception.find_nearest_enemy_hero(AiConfig.RETREAT_RANGE)
-		var away = (hero.global_position - enemy_near.global_position).normalized() if enemy_near else Vector3.FORWARD
-		var end1 := _flash_end(away)
+	# 逃跑：反向闪
+	if _in_flee():
+		var enemy = perception.find_nearest_enemy_hero(AiConfig.RETREAT_RANGE)
+		if enemy == null:
+			enemy = perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE)
+		if enemy == null:
+			return false
+		var away: Vector3 = (hero.global_position - enemy.global_position)
+		away.y = 0.0
+		if away.length() < 0.1:
+			away = Vector3.FORWARD
+		var end1 := _flash_end(away.normalized())
 		if end1 == Vector3.ZERO:
 			return false
 		_do_flash(end1)
 		return true
-	# 进攻闪现
-	if state == HeroAI.State.PUSH \
-			and perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE) \
-			and hero.health > hero.actual_max_health * (AiConfig.HEALTH_SAFE - 0.1):
-		var enemy = perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE)
-		if enemy and hero.global_position.distance_to(enemy.global_position) > AiConfig.MELEE_RANGE:
-			var toward = (enemy.global_position - hero.global_position).normalized()
-			var end2 := _flash_end(toward)
-			if end2 == Vector3.ZERO:
-				return false
-			_do_flash(end2)
-			return true
+	# 追击：向敌人闪（贴脸距离内不浪费）
+	if _in_chase():
+		var enemy2 = perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE)
+		if enemy2 == null:
+			return false
+		if hero.global_position.distance_to(enemy2.global_position) <= AiConfig.MELEE_RANGE:
+			return false
+		var toward: Vector3 = (enemy2.global_position - hero.global_position)
+		toward.y = 0.0
+		if toward.length() < 0.1:
+			return false
+		var end2 := _flash_end(toward.normalized())
+		if end2 == Vector3.ZERO:
+			return false
+		_do_flash(end2)
+		return true
 	return false
 
 
