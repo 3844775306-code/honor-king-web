@@ -239,6 +239,43 @@ func _try_teleport():
 
 
 # ==================== 技能升级 ====================
+func _try_teleport_route() -> void:
+	if hero.is_teleporting or hero.teleport_timer > 0.0:
+		return
+	if hero.manual_target != null and is_instance_valid(hero.manual_target):
+		return
+	if perception.count_enemy_heroes_near(15.0) > 0:
+		return
+	var minion = perception.find_nearest_ally_minion_on_lane(lane)
+	if minion == null:
+		return
+	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	if battle == null:
+		return
+	var best_zone: Node3D = null
+	var best_total := INF
+	for z in get_tree().get_nodes_in_group("teleport_zones"):
+		if not (z is Node3D):
+			continue
+		var d: float = hero.global_position.distance_to((z as Node3D).global_position)
+		if d <= 5.0 or d > 20.0:
+			continue
+		var path_len := PathFinder.path_length(hero.global_position, (z as Node3D).global_position, hero.team)
+		if path_len <= 0.0:
+			path_len = d
+		var total: float = path_len / maxf(1.0, hero.actual_move_speed) + Hero.TELEPORT_DURATION
+		if total < best_total:
+			best_total = total
+			best_zone = z as Node3D
+	if best_zone == null:
+		return
+	var direct: float = hero.global_position.distance_to(minion.global_position) / maxf(1.0, hero.actual_move_speed)
+	if best_total + 2.0 >= direct:
+		return
+	hero.move_target = best_zone.global_position
+	_set_action(AIAction.Type.ROTATE, 110, AIAction.PauseClass.NONE, "传送转线")
+
+
 func _try_upgrade_skills():
 	if hero.skill_points <= 0:
 		return
@@ -762,6 +799,7 @@ func _process(delta):
 		brain.process_special_actions(current_action.type)     # 多态: 兰陵王隐身等
 		
 		_decide()
+		_try_teleport_route()
 		_try_upgrade_skills()
 		_ai_update_enhanced_attack_flag()   # 只有能收掉残血目标时才把强普位移交给普攻
 		_try_travel_dash()   # 非战斗位移技能赶路（孙尚香/马可波罗等）
