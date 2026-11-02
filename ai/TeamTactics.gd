@@ -376,7 +376,8 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 		TeamTask.Type.PUSH_TOWER:
 			return false
 		TeamTask.Type.INVADE_JUNGLE:
-			return not _jungle_monster_near(t.target_pos, 15.0)
+			# 反野完成：目标野怪区域周围 20m 内已无存活野怪
+			return not _jungle_monster_near(t.target_pos, 20.0)
 	return false
 
 
@@ -407,6 +408,8 @@ func _enemies_near(pos: Vector3, radius: float, team: int) -> int:
 
 func _jungle_monster_near(pos: Vector3, radius: float) -> bool:
 	for e in bm.get_tree().get_nodes_in_group("jungle_monsters"):
+		if not is_instance_valid(e):
+			continue
 		if e is JungleMonster and (e as JungleMonster).health > 0:
 			if (e as Node3D).global_position.distance_to(pos) <= radius:
 				return true
@@ -513,17 +516,18 @@ func allocate_all() -> Dictionary:
 			var invader := _find_natural_jungler(team)
 			if invader != null:
 				current_mode = SplitMode.INVADE
-				var target_pos := _enemy_jungle_target(team, invader.global_position)
-				invade_target_by_hero[invader] = target_pos
+				# 每个反野成员各自选择敌方半区离自己最近的野怪
+				invade_target_by_hero[invader] = _enemy_jungle_target(team, invader.global_position)
 				var marksman := _find_carry(team)
 				if marksman != null and marksman != invader:
-					invade_target_by_hero[marksman] = target_pos
+					invade_target_by_hero[marksman] = _enemy_jungle_target(team, marksman.global_position)
 				var candidates := []
 				for h in _get_ally_heroes(team):
 					if h.is_ai and h != invader and h != marksman:
 						candidates.append(h)
 				if not candidates.is_empty():
-					invade_target_by_hero[candidates[randi() % candidates.size()]] = target_pos
+					var helper: Hero = candidates[randi() % candidates.size()]
+					invade_target_by_hero[helper] = _enemy_jungle_target(team, helper.global_position)
 				_allocate_team(team, default_mode, result)
 				print("[TeamTactics] t=%.0f %s 人数优势 %d:%d，%s 带队反野" % [bm.game_time, team_label, ally_alive, enemy_alive, invader.display_name])
 				continue
@@ -711,6 +715,22 @@ func _nearest_tower_in_lane(team: int, lane: int, from: Vector3) -> Turret:
 
 
 func _enemy_jungle_target(team: int, from_pos: Vector3 = Vector3.ZERO) -> Vector3:
+	# 优先选敌方半区离自己最近的「存活野怪」本体，而不是营地中心
+	var best_monster_pos := Vector3.ZERO
+	var best_monster_d := INF
+	for e in bm.get_tree().get_nodes_in_group("jungle_monsters"):
+		if not is_instance_valid(e) or not (e is JungleMonster) or (e as JungleMonster).health <= 0.0:
+			continue
+		var mp: Vector3 = (e as Node3D).global_position
+		if not BattleManager.in_enemy_jungle_zone(mp, team):
+			continue
+		var md := from_pos.distance_to(mp) if from_pos != Vector3.ZERO else 0.0
+		if md < best_monster_d:
+			best_monster_d = md
+			best_monster_pos = mp
+	if best_monster_pos != Vector3.ZERO:
+		return best_monster_pos
+	# 敌方野区暂时无怪：回退到最近的敌方营地中心，任务会被判定完成
 	var best := Vector3.ZERO
 	var best_d := INF
 	for p in bm.jungle_camp_positions:
