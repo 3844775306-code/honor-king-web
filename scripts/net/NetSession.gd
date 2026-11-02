@@ -163,6 +163,7 @@ const SNAP_FX := 8
 const SNAP_EVENTS := 9        # #44 数值弹出/经验珠/攻击动作事件段（host v5 idx9，仿 FX）
 const SNAP_SCORE := 10        # 顶部实时战况（击杀比分+经济比分）：{pk,ek,pg,eg}（host 全量统计）
 const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _build_respawn_rows 尾段；长度守卫防旧 client）
+const SNAP_DEAD_HEROES := 15  # 阵亡英雄尸体行 [nid,team,x,z,yaw,name]，躺尸到复活
 
 # --- #43 FX kind（host push_net_fx / client catalog 共用，值即客户端视觉档） ---
 # 1..8 对应 SkillDataBase(SkillApplier) 具名视觉 helper（B 段插桩）；20+ 一次性闪光（C 段）。
@@ -1535,6 +1536,15 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 				float(z.get("pos", Vector3.ZERO).z), float(z.get("r", 8.0))])
 	out.append(reveal_rows)
 
+	# 阵亡英雄：保留倒地模型（尸体）直到复活；行 = [nid, team, x, z, yaw, name]
+	var dead_rows: Array = []
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if not is_instance_valid(e) or not (e is Hero) or not (e as Hero).is_dead:
+			continue
+		dead_rows.append([_net_id_for(e), int(e.team), e.global_position.x, e.global_position.z,
+			e.rotation.y, str(e.display_name)])
+	out.append(dead_rows)
+
 	return out
 
 
@@ -2872,3 +2882,5 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
+
+

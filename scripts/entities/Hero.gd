@@ -81,6 +81,11 @@ var net_attack_priority: int = -1
 var hidden_in_bush: bool = false   # 每帧由 _update_bush_stealth() 刷新：草丛中且同排无敌方英雄时为 true
 var _bush_region_counts: Dictionary = {}   # 所在草区域 {region_id: 重叠计数}
 var visual_mesh: Node3D
+var _death_pose := false
+var _death_pose_tween: Tween = null
+var _death_vis_node: Node3D = null
+var _death_vis_rot := Vector3.ZERO
+var _death_vis_pos := Vector3.ZERO
 var manual_target: GameEntity = null
 # 锁敌头像锁定的目标（移动端点头像确定；与普攻/世界点击的 manual_target 分开存，互不覆盖）
 var locked_target: Hero = null
@@ -1506,6 +1511,55 @@ func _reset_states_on_death() -> void:
 	_recalculate_attributes()
 
 
+## 阵亡倒地：保留模型，优先播死亡剪辑，否则绕脚原点前倒 90° 躺地
+func _start_death_pose() -> void:
+	_death_pose = true
+	if _death_pose_tween != null and _death_pose_tween.is_valid():
+		_death_pose_tween.kill()
+	_death_pose_tween = null
+	if anim_player != null:
+		for nm in ["die", "death", "Die", "Death", "dead"]:
+			if anim_player.has_animation(nm):
+				anim_player.play(nm)
+				current_anim = nm
+				break
+	# 注意：visual_mesh 外层被 WalkFeel 每帧归位旋转，不能直接转；转它下面的模型实例
+	_death_vis_node = null
+	if visual_mesh != null and is_instance_valid(visual_mesh):
+		for ch in visual_mesh.get_children():
+			if ch is Node3D:
+				_death_vis_node = ch
+				break
+		if _death_vis_node == null:
+			_death_vis_node = visual_mesh
+	if _death_vis_node == null or not is_instance_valid(_death_vis_node):
+		return
+	_death_vis_rot = _death_vis_node.rotation
+	_death_vis_pos = _death_vis_node.position
+	_death_pose_tween = create_tween()
+	_death_pose_tween.set_parallel(true)
+	_death_pose_tween.tween_property(_death_vis_node, "rotation:x", _death_vis_rot.x - PI * 0.5, 0.32) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_death_pose_tween.tween_property(_death_vis_node, "position:y", _death_vis_pos.y + 0.06, 0.32)
+
+
+## 复活起身：恢复模型姿态
+func _end_death_pose() -> void:
+	if not _death_pose:
+		return
+	_death_pose = false
+	if _death_pose_tween != null and _death_pose_tween.is_valid():
+		_death_pose_tween.kill()
+	_death_pose_tween = null
+	if _death_vis_node != null and is_instance_valid(_death_vis_node):
+		_death_vis_node.rotation = _death_vis_rot
+		_death_vis_node.position = _death_vis_pos
+	_death_vis_node = null
+	if anim_player != null and current_anim in ["die", "death", "Die", "Death", "dead"]:
+		anim_player.stop()
+		current_anim = ""
+		_play_anim("idle")
+
 func die(killer):
 	if is_dead:
 		return
@@ -1545,7 +1599,9 @@ func die(killer):
 	SfxManager.try_death_sfx(display_name)
 	respawn_timer = RESPAWN_BASE_TIME + (level - 1) * RESPAWN_SCALE * 2
 	respawn_time_total = RESPAWN_BASE_TIME + (level - 1) * RESPAWN_SCALE * 2
-	visible = false
+	# 阵亡：保留模型 + 播倒地（有 death 剪辑用剪辑，否则程序化前倒），躺到复活
+	visible = true
+	_start_death_pose()
 	collision_layer = 0
 	stun_timer = 0.0; knockup_timer = 0.0; remove_cc_speed_buffs()
 	shield_remaining = 0.0; shield_timer = 0.0
@@ -1575,6 +1631,7 @@ func die(killer):
 		bm_wipe.check_team_wipe(self)
 
 func _respawn():
+	_end_death_pose()
 	if display_name == "沈梦溪":
 		stat = 10
 	is_dead = false
@@ -5921,3 +5978,6 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
 			await get_tree().create_timer(0.15).timeout
+
+
+

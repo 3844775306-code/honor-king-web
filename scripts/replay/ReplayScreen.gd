@@ -1078,8 +1078,7 @@ func _apply_frame(t: float) -> void:
 			var dage: float = _t - float(node.get("dead_at", _t))
 			node["root"].rotation.x = minf(PI * 0.5, dage * 6.0)
 			node["root"].position.y = -minf(0.5, dage * 1.2)
-			if dage > 1.1:
-				node["root"].visible = false
+			# 倒地后保持躺尸直到复活（不隐藏模型）
 			# 阵亡也要更新状态（复活倒计时/观战/名册都需要）
 			while _hero_state.size() <= i:
 				_hero_state.append({})
@@ -3848,6 +3847,7 @@ class EventToast extends Control:
 			int(round(19.0 * UiKit.scale())), Color(0.97, 0.99, 1.0))
 		UiKit.text(self, Vector2(size.x - 90.0, size.y * 0.5 + 6.0), time_text,
 			int(round(14.0 * UiKit.scale())), Color(0.62, 0.72, 0.86))
+
 
 
 

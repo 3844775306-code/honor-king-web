@@ -58,6 +58,7 @@ const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _
 const SNAP_VISION := 12       # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 const SNAP_HEALTH_PACKS := 13 # 血包状态 [x,z,team,available,cooldown_timer,respawn_time]
 const SNAP_SKILL_REVEALS := 14 # 技能侦察区域 [x,z,radius]（鲁班2/后羿R）
+const SNAP_DEAD_HEROES := 15  # 阵亡尸体 [nid,team,x,z,yaw,name]（躺尸到复活）
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 const MOVE_JUMP_UNITS := 100.0    # 相邻快照样本位移超此即判瞬移/位移技能/回城：直接贴最新，不插值滑行
 const INTERP_DELAY := 0.08        # 实体插值回看窗口：WS（TCP）抖动下始终有下一个样本可插值，避免隔帧贴最新样本冻结
@@ -928,6 +929,43 @@ func _on_snapshot(snap: Array) -> void:
 		_mm.skill_reveal_rows = snap[SNAP_SKILL_REVEALS]
 	else:
 		_mm.skill_reveal_rows = []
+	_update_dead_corpses(snap[SNAP_DEAD_HEROES] if snap.size() > SNAP_DEAD_HEROES else [])
+
+# 阵亡英雄尸体：保留倒地模型直到复活（host 快照 SNAP_DEAD_HEROES 段）
+var _corpses: Dictionary = {}   # nid -> Node3D
+
+func _update_dead_corpses(rows: Array) -> void:
+	var alive := {}
+	for nid in _views.keys():
+		alive[int(nid)] = true
+	var want := {}
+	for r in rows:
+		if not (r is Array) or r.size() < 6:
+			continue
+		var nid := int(r[0])
+		if nid <= 0 or alive.has(nid):
+			continue
+		want[nid] = true
+		var node: Node3D = _corpses.get(nid)
+		if node == null or not is_instance_valid(node):
+			var ents := get_node_or_null("Entities")
+			if ents == null:
+				continue
+			node = Node3D.new()
+			node.name = "Corpse_%d" % nid
+			var hm := NetModels.hero(str(r[5]))
+			if hm != null:
+				node.add_child(hm)
+			ents.add_child(node)
+			_corpses[nid] = node
+		node.position = Vector3(float(r[2]), 0.0, float(r[3]))
+		node.rotation = Vector3(-PI * 0.5, float(r[4]), 0.0)
+	for nid in _corpses.keys():
+		if not want.has(int(nid)) or alive.has(int(nid)):
+			var nd = _corpses[int(nid)]
+			if nd != null and is_instance_valid(nd):
+				nd.queue_free()
+			_corpses.erase(nid)
 
 func _apply_health_packs(rows: Array) -> void:
 	_health_pack_available.clear()
@@ -6158,6 +6196,8 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
+
 
 
 

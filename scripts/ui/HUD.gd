@@ -93,6 +93,10 @@ func _update_hero_bar(entity, cam, cam_forward: Vector3) -> void:
 		add_child(info)
 		hero_info_controls[entity] = info
 	var info = hero_info_controls[entity]
+	# 阵亡英雄保留倒地模型，但不再显示血条
+	if entity.get("is_dead") == true:
+		info.visible = false
+		return
 	# 英雄血条被顶部中央战况带遮挡：锚点整体下移，避开 band
 	var world_pos = entity.global_position + Vector3.UP * (entity.body_radius * 2.0 + 1.2)
 	# 锚点在相机后方（含第一人称自身：锚点位于相机正上方，深度≈0）时隐藏，避免 unproject 投影错乱
@@ -255,3 +259,4 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 			if cnt > 0:
 				mlist.append({"name": str(src.display_name), "count": cnt, "type": ""})
 	_row_buf.append(row)
+
