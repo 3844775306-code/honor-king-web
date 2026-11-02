@@ -146,8 +146,6 @@ const CHASE_MAX_TIME: float = 12.0           # 单次追击最长时长（秒）
 const CHASE_ALLY_GUARD: float = 12.0         # 目标附近还有别的敌人英雄在该距离内则不追（防一打多）
 
 # ==================== 赶路位移（AI 用位移技能加速转线/回线/刷野） ====================
-const TRAVEL_DASH_MIN_DIST: float = 9.0       # 距目标(move_target)超过该值才考虑位移赶路
-const TRAVEL_DASH_ENEMY_GUARD: float = 15.0   # 该距离内有可见敌方英雄时不赶路（位移留给接战/逃生）
 const TRAVEL_DASH_TURRET_MARGIN: float = 2.0  # 距敌方塔(射程+此余量)内不赶路，避免滚进塔里白挨打
 
 # ==================== 难度系统 ====================

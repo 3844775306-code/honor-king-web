@@ -375,6 +375,9 @@ func _try_travel_dash():
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return
+	# 召唤师疾跑：赶路距离超过普攻距离就交，不再额外判断敌人/最短距离。
+	if _try_travel_sprint():
+		return
 	var idx := _pick_travel_dash_skill()
 	if idx < 0:
 		return
@@ -394,6 +397,15 @@ func _try_travel_dash():
 
 
 # 选择赶路用位移技能：只在 1/2 技能位找，大招(3)与特殊槽(隐身/恢复等)不用于赶路
+func _try_travel_sprint() -> bool:
+	if not hero.summoner_skill or hero.summoner_cooldown > 0.0:
+		return false
+	if str(hero.summoner_skill.skill_name) != "疾跑":
+		return false
+	hero._use_summoner()
+	return true
+
+
 func _pick_travel_dash_skill() -> int:
 	var best := -1
 	var best_cd := INF
@@ -602,15 +614,7 @@ func _try_enhanced_aa_travel(dest: Vector3) -> bool:
 		return false
 	if not hero.ai_enhanced_aa_ready():
 		return false
-	# 积攒期不随便把强普花在赶路：马超未满层/距离不够远就留着
-	var dest_dist: float = hero.global_position.distance_to(dest)
-	var nm := str(hero.display_name)
-	if nm == "马超" and dest_dist < 22.0 and hero.stat_timer < 8.0:
-		return false
-	if nm == "铠" and dest_dist < 20.0:
-		return false
-	if nm == "不知火舞" and dest_dist < 18.0:
-		return false
+	# 只要已经离开普攻距离（调用方已判断），就把强化普攻用于赶路，不再按英雄额外设距离门槛。
 	var dir: Vector3 = dest - hero.global_position
 	dir.y = 0.0
 	if dir.length() < 0.5:
@@ -2589,5 +2593,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
