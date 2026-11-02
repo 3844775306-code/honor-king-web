@@ -779,6 +779,11 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	# 泉水养伤是最高常态约束：只要在己方泉水且未回满，就不允许任何任务/守塔把 AI 拉出泉。
+	if hero.is_in_own_fountain() and not _fully_recovered():
+		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "泉水养伤")
+		_recall_safe_behavior(delta)
+		return
 	_sync_ai_movement()
 	if _temp_clearing and (hero.manual_target == null or not is_instance_valid(hero.manual_target) \
 			or hero.manual_target.health <= 0.0):
@@ -2003,7 +2008,7 @@ func _recall_safe_behavior(delta):
 			_leave_recall_spot()
 			return
 		_follow_safe_route(safe_pos)
-	elif not hero.is_recalling:
+	elif not hero.is_recalling and not _fully_recovered():
 		hero.start_recall()
 
 
