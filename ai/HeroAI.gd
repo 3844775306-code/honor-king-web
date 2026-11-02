@@ -26,6 +26,7 @@ var _temp_clearing: bool = false
 var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
+var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -200,6 +201,46 @@ func _finish_current_action() -> void:
 	current_action = AIAction.new(AIAction.Type.IDLE)
 	_task_pause_active = false
 
+
+## 被敌方英雄攻击的反应：返回 true 表示本帧已接管（撤退中，跳过其他决策）
+func _react_to_hero_attack(delta: float) -> bool:
+	var atk: Hero = hero.last_hero_attacker
+	var now: float = Time.get_ticks_msec() * 0.001
+	if atk == null or not is_instance_valid(atk) or atk.health <= 0.0 or now - hero.last_hero_attacker_at > 1.2:
+		atk = null
+	# 对方已停手：结束被攻击撤退
+	if _attack_retreat_target != null:
+		if atk == null or atk != _attack_retreat_target or _attack_retreat_target.health <= 0.0:
+			_attack_retreat_target = null
+			return false
+	if atk == null:
+		return false
+	# 已经在撤退：持续远离，直到对方不再攻击
+	if _attack_retreat_target == atk:
+		_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
+		_retreat_from_hero(atk, delta)
+		return true
+	if hero.casting_skill:
+		return false
+	# 立即判断是否主动换血；主动换血则交给正常决策打
+	if trade_planner != null and trade_planner.should_trade_with(atk):
+		return false
+	_attack_retreat_target = atk
+	_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
+	_retreat_from_hero(atk, delta)
+	return true
+
+
+## 远离指定敌方英雄（被攻击撤退用）
+func _retreat_from_hero(enemy: Hero, delta: float = 0.0) -> void:
+	hero.manual_target = null
+	if hero.is_recalling:
+		hero.cancel_recall()
+	var away: Vector3 = hero.global_position - enemy.global_position
+	away.y = 0.0
+	if away.length() < 0.05:
+		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+	hero.move_target = hero.global_position + away.normalized() * 4.0
 
 ## 朝指定点走（A* 绕墙；泉水养伤/回城落点用）
 func _walk_to(goal: Vector3) -> void:
@@ -914,6 +955,10 @@ func _process(delta):
 			_ai_path.clear()
 		if hero.is_in_own_fountain():
 			_recall_safe_behavior(delta)
+		return
+
+	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
+	if _react_to_hero_attack(delta):
 		return
 	_sync_ai_movement()
 	# 目标死亡后的“附近是否还有其他小兵”交给 _action_is_complete 的 TEMP_CLEAR 分支处理

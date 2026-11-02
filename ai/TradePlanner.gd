@@ -59,6 +59,19 @@ func update(delta: float, _game_time: float) -> void:
 		cooldown = EXIT_COOLDOWN
 
 
+## 被攻击时判断是否主动换血：已锁定该目标，或当前没有换血且该目标会被选为换血对象
+func should_trade_with(target: Hero) -> bool:
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	if active_target == target:
+		return true
+	if active_target != null:
+		return false
+	if cooldown > 0.0 or exit_timer > 0.0:
+		return false
+	return _pick_target() == target
+
+
 func evaluate() -> Dictionary:
 	if active_target != null:
 		if not is_instance_valid(active_target) or active_target.health <= 0.0:
@@ -214,3 +227,4 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if cover < 500.0:
 			return true
 	return false
+
