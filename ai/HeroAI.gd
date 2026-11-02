@@ -547,7 +547,13 @@ func _ai_update_enhanced_attack_flag() -> void:
 		return
 	var dist: float = hero.global_position.distance_to(t.global_position)
 	var aa: float = hero.attack_range * 0.01
-	if dist <= aa + 0.6 and float(t.health) <= float(t.actual_max_health) * 0.3:
+	if dist > aa + 0.6:
+		return
+	# 铠：W 后 stat=1 时普通普攻被强化突进替代；换血阶段也必须打出去，不能只在斩杀线才放
+	if str(hero.display_name) == "铠":
+		hero.ai_enhanced_attack_ok = true
+		return
+	if float(t.health) <= float(t.actual_max_health) * 0.3:
 		hero.ai_enhanced_attack_ok = true
 
 
@@ -2475,3 +2481,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
