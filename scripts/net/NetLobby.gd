@@ -939,15 +939,31 @@ func _open_cloud() -> void:
 	var title := _mk_label("云端存档", int(_fs(UiKit.FS_HUGE) * 1.6), COL_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(title)
-	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n服务端约定：POST {地址}/upload 上传、GET {地址}/download?pid=玩家ID 下载（Bearer Token 可选）。",
+	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n可选三种后端：通用 HTTP / LeanCloud / Bmob（国内 BaaS 不需要梯子）。",
 		_fs(UiKit.FS_SM), COL_DIM)
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(tip)
 
 	var cfg := PlayerPrefs.cloud_cfg()
-	col.add_child(_cloud_edit_row("服务器地址", "https://example.com/hk", str(cfg.get("url", "")), false))
-	col.add_child(_cloud_edit_row("访问令牌", "可留空", str(cfg.get("token", "")), true))
+	# 后端切换：http（自建/Serverless）/ leancloud / bmob（国内 BaaS，免梯子）
+	var backend_btn := _mk_btn("", UiKit.C_TEAM1, false, Vector2(520, 48))
+	backend_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	col.add_child(backend_btn)
+	var _refresh_backend := func() -> void:
+		var names := {"http": "通用 HTTP", "leancloud": "LeanCloud（国内 BaaS）", "bmob": "Bmob（国内 BaaS）"}
+		backend_btn.text = "存储后端：" + str(names.get(CloudSyncScript.backend(), "通用 HTTP"))
+	_refresh_backend.call()
+	backend_btn.pressed.connect(func() -> void:
+		var order := ["http", "leancloud", "bmob"]
+		var c := PlayerPrefs.cloud_cfg()
+		c["backend"] = order[(order.find(CloudSyncScript.backend()) + 1) % order.size()]
+		PlayerPrefs.set_cloud_cfg(c)
+		_refresh_backend.call())
+	col.add_child(_cloud_edit_row("服务器地址", "HTTP 地址；LeanCloud 填控制台服务器地址；Bmob 留空", str(cfg.get("url", "")), false))
+	col.add_child(_cloud_edit_row("访问令牌（HTTP）", "通用 HTTP 后端用，可留空", str(cfg.get("token", "")), true))
+	col.add_child(_cloud_edit_row("AppID", "LeanCloud AppID / Bmob Application ID", str(cfg.get("app_id", "")), false))
+	col.add_child(_cloud_edit_row("AppKey", "LeanCloud AppKey / Bmob REST API Key", str(cfg.get("app_key", "")), true))
 	var pid_lab := _mk_label("玩家 ID：%s" % CloudSyncScript.player_id(), _fs(UiKit.FS_SM), COL_TEXT)
 	col.add_child(pid_lab)
 
@@ -1019,16 +1035,25 @@ func _cloud_edit_row(label_txt: String, placeholder: String, value: String, secr
 func _save_cloud_cfg() -> void:
 	var url := ""
 	var token := ""
+	var app_id := ""
+	var app_key := ""
 	if _stack != null:
 		var edits := _stack.find_children("*", "LineEdit", true, false)
 		if edits.size() > 0:
 			url = (edits[0] as LineEdit).text
 		if edits.size() > 1:
 			token = (edits[1] as LineEdit).text
+		if edits.size() > 2:
+			app_id = (edits[2] as LineEdit).text
+		if edits.size() > 3:
+			app_key = (edits[3] as LineEdit).text
 	var old := PlayerPrefs.cloud_cfg()
 	PlayerPrefs.set_cloud_cfg({
+		"backend": str(old.get("backend", "http")),
 		"url": url.strip_edges(),
 		"token": token.strip_edges(),
+		"app_id": app_id.strip_edges(),
+		"app_key": app_key.strip_edges(),
 		"pid": str(old.get("pid", CloudSyncScript.player_id())),
 		"auto": bool(old.get("auto", false)),
 	})
@@ -3619,3 +3644,4 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
+
