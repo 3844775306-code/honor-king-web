@@ -168,7 +168,7 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.DEFEND_TOWER:
 			return _get_lane_turret_under_attack(lane) == null
 		AIAction.Type.HEALTH_PACK:
-			return hero.health > hero.actual_max_health * 0.60
+			return hero.health > hero.actual_max_health * 0.60 or _find_safe_health_pack() == null
 		AIAction.Type.TRIPOD:
 			return hero.manual_target == null or not is_instance_valid(hero.manual_target)
 		AIAction.Type.VISION_SPIRIT:
@@ -1365,6 +1365,8 @@ func _find_temp_clear_target() -> Minion:
 			continue
 		best_d = d
 		m = e as Minion
+	if m == null:
+		_temp_clearing = false
 	return m
 
 
@@ -1642,7 +1644,7 @@ func _follow_safe_route(goal: Vector3) -> void:
 	if goal.distance_to(_safe_route_goal) > 2.0 or now - _safe_route_plan_time > 1.0 \
 			or _safe_route_path.is_empty() or _safe_route_index >= _safe_route_path.size():
 		_safe_route_goal = goal
-		_safe_route_path = PathFinder.find_path(hero.global_position, goal, Vector3.ZERO, hero.team)
+		_safe_route_path = MovementPlanner.plan(hero, goal, threat_model)
 		_safe_route_index = 0
 		_safe_route_plan_time = now
 	if _safe_route_path.is_empty():
