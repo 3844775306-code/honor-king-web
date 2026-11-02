@@ -7,9 +7,8 @@
 class_name HeroAI
 extends Node
 
-enum State { PUSH, FARM, RETREAT, RECALL, AVOID, RECALL_SAFE }  # 行为标签，供战术层判断；真正的分支在 _decide
-
-var state: int = State.PUSH
+var current_action: AIAction = AIAction.new(AIAction.Type.IDLE)
+var safety_stack: Array[AIAction] = []
 var lane: int = AiConfig.Lane.MID
 var hero: Hero
 var perception: AiPerception
@@ -25,6 +24,8 @@ var think_timer: float = 0.0
 var _frame_delta: float = 0.0
 var _temp_clearing: bool = false
 var _task_commit_until: float = -999.0
+var _env_pause_used := false
+var _task_pause_active := false
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -92,6 +93,57 @@ func _ready():
 	lane_strategy = LaneStrategy.new(hero, perception, lane)
 	jungle_strategy = JungleStrategy.new(hero, perception)
 
+func _set_action(action_type: int, priority: int = 0, pause_class: int = AIAction.PauseClass.NONE, reason: String = "") -> void:
+	if current_action != null and current_action.is_active():
+		if current_action.type == action_type:
+			return
+		current_action.mark(AIAction.Status.INTERRUPTED)
+	current_action = AIAction.new(action_type, priority, pause_class, reason)
+	if pause_class == AIAction.PauseClass.NONE:
+		_task_pause_active = false
+	if current_action.pause_class != AIAction.PauseClass.NONE and team_task != null and team_task.is_active():
+		_pause_task_for(current_action)
+
+
+func _push_safety_action(action_type: int) -> void:
+	if _is_action(AIAction.Type.DODGE) or _is_action(AIAction.Type.TOWER_ESCAPE):
+		return
+	if current_action != null and current_action.is_active():
+		safety_stack.append(current_action)
+	current_action = AIAction.new(action_type, 1000, AIAction.PauseClass.SURVIVAL, "frame safety")
+	_task_pause_active = true
+
+
+func _resume_safety_action() -> void:
+	while not safety_stack.is_empty():
+		var prev: AIAction = safety_stack.pop_back()
+		if prev != null and prev.is_active():
+			current_action = prev
+			_task_pause_active = false
+			return
+	current_action = AIAction.new(AIAction.Type.IDLE)
+
+
+func _can_run_environment_action() -> bool:
+	if team_task == null or not team_task.is_active():
+		return true
+	return not _env_pause_used
+
+
+func _is_action(action_type: int) -> bool:
+	return current_action != null and current_action.is_active() and current_action.type == action_type
+
+
+func _pause_task_for(action: AIAction) -> void:
+	if team_task == null or not team_task.is_active():
+		return
+	if action.pause_class == AIAction.PauseClass.SURVIVAL:
+		_task_pause_active = true
+	elif action.pause_class == AIAction.PauseClass.ENVIRONMENT and not _env_pause_used:
+		_env_pause_used = true
+		_task_pause_active = true
+
+
 func _assign_lane():
 	match hero.role:
 		"射手": lane = AiConfig.Lane.FARM
@@ -104,7 +156,7 @@ func _assign_lane():
 	jungle_kill_count = 0
 	has_respawned_recently = true
 	# 回城/复活后返回原分路
-	state = State.FARM if lane == AiConfig.Lane.JUNGLE else State.PUSH
+	_set_action(AIAction.Type.JUNGLE_FARM) if lane == AiConfig.Lane.JUNGLE else AIAction.Type.PUSH_LANE
 	hero.manual_target = null
 	hero.move_target = hero.global_position
 	# 重置策略模块
@@ -358,7 +410,7 @@ func _ai_update_enhanced_attack_flag() -> void:
 func _try_collect_enhanced_charge() -> bool:
 	if not is_instance_valid(hero) or str(hero.display_name) != "马超":
 		return false
-	if state != State.PUSH and state != State.FARM:
+	if not _is_action(AIAction.Type.PUSH_LANE) and not _is_action(AIAction.Type.JUNGLE_FARM):
 		return false
 	if hero.stat_timer >= 8.0:
 		return false
@@ -584,14 +636,24 @@ func _process(delta):
 		if hero.tower_attack_timer <= 0:
 			hero.under_tower_attack = false
 			hero.tower_attacker = null
+			if _is_action(AIAction.Type.TOWER_ESCAPE):
+				_resume_safety_action()
 		elif hero.tower_attacker and is_instance_valid(hero.tower_attacker):
+			if not _is_action(AIAction.Type.TOWER_ESCAPE):
+				_push_safety_action(AIAction.Type.TOWER_ESCAPE)
 			# 立即沿直线退出塔的攻击范围
 			_retreat_from_turret(hero.tower_attacker)
-	# --- 弹道躲避（每帧）：命中威胁时标记 AVOID ---
+	# --- 弹道躲避（每帧）：命中威胁时标记 DODGE ---
 	if _dodge_threats():
-		state = State.AVOID
+		if not _is_action(AIAction.Type.DODGE):
+			_push_safety_action(AIAction.Type.DODGE)
 		return
-	if hero.manual_target and hero.manual_target is Hero and _is_under_enemy_tower(hero.manual_target ):hero.set_manual_target(null)
+	elif _is_action(AIAction.Type.DODGE):
+		_resume_safety_action()
+	if hero.manual_target and hero.manual_target is Hero and not _is_target_safe(hero.manual_target):
+		hero.set_manual_target(null)
+		if current_action != null:
+			current_action.mark(AIAction.Status.INTERRUPTED)
 
 	if not is_instance_valid(hero) or hero.is_dead:
 		has_respawned_recently = false
@@ -604,7 +666,7 @@ func _process(delta):
 	var _gt_now: float = float(_bm_now.game_time) if _bm_now != null else 0.0
 	threat_model.update(_gt_now)
 	trade_planner.update(delta, _gt_now)
-	if _temp_clearing and team_task != null and team_task.is_active():
+	if (_task_pause_active or _temp_clearing) and team_task != null and team_task.is_active():
 		team_task.expires_at += delta
 
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
@@ -633,9 +695,9 @@ func _process(delta):
 			return
 		_try_teleport()
 		brain.process_skill_windows()            # 多态: 李白/太乙等英雄特判
-		summoner_tactics.try_use(state, lane)
-		item_tactics.try_use(state)
-		brain.process_special_actions(state)     # 多态: 兰陵王隐身等
+		summoner_tactics.try_use(current_action.type, lane)
+		item_tactics.try_use(current_action.type)
+		brain.process_special_actions(current_action.type)     # 多态: 兰陵王隐身等
 		
 		_decide()
 		_try_upgrade_skills()
@@ -662,9 +724,11 @@ func _process(delta):
 			_try_use_recover()
 
 	# --- 血包（泉水养伤时不抢血包，否则会半血跑出泉） ---
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW and not hero.is_in_own_fountain():
+	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW and not hero.is_in_own_fountain() \
+			and _can_run_environment_action():
 		var pack = perception.find_health_pack_on_lane(lane)
 		if pack and is_instance_valid(pack):
+			_set_action(AIAction.Type.HEALTH_PACK, 860, AIAction.PauseClass.ENVIRONMENT, "血包")
 			hero.move_target = pack.global_position
 			return
 
@@ -673,12 +737,12 @@ func _process(delta):
 		return
 
 	# --- 状态行为分发：RETREAT / RECALL_SAFE 只跑生存行为，不参与输出 ---
-	match state:
-		State.RECALL_SAFE:
+	match current_action.type:
+		AIAction.Type.SAFE_RECALL:
 			_recall_safe_behavior(delta)
-		State.RETREAT:
+		AIAction.Type.RETURN_TO_BASE:
 			_retreat_behavior()
-	if state == State.RECALL_SAFE or state == State.RETREAT:
+	if _is_action(AIAction.Type.SAFE_RECALL) or _is_action(AIAction.Type.RETURN_TO_BASE):
 		return
 
 	# --- 视野之灵：友方 AI 捡金币，敌方 AI 近身 1 米压制 5 秒 ---
@@ -706,17 +770,6 @@ func _process(delta):
 # 每个 think tick 评估一次：先处理高地/塔防御与撤退/回城，再交给分路/打野策略
 # ==================== 调试：思考过程 ====================
 
-func _state_name(st: int) -> String:
-	match st:
-		State.PUSH: return "PUSH"
-		State.FARM: return "FARM"
-		State.RETREAT: return "RETREAT"
-		State.RECALL: return "RECALL"
-		State.AVOID: return "AVOID"
-		State.RECALL_SAFE: return "RECALL_SAFE"
-	return str(st)
-
-
 func _debug_lane() -> String:
 	match lane:
 		AiConfig.Lane.FARM: return "下路"
@@ -728,10 +781,10 @@ func _debug_lane() -> String:
 func _debug_intent() -> String:
 	if hero.is_recalling: return "recall"
 	if hero.is_teleporting: return "rotate"
-	match state:
-		State.RETREAT: return "retreat"
-		State.RECALL_SAFE, State.RECALL: return "recall"
-		State.AVOID: return "avoid"
+	match current_action.type:
+		AIAction.Type.RETURN_TO_BASE: return "retreat"
+		AIAction.Type.SAFE_RECALL: return "recall"
+		AIAction.Type.DODGE: return "avoid"
 	if hero.manual_target != null and is_instance_valid(hero.manual_target):
 		var t = hero.manual_target
 		var d: float = hero.global_position.distance_to(t.global_position)
@@ -739,7 +792,7 @@ func _debug_intent() -> String:
 		if hp <= 0.3: return "kill"
 		if d > hero.attack_range * 0.01 + 1.0: return "chase"
 		return "fight"
-	if state == State.FARM: return "jungle" if lane == AiConfig.Lane.JUNGLE else "farm"
+	if _is_action(AIAction.Type.JUNGLE_FARM): return "jungle" if lane == AiConfig.Lane.JUNGLE else "farm"
 	return "push"
 
 
@@ -757,9 +810,9 @@ func _dbg_add(txt: String) -> void:
 
 
 func _debug_track() -> void:
-	if state != _dbg_last_state:
-		_dbg_add("状态 -> %s（目标=%s）" % [_state_name(state), _ent_name(hero.manual_target)])
-		_dbg_last_state = state
+	if current_action.type != _dbg_last_state:
+		_dbg_add("状态 -> %s（目标=%s）" % [current_action.label(), _ent_name(hero.manual_target)])
+		_dbg_last_state = current_action.type
 	var tn := _ent_name(hero.manual_target)
 	if tn != _dbg_last_target:
 		_dbg_add("锁定目标 -> %s" % (tn if tn != "" else "无"))
@@ -848,12 +901,12 @@ func _chip_action() -> String:
 		if d <= reach + 1.0:
 			return "攻击"
 		return "接近"
-	match state:
-		State.RETREAT: return "撤离"
-		State.AVOID: return "躲技能"
-		State.RECALL, State.RECALL_SAFE: return "回城"
-		State.FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
-		State.PUSH:
+	match current_action.type:
+		AIAction.Type.RETURN_TO_BASE: return "撤离"
+		AIAction.Type.DODGE: return "躲技能"
+		AIAction.Type.SAFE_RECALL: return "回城"
+		AIAction.Type.JUNGLE_FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
+		AIAction.Type.PUSH_LANE:
 			var mn = perception.find_nearest_enemy_minion(AiConfig.PUSH_TARGET_RANGE)
 			if mn != null and is_instance_valid(mn):
 				return "清兵"
@@ -942,7 +995,7 @@ func debug_snapshot() -> Dictionary:
 		jungle_txt = "phase=%d idx=%d assigned=%d" % [int(jungle_strategy.current_phase), int(jungle_strategy._phase_index), int(jungle_strategy.assigned_lane)]
 	return {
 		"name": hero.display_name, "role": hero.role, "team": int(hero.team),
-		"state": _state_name(state), "lane": _debug_lane(),
+		"state": current_action.label(), "lane": _debug_lane(),
 		"intent": _debug_intent(), "intent_target": _ent_name(hero.manual_target),
 		"hp": int(hero.health), "hp_max": int(hero.actual_max_health),
 		"mana": int(hero.mana), "mana_max": int(hero.actual_mana_max),
@@ -996,25 +1049,25 @@ func _decide():
 
 	# 敌方大禹治疗鼎：在交战范围内就顺手拆掉（否则残血敌人会被持续奶回来）
 	var enemy_pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
-	if enemy_pot:
+	if enemy_pot and _can_run_environment_action():
+		_set_action(AIAction.Type.TRIPOD, 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
 		hero.manual_target = enemy_pot
-		state = State.PUSH
 		return
 
 	# 泉水养伤：在自家泉水范围内血/蓝没回到阈值前不出门（原来只要血量>2000 就走，等于半血出门）
 	if hero.is_in_own_fountain() and not _fully_recovered():
-		state = State.RECALL_SAFE
+		_set_action(AIAction.Type.SAFE_RECALL, 0, AIAction.PauseClass.SURVIVAL)
 		return
 
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
-		state = State.RECALL_SAFE
+		_set_action(AIAction.Type.SAFE_RECALL, 0, AIAction.PauseClass.SURVIVAL)
 		return
 
 	# 撤退：低血 + 有敌方英雄压近 + 没站在己方塔下 → 退守（不再主动接战）
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
 			and not _is_under_own_tower() \
 			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
-		state = State.RETREAT
+		_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
 		return
 
 	# 主动换血：满足威胁/血量/技能/控制条件才进场；进场后由 TradePlanner 控制退出。
@@ -1026,7 +1079,7 @@ func _decide():
 			if tt != null and is_instance_valid(tt) and (tt as Hero).health > 0.0:
 				hero.manual_target = tt
 				hero.move_target = Vector3.ZERO
-				state = State.PUSH
+				_set_action(AIAction.Type.TRADE, 950, AIAction.PauseClass.SURVIVAL, "换血")
 				return
 		elif tact == "exit":
 			hero.manual_target = null
@@ -1036,11 +1089,11 @@ func _decide():
 				if own_turret != null:
 					safe_dest = own_turret.global_position
 			hero.move_target = safe_dest
-			state = State.RETREAT
+			_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
 			return
 
 	# 临时清兵：换血窗口与团队任务之间；周围有敌方小兵时优先锁定小兵，并暂停团队任务计时。
-	if _try_temp_clear():
+	if _can_run_environment_action() and _try_temp_clear():
 		return
 
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
@@ -1061,7 +1114,10 @@ func _decide():
 				hero.manual_target = tr.get("manual_target")
 			if tr.has("move_target"):
 				hero.move_target = tr.get("move_target")
-			state = State.RETREAT if str(tr.get("state", "push")) == "retreat" else State.PUSH
+			if str(tr.get("state", "push")) == "retreat":
+				_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
+			else:
+				_set_action(AIAction.Type.TEAM_TASK, team_task.priority, AIAction.PauseClass.NONE, team_task.label())
 			# 推线/抱团推塔仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
 			if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
 				return
@@ -1080,7 +1136,7 @@ func _decide():
 			if jungle_strategy:
 				jungle_strategy.update_time(gt)
 				jungle_strategy.decide()
-			state = State.FARM
+			_set_action(AIAction.Type.JUNGLE_FARM)
 		else:
 			if lane_strategy:
 				lane_strategy.update_time(gt)
@@ -1088,7 +1144,7 @@ func _decide():
 				# 中路换线同步回HeroAI
 				if lane != lane_strategy.lane:
 					lane = lane_strategy.lane
-			state = State.PUSH
+			_set_action(AIAction.Type.PUSH_LANE)
 	else:
 		# === 4分钟+：团队分推（分路由 BattleManager 统一分配） ===
 
@@ -1099,7 +1155,7 @@ func _decide():
 				is_dragon_rally = false
 				_assign_lane()
 			else:
-				state = State.PUSH
+				_set_action(AIAction.Type.PUSH_LANE)
 				_dragon_rally_behavior()
 				return
 
@@ -1108,14 +1164,14 @@ func _decide():
 			if jungle_strategy:
 				jungle_strategy.update_time(gt)
 				jungle_strategy.decide()
-			state = State.FARM
+			_set_action(AIAction.Type.JUNGLE_FARM)
 		else:
 			if lane_strategy:
 				lane_strategy.update_time(gt)
 				lane_strategy.decide()
 				if lane != lane_strategy.lane:
 					lane = lane_strategy.lane
-			state = State.PUSH
+			_set_action(AIAction.Type.PUSH_LANE)
 
 
 # 临时清兵任务：15–20m（随移速增加）内有敌方小兵就锁定，清完自动结束。
@@ -1139,7 +1195,7 @@ func _try_temp_clear() -> bool:
 		return false
 	hero.manual_target = m
 	hero.move_target = Vector3.ZERO
-	state = State.PUSH
+	_set_action(AIAction.Type.TEMP_CLEAR, 850, AIAction.PauseClass.ENVIRONMENT, "临时清兵")
 	_temp_clearing = true
 	return true
 
@@ -1189,6 +1245,8 @@ func assign_team_task(task: TeamTask) -> void:
 			return
 	team_task = task
 	_task_commit_until = now + 2.0
+	_env_pause_used = false
+	_task_pause_active = false
 	if task.type == TeamTask.Type.OBJECTIVE:
 		is_dragon_rally = true
 		dragon_rally_pos = task.target_pos
@@ -1237,6 +1295,8 @@ func apply_team_lane(new_lane: int) -> void:
 # 友方 AI：未领奖的视野之灵在附近时主动走过去触碰（10 金币）。
 # 敌方 AI：已进入草丛提供视野的视野之灵在附近时，走到 1 米内站定，累计 5 秒将其逼退。
 func _try_vision_spirit_contact() -> bool:
+	if not _can_run_environment_action():
+		return false
 	var tree := hero.get_tree()
 	if tree == null:
 		return false
@@ -1269,7 +1329,7 @@ func _try_vision_spirit_contact() -> bool:
 	hero.manual_target = null
 	# 0.8 米内站定，确保进入视野之灵的 1 米判定圈
 	hero.move_target = hero.global_position if best_d <= 0.8 else best.global_position
-	state = State.PUSH
+	_set_action(AIAction.Type.VISION_SPIRIT, 820, AIAction.PauseClass.ENVIRONMENT, "视野之灵")
 	return true
 
 # ==================== 六维指标计算 ====================
@@ -1466,6 +1526,54 @@ func _dodge_threats() -> bool:
 
 
 
+func _tower_guarding(target: Hero) -> Turret:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0 or int((e as Turret).team) == int(hero.team):
+			continue
+		var t := e as Turret
+		if target.global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+			return t
+	return null
+
+
+func _is_target_safe(target: Hero) -> bool:
+	var tower := _tower_guarding(target)
+	if tower == null:
+		return true
+	# 手长：站塔外能打到目标
+	var reach := hero.attack_range * 0.01
+	if hero.global_position.distance_to(tower.global_position) > tower.attack_range * 0.01 \
+			and hero.global_position.distance_to(target.global_position) <= reach + 1.0:
+		return true
+	# 必须越塔：关键技能爆发 + 护盾，估算塔伤次数
+	return _estimate_tower_hits(target, tower) <= 2
+
+
+func _estimate_tower_hits(target: Hero, tower: Turret) -> int:
+	var ehp := target.health + target.shield_remaining
+	var burst := _estimate_burst_damage(target)
+	var dps := maxf(1.0, hero.actual_attack_damage * hero.attack_speed)
+	var kill_time := maxf(0.0, ehp - burst) / dps + 1.6
+	var interval := 1.0 / maxf(0.2, tower.attack_speed)
+	return int(ceil(kill_time / interval))
+
+
+func _estimate_burst_damage(target: Hero) -> float:
+	var burst := hero.actual_attack_damage
+	for i in range(mini(3, hero.skills.size())):
+		var sk: Skill = hero.skills[i]
+		if sk == null or sk.damage <= 0.0:
+			continue
+		if i >= hero.skill_levels.size() or hero.skill_levels[i] <= 0:
+			continue
+		if i < hero.skill_cooldowns.size() and hero.skill_cooldowns[i] > 0.0:
+			continue
+		if sk.cast_range > 0.0 and hero.global_position.distance_to(target.global_position) > sk.cast_range + 2.0:
+			continue
+		burst += sk.damage
+	return burst
+
+
 # 检测目标是否在其己方塔下
 func _is_under_enemy_tower(target: Hero) -> bool:
 	var tree := hero.get_tree()
@@ -1507,7 +1615,7 @@ func _update_finish_chase(delta: float) -> bool:
 	# Hero 自身带 AI 追击：manual_target 在射程外会自动朝目标移动（move_target 必须清空，否则优先于追击）
 	hero.manual_target = _chase_target
 	hero.move_target = Vector3.ZERO
-	state = State.PUSH
+	_set_action(AIAction.Type.FINISH_CHASE, 940, AIAction.PauseClass.SURVIVAL, "残血追击")
 	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
 	if _try_chase_dash(_chase_target):
 		return true
@@ -1953,7 +2061,7 @@ func _handle_high_defense() -> bool:
 		# 还没到：先跑过去（只换目标不移动 = 原地补兵，等于没防守）
 		hero.manual_target = null
 		hero.move_target = target.global_position
-	state = State.PUSH
+	_set_action(AIAction.Type.PUSH_LANE)
 	return true
 
 ## 回防目标：优先塔当前仇敌；否则选塔附近最近的敌方小兵（拆塔主力），再退到敌方英雄
@@ -2001,7 +2109,7 @@ func _handle_lane_turret_defense() -> bool:
 	if dist > AiConfig.FRIENDLY_TURRET_CLOSE:
 		hero.manual_target = null
 		hero.move_target = turret.global_position
-		state = State.PUSH
+		_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
 		return true
 	var defender := _defense_target_for_turret(turret)
 	if defender != null and is_instance_valid(defender) and defender.health > 0:
@@ -2009,7 +2117,7 @@ func _handle_lane_turret_defense() -> bool:
 		hero.move_target = Vector3.ZERO   # 清掉“跑到塔中心”的旧移动指令，否则会压着目标不走、也不普攻
 	else:
 		hero.manual_target = null
-	state = State.PUSH
+	_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
 	return true
 
 

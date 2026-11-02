@@ -8,7 +8,7 @@ func process_special_actions(state: int) -> void:
 		return
 	if hero.skill_cooldowns[3] > 0:
 		return
-	if perception.find_nearest_enemy_hero(AiConfig.LANLING_STEALTH_RANGE) and state == HeroAI.State.PUSH:
+	if perception.find_nearest_enemy_hero(AiConfig.LANLING_STEALTH_RANGE) and state == AIAction.Type.PUSH_LANE:
 		tactics.force_cast(3, hero.global_position)
 
 

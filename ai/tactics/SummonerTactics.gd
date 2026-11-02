@@ -50,7 +50,7 @@ func _try_teleport() -> bool:
 	if hero.health <= hero.actual_max_health * AiConfig.HEALTH_DEFEND:
 		return false
 	var tp_turret = perception.find_nearest_friendly_turret(AiConfig.TP_TURRET_RANGE)
-	if state == HeroAI.State.PUSH and tp_turret:
+	if state == AIAction.Type.PUSH_LANE and tp_turret:
 		var enemy_turret = perception.find_nearest_enemy_turret(AiConfig.ENEMY_TURRET_CHECK)
 		if enemy_turret and hero.global_position.distance_to(enemy_turret.global_position) > AiConfig.TP_ENEMY_TURRET_DIST:
 			hero._use_summoner()
@@ -62,24 +62,24 @@ func _try_teleport() -> bool:
 	return false
 
 
-## 追击：推进状态且交战范围内有敌方英雄
+## 追击残血：只允许 FINISH_CHASE 使用闪现
 func _in_chase() -> bool:
-	return state == HeroAI.State.PUSH and perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE) != null
+	return state == AIAction.Type.FINISH_CHASE \
+		and perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE) != null
 
 
-## 逃跑：撤退/安全回城，或血量偏低且敌人已进入撤退距离
+## 闪现逃生：仅血量 <20% 且高威胁时使用
 func _in_flee() -> bool:
-	if state == HeroAI.State.RETREAT or state == HeroAI.State.RECALL_SAFE:
-		return true
-	return hero.health < hero.actual_max_health * AiConfig.HEALTH_DEFEND \
-		and perception.find_nearest_enemy_hero(AiConfig.RETREAT_RANGE) != null
+	if hero.health >= hero.actual_max_health * 0.20:
+		return false
+	return perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) >= AiConfig.FLEE_ENEMY_COUNT
 
 
 ## 换血窗口：TradePlanner 正在主动换血（无 planner 时用近身交战兜底）
 func _in_trade() -> bool:
 	if trade_planner != null:
 		return trade_planner.active_target != null and is_instance_valid(trade_planner.active_target)
-	return state == HeroAI.State.PUSH and perception.find_nearest_enemy_hero(AiConfig.MELEE_RANGE) != null
+	return state == AIAction.Type.PUSH_LANE and perception.find_nearest_enemy_hero(AiConfig.MELEE_RANGE) != null
 
 
 func _try_sprint() -> bool:

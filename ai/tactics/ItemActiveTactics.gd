@@ -73,7 +73,7 @@ func _try_sunspire() -> void:
 		return
 	if not (hero.equipment_slots.has("sunspire_bow") or hero.equipment_slots.has("swift_day")):
 		return
-	if state != HeroAI.State.PUSH:
+	if state != AIAction.Type.PUSH_LANE:
 		return
 	if not perception.find_nearest_enemy_hero(AiConfig.SUNSPIRE_ACTIVE_RANGE):
 		return
