@@ -26,6 +26,10 @@ var _temp_clearing: bool = false
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
+var _ai_path: Array = []
+var _ai_path_goal := Vector3.ZERO
+var _ai_path_time := 0.0
+var _ai_path_index := 0
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -183,14 +187,28 @@ func _finish_current_action() -> void:
 func _sync_ai_movement() -> void:
 	var t = hero.manual_target
 	if t == null or not is_instance_valid(t) or t.health <= 0.0:
+		_ai_path.clear()
 		return
 	var reach: float = (hero._aa_engage_reach() if not t is JungleMonster else 2.0)
 	var dist: float = hero.global_position.distance_to(t.global_position)
-	if dist > reach:
-		if hero.move_target == Vector3.ZERO or hero.move_target.distance_to(t.global_position) > 1.5:
-			hero.move_target = t.global_position
-	elif hero.move_target != Vector3.ZERO:
+	if dist <= reach:
+		_ai_path.clear()
 		hero.move_target = Vector3.ZERO
+		return
+	var now := _game_time()
+	if _ai_path.is_empty() or _ai_path_goal.distance_to(t.global_position) > 2.0 \
+			or now - _ai_path_time > 0.8 or _ai_path_index >= _ai_path.size():
+		_ai_path_goal = t.global_position
+		_ai_path = MovementPlanner.plan(hero, _ai_path_goal, threat_model)
+		_ai_path_time = now
+		_ai_path_index = 0
+	if _ai_path.is_empty():
+		hero.move_target = t.global_position
+		return
+	while _ai_path_index < _ai_path.size() - 1 \
+			and hero.global_position.distance_to(_ai_path[_ai_path_index]) < 1.2:
+		_ai_path_index += 1
+	hero.move_target = _ai_path[_ai_path_index]
 
 
 func _assign_lane():
