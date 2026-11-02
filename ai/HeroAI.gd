@@ -99,7 +99,7 @@ func _ready():
 	lane_strategy = LaneStrategy.new(hero, perception, lane)
 	jungle_strategy = JungleStrategy.new(hero, perception)
 
-func _set_action(action_type: int, priority: int = 0, pause_class: int = AIAction.PauseClass.NONE, reason: String = "") -> void:
+func _set_action(action_type: int, priority: int = 0, pause_class: int = AIAction.PauseClass.NONE, reason: String = "", data: Dictionary = {}) -> void:
 	if current_action != null and current_action.is_active():
 		if current_action.type == action_type:
 			return
@@ -1318,7 +1318,7 @@ func _execute_candidate(a: AIAction):
 			if a.data.has("pos"):
 				retreat_pos = a.data.get("pos", Vector3.ZERO)
 			hero.move_target = retreat_pos
-			_set_action(AIAction.Type.RETURN_TO_BASE, 900, a.pause_class, a.reason)
+			_set_action(AIAction.Type.RETURN_TO_BASE, 900, a.pause_class, a.reason, a.data)
 		AIAction.Type.TRADE:
 			hero.manual_target = a.target
 			hero.move_target = Vector3.ZERO
