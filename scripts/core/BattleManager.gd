@@ -104,6 +104,12 @@ var _training_def_btn: Button = null
 var _training_ai_hero_name := ""
 var _training_ai_hero_btn: Button = null
 var _training_stats_t := 0.0
+var _training_panel: PanelContainer = null
+var _training_content: VBoxContainer = null
+var _training_collapsed := false
+var _training_stats_panel: PanelContainer = null
+var _training_stats_content: VBoxContainer = null
+var _training_stats_collapsed := false
 var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
 var _test_prev_pos := Vector3.ZERO
 var _test_layer: CanvasLayer = null
@@ -526,24 +532,32 @@ func _setup_training_hud() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_training_hud.add_child(root)
 
-	# 左侧：训练操作
-	var panel := PanelContainer.new()
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.offset_left = -200
-	panel.offset_right = 200
-	panel.offset_top = 36
-	panel.custom_minimum_size = Vector2(400, 0)
-	panel.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD, false, 0.94))
-	root.add_child(panel)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 7)
-	panel.add_child(vb)
+	# 小地图上方：训练操作（直接覆盖小地图）
+	_training_panel = PanelContainer.new()
+	_training_panel.position = Vector2(40 + UiKit.safe_left(), 40 + UiKit.safe_top())
+	_training_panel.custom_minimum_size = Vector2(400, 0)
+	_training_panel.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD, false, 0.96))
+	root.add_child(_training_panel)
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 6)
+	_training_panel.add_child(outer)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	outer.add_child(header)
 	var title := Label.new()
 	title.text = "训 练 营"
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_theme_font_size_override("font_size", int(round(UiKit.FS_LG * UiKit.scale())))
 	title.add_theme_color_override("font_color", UiKit.C_GOLD)
-	vb.add_child(title)
+	header.add_child(title)
+	var collapse_btn := _training_mk_btn("▾")
+	collapse_btn.custom_minimum_size = Vector2(44, 36)
+	collapse_btn.pressed.connect(_training_toggle_collapse)
+	header.add_child(collapse_btn)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 7)
+	outer.add_child(vb)
+	_training_content = vb
 	_training_label = Label.new()
 	_training_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
 	_training_label.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
@@ -614,23 +628,32 @@ func _setup_training_hud() -> void:
 	b_back.pressed.connect(_training_exit)
 	vb.add_child(b_back)
 
-	# 右上：木偶详细统计（避开左下角操作按钮）
-	var stats_panel := PanelContainer.new()
-	stats_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	stats_panel.offset_left = -int(520.0 * UiKit.scale())
-	stats_panel.offset_right = -int(30.0 * UiKit.scale())
-	stats_panel.offset_top = int(36.0 * UiKit.scale())
-	stats_panel.offset_bottom = int(380.0 * UiKit.scale())
-	stats_panel.add_theme_stylebox_override("panel", UiKit.skin_card(Color(0.55, 0.78, 1.0), false, 0.94))
-	root.add_child(stats_panel)
-	var svb := VBoxContainer.new()
-	svb.add_theme_constant_override("separation", 8)
-	stats_panel.add_child(svb)
+	# 原英雄头像位置：木偶详细统计（直接覆盖头像区）
+	_training_stats_panel = PanelContainer.new()
+	_training_stats_panel.position = Vector2(500 + UiKit.safe_left(), 28 + UiKit.safe_top())
+	_training_stats_panel.custom_minimum_size = Vector2(500, 0)
+	_training_stats_panel.add_theme_stylebox_override("panel", UiKit.skin_card(Color(0.55, 0.78, 1.0), false, 0.96))
+	root.add_child(_training_stats_panel)
+	var s_outer := VBoxContainer.new()
+	s_outer.add_theme_constant_override("separation", 6)
+	_training_stats_panel.add_child(s_outer)
+	var s_header := HBoxContainer.new()
+	s_header.add_theme_constant_override("separation", 8)
+	s_outer.add_child(s_header)
 	var stitle := Label.new()
 	stitle.text = "木偶伤害统计"
+	stitle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stitle.add_theme_font_size_override("font_size", int(round(UiKit.FS_LG * UiKit.scale())))
 	stitle.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
-	svb.add_child(stitle)
+	s_header.add_child(stitle)
+	var s_collapse := _training_mk_btn("▾")
+	s_collapse.custom_minimum_size = Vector2(44, 36)
+	s_collapse.pressed.connect(_training_toggle_stats_collapse)
+	s_header.add_child(s_collapse)
+	var svb := VBoxContainer.new()
+	svb.add_theme_constant_override("separation", 8)
+	s_outer.add_child(svb)
+	_training_stats_content = svb
 	_training_dummy_label = RichTextLabel.new()
 	_training_dummy_label.bbcode_enabled = true
 	_training_dummy_label.fit_content = false
@@ -643,6 +666,19 @@ func _setup_training_hud() -> void:
 	svb.add_child(reset_btn)
 	_training_refresh_label()
 	_training_refresh_dummy_stats()
+
+
+func _training_toggle_collapse() -> void:
+	_training_collapsed = not _training_collapsed
+	if _training_content != null:
+		_training_content.visible = not _training_collapsed
+	_training_panel.custom_minimum_size = Vector2(400, 0)
+
+
+func _training_toggle_stats_collapse() -> void:
+	_training_stats_collapsed = not _training_stats_collapsed
+	if _training_stats_content != null:
+		_training_stats_content.visible = not _training_stats_collapsed
 
 
 func _training_refresh_label() -> void:
