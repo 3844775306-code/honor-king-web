@@ -9,17 +9,19 @@ extends RefCounted
 
 const TIMEOUT := 10.0
 const BACKEND_HTTP := "http"
+const BACKEND_SUPABASE := "supabase"
 const BACKEND_LEANCLOUD := "leancloud"
 const BACKEND_BMOB := "bmob"
 const LC_CLASS := "/1.1/classes/CloudSave"
 const BMOB_BASE := "https://api.bmob.cn/1"
 const BMOB_CLASS := "/classes/CloudSave"
+const SUPA_TABLE := "/rest/v1/cloud_saves"
 
 
 ## 当前后端：http / leancloud / bmob
 static func backend() -> String:
 	var b := str(PlayerPrefs.cloud_cfg().get("backend", BACKEND_HTTP))
-	if b != BACKEND_LEANCLOUD and b != BACKEND_BMOB:
+	if b != BACKEND_LEANCLOUD and b != BACKEND_BMOB and b != BACKEND_SUPABASE:
 		return BACKEND_HTTP
 	return b
 
@@ -34,6 +36,10 @@ static func is_configured() -> bool:
 				and str(cfg.get("app_key", "")).strip_edges() != ""
 		BACKEND_BMOB:
 			return str(cfg.get("app_id", "")).strip_edges() != "" \
+				and str(cfg.get("app_key", "")).strip_edges() != ""
+		BACKEND_SUPABASE:
+			# Supabase：url=项目地址，app_key=anon public key
+			return str(cfg.get("url", "")).strip_edges() != "" \
 				and str(cfg.get("app_key", "")).strip_edges() != ""
 		_:
 			return str(cfg.get("url", "")).strip_edges() != ""
@@ -71,6 +77,8 @@ static func upload(tree: SceneTree, cb: Callable = Callable()) -> void:
 			_lc_upload(tree, cb)
 		BACKEND_BMOB:
 			_bmob_upload(tree, cb)
+		BACKEND_SUPABASE:
+			_supabase_upload(tree, cb)
 		_:
 			_http_upload(tree, cb)
 
@@ -85,6 +93,8 @@ static func download(tree: SceneTree, cb: Callable = Callable()) -> void:
 			_lc_download(tree, cb)
 		BACKEND_BMOB:
 			_bmob_download(tree, cb)
+		BACKEND_SUPABASE:
+			_supabase_download(tree, cb)
 		_:
 			_http_download(tree, cb)
 
@@ -239,6 +249,55 @@ static func _bmob_download(tree: SceneTree, cb: Callable) -> void:
 	)
 
 
+## —— Supabase（免费档，PostgREST 直连，无需部署 Edge Function） ——
+
+static func _supabase_headers(cfg: Dictionary) -> PackedStringArray:
+	var key := str(cfg.get("app_key", "")).strip_edges()
+	return PackedStringArray([
+		"Content-Type: application/json",
+		"apikey: " + key,
+		"Authorization: Bearer " + key,
+	])
+
+
+static func _supabase_url(cfg: Dictionary) -> String:
+	return str(cfg.get("url", "")).strip_edges().trim_suffix("/") + SUPA_TABLE
+
+
+static func _supabase_upload(tree: SceneTree, cb: Callable) -> void:
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var data := payload()
+	var body := JSON.stringify({"pid": player_id(), "ts": int(data["ts"]), "data": data})
+	var headers := _supabase_headers(cfg)
+	headers.append("Prefer: resolution=merge-duplicates")
+	# on_conflict=pid：主键冲突时覆盖（upsert），避免先查后写两次请求
+	_do_headers(tree, HTTPClient.METHOD_POST, _supabase_url(cfg) + "?on_conflict=pid", body, headers,
+		func(ok: bool, code: int, resp: String) -> void:
+			_cb(cb, ok, code, "已上传" if ok else resp.left(120))
+	)
+
+
+static func _supabase_download(tree: SceneTree, cb: Callable) -> void:
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var url := "%s?pid=eq.%s&select=data&limit=1" % [_supabase_url(cfg), player_id().uri_encode()]
+	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
+		func(ok: bool, code: int, body: String) -> void:
+			if not ok:
+				_cb(cb, false, code, "读取云端失败")
+				return
+			var arr := _results_of(body)
+			if arr.is_empty():
+				_cb(cb, true, code, "云端无有效数据")
+				return
+			var row: Dictionary = arr[0] if arr[0] is Dictionary else {}
+			var data: Variant = row.get("data", {})
+			if not (data is Dictionary) or (data as Dictionary).is_empty():
+				_cb(cb, true, code, "云端无有效数据")
+				return
+			var merged := apply_remote(data as Dictionary)
+			_cb(cb, true, code, "已同步" if merged else "云端无有效数据")
+	)
+
 ## 把云端数据写回本地存档（段位 + 对战纪录合并）
 static func apply_remote(data: Dictionary) -> bool:
 	var any := false
@@ -273,6 +332,8 @@ static func _apply_body(cb: Callable, code: int, body: String) -> void:
 ## LeanCloud / Bmob 查询结果：{"results":[...]}
 static func _results_of(body: String) -> Array:
 	var parsed: Variant = JSON.parse_string(body)
+	if parsed is Array:
+		return parsed as Array   # PostgREST / REST 顶层数组
 	if parsed is Dictionary:
 		var r: Variant = (parsed as Dictionary).get("results", [])
 		if r is Array:
@@ -310,5 +371,6 @@ static func _do_headers(tree: SceneTree, method: int, url: String, body: String,
 			req.queue_free()
 		var ok := result == HTTPRequest.RESULT_SUCCESS and code >= 200 and code < 300
 		_cb(cb, ok, code, resp.get_string_from_utf8()), CONNECT_ONE_SHOT)
+
 
 

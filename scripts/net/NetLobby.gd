@@ -939,7 +939,7 @@ func _open_cloud() -> void:
 	var title := _mk_label("云端存档", int(_fs(UiKit.FS_HUGE) * 1.6), COL_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(title)
-	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n推荐阿里云轻量自建（后端选「通用 HTTP」，见 deploy/README.md，不用梯子、免备案）。",
+	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n推荐 Supabase 免费档（不用买服务器，配置见 docs/云端存档-国内BaaS.md）；也可阿里云轻量自建。",
 		_fs(UiKit.FS_SM), COL_DIM)
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -951,11 +951,11 @@ func _open_cloud() -> void:
 	backend_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	col.add_child(backend_btn)
 	var _refresh_backend := func() -> void:
-		var names := {"http": "通用 HTTP（阿里云自建，推荐）", "bmob": "Bmob（国内 BaaS）", "leancloud": "LeanCloud（已停止新注册）"}
+		var names := {"http": "通用 HTTP（阿里云自建）", "supabase": "Supabase（免费档，推荐）", "bmob": "Bmob（国内 BaaS）", "leancloud": "LeanCloud（已停止新注册）"}
 		backend_btn.text = "存储后端：" + str(names.get(CloudSyncScript.backend(), "通用 HTTP"))
 	_refresh_backend.call()
 	backend_btn.pressed.connect(func() -> void:
-		var order := ["http", "bmob", "leancloud"]
+		var order := ["http", "supabase", "bmob", "leancloud"]
 		var c := PlayerPrefs.cloud_cfg()
 		c["backend"] = order[(order.find(CloudSyncScript.backend()) + 1) % order.size()]
 		PlayerPrefs.set_cloud_cfg(c)
@@ -3644,6 +3644,3 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
-
-
-
