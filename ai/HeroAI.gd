@@ -177,7 +177,15 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.TEMP_CLEAR:
 			return _temp_clear_retarget_or_done()
 		AIAction.Type.TEAM_TASK:
-			return team_task == null or not team_task.is_active()
+			if team_task == null or not team_task.is_active():
+				return true
+			# 团队任务被重规划（类型/分路/优先级变化）时，旧 TEAM_TASK Action 必须失效，
+			# 否则旧的 P80 会挡住新的 P50 推线任务，AI 会停在龙坑。
+			if not current_action.data.is_empty():
+				return int(current_action.data.get("task_type", -1)) != int(team_task.type) \
+					or int(current_action.data.get("task_lane", -99)) != int(team_task.lane) \
+					or int(current_action.data.get("task_priority", -1)) != int(team_task.priority)
+			return current_action.priority != team_task.priority
 		AIAction.Type.OBJECTIVE:
 			return not is_dragon_rally or not _is_dragon_alive()
 		AIAction.Type.SAFE_RECALL:
@@ -1567,6 +1575,8 @@ func _execute_team_task() -> void:
 	var gt := _game_time()
 	var tr := task_executor.execute(team_task, gt)
 	if tr.is_empty():
+		# 没有可执行结果时释放旧 TEAM_TASK，避免旧任务动作锁死移动。
+		_finish_current_action()
 		return
 	if tr.has("lane"):
 		lane = int(tr.get("lane", lane))
@@ -1579,7 +1589,12 @@ func _execute_team_task() -> void:
 	if str(tr.get("state", "push")) == "retreat":
 		_set_action(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "任务撤退")
 	else:
-		_set_action(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label())
+		var task_data := {
+			"task_type": int(team_task.type),
+			"task_lane": int(team_task.lane),
+			"task_priority": int(team_task.priority),
+		}
+		_set_action(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label(), task_data)
 	if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
 		return
 	_execute_local_task(_is_natural_jungler)
@@ -2829,7 +2844,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
-
-
