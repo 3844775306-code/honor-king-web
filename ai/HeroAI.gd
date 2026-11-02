@@ -97,6 +97,8 @@ func _set_action(action_type: int, priority: int = 0, pause_class: int = AIActio
 	if current_action != null and current_action.is_active():
 		if current_action.type == action_type:
 			return
+		if priority < current_action.priority:
+			return
 		current_action.mark(AIAction.Status.INTERRUPTED)
 	current_action = AIAction.new(action_type, priority, pause_class, reason)
 	if pause_class == AIAction.PauseClass.NONE:
@@ -144,6 +146,35 @@ func _pause_task_for(action: AIAction) -> void:
 		_task_pause_active = true
 
 
+func _action_is_complete(action: AIAction) -> bool:
+	match action.type:
+		AIAction.Type.TRADE:
+			return trade_planner.active_target == null or not is_instance_valid(trade_planner.active_target)
+		AIAction.Type.FINISH_CHASE:
+			return _chase_target == null or not is_instance_valid(_chase_target) or _chase_target.health <= 0.0
+		AIAction.Type.TEMP_CLEAR:
+			return not _temp_clearing
+		AIAction.Type.TEAM_TASK:
+			return team_task == null or not team_task.is_active()
+		AIAction.Type.SAFE_RECALL:
+			return hero.is_in_own_fountain() and _fully_recovered()
+		AIAction.Type.HEALTH_PACK:
+			return hero.health > hero.actual_max_health * 0.60
+		AIAction.Type.TRIPOD:
+			return hero.manual_target == null or not is_instance_valid(hero.manual_target)
+		AIAction.Type.VISION_SPIRIT:
+			return hero.move_target == Vector3.ZERO
+	return false
+
+
+func _finish_current_action() -> void:
+	if current_action == null:
+		return
+	current_action.mark(AIAction.Status.COMPLETED)
+	current_action = AIAction.new(AIAction.Type.IDLE)
+	_task_pause_active = false
+
+
 func _assign_lane():
 	match hero.role:
 		"射手": lane = AiConfig.Lane.FARM
@@ -156,7 +187,10 @@ func _assign_lane():
 	jungle_kill_count = 0
 	has_respawned_recently = true
 	# 回城/复活后返回原分路
-	_set_action(AIAction.Type.JUNGLE_FARM) if lane == AiConfig.Lane.JUNGLE else AIAction.Type.PUSH_LANE
+	if lane == AiConfig.Lane.JUNGLE:
+		_set_action(AIAction.Type.JUNGLE_FARM)
+	else:
+		_set_action(AIAction.Type.PUSH_LANE)
 	hero.manual_target = null
 	hero.move_target = hero.global_position
 	# 重置策略模块
@@ -668,6 +702,8 @@ func _process(delta):
 	trade_planner.update(delta, _gt_now)
 	if (_task_pause_active or _temp_clearing) and team_task != null and team_task.is_active():
 		team_task.expires_at += delta
+	if current_action != null and current_action.is_active() and _action_is_complete(current_action):
+		_finish_current_action()
 
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
 	skill_tactics.update_combo(delta)
@@ -1056,18 +1092,18 @@ func _decide():
 
 	# 泉水养伤：在自家泉水范围内血/蓝没回到阈值前不出门（原来只要血量>2000 就走，等于半血出门）
 	if hero.is_in_own_fountain() and not _fully_recovered():
-		_set_action(AIAction.Type.SAFE_RECALL, 0, AIAction.PauseClass.SURVIVAL)
+		_set_action(AIAction.Type.SAFE_RECALL, 900, AIAction.PauseClass.SURVIVAL, "回城")
 		return
 
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
-		_set_action(AIAction.Type.SAFE_RECALL, 0, AIAction.PauseClass.SURVIVAL)
+		_set_action(AIAction.Type.SAFE_RECALL, 900, AIAction.PauseClass.SURVIVAL, "回城")
 		return
 
 	# 撤退：低血 + 有敌方英雄压近 + 没站在己方塔下 → 退守（不再主动接战）
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
 			and not _is_under_own_tower() \
 			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
-		_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
+		_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
 		return
 
 	# 主动换血：满足威胁/血量/技能/控制条件才进场；进场后由 TradePlanner 控制退出。
@@ -1089,7 +1125,7 @@ func _decide():
 				if own_turret != null:
 					safe_dest = own_turret.global_position
 			hero.move_target = safe_dest
-			_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
+			_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
 			return
 
 	# 临时清兵：换血窗口与团队任务之间；周围有敌方小兵时优先锁定小兵，并暂停团队任务计时。
@@ -1115,7 +1151,7 @@ func _decide():
 			if tr.has("move_target"):
 				hero.move_target = tr.get("move_target")
 			if str(tr.get("state", "push")) == "retreat":
-				_set_action(AIAction.Type.RETURN_TO_BASE, 0, AIAction.PauseClass.SURVIVAL)
+				_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
 			else:
 				_set_action(AIAction.Type.TEAM_TASK, team_task.priority, AIAction.PauseClass.NONE, team_task.label())
 			# 推线/抱团推塔仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
