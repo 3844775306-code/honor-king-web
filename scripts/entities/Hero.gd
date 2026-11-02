@@ -2001,8 +2001,14 @@ func _physics_process(delta):
 	if visual_mesh:
 		var _in_bush_region := not _bush_region_counts.is_empty()
 		var target_alpha = 1.0
+		# 测试观战：全知视野下隐身/草丛英雄也必须可见
+		var _tbm_v = get_tree().get_first_node_in_group("battle_manager")
+		var _test_omni: bool = _tbm_v != null and bool(_tbm_v.get("_ai_test_match"))
+		if _test_omni:
+			visible = true
+			target_alpha = 1.0
 		# 隐身优先于草丛互见：隐身期间即便与敌方同处一片草丛也保持隐匿
-		if hidden_in_bush or lanling_stealth_active or shadow_dart_active:
+		elif hidden_in_bush or lanling_stealth_active or shadow_dart_active:
 			# 己方（玩家=兰陵王时）呈透明造型；敌方完全隐藏
 			target_alpha = 0.25 if Config.is_ally(team) else 0.0  # 敌方不可见
 			visible = Config.is_ally(team)  # 敌方完全隐藏
@@ -3023,6 +3029,9 @@ func _empty_attack() -> void:
 	if _replay_rec != null:
 		_replay_rec.call("note_attack", display_name, global_position + Vector3.UP * 1.2,
 			global_position + fwd * 4.0, Vfx.color_for_hero(display_name))
+	var _tbm = get_tree().get_first_node_in_group("battle_manager")
+	if _tbm != null and _tbm.has_method("test_hero_action"):
+		_tbm.call("test_hero_action", self, "attack", 0)
 	if not is_melee_aa():
 		# 远程：沿朝向直线弹道（无锁定目标）
 		var bullet := Bullet.new()
@@ -3064,6 +3073,9 @@ func _perform_attack(target: GameEntity):
 			_tk = "hero"
 		_replay_rec2.call("note_attack", display_name, _muzzle_pos(), _aim, Vfx.color_for_hero(display_name),
 			is_melee_aa(), _tk, _tr, _th)
+	var _tbm2 = get_tree().get_first_node_in_group("battle_manager")
+	if _tbm2 != null and _tbm2.has_method("test_hero_action"):
+		_tbm2.call("test_hero_action", self, "attack", 0)
 	manual_target = target
 	# 补刀提示：记录本次普攻目标并给一个略长于攻击间隔的有效期
 	aa_target = target
@@ -4769,6 +4781,9 @@ func _finish_casting():
 	if _replay_rec != null:
 		_replay_rec.call("note_cast", display_name, pending_skill_index,
 			global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, _cast_fwd, skill, int(team))
+	var _tbm3 = get_tree().get_first_node_in_group("battle_manager")
+	if _tbm3 != null and _tbm3.has_method("test_hero_action"):
+		_tbm3.call("test_hero_action", self, "skill", pending_skill_index)
 	match skill.type:
 		0:
 			# 优先使用瞄准时选中的目标（拖拽吸附 / 悬停锁定 / 联机 C_CAST 传入实体）；

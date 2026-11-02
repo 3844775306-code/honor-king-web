@@ -86,6 +86,16 @@ var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
 var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
+var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
+var _test_prev_pos := Vector3.ZERO
+var _test_layer: CanvasLayer = null
+var _test_pause_btn: Button = null
+var _test_speed_btn: Button = null
+var _test_hero_btn: Button = null
+var _test_name_lab: Label = null
+var _test_paused := false
+var _test_speed_idx := 4
+const TEST_SPEEDS := [0.5, 1.0, 2.0, 3.0, 4.0]
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -325,6 +335,136 @@ func _start_ai_test_match() -> void:
 	pool.shuffle()
 	print("[AI-TEST] start random 10 AI at 4x")
 	_start_game(str(pool[0]))
+
+
+## 测试观战 HUD：倍速/暂停/切换主视角/结束，模仿回放控制条
+func _setup_test_hud() -> void:
+	if _test_layer != null and is_instance_valid(_test_layer):
+		return
+	_test_view_hero = hero
+	_test_prev_pos = hero.global_position if is_instance_valid(hero) else Vector3.ZERO
+	_test_layer = CanvasLayer.new()
+	_test_layer.layer = 125
+	_test_layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_test_layer)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_test_layer.add_child(root)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	center.offset_top = 18
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(center)
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 8)
+	center.add_child(bar)
+	_test_pause_btn = _test_mk_btn("⏸ 暂停")
+	_test_pause_btn.pressed.connect(_test_toggle_pause)
+	bar.add_child(_test_pause_btn)
+	_test_speed_btn = _test_mk_btn("4.0×")
+	_test_speed_btn.pressed.connect(_test_cycle_speed)
+	bar.add_child(_test_speed_btn)
+	_test_hero_btn = _test_mk_btn("切换视角")
+	_test_hero_btn.pressed.connect(_test_cycle_hero)
+	bar.add_child(_test_hero_btn)
+	_test_name_lab = Label.new()
+	_test_name_lab.add_theme_font_size_override("font_size", int(round(UiKit.FS_MD * UiKit.scale())))
+	_test_name_lab.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	bar.add_child(_test_name_lab)
+	var exit_btn := _test_mk_btn("✕ 结束测试")
+	exit_btn.pressed.connect(_exit_ai_test)
+	bar.add_child(exit_btn)
+	if is_instance_valid(TouchController):
+		TouchController.set_hero(hero)
+	_test_refresh_label()
+
+
+func _test_mk_btn(txt: String) -> Button:
+	var b := Button.new()
+	b.text = txt
+	b.custom_minimum_size = Vector2(120, 44)
+	b.process_mode = Node.PROCESS_MODE_ALWAYS
+	b.add_theme_font_size_override("font_size", int(round(UiKit.FS_MD * UiKit.scale())))
+	return b
+
+
+func _test_refresh_label() -> void:
+	if _test_name_lab == null or not is_instance_valid(hero):
+		return
+	_test_name_lab.text = "主视角：%s" % str(hero.display_name)
+
+
+func _test_toggle_pause() -> void:
+	_test_paused = not _test_paused
+	get_tree().paused = _test_paused
+	if _test_pause_btn != null:
+		_test_pause_btn.text = "▶ 继续" if _test_paused else "⏸ 暂停"
+	if not _test_paused:
+		Engine.time_scale = float(TEST_SPEEDS[_test_speed_idx])
+
+
+func _test_cycle_speed() -> void:
+	_test_speed_idx = (_test_speed_idx + 1) % TEST_SPEEDS.size()
+	var sp: float = float(TEST_SPEEDS[_test_speed_idx])
+	if not _test_paused:
+		Engine.time_scale = sp
+	if _test_speed_btn != null:
+		_test_speed_btn.text = "%.1f×" % sp
+
+
+func _test_cycle_hero() -> void:
+	var hs: Array = []
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if e is Hero and e.health > 0.0:
+			hs.append(e)
+	if hs.is_empty():
+		return
+	var cur: int = hs.find(hero)
+	var nx: int = (cur + 1) % hs.size() if cur >= 0 else 0
+	hero = hs[nx]
+	_test_view_hero = hero
+	spectate_hero = null
+	_cam_snap = true
+	if is_instance_valid(TouchController):
+		TouchController.set_hero(hero)
+	if minimap != null:
+		minimap.heroes = [hero, enemy_hero]
+	_test_refresh_label()
+
+
+func _exit_ai_test() -> void:
+	_ai_test_match = false
+	_test_paused = false
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+
+
+## 测试观战每帧：主视角回正/死亡自动切换、摇杆跟随 AI 移动方向
+func _test_tick(delta: float) -> void:
+	if hero == null or not is_instance_valid(hero) or hero.health <= 0.0:
+		_test_cycle_hero()
+		return
+	var p: Vector3 = hero.global_position
+	var d: Vector3 = p - _test_prev_pos
+	_test_prev_pos = p
+	if is_instance_valid(TouchController):
+		if d.length() > 0.01:
+			TouchController.set_test_move(Vector2(d.x, -d.z).normalized())
+		else:
+			TouchController.set_test_move(Vector2.ZERO)
+	_test_refresh_label()
+
+
+## Hero 侧回调：仅测试局且为当前主视角英雄时闪对应按钮
+func test_hero_action(h: Hero, kind: String, slot: int = 0) -> void:
+	if not _ai_test_match or h != hero or not is_instance_valid(TouchController):
+		return
+	if kind == "attack":
+		TouchController.flash_attack()
+	else:
+		TouchController.flash_skill(slot)
 
 
 func _start_net_lineup(picks: Dictionary) -> void:
@@ -647,6 +787,8 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		_distribute_lane_assignments(team_tactics.assignments)
 	await _load_step(0.96)
 	await _load_step(1.0)
+	if _ai_test_match:
+		_setup_test_hud()
 	# 加载完成后停留 2 秒（进度条 100% 展示完整）再进入战斗
 	if loading_screen != null and is_instance_valid(loading_screen):
 		await get_tree().create_timer(2.0).timeout
@@ -5799,6 +5941,8 @@ func _process(delta):
 			get_tree().quit()
 		return
 	_sync_postfx()
+	if _ai_test_match:
+		_test_tick(delta)
 	# 金币自动增长
 		# 摄像机控制
 	if spectate_hero != null:
@@ -6088,6 +6232,15 @@ func _update_vision(delta: float) -> void:
 		return
 
 	_vision_timer = 0.2
+	# 测试观战：全知视野，所有单位常显（不改 AI 逻辑，只改可见性）
+	if _ai_test_match:
+		for ent in get_tree().get_nodes_in_group("entities"):
+			if ent is GameEntity:
+				ent.visible = true
+		for hh in get_tree().get_nodes_in_group("heroes"):
+			if hh is Hero:
+				hh.visible = true
+		return
 	var player_team := Config.player_team
 
 	# Collect friendly vision sources (heroes, minions, turrets)
@@ -6596,6 +6749,8 @@ func _ground_from_screen(screen: Vector2, plane_y: float) -> Vector3:
 func _unhandled_input(event):
 	if not hero_selected or intro_active or building_battle:
 		return
+	if _ai_test_match:
+		return   # 测试局：玩家不能直接操作英雄/战场，只允许 HUD 观战按钮
 
 	# 中键：桌面自由镜头拖动平移（松手保持偏移，按 Y 回正）
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
@@ -6780,10 +6935,15 @@ var _pm_key: DirectionalLight3D = null
 var _pm_hidden: Array = []
 var _pm_lights: Array = []
 
-## 测试局结束：等录像落盘后回主菜单（8 秒真实时间，ignore_time_scale）
+## 测试局结束：等录像落盘后回主菜单（3 秒真实时间，ignore_time_scale）
 func _finish_ai_test_match() -> void:
-	await get_tree().create_timer(8.0, true, false, true).timeout
+	await get_tree().create_timer(3.0, true, false, true).timeout
+	var rec = get_tree().get_first_node_in_group("replay_recorder")
+	if rec != null and rec.has_method("flush_save"):
+		rec.call("flush_save")
+	await get_tree().create_timer(1.0, true, false, true).timeout
 	_ai_test_match = false
+	_test_paused = false
 	Engine.time_scale = 1.0
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/lobby.tscn")

@@ -118,6 +118,14 @@ func _process(delta: float) -> void:
 	_sample(delta, false)
 
 
+## 测试局/主动结束：立即落盘（不等 game_over 的 1.2s 收尾）
+func flush_save() -> void:
+	if _saved or not _started:
+		return
+	if _frames.size() >= 20:
+		_save()
+
+
 func _exit_tree() -> void:
 	# 中途退出/投降：还没落盘就把已有的片段存成“中途退出”录像
 	if _saved or not _started:

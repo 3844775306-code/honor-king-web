@@ -253,6 +253,23 @@ func _process(_delta):
 func set_hero(h: Hero):
 	hero = h
 
+
+## 测试/观战：外部触发技能/普攻按钮动效
+func flash_skill(i: int) -> void:
+	if i >= 0 and i < _skill_buttons.size() and is_instance_valid(_skill_buttons[i]):
+		_skill_buttons[i].call("flash_press")
+
+
+func flash_attack() -> void:
+	if _attack_button != null and is_instance_valid(_attack_button):
+		_attack_button.flash_press()
+
+
+## 测试/观战：摇杆视觉跟随 AI 移动方向（不产生输入）
+func set_test_move(v: Vector2) -> void:
+	if _joystick != null and is_instance_valid(_joystick):
+		_joystick.set_external_move(v)
+
 # ---------------- 敌人索敌头像条（技能扇形外侧弧线） ----------------
 
 # 每帧扫描玩家攻击范围内的敌人：范围内有敌方英雄就出现头像；按距离排序取前 PICKER_MAX 个，
