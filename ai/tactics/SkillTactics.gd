@@ -73,6 +73,8 @@ func _can_execute_combo(combo: Dictionary, target: GameEntity) -> bool:
 			return false
 		if not _can_use_skill_on(idx, target):
 			return false
+		if not _skill_in_range(idx, target):
+			return false
 	return true
 
 
@@ -111,7 +113,7 @@ func update_combo(delta: float) -> bool:
 	if idx >= hero.skills.size() or hero.skills[idx] == null \
 			or hero.skill_levels[idx] <= 0 or hero.skill_cooldowns[idx] > 0.0 \
 			or hero.mana < hero.skills[idx].mana_cost \
-			or hero.global_position.distance_to(_combo_target.global_position) > AiConfig.SKILL_USE_RANGE \
+			or not _skill_in_range(idx, _combo_target) \
 			or (idx == 2 and not _ult_allowed(_combo_target)) \
 			or not _can_use_skill_on(idx, _combo_target):
 		_clear_combo()
@@ -135,6 +137,45 @@ func _clear_combo() -> void:
 	_combo_step = 0
 	_combo_target = null
 	_combo_wait = 0.0
+
+
+## 技能是否在自身实际施法距离内；0距离技能视为自身/AOE，不做距离限制。
+func _skill_in_range(index: int, target: GameEntity) -> bool:
+	if target == null or not is_instance_valid(target):
+		return true
+	if index < 0 or index >= hero.skills.size() or hero.skills[index] == null:
+		return false
+	var sk: Skill = hero.skills[index]
+	if sk.type == 2 or sk.type == 6 or sk.cast_range <= 0.0:
+		return true
+	var reach: float = sk.cast_range + float(target.body_radius) + 0.6
+	return hero.global_position.distance_to(target.global_position) <= reach
+
+
+## 逃跑时只放瞬发/低前摇的远程伤害或控制技能，不因长前摇停下送人头。
+func try_escape_skill(target: GameEntity, max_cast_time: float = 0.15) -> bool:
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	if _turret_blocked(target):
+		return false
+	if skill_feed_timer > 0.0:
+		return false
+	var candidates := _get_candidates(target)
+	var best: Dictionary = {}
+	for c in candidates:
+		var sk: Skill = c["skill"]
+		if sk.cast_time > max_cast_time or sk.is_channeling:
+			continue
+		# 只要伤害/控制/减速，不要赶路位移和纯增益
+		if sk.damage <= 0.0 and not _has_control(sk):
+			continue
+		if best.is_empty() or float(c["score"]) > float(best["score"]):
+			best = c
+	if best.is_empty():
+		return false
+	skill_feed_timer = AiConfig.SKILL_FEED_COOLDOWN
+	hero._start_casting(int(best["index"]), best["skill"], _aim_pos(target))
+	return true
 
 
 # ==================== 单技能评分 ====================
@@ -191,6 +232,8 @@ func _get_candidates(target: GameEntity = null) -> Array:
 			continue
 		# 后羿大招仅对英雄使用
 		if not _can_use_skill_on(i, target):
+			continue
+		if not _skill_in_range(i, target):
 			continue
 		var sk: Skill = hero.skills[i]
 		var score := _score_skill(sk, i, target)

@@ -1013,10 +1013,9 @@ func _process(delta):
 
 	# --- 近身目标技能 ---
 	if hero.manual_target and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0:
-		var skill_dist := hero.global_position.distance_to(hero.manual_target.global_position)
 		# 追英雄时先考虑位移贴脸（够不到才用，已在普攻距离内不会浪费）
 		var used_dash: bool = hero.manual_target is Hero and _try_chase_dash(hero.manual_target)
-		if not used_dash and skill_dist < AiConfig.SKILL_USE_RANGE:
+		if not used_dash:
 			_try_use_skills(hero.manual_target)
 	else:
 		hero.manual_target = null
@@ -1851,18 +1850,19 @@ func _move_to_friendly_turret() -> void:
 # 撤退行为：仅在 TradePlanner 退出后执行，只去它给的安全点；威胁降到低即完成。
 func _retreat_behavior(delta: float = 0.0) -> void:
 	hero.manual_target = null
-	# 撤退执行：向远离「威胁最大的敌方英雄」的方向移动，直到回到低威胁状态
-	var threat_enemy: Hero = threat_model.most_threatening_enemy() if threat_model != null else null
-	if threat_enemy == null or _is_threat_low():
+	# 撤退时允许回身放瞬发/低前摇的远程伤害/控制，不因长前摇停下送人头。
+	var chaser: Hero = perception.find_nearest_enemy_hero(30.0)
+	if chaser != null:
+		skill_tactics.try_escape_skill(chaser)
+	var goal := Vector3.ZERO
+	if current_action != null and current_action.data.has("pos"):
+		goal = current_action.data.get("pos", Vector3.ZERO)
+	if goal == Vector3.ZERO:
 		hero.move_target = Vector3.ZERO
 		_finish_current_action()
 		return
-	var away: Vector3 = hero.global_position - threat_enemy.global_position
-	away.y = 0.0
-	if away.length() < 0.05:
-		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
-	hero.move_target = hero.global_position + away.normalized() * 4.0
-
+	# 只走 TradePlanner 给出的安全点，不用最近塔/泉水替代。
+	_follow_safe_route(goal)
 
 # 选撤退目标：己方塔 + 泉水，按 A* 路径风险和距离评分。
 func _choose_safe_retreat_goal() -> Vector3:
@@ -2069,8 +2069,8 @@ func _update_finish_chase(delta: float) -> bool:
 	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
 	if _try_chase_dash(_chase_target):
 		return true
-	if hero.global_position.distance_to(_chase_target.global_position) < AiConfig.SKILL_USE_RANGE:
-		_try_use_skills(_chase_target)
+	# SkillTactics 内部按技能实际 cast_range 过滤；这里不再用固定 10m 卡远程技能。
+	_try_use_skills(_chase_target)
 	return true
 
 
