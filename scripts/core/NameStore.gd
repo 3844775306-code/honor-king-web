@@ -3,14 +3,15 @@
 class_name NameStore
 extends RefCounted
 
-const CFG_PATH := "user://profile.cfg"
+static func _cfg_path() -> String:
+	return UserScope.path("profile.cfg")
 const FALLBACK_PATH := "res://profile_cache.cfg"   # user:// 不可写时的兜底（桌面/编辑器运行）
 const AI_FIRST := ["夜", "风", "云", "月", "星", "雪", "尘", "霜", "雷", "影", "光", "墨", "青", "白", "赤", "玄", "寒", "孤"]
 const AI_SECOND := ["行者", "无声", "归客", "长歌", "问天", "逐月", "踏雪", "临渊", "听雨", "断浪", "折戟", "扶摇", "落霞", "惊鸿", "孤舟", "清欢", "流火", "照夜"]
 
 ## 读取缓存里的玩家昵称（无则空串）
 static func player_name() -> String:
-	for path in [CFG_PATH, FALLBACK_PATH]:
+	for path in [_cfg_path()]:
 		var cf := ConfigFile.new()
 		if cf.load(path) != OK:
 			continue
@@ -24,8 +25,8 @@ static func save_player_name(n: String) -> void:
 	var nm := n.strip_edges()
 	if nm == "":
 		return
-	for path in [CFG_PATH, FALLBACK_PATH]:
-		if path == CFG_PATH:
+	for path in [_cfg_path()]:
+		if path == _cfg_path():
 			# 首次运行 user:// 目录可能尚未建立，先补建再写
 			var user_dir := ProjectSettings.globalize_path("user://")
 			if not DirAccess.dir_exists_absolute(user_dir):
@@ -60,4 +61,6 @@ static func random_ai_names(n: int, exclude: Array = []) -> Array:
 	while out.size() < n:
 		out.append("影卫%02d" % (out.size() + 1))
 	return out
+
+
 

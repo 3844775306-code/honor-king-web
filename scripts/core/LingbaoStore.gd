@@ -1,7 +1,8 @@
 extends RefCounted
 ## 灵宝本地存档：好感度 / 配色 / 名字（user://lingbao.cfg，纯本地不上传）
 
-const PATH := "user://lingbao.cfg"
+static func _path() -> String:
+	return UserScope.path("lingbao.cfg")
 const PATH_DEV := "res://lingbao.cfg"   # user:// 不可写时（沙箱/只读环境）退到工程目录
 const COLORS := [
 	Color(0.62, 0.86, 1.00),   # 冰蓝
@@ -15,14 +16,13 @@ const NAME_DEFAULT := "小灵"
 
 static func _load() -> ConfigFile:
 	var cf := ConfigFile.new()
-	if cf.load(PATH) != OK:
-		cf = ConfigFile.new()
-		cf.load(PATH_DEV)
+	if cf.load(_path()) != OK:
+		cf = ConfigFile.new()   # 账号隔离：不再读 res:// 旧兜底，避免新账号继承工程内旧数据
 	return cf
 
 
 static func _save(cf: ConfigFile) -> void:
-	if cf.save(PATH) == OK:
+	if cf.save(_path()) == OK:
 		CloudSync.schedule_push()
 		return
 	cf.save(PATH_DEV)
@@ -70,4 +70,6 @@ static func cycle_color() -> int:
 	cf.set_value("lingbao", "color", i)
 	_save(cf)
 	return i
+
+
 

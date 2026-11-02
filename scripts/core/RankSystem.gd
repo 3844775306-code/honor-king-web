@@ -5,7 +5,8 @@ extends RefCounted
 ## 奖牌额外加分，评分 >90 额外 +200；每 100 分换算 1 颗星。
 ## 数据存 user://rank.json，受限环境退回 res://saves/rank.json。
 
-const SAVE_PATH := "user://rank.json"
+static func _save_path() -> String:
+	return UserScope.path("rank.json")
 const FALLBACK_PATH := "res://saves/rank.json"
 
 const KING_INDEX := 6
@@ -61,7 +62,7 @@ static func _ensure_loaded() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	for p in [SAVE_PATH, FALLBACK_PATH]:
+	for p in [_save_path()]:
 		if not FileAccess.file_exists(p):
 			continue
 		var f := FileAccess.open(p, FileAccess.READ)
@@ -85,7 +86,7 @@ static func reload() -> void:
 
 static func _flush() -> void:
 	var txt := JSON.stringify(_data, "\t")
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_save_path(), FileAccess.WRITE)
 	if f != null:
 		f.store_string(txt)
 		f.close()
@@ -290,5 +291,8 @@ static func import_state(st: Dictionary) -> bool:
 	_loaded = true
 	_flush()
 	return true
+
+
+
 
 

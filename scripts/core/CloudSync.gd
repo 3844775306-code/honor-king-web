@@ -18,6 +18,7 @@ const BMOB_CLASS := "/classes/CloudSave"
 const SUPA_TABLE := "/rest/v1/cloud_saves"
 const ACCOUNTS_TABLE := "/rest/v1/hk_accounts"
 const REPLAY_META := "/rest/v1/hk_replay_meta"
+const PROFILES_TABLE := "/rest/v1/hk_profiles"
 const STORAGE_BUCKET := "hk_replays"
 # 内置云端账号（玩家无需填写）：Supabase 免费档项目
 const DEFAULT_URL := "https://oewvixujojsbqwxfnkfk.supabase.co"
@@ -26,7 +27,8 @@ const DEFAULT_KEY := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const SYNC_FILES := ["accounts.json", "account_session.json", "player_prefs.json", "profile.cfg",
 	"rank.json", "battle_history.json", "hero_builds.json", "lingbao.cfg",
 	"ai_chat.cfg", "paired_devices.cfg"]
-const META_PATH := "user://cloud_sync_meta.json"
+static func _meta_path() -> String:
+	return UserScope.path("cloud_sync_meta.json")
 const ReplayRepo := preload("res://scripts/core/ReplayRecorder.gd")
 
 
@@ -81,7 +83,7 @@ static func ensure_defaults() -> void:
 static func bundle() -> Dictionary:
 	var files := {}
 	for name in SYNC_FILES:
-		var p := "user://" + str(name)
+		var p := ("user://" + str(name)) if UserScope.is_global(str(name)) else UserScope.path(str(name))
 		if not FileAccess.file_exists(p):
 			continue
 		var f := FileAccess.open(p, FileAccess.READ)
@@ -330,6 +332,7 @@ static func _supabase_upload(tree: SceneTree, cb: Callable) -> void:
 		func(ok: bool, code: int, resp: String) -> void:
 			if ok:
 				_write_meta(int(data["ts"]))
+				_push_profile(tree, cfg)
 			_cb(cb, ok, code, "已上传" if ok else resp.left(120))
 	)
 
@@ -414,13 +417,15 @@ static func upload_replay(tree: SceneTree, entry: Dictionary, cb: Callable = Cal
 
 
 ## 云端录像列表（所有玩家上传的，按时间倒序）
-static func list_cloud_replays(tree: SceneTree, cb: Callable) -> void:
+static func list_cloud_replays(tree: SceneTree, cb: Callable, pid_filter: String = "") -> void:
 	ensure_defaults()
 	if not is_configured() or backend() != BACKEND_SUPABASE:
 		_cb(cb, false, 0, "未配置云端")
 		return
 	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
 	var url := _meta_url(cfg) + "?select=*&order=created.desc&limit=100"
+	if pid_filter != "":
+		url += "&pid=eq." + pid_filter.uri_encode()
 	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
 		func(ok: bool, code: int, body: String) -> void:
 			cb.call(ok, code, _results_of(body) if ok else [])
@@ -442,11 +447,12 @@ static func download_cloud_replay(tree: SceneTree, row: Dictionary, save_to_inde
 			if not ok or bytes.is_empty():
 				_cb(cb, false, code, "录像下载失败")
 				return
-			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://replays"))
+			var rdir := UserScope.replays_dir()
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(rdir))
 			var fname := str(row.get("name", "cloud.rep"))
-			var dst := "user://replays/" + fname
+			var dst := rdir + fname
 			if FileAccess.file_exists(dst):
-				dst = "user://replays/%s_%d.rep" % [fname.get_basename(), Time.get_ticks_msec()]
+				dst = "%s%s_%d.rep" % [rdir, fname.get_basename(), Time.get_ticks_msec()]
 			var f := FileAccess.open(dst, FileAccess.WRITE)
 			if f == null:
 				_cb(cb, false, 0, "保存录像失败")
@@ -516,6 +522,83 @@ static func fetch_account(tree: SceneTree, username: String, cb: Callable) -> vo
 			cb.call(true, code, arr[0] if not arr.is_empty() and arr[0] is Dictionary else {})
 	)
 
+## —— 段位排行榜 / 玩家主页 / 云端容量 ——
+
+static func _profiles_url(cfg: Dictionary) -> String:
+	return str(cfg.get("url", "")).strip_edges().trim_suffix("/") + PROFILES_TABLE
+
+
+## 上传段位档案（排行榜用）：同步成功后顺带推送
+static func _push_profile(tree: SceneTree, cfg: Dictionary) -> void:
+	var st := RankSystem.state()
+	var body := JSON.stringify({
+		"pid": player_id(), "nickname": NameStore.player_name(),
+		"tier": int(st.get("tier", 0)), "sub": int(st.get("sub", 0)),
+		"stars": int(st.get("stars", 0)), "points": int(st.get("points", 0)),
+		"wins": int(st.get("wins", 0)), "losses": int(st.get("losses", 0)),
+		"updated": int(Time.get_unix_time_from_system()),
+	})
+	var h := _supabase_headers(cfg)
+	h.append("Prefer: resolution=merge-duplicates")
+	_do_headers(tree, HTTPClient.METHOD_POST, _profiles_url(cfg) + "?on_conflict=pid",
+		body, h, func(_ok: bool, _code: int, _resp: String) -> void:
+			pass)
+
+
+## 段位排行榜（按 大段位/小段位/星/积分 倒序）
+static func list_leaderboard(tree: SceneTree, cb: Callable) -> void:
+	ensure_defaults()
+	if not is_configured() or backend() != BACKEND_SUPABASE:
+		_cb(cb, false, 0, "未配置云端")
+		return
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var url := _profiles_url(cfg) + "?select=*&order=tier.desc,sub.desc,stars.desc,points.desc&limit=100"
+	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
+		func(ok: bool, code: int, body: String) -> void:
+			cb.call(ok, code, _results_of(body) if ok else [])
+	)
+
+
+## 取某个玩家的整包存档（主页用）：返回 data 字典（含 files）
+static func get_player_bundle(tree: SceneTree, pid: String, cb: Callable) -> void:
+	ensure_defaults()
+	if not is_configured() or backend() != BACKEND_SUPABASE:
+		_cb(cb, false, 0, "未配置云端")
+		return
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var url := "%s?pid=eq.%s&select=data&limit=1" % [_supabase_url(cfg), pid.uri_encode()]
+	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
+		func(ok: bool, code: int, body: String) -> void:
+			if not ok:
+				cb.call(false, code, {})
+				return
+			var arr := _results_of(body)
+			var data: Variant = {}
+			if not arr.is_empty() and arr[0] is Dictionary:
+				data = (arr[0] as Dictionary).get("data", {})
+			cb.call(true, code, data if data is Dictionary else {})
+	)
+
+
+## 云端已用容量（所有玩家录像大小之和）/ 免费档上限 1GB
+static func storage_usage(tree: SceneTree, cb: Callable) -> void:
+	ensure_defaults()
+	if not is_configured() or backend() != BACKEND_SUPABASE:
+		_cb(cb, false, 0, "未配置云端")
+		return
+	var cfg: Dictionary = PlayerPrefs.cloud_cfg()
+	var url := _meta_url(cfg) + "?select=size"
+	_do_headers(tree, HTTPClient.METHOD_GET, url, "", _supabase_headers(cfg),
+		func(ok: bool, code: int, body: String) -> void:
+			if not ok:
+				cb.call(false, code, 0, 0)
+				return
+			var used := 0
+			for r in _results_of(body):
+				used += int((r as Dictionary).get("size", 0))
+			cb.call(true, code, used, 1024 * 1024 * 1024)
+	)
+
 ## 把云端数据写回本地（优先整包 files；兼容旧的 rank/history 字段）
 static func apply_remote(data: Dictionary) -> bool:
 	var any := false
@@ -546,7 +629,7 @@ static func _apply_files(files_in: Dictionary) -> bool:
 		var content := str(files_in[name])
 		if content == "":
 			continue
-		var p := "user://" + str(name)
+		var p := ("user://" + str(name)) if UserScope.is_global(str(name)) else UserScope.path(str(name))
 		if FileAccess.file_exists(p):
 			var old := FileAccess.get_file_as_string(p)
 			if old == content:
@@ -565,7 +648,7 @@ static func _apply_files(files_in: Dictionary) -> bool:
 
 
 static func _write_meta(ts: int) -> void:
-	var f := FileAccess.open(META_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_meta_path(), FileAccess.WRITE)
 	if f == null:
 		return
 	f.store_string(JSON.stringify({"ts": ts}))
@@ -573,9 +656,9 @@ static func _write_meta(ts: int) -> void:
 
 
 static func local_meta() -> Dictionary:
-	if not FileAccess.file_exists(META_PATH):
+	if not FileAccess.file_exists(_meta_path()):
 		return {}
-	var txt := FileAccess.get_file_as_string(META_PATH)
+	var txt := FileAccess.get_file_as_string(_meta_path())
 	var parsed: Variant = JSON.parse_string(txt)
 	return parsed if parsed is Dictionary else {}
 
@@ -762,6 +845,13 @@ static func _do_headers(tree: SceneTree, method: int, url: String, body: String,
 			req.queue_free()
 		var ok := result == HTTPRequest.RESULT_SUCCESS and code >= 200 and code < 300
 		_cb(cb, ok, code, resp.get_string_from_utf8()), CONNECT_ONE_SHOT)
+
+
+
+
+
+
+
 
 
 

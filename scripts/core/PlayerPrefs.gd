@@ -4,7 +4,8 @@ extends RefCounted
 ## 受限环境（编辑器沙箱）不可写时退回 res://saves/player_prefs.json。
 ## 分路取值见 HeroPickData.LANES（对抗路/打野/中路/发育路/游走）。
 
-const SAVE_PATH := "user://player_prefs.json"
+static func _save_path() -> String:
+	return UserScope.path("player_prefs.json")
 const FALLBACK_PATH := "res://saves/player_prefs.json"
 const DEFAULT_LANE := "对抗路"
 
@@ -17,7 +18,7 @@ static func _ensure_loaded() -> void:
 		return
 	_loaded = true
 	# user:// 为主、res://saves 兜底：两边各取所需（受限环境 user:// 写失败时靠后者续命）
-	for p in [SAVE_PATH, FALLBACK_PATH]:
+	for p in [_save_path()]:
 		if not FileAccess.file_exists(p):
 			continue
 		var f := FileAccess.open(p, FileAccess.READ)
@@ -41,7 +42,7 @@ static func reload() -> void:
 
 static func _flush() -> void:
 	var txt := JSON.stringify(_data, "\t")
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_save_path(), FileAccess.WRITE)
 	if f != null:
 		f.store_string(txt)
 		f.close()
@@ -150,5 +151,8 @@ static func clear_btn_layout() -> void:
 	_ensure_loaded()
 	_data.erase("btn_layout")
 	_flush()
+
+
+
 
 

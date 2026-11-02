@@ -8,9 +8,13 @@ const BulletVisual = preload("res://scripts/core/BulletVisual.gd")
 const GROUP := "replay_recorder"
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 
-const DIR := "user://replays"
+static func _dir() -> String:
+	return UserScope.replays_dir()
+
+
 const DEV_DIR := "res://replays"          # user:// 不可写时（沙箱/只读环境）退到工程目录
-const INDEX_PATH := "user://replays/index.json"
+static func _index_path() -> String:
+	return _dir() + "index.json"
 const DEV_INDEX := "res://replays/index.json"
 const SAMPLE_HZ := 10.0
 const MINI_HZ := 3.0
@@ -867,12 +871,12 @@ func _save() -> void:
 	if _frames.size() < 20:
 		queue_free()
 		return
-	var dir := DirAccess.open(DIR)
-	if dir == null:
-		DirAccess.make_dir_recursive_absolute(DIR)
+	var rdir := _dir()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(rdir))
+	var dir := DirAccess.open(rdir)
 	var stamp := Time.get_datetime_string_from_system(false, true)
 	stamp = stamp.replace("-", "").replace(":", "").replace(" ", "_")
-	var path := "%s/r_%s.rep" % [DIR, stamp]
+	var path := "%s/r_%s.rep" % [rdir, stamp]
 	var my_rows: Array = []
 	for i in range(_hero_meta.size()):
 		var meta: Dictionary = _hero_meta[i]
@@ -977,7 +981,7 @@ static func _delete_file(path: String) -> void:
 
 static func load_index() -> Array:
 	var txt := ""
-	for p in [INDEX_PATH, DEV_INDEX]:
+	for p in [_index_path(), DEV_INDEX]:
 		var f := FileAccess.open(p, FileAccess.READ)
 		if f != null:
 			txt = f.get_as_text()
@@ -990,7 +994,7 @@ static func load_index() -> Array:
 
 
 static func _write_index(arr: Array) -> void:
-	var f := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_index_path(), FileAccess.WRITE)
 	if f == null:
 		var d := DirAccess.open(DEV_DIR)
 		if d == null:
@@ -1072,5 +1076,6 @@ static func load_replay(path: String) -> Dictionary:
 	f.close()
 	var data = JSON.parse_string(txt)
 	return data if data is Dictionary else {}
+
 
 

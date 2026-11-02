@@ -75,6 +75,23 @@ create policy hk_replay_meta_read   on public.hk_replay_meta for select using (t
 create policy hk_replay_meta_insert on public.hk_replay_meta for insert with check (true);
 create policy hk_replay_meta_update on public.hk_replay_meta for update using (true) with check (true);
 
+-- 段位排行榜（自动上传段位/昵称）
+create table if not exists public.hk_profiles (
+  pid text primary key,
+  nickname text default '',
+  tier int default 0,
+  sub int default 0,
+  stars int default 0,
+  points int default 0,
+  wins int default 0,
+  losses int default 0,
+  updated bigint default 0
+);
+alter table public.hk_profiles enable row level security;
+create policy hk_profiles_read   on public.hk_profiles for select using (true);
+create policy hk_profiles_insert on public.hk_profiles for insert with check (true);
+create policy hk_profiles_update on public.hk_profiles for update using (true) with check (true);
+
 -- 录像手动上传用的存储桶（10MB 级 .rep）
 insert into storage.buckets (id, name, public)
 values ('hk_replays', 'hk_replays', false)
@@ -134,6 +151,7 @@ cd cloudflare/cloud-save
 CLOUD_TOKEN=dev-token node dev-server.mjs
 # 游戏内地址 http://127.0.0.1:8788，口令 dev-token
 ```
+
 
 
 

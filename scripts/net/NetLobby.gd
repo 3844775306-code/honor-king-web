@@ -27,6 +27,7 @@ const TacticalMapScript = preload("res://scripts/ui/TacticalMap.gd")
 const ReplayBrowserPanelScript = preload("res://scripts/ui/ReplayBrowserPanel.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
 const ReplayScreenScript = preload("res://scripts/replay/ReplayScreen.gd")
+const LeaderboardPanelScript = preload("res://scripts/ui/LeaderboardPanel.gd")
 const BootIntroScript = preload("res://scripts/ui/GameBootIntro.gd")
 const BootIntro3DScript = preload("res://scripts/ui/GameBootIntro3D.gd")
 const LoginPanelScript = preload("res://scripts/ui/LoginPanel.gd")
@@ -191,6 +192,7 @@ var _login_layer: CanvasLayer = null
 
 
 func _ready() -> void:
+	UserScope.ensure()   # 本地数据按账号隔离（首次运行会把旧根目录存档迁移到当前账号）
 	# CLI 直连（--net-host/--net-join）：不进大厅，直接路由
 	if NetSession.cli_mode:
 		if NetSession.mode == NetSession.Mode.HOST:
@@ -941,6 +943,15 @@ func _cloud_startup_sync() -> void:
 
 # ---------- 云端存档（段位 + 对战纪录；需自备 HTTP 服务） ----------
 
+## 云端容量：录像占用 / 免费档上限（1GB）
+func _cloud_load_capacity(lbl: Label) -> void:
+	CloudSyncScript.storage_usage(get_tree(), func(ok: bool, code: int, used: int, cap: int) -> void:
+		if not ok:
+			lbl.text = "云端容量：读取失败（%d）" % code
+			return
+		lbl.text = "云端容量：已用 %.1f MB / %.1f GB（录像占用）" % [
+			float(used) / 1048576.0, float(cap) / 1073741824.0])
+
 ## 云端录像列表：所有玩家上传，可播放/保存到本机
 func _cloud_load_replays(box: VBoxContainer, status: Label) -> void:
 	for ch in box.get_children():
@@ -1071,6 +1082,13 @@ func _open_cloud() -> void:
 			status.text = msg + "（重启游戏后生效）" if ok else "下载失败（%d）%s" % [code, msg.left(60)]))
 	act.add_child(b_down)
 
+	var cap_lab := _mk_label("云端容量：读取中…", _fs(UiKit.FS_SM), COL_TEXT)
+	col.add_child(cap_lab)
+	_cloud_load_capacity(cap_lab)
+	var b_rank := _mk_btn("🏆  段位排行榜", UiKit.C_GOLD, false, Vector2(260, 50))
+	b_rank.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_rank.pressed.connect(func() -> void: add_child(LeaderboardPanelScript.new()))
+	col.add_child(b_rank)
 	col.add_child(_mk_label("云端录像（所有玩家共享，点「播放」直接看、点「保存」进本机列表）", _fs(UiKit.FS_MD), COL_TEXT))
 	var cr_status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
 	col.add_child(cr_status)
@@ -1191,22 +1209,6 @@ func _open_controls() -> void:
 	lay_btn.disabled = true
 	lay_row.add_child(lay_btn)
 
-	col.add_child(_mk_label("云端录像（所有玩家共享，点「播放」直接看、点「保存」进本机列表）", _fs(UiKit.FS_MD), COL_TEXT))
-	var cr_status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
-	col.add_child(cr_status)
-	var cr_scroll := ScrollContainer.new()
-	cr_scroll.custom_minimum_size = Vector2(0, 300)
-	cr_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	col.add_child(cr_scroll)
-	var cr_box := VBoxContainer.new()
-	cr_box.add_theme_constant_override("separation", 6)
-	cr_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cr_scroll.add_child(cr_box)
-	var b_refresh := _mk_btn("刷新云端录像", UiKit.C_TEAM1, false, Vector2(220, 46))
-	b_refresh.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	b_refresh.pressed.connect(func() -> void: _cloud_load_replays(cr_box, cr_status))
-	col.add_child(b_refresh)
-	_cloud_load_replays(cr_box, cr_status)
 	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
 	back.pressed.connect(_show_menu)
 	col.add_child(back)
@@ -3721,4 +3723,3 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
-

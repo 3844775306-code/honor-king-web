@@ -97,6 +97,10 @@ static func last_username() -> String:
 static func sign_out() -> void:
 	var s := _load_session()
 	if not s.is_empty():
+		UserScope.set_active("guest")
+		PlayerPrefs.reload()
+		RankSystem.reload()
+		HeroBuildStore.reload()
 		var cfg := PlayerPrefs.cloud_cfg()
 		cfg["pid"] = ""
 		cfg["token"] = ""
@@ -196,6 +200,11 @@ static func _finish_login(tree: SceneTree, username: String, acc: Dictionary, cb
 	var now := int(Time.get_unix_time_from_system())
 	var pid := str(acc.get("pid", ""))
 	var token := str(acc.get("token", ""))
+	# 切换本地数据目录到该账号；新账号目录为空 → 不会继承上一个账号的数据
+	UserScope.set_active(pid)
+	PlayerPrefs.reload()
+	RankSystem.reload()
+	HeroBuildStore.reload()
 	var cfg := PlayerPrefs.cloud_cfg()
 	cfg["pid"] = pid
 	cfg["token"] = token
@@ -222,6 +231,8 @@ static func _hash(password: String, salt: String) -> String:
 static func _cb(cb: Callable, ok: bool, msg: String) -> void:
 	if cb.is_valid():
 		cb.call(ok, msg)
+
+
 
 
 

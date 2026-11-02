@@ -2,7 +2,8 @@ class_name BattleHistory
 ## 对战纪录：每局结束把结算数据（winner + 全英雄行）追加到 user://battle_history.json，
 ## 大厅「对战纪录」页面读取后复刻结算面板。与联机结算广播共用同一份 rows 结构。
 
-const PATH := "user://battle_history.json"
+static func _path() -> String:
+	return UserScope.path("battle_history.json")
 const MAX_RECORDS := 20
 
 
@@ -101,9 +102,9 @@ static func record(payload: Dictionary, mode: String) -> void:
 
 
 static func all() -> Array:
-	if not FileAccess.file_exists(PATH):
+	if not FileAccess.file_exists(_path()):
 		return []
-	var f := FileAccess.open(PATH, FileAccess.READ)
+	var f := FileAccess.open(_path(), FileAccess.READ)
 	if f == null:
 		return []
 	var txt := f.get_as_text()
@@ -117,14 +118,14 @@ static func count() -> int:
 
 
 static func clear() -> void:
-	var abs_path := ProjectSettings.globalize_path(PATH)
-	if FileAccess.file_exists(PATH):
+	var abs_path := ProjectSettings.globalize_path(_path())
+	if FileAccess.file_exists(_path()):
 		DirAccess.remove_absolute(abs_path)
 	_save([])
 
 
 static func _save(all_records: Array) -> void:
-	var f := FileAccess.open(PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_path(), FileAccess.WRITE)
 	if f == null:
 		return
 	f.store_string(JSON.stringify(all_records))
@@ -158,6 +159,7 @@ static func import_all(records: Array) -> bool:
 		merged.pop_back()
 	_save(merged)
 	return true
+
 
 
 

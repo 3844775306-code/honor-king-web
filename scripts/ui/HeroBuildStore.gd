@@ -5,7 +5,8 @@ extends RefCounted
 ## 选人页可把某套方案设为「本局推荐出装」。
 ## 文件结构：{ "英雄名": [ {"name": "方案名", "items": ["id1", ...]} ] }
 
-const SAVE_PATH := "user://hero_builds.json"
+static func _save_path() -> String:
+	return UserScope.path("hero_builds.json")
 const FALLBACK_PATH := "res://saves/hero_builds.json"
 const MAX_SLOTS := 6
 const MAX_SCHEMES := 6
@@ -18,7 +19,7 @@ static func _ensure_loaded() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	for p in [SAVE_PATH, FALLBACK_PATH]:
+	for p in [_save_path()]:
 		if not FileAccess.file_exists(p):
 			continue
 		var f := FileAccess.open(p, FileAccess.READ)
@@ -41,7 +42,7 @@ static func reload() -> void:
 
 static func _flush() -> void:
 	var txt := JSON.stringify(_data, "\t")
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(_save_path(), FileAccess.WRITE)
 	if f != null:
 		f.store_string(txt)
 		f.close()
@@ -116,5 +117,7 @@ static func delete_build(hero_name: String, build_name: String) -> void:
 ## 是否存在某英雄的任何方案
 static func has_builds(hero_name: String) -> bool:
 	return not get_builds(hero_name).is_empty()
+
+
 
 
