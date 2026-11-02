@@ -189,6 +189,7 @@ var _hero_cfg_cache := {}                    # BattleManager.hero_configs 懒加
 static var _boot_intro_played := false       # 本次进程只播一次开机动画（战斗返回大厅不重播）
 static var _login_completed := false         # 本次进程已完成登录/开始过渡，回到大厅直接进菜单
 var _login_layer: CanvasLayer = null
+var _record_dialog: CanvasLayer = null
 
 
 func _ready() -> void:
@@ -687,25 +688,77 @@ func _set_menu_enabled(on: bool) -> void:
 	_connecting = not on
 
 
-## 测试/训练营开局前询问是否保存录像
+## 测试/训练营开局前询问是否保存录像（游戏内皮肤弹窗，不用引擎默认对话框）
 func _ask_record_replay(on_done: Callable) -> void:
+	if _record_dialog != null and is_instance_valid(_record_dialog):
+		return
 	_set_menu_enabled(false)
-	var dlg := ConfirmationDialog.new()
-	dlg.title = "对局录像"
-	dlg.dialog_text = "是否将本局保存到「录像回放」？"
-	dlg.ok_button_text = "保存录像"
-	dlg.cancel_button_text = "不保存"
-	dlg.dialog_autowrap = true
-	add_child(dlg)
-	dlg.confirmed.connect(func() -> void:
-		dlg.queue_free()
-		on_done.call(true)
-	)
-	dlg.canceled.connect(func() -> void:
-		dlg.queue_free()
-		on_done.call(false)
-	)
-	dlg.popup_centered(Vector2i(620, 240))
+	var layer := CanvasLayer.new()
+	layer.name = "RecordAskLayer"
+	layer.layer = 150
+	add_child(layer)
+	_record_dialog = layer
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.focus_mode = Control.FOCUS_ALL
+	layer.add_child(root)
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.62)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(center)
+	var card := Panel.new()
+	card.custom_minimum_size = Vector2(UiKit.scale() * 720.0, UiKit.scale() * 320.0)
+	card.add_theme_stylebox_override("panel",
+		UiKit.flat(0.97, 18, 1, Color(0.98, 0.82, 0.32, 0.55), Color(0.035, 0.045, 0.07, 0.98), 0.0, 18.0))
+	center.add_child(card)
+	var col := VBoxContainer.new()
+	col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	col.offset_left = 34.0
+	col.offset_right = -34.0
+	col.offset_top = 24.0
+	col.offset_bottom = -24.0
+	col.add_theme_constant_override("separation", 16)
+	card.add_child(col)
+	var ttl := _mk_label("对局录像", int(_fs(UiKit.FS_HUGE) * 1.3), UiKit.C_GOLD)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(ttl)
+	var desc := _mk_label("是否将本局保存到「录像回放」？\n保存后可在大厅「录像回放」里播放、导出或上传云端。", _fs(UiKit.FS_SM), COL_SUB)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	col.add_child(desc)
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_child(spacer)
+	var act := HBoxContainer.new()
+	act.alignment = BoxContainer.ALIGNMENT_CENTER
+	act.add_theme_constant_override("separation", 28)
+	col.add_child(act)
+	var _close := func(record: bool) -> void:
+		if is_instance_valid(layer):
+			layer.queue_free()
+		_record_dialog = null
+		on_done.call(record)
+	var b_save := _mk_btn("保存录像", UiKit.C_GOLD, true, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
+	b_save.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_save.pressed.connect(func() -> void: _close.call(true))
+	act.add_child(b_save)
+	var b_skip := _mk_btn("不保存", UiKit.C_TEAM0, false, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
+	b_skip.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_skip.pressed.connect(func() -> void: _close.call(false))
+	act.add_child(b_skip)
+	var hint := _mk_label("Esc 关闭 = 不保存", _fs(UiKit.FS_XS), COL_DIM)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(hint)
+	root.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventKey and (ev as InputEventKey).pressed and (ev as InputEventKey).keycode == KEY_ESCAPE:
+			_close.call(false))
+	root.grab_focus()
 
 
 # 分路芯片（112×56，5 个 + 标签刚好收在 640 按钮列内）
