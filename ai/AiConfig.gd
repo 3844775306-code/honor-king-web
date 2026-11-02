@@ -133,6 +133,7 @@ const DODGE_CHANCE: float = 0.6              # 躲避概率（0-1）
 const DASH_CHASE_MAX_RANGE: float = 14.0     # 追击时愿意用位移技能的最大距离
 const DASH_CHASE_SLACK: float = 1.5          # 突进后仍够不到目标的余量（不够就不浪费）
 const DASH_ESCAPE_THREAT: float = 8.0        # 敌方英雄贴近该距离才考虑位移逃跑
+const SMALL_DASH_THROUGH_WALL_MAX: float = 3.0  # 小位移技能（<=该距离）允许直接穿墙
 const DASH_ESCAPE_HP_RATIO: float = 0.55     # 自身生命低于该比例才用位移逃命
 
 # ==================== 残血追击（收人头） ====================

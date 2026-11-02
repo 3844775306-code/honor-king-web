@@ -580,10 +580,11 @@ func _resolve_dash_end(from: Vector3, dir: Vector3, length: float) -> Vector3:
 	if straight < 0.2:
 		return Vector3.ZERO
 	if _dash_line_blocked(from, end):
-		# 直线被墙挡：只有走路需要绕远（>1.6 倍）才值得穿墙位移
-		var walk := PathFinder.path_length(from, end, hero.team)
-		if walk <= 0.0 or walk < straight * 1.6:
-			return Vector3.ZERO
+		# 小位移技能允许直接穿墙；大位移仍要求绕路明显更远，避免浪费长位移。
+		if length > AiConfig.SMALL_DASH_THROUGH_WALL_MAX:
+			var walk := PathFinder.path_length(from, end, hero.team)
+			if walk <= 0.0 or walk < straight * 1.6:
+				return Vector3.ZERO
 	if _dash_landing_in_enemy_turret(end):
 		return Vector3.ZERO
 	return end
