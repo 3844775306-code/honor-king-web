@@ -192,6 +192,8 @@ const SKILL_MAX_LEVEL = 6             # 普通技能最高等级
 const ULTIMATE_MAX_LEVEL = 3          # 大招最高等级
 const ULTIMATE_REQUIRED_LEVEL = [0, 4, 8, 12]   # 大招升至第 N 级（N=1/2/3）所需英雄等级
 var skill_points: int = 0             # 剩余技能点数
+var training_invincible := false       # 训练营：无敌
+var training_no_cooldown := false      # 训练营：无冷却
 var skill_restores:Array = []
 var base_attack_speed: float = 1.0       # 基础攻速（每秒攻击次数）
 var attack_speed_growth: float = 0.02   
@@ -771,7 +773,8 @@ func _apply_healing(amount: float) -> float:
 	return max(actual, 0.0)
 
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id:int=-1, pen_percent: float = 0.0, is_crit_forced: int = -1):
-	
+	if training_invincible:
+		return
 	# 先调用基类处理护盾/伤害
 	if wd_timer>0:
 		return
@@ -1658,6 +1661,11 @@ func _on_dash_finished(anim: String) -> void:
 
 # 技能/召唤师冷却统一递减（死亡/复活倒计时期间也照常走，复活时不清空）
 func _tick_skill_cooldowns(delta):
+	if training_no_cooldown:
+		for j in range(skill_cooldowns.size()):
+			skill_cooldowns[j] = 0.0
+		summoner_cooldown = 0.0
+		return
 	for j in range(skill_cooldowns.size()):
 		if skills[j] == null: continue
 		if skill_cooldowns[j] > 0:

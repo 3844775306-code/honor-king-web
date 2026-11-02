@@ -110,6 +110,10 @@ var _training_collapsed := false
 var _training_stats_panel: PanelContainer = null
 var _training_stats_content: VBoxContainer = null
 var _training_stats_collapsed := false
+var _training_invincible := false
+var _training_no_cd := false
+var _training_invincible_btn: Button = null
+var _training_no_cd_btn: Button = null
 var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
 var _test_prev_pos := Vector3.ZERO
 var _test_layer: CanvasLayer = null
@@ -624,6 +628,15 @@ func _setup_training_hud() -> void:
 	var b_def_hi := _training_mk_btn("防 +50")
 	b_def_hi.pressed.connect(func(): _training_set_dummy_resist(_training_dummy_armor + 50.0))
 	def_row.add_child(b_def_hi)
+	var buff_row := HBoxContainer.new()
+	buff_row.add_theme_constant_override("separation", 6)
+	vb.add_child(buff_row)
+	_training_invincible_btn = _training_mk_btn("无敌：关")
+	_training_invincible_btn.pressed.connect(_training_toggle_invincible)
+	buff_row.add_child(_training_invincible_btn)
+	_training_no_cd_btn = _training_mk_btn("无冷却：关")
+	_training_no_cd_btn.pressed.connect(_training_toggle_no_cd)
+	buff_row.add_child(_training_no_cd_btn)
 	var b_back := _training_mk_btn("返回大厅")
 	b_back.pressed.connect(_training_exit)
 	vb.add_child(b_back)
@@ -666,6 +679,22 @@ func _setup_training_hud() -> void:
 	svb.add_child(reset_btn)
 	_training_refresh_label()
 	_training_refresh_dummy_stats()
+
+
+func _training_toggle_invincible() -> void:
+	_training_invincible = not _training_invincible
+	if hero != null and is_instance_valid(hero):
+		hero.training_invincible = _training_invincible
+	if _training_invincible_btn != null:
+		_training_invincible_btn.text = "无敌：%s" % ("开" if _training_invincible else "关")
+
+
+func _training_toggle_no_cd() -> void:
+	_training_no_cd = not _training_no_cd
+	if hero != null and is_instance_valid(hero):
+		hero.training_no_cooldown = _training_no_cd
+	if _training_no_cd_btn != null:
+		_training_no_cd_btn.text = "无冷却：%s" % ("开" if _training_no_cd else "关")
 
 
 func _training_toggle_collapse() -> void:
@@ -735,8 +764,10 @@ func _training_level_up() -> void:
 func _training_max_level() -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
-	while hero.level < 15:
-		hero.level_up()
+	hero.level = 15
+	hero.skill_points = 14
+	hero._check_fourth_skill_unlock()
+	hero._recalculate_attributes()
 	_training_refresh_label()
 
 
@@ -895,12 +926,24 @@ func _training_cycle_player_hero() -> void:
 	var lv: int = int(hero.level)
 	var gold: int = int(hero.gold)
 	var old := hero
+	# 切换英雄：重置技能等级，并回退已花费技能点（第4技能免费，不计）
+	var refund := int(old.skill_points)
+	for si in range(mini(3, old.skill_levels.size())):
+		refund += int(old.skill_levels[si])
+	var keep_inv := bool(old.training_invincible)
+	var keep_nocd := bool(old.training_no_cooldown)
 	old.queue_free()
 	_create_player_hero(nm)
 	if hero != null and is_instance_valid(hero):
 		hero.global_position = pos
 		hero.level = lv
 		hero.gold = gold
+		for si in range(hero.skill_levels.size()):
+			hero.skill_levels[si] = 0
+		hero.skill_points = refund
+		hero._check_fourth_skill_unlock()
+		hero.training_invincible = keep_inv
+		hero.training_no_cooldown = keep_nocd
 		hero._recalculate_attributes()
 	_training_refresh_label()
 
