@@ -1786,7 +1786,7 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 	hero.manual_target = null
 	# 撤退门控：只在自己血量低于「最近的敌方英雄」时撤退，否则跳过撤退状态
 	var nearest: Hero = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO) if perception != null else null
-	if nearest == null or quest_health_not_lower(nearest):
+	if nearest == null or _health_not_lower_than(nearest):
 		_retreat_away_t = 0.0
 		_retreat_away_from = null
 		hero.move_target = Vector3.ZERO
@@ -1805,7 +1805,7 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 
 
 ## 撤退门控：自己血量是否不低于该敌方英雄
-func quest_health_not_lower(enemy: Hero) -> bool:
+func _health_not_lower_than(enemy: Hero) -> bool:
 	return enemy == null or not is_instance_valid(enemy) or hero.health >= enemy.health
 
 
@@ -2633,4 +2633,5 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
