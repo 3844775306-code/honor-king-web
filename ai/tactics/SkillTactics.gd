@@ -1,5 +1,6 @@
 class_name SkillTactics
 extends RefCounted
+# 施法规则以 docs/AI_SKILL_RULES.md 为唯一规则源；改规则必须同步文档。
 
 var hero: Hero
 var perception: AiPerception
@@ -175,6 +176,8 @@ func force_cast(skill_index: int, target_pos: Vector3) -> bool:
 func _get_candidates(target: GameEntity = null) -> Array:
 	var result := []
 	for i in range(hero.skills.size()):
+		if i >= 4:
+			continue                    # 槽4=恢复：由 HeroAI._try_use_recover 独立处理，不参与普通技能候选
 		if hero.skills[i] == null:      # 空技能槽（如未配第 4 技能）：直接跳过，避免空引用崩溃
 			continue
 		if hero.skill_levels[i] <= 0:
