@@ -572,6 +572,12 @@ func _setup_training_hud() -> void:
 	_training_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
 	_training_label.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
 	vb.add_child(_training_label)
+	var hk := Label.new()
+	hk.text = "快捷键 F6兵线 F7野怪 F8升级 F9满级 F10金币\nCtrl+F6木偶 Ctrl+F7清木偶 · Alt+1无敌 Alt+2无CD · Alt+H切英雄 Alt+J切AI Alt+K/L AI数量"
+	hk.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hk.add_theme_font_size_override("font_size", int(round(UiKit.FS_XS * UiKit.scale())))
+	hk.add_theme_color_override("font_color", Color(0.62, 0.72, 0.86))
+	vb.add_child(hk)
 	var sep := HSeparator.new()
 	vb.add_child(sep)
 	_training_minion_btn = _training_mk_btn("兵线：关")
@@ -687,6 +693,32 @@ func _setup_training_hud() -> void:
 	_training_refresh_dummy_stats()
 
 
+func _training_handle_hotkey(event: InputEventKey) -> bool:
+	if event.alt_pressed:
+		match event.keycode:
+			KEY_1: _training_toggle_invincible(); return true
+			KEY_2: _training_toggle_no_cd(); return true
+			KEY_H: _training_cycle_player_hero(); return true
+			KEY_J: _training_cycle_ai_hero(); return true
+			KEY_K: _training_set_ai_count(_training_ai_count + 1); return true
+			KEY_L: _training_set_ai_count(_training_ai_count - 1); return true
+			KEY_R: _training_reset_dummy_stats(); return true
+		return false
+	match event.keycode:
+		KEY_F6:
+			if event.ctrl_pressed: _training_place_dummy()
+			else: _training_toggle_minions()
+			return true
+		KEY_F7:
+			if event.ctrl_pressed: _training_clear_dummies()
+			else: _training_toggle_jungle()
+			return true
+		KEY_F8: _training_level_up(); return true
+		KEY_F9: _training_max_level(); return true
+		KEY_F10: _training_add_gold(); return true
+	return false
+
+
 func _training_toggle_invincible() -> void:
 	_training_invincible = not _training_invincible
 	if hero != null and is_instance_valid(hero):
@@ -771,7 +803,7 @@ func _training_max_level() -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
 	hero.level = 15
-	hero.skill_points = 14
+	hero.skill_points = 15
 	hero._check_fourth_skill_unlock()
 	hero._recalculate_attributes()
 	_training_refresh_label()
@@ -7280,6 +7312,9 @@ func _unhandled_input(event):
 		return
 	if _ai_test_match:
 		return   # 测试局：玩家不能直接操作英雄/战场，只允许 HUD 观战按钮
+	if _training_mode and event is InputEventKey and event.pressed and not event.echo:
+		if _training_handle_hotkey(event):
+			return
 
 	# 中键：桌面自由镜头拖动平移（松手保持偏移，按 Y 回正）
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
