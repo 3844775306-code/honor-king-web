@@ -30,6 +30,7 @@ var priority: int = 0
 var pause_class: int = PauseClass.NONE
 var interruptible := true
 var target: GameEntity = null
+var data: Dictionary = {}
 var target_pos := Vector3.ZERO
 var lane := -1
 var created_at := 0.0

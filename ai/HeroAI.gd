@@ -1141,137 +1141,213 @@ func debug_snapshot() -> Dictionary:
 
 
 func _decide():
-	# 高地/水晶防御已上移到团队任务层，英雄层不再单独处理。
-
-	# P1: 本线防御塔防御（外塔/内塔）
-	if _handle_lane_turret_defense():
+	var candidates := _build_action_candidates()
+	if candidates.is_empty():
 		return
-
-	# 敌方大禹治疗鼎：在交战范围内就顺手拆掉（否则残血敌人会被持续奶回来）
-	var enemy_pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
-	if enemy_pot and _can_run_environment_action():
-		_set_action(AIAction.Type.TRIPOD, 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
-		hero.manual_target = enemy_pot
+	var best := _pick_candidate(candidates)
+	if best == null:
 		return
+	if current_action != null and current_action.is_active() and best.priority < current_action.priority:
+		return
+	_execute_candidate(best)
 
-	# 泉水养伤：在自家泉水范围内血/蓝没回到阈值前不出门（原来只要血量>2000 就走，等于半血出门）
+
+func _build_action_candidates() -> Array[AIAction]:
+	var out: Array[AIAction] = []
+	var gt := _game_time()
+
+	# 本线塔防御
+	var turret := _get_lane_turret_under_attack(lane)
+	if turret != null and hero.global_position.distance_to(turret.global_position) <= AiConfig.DEFEND_LANE_TURRET_RANGE:
+		out.append(AIAction.new(AIAction.Type.DEFEND_TOWER, 940, AIAction.PauseClass.SURVIVAL, "守塔"))
+
+	# 大禹鼎
+	var pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
+	if pot != null and _can_run_environment_action():
+		var a := AIAction.new(AIAction.Type.TRIPOD, 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
+		a.target = pot
+		out.append(a)
+
+	# 回城
 	if hero.is_in_own_fountain() and not _fully_recovered():
-		_set_action(AIAction.Type.SAFE_RECALL, 900, AIAction.PauseClass.SURVIVAL, "回城")
-		return
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
+	elif hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
 
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
-		_set_action(AIAction.Type.SAFE_RECALL, 900, AIAction.PauseClass.SURVIVAL, "回城")
-		return
-
-	# 撤退：低血 + 有敌方英雄压近 + 没站在己方塔下 → 退守（不再主动接战）
+	# 撤退
 	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
 			and not _is_under_own_tower() \
 			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
-		_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
-		return
+		out.append(AIAction.new(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "撤退"))
 
-	# 主动换血：满足威胁/血量/技能/控制条件才进场；进场后由 TradePlanner 控制退出。
-	var trade_intent: Dictionary = trade_planner.evaluate()
+	# 换血
+	var trade_intent := trade_planner.evaluate()
 	if not trade_intent.is_empty():
 		var tact := str(trade_intent.get("action", ""))
-		if tact == "enter" or tact == "hold":
+		if tact == "exit":
+			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "换血退出")
+			a.data = trade_intent
+			out.append(a)
+		elif tact == "enter" or tact == "hold":
 			var tt = trade_intent.get("target")
 			if tt != null and is_instance_valid(tt) and (tt as Hero).health > 0.0:
-				hero.manual_target = tt
-				hero.move_target = Vector3.ZERO
-				_set_action(AIAction.Type.TRADE, 950, AIAction.PauseClass.SURVIVAL, "换血")
-				return
-		elif tact == "exit":
-			hero.manual_target = null
-			var safe_dest: Vector3 = trade_intent.get("pos", Vector3.ZERO)
-			if safe_dest == Vector3.ZERO:
-				var own_turret: Turret = perception.find_nearest_friendly_turret(AiConfig.FRIENDLY_TURRET_FAR)
-				if own_turret != null:
-					safe_dest = own_turret.global_position
-			hero.move_target = safe_dest
-			_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
-			return
+				var a := AIAction.new(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "换血")
+				a.target = tt
+				out.append(a)
 
-	# 临时清兵：换血窗口与团队任务之间；周围有敌方小兵时优先锁定小兵，并暂停团队任务计时。
-	if _can_run_environment_action() and _try_temp_clear():
-		return
+	# 临时清兵
+	if _can_run_environment_action():
+		var m := _find_temp_clear_target()
+		if m != null:
+			var a := AIAction.new(AIAction.Type.TEMP_CLEAR, 850, AIAction.PauseClass.ENVIRONMENT, "临时清兵")
+			a.target = m
+			out.append(a)
 
-	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
-	var gt := bm.game_time if bm else 0.0
-
-	# 团队主线任务：团队层只给任务，英雄层负责翻译成走位/目标。
+	# 团队任务
 	if team_task != null and team_task.is_expired(gt):
 		team_task = null
 		is_dragon_rally = false
 	if team_task != null:
-		var tr := task_executor.execute(team_task, gt)
-		if not tr.is_empty():
-			if tr.has("lane"):
-				lane = int(tr.get("lane", lane))
-				if lane_strategy:
-					lane_strategy.pending_lane = lane
-			if tr.has("manual_target"):
-				hero.manual_target = tr.get("manual_target")
-			if tr.has("move_target"):
-				hero.move_target = tr.get("move_target")
-			if str(tr.get("state", "push")) == "retreat":
-				_set_action(AIAction.Type.RETURN_TO_BASE, 890, AIAction.PauseClass.SURVIVAL, "撤退")
-			else:
-				_set_action(AIAction.Type.TEAM_TASK, team_task.priority, AIAction.PauseClass.NONE, team_task.label())
-			# 推线/抱团推塔仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
-			if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
-				return
+		out.append(AIAction.new(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label()))
 
-	# 同步分路到策略模块
-	if not _is_natural_jungler:
+	# 默认本地
+	if _is_natural_jungler:
+		out.append(AIAction.new(AIAction.Type.JUNGLE_FARM, 20, AIAction.PauseClass.NONE, "刷野"))
+	else:
+		out.append(AIAction.new(AIAction.Type.PUSH_LANE, 20, AIAction.PauseClass.NONE, "推线"))
+
+	# 守塔 vs 回城：守塔点附近无敌人且自身 >15%，守塔优先；否则回城优先
+	var defend := _first_candidate(out, AIAction.Type.DEFEND_TOWER)
+	var recall := _first_candidate(out, AIAction.Type.SAFE_RECALL)
+	if defend != null and recall != null:
+		if perception.count_enemy_heroes_near_center(defend_pos(defend), 15.0) == 0 and hero.health > hero.actual_max_health * 0.15:
+			recall.priority = 0
+		else:
+			defend.priority = 0
+	return out
+
+
+func _first_candidate(items: Array[AIAction], t: int) -> AIAction:
+	for a in items:
+		if a.type == t:
+			return a
+	return null
+
+
+func defend_pos(_a: AIAction) -> Vector3:
+	var turret := _get_lane_turret_under_attack(lane)
+	return turret.global_position if turret != null else hero.global_position
+
+
+func _pick_candidate(items: Array[AIAction]) -> AIAction:
+	var best: AIAction = null
+	for a in items:
+		if a.priority <= 0:
+			continue
+		if best == null or a.priority > best.priority:
+			best = a
+	return best
+
+
+func _execute_candidate(a: AIAction):
+	match a.type:
+		AIAction.Type.DEFEND_TOWER:
+			_handle_lane_turret_defense()
+		AIAction.Type.TRIPOD:
+			hero.manual_target = a.target
+			_set_action(AIAction.Type.TRIPOD, a.priority, a.pause_class, a.reason)
+		AIAction.Type.SAFE_RECALL:
+			_set_action(AIAction.Type.SAFE_RECALL, a.priority, a.pause_class, a.reason)
+		AIAction.Type.RETURN_TO_BASE:
+			hero.manual_target = null
+			if a.data.has("pos"):
+				var p = a.data.get("pos", Vector3.ZERO)
+				if p != Vector3.ZERO:
+					hero.move_target = p
+			_set_action(AIAction.Type.RETURN_TO_BASE, a.priority, a.pause_class, a.reason)
+		AIAction.Type.TRADE:
+			hero.manual_target = a.target
+			hero.move_target = Vector3.ZERO
+			_set_action(AIAction.Type.TRADE, a.priority, a.pause_class, a.reason)
+		AIAction.Type.TEMP_CLEAR:
+			hero.manual_target = a.target
+			hero.move_target = Vector3.ZERO
+			_temp_clearing = true
+			_set_action(AIAction.Type.TEMP_CLEAR, a.priority, a.pause_class, a.reason)
+		AIAction.Type.TEAM_TASK:
+			_execute_team_task()
+		AIAction.Type.JUNGLE_FARM:
+			_execute_local_task(true)
+		AIAction.Type.PUSH_LANE:
+			_execute_local_task(false)
+
+
+func _execute_team_task() -> void:
+	var gt := _game_time()
+	var tr := task_executor.execute(team_task, gt)
+	if tr.is_empty():
+		return
+	if tr.has("lane"):
+		lane = int(tr.get("lane", lane))
 		if lane_strategy:
-			lane_strategy.lane = lane
+			lane_strategy.pending_lane = lane
+	if tr.has("manual_target"):
+		hero.manual_target = tr.get("manual_target")
+	if tr.has("move_target"):
+		hero.move_target = tr.get("move_target")
+	if str(tr.get("state", "push")) == "retreat":
+		_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "任务撤退")
 	else:
-		if jungle_strategy and lane != AiConfig.Lane.JUNGLE:
-			jungle_strategy.assigned_lane = lane
+		_set_action(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label())
+	if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
+		return
+	_execute_local_task(_is_natural_jungler)
 
-	if gt < AiConfig.EARLY_GAME_END:
-		# === 0-4分钟：早期对线 ===
-		if _is_natural_jungler:
-			if jungle_strategy:
-				jungle_strategy.update_time(gt)
-				jungle_strategy.decide()
-			_set_action(AIAction.Type.JUNGLE_FARM)
+
+func _execute_local_task(jungle: bool) -> void:
+	var gt := _game_time()
+	if jungle:
+		if jungle_strategy:
+			jungle_strategy.update_time(gt)
+			jungle_strategy.decide()
+		_set_action(AIAction.Type.JUNGLE_FARM)
+		return
+	if gt >= AiConfig.EARLY_GAME_END and is_dragon_rally:
+		if not _is_dragon_alive():
+			is_dragon_rally = false
+			_assign_lane()
 		else:
-			if lane_strategy:
-				lane_strategy.update_time(gt)
-				lane_strategy.decide()
-				# 中路换线同步回HeroAI
-				if lane != lane_strategy.lane:
-					lane = lane_strategy.lane
+			_dragon_rally_behavior()
 			_set_action(AIAction.Type.PUSH_LANE)
-	else:
-		# === 4分钟+：团队分推（分路由 BattleManager 统一分配） ===
+			return
+	if lane_strategy:
+		lane_strategy.update_time(gt)
+		lane_strategy.decide()
+		if lane != lane_strategy.lane:
+			lane = lane_strategy.lane
+	_set_action(AIAction.Type.PUSH_LANE)
 
-		# 打龙集合检查
-		if is_dragon_rally:
-			if not _is_dragon_alive():
-				print("[HeroAI] t=%.0f %s 龙已死，取消打龙集合" % [(get_tree().get_first_node_in_group("battle_manager") as BattleManager).game_time if get_tree().get_first_node_in_group("battle_manager") else 0.0, hero.display_name])
-				is_dragon_rally = false
-				_assign_lane()
-			else:
-				_set_action(AIAction.Type.PUSH_LANE)
-				_dragon_rally_behavior()
-				return
 
-		# 正常分路行为
-		if _is_natural_jungler:
-			if jungle_strategy:
-				jungle_strategy.update_time(gt)
-				jungle_strategy.decide()
-			_set_action(AIAction.Type.JUNGLE_FARM)
-		else:
-			if lane_strategy:
-				lane_strategy.update_time(gt)
-				lane_strategy.decide()
-				if lane != lane_strategy.lane:
-					lane = lane_strategy.lane
-			_set_action(AIAction.Type.PUSH_LANE)
+func _game_time() -> float:
+	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	return bm.game_time if bm != null else 0.0
+
+
+func _find_temp_clear_target() -> Minion:
+	var radius := 15.0 + clampf((hero.actual_move_speed - 6.0) / 2.0, 0.0, 5.0)
+	var m: Minion = null
+	var best_d := radius
+	for e in hero.get_tree().get_nodes_in_group("minions"):
+		if not (e is Minion) or int((e as Minion).team) == int(hero.team) or (e as Minion).health <= 0.0:
+			continue
+		var d := hero.global_position.distance_to((e as Node3D).global_position)
+		if d > best_d or _minion_under_unsafe_tower(e as Minion):
+			continue
+		if not _temp_clear_path_safe(e as Minion):
+			continue
+		best_d = d
+		m = e as Minion
+	return m
 
 
 # 临时清兵任务：15–20m（随移速增加）内有敌方小兵就锁定，清完自动结束。
