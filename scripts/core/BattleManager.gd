@@ -87,6 +87,7 @@ var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
 var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
 var _training_mode := false          # 主菜单训练营
+var _record_replay := true           # 本局是否录像（测试/训练营由入口询问）
 var _training_minions := false
 var _training_jungle := false
 var _training_minion_changed := false
@@ -344,16 +345,21 @@ func _ready():
 	elif "--net-test" in OS.get_cmdline_user_args() or "--ai-bench" in OS.get_cmdline_user_args():
 		call_deferred("_start_game", "亚瑟")
 	elif PlayerPrefs.opt_bool("ai_test_match", false):
-		PlayerPrefs.set_opt("ai_test_match", false)
 		_ai_test_match = true
+		_record_replay = PlayerPrefs.opt_bool("ai_test_record", false)
+		PlayerPrefs.set_opt("ai_test_match", false)
+		PlayerPrefs.set_opt("ai_test_record", false)
 		call_deferred("_start_ai_test_match")
 	elif "--ai-test" in OS.get_cmdline_user_args():
-		# CLI/无头测试入口：与主菜单测试模块同一流程
+		# CLI/无头测试入口：与主菜单测试模块同一流程（CLI 默认不录像）
 		_ai_test_match = true
+		_record_replay = false
 		call_deferred("_start_ai_test_match")
 	elif PlayerPrefs.opt_bool("training_mode", false) or "--training-camp" in OS.get_cmdline_user_args():
-		PlayerPrefs.set_opt("training_mode", false)
 		_training_mode = true
+		_record_replay = PlayerPrefs.opt_bool("training_record", false) and "--training-camp" not in OS.get_cmdline_user_args()
+		PlayerPrefs.set_opt("training_mode", false)
+		PlayerPrefs.set_opt("training_record", false)
 		call_deferred("_start_training_camp")
 
 ## 主菜单测试模块：随机英雄开局，双方 10 个 AI，4 倍速；对局结束自动保存录像并回大厅
@@ -2097,7 +2103,8 @@ func _create_player_hero(type: String, summoner_id: String = "flash"):
 	add_child(hero)
 	TouchController.set_hero(hero)
 	LingbaoScript.ensure(self)
-	ReplayScript.ensure(self)
+	if _record_replay:
+		ReplayScript.ensure(self)
 
 func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_heroes: Array = []):
 	# 只有apply_skills实现的英雄

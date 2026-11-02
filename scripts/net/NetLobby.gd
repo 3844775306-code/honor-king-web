@@ -677,6 +677,27 @@ func _set_menu_enabled(on: bool) -> void:
 	_connecting = not on
 
 
+## 测试/训练营开局前询问是否保存录像
+func _ask_record_replay(on_done: Callable) -> void:
+	_set_menu_enabled(false)
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "对局录像"
+	dlg.dialog_text = "是否将本局保存到「录像回放」？"
+	dlg.ok_button_text = "保存录像"
+	dlg.cancel_button_text = "不保存"
+	dlg.dialog_autowrap = true
+	add_child(dlg)
+	dlg.confirmed.connect(func() -> void:
+		dlg.queue_free()
+		on_done.call(true)
+	)
+	dlg.canceled.connect(func() -> void:
+		dlg.queue_free()
+		on_done.call(false)
+	)
+	dlg.popup_centered(Vector2i(620, 240))
+
+
 # 分路芯片（112×56，5 个 + 标签刚好收在 640 按钮列内）
 func _mk_lane_btn(lane: String) -> Button:
 	var b := Button.new()
@@ -837,8 +858,12 @@ func _status_text(text: String, color: Color) -> void:
 func _start_training_camp() -> void:
 	if _connecting or _route_pending != "":
 		return
+	_ask_record_replay(_begin_training_camp)
+
+
+func _begin_training_camp(record: bool) -> void:
 	PlayerPrefs.set_opt("training_mode", true)
-	_set_menu_enabled(false)
+	PlayerPrefs.set_opt("training_record", record)
 	_status_text("训练营：自由测试技能与伤害…", COL_SUB)
 	_show_loading_then("res://scenes/battle.tscn")
 
@@ -847,8 +872,12 @@ func _start_training_camp() -> void:
 func _start_ai_test_match() -> void:
 	if _connecting or _route_pending != "":
 		return
+	_ask_record_replay(_begin_ai_test_match)
+
+
+func _begin_ai_test_match(record: bool) -> void:
 	PlayerPrefs.set_opt("ai_test_match", true)
-	_set_menu_enabled(false)
+	PlayerPrefs.set_opt("ai_test_record", record)
 	_status_text("测试模块：随机 10 AI · 4 倍速开局…", COL_SUB)
 	_show_loading_then("res://scenes/battle.tscn")
 
