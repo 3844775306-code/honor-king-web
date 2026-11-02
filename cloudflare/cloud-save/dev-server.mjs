@@ -6,11 +6,13 @@
 // 数据落盘：./.data/saves.json（记得别提交）
 
 import http from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const PORT = Number(process.env.PORT || 8788);
+const HOST = String(process.env.HOST || "127.0.0.1");   // 部署到服务器时用 HOST=0.0.0.0
 const TOKEN = String(process.env.CLOUD_TOKEN || "dev-token");
+const ACCESS_LOG = process.env.LOG === "1";
 const DATA_DIR = path.resolve(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "saves.json");
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -23,7 +25,9 @@ try {
 }
 async function persist() {
   await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(DATA_FILE, JSON.stringify(store, null, 2), "utf8");
+  const tmp = DATA_FILE + ".tmp";
+  await writeFile(tmp, JSON.stringify(store, null, 2), "utf8");
+  await rename(tmp, DATA_FILE);   // 原子替换，防写坏存档
 }
 
 function cors(res) {
@@ -63,6 +67,7 @@ function authorized(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (ACCESS_LOG) console.log(`[cloud-save] ${req.method} ${req.url}`);
   cors(res);
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -107,6 +112,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[cloud-save] http://127.0.0.1:${PORT}  token=${TOKEN}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[cloud-save] listening http://${HOST}:${PORT}  token=${TOKEN ? "已设置" : "未设置"}`);
 });
+
+async function shutdown() {
+  try { await persist(); } catch {}
+  server.close(() => process.exit(0));
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+

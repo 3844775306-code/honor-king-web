@@ -1,6 +1,9 @@
-# HonorKing 云端存档 · Cloudflare Workers
+# HonorKing 云端存档 · 服务端（Cloudflare Workers / 阿里云）
 
-给朋友小圈子用的免费云存档后端，零运维、免费额度足够。协议与游戏内
+> **国内玩家推荐用阿里云轻量服务器部署**：见 [`deploy/README.md`](./deploy/README.md)，不用梯子、IP+端口免备案，几条命令跑起来。
+> Cloudflare Workers 仅作海外/有代理时的备选。
+
+给朋友小圈子用的云存档后端，零运维、免费额度足够（Workers 方案）。协议与游戏内
 `scripts/core/CloudSync.gd` 完全一致（**玩家段位 + 对战纪录**，不含录像）：
 
 ```
@@ -84,4 +87,5 @@ npx wrangler d1 execute honorking-saves --remote --command "SELECT pid,ts,update
 - 口令是**全朋友共用一个**的简单鉴权，别公开贴到网上；要更严可后续加设备级 token
 - 只同步段位和对战纪录；10MB 级录像 `.rep` 没有上传（需要的话另加 R2/KV 方案）
 - 数据在 Cloudflare D1（海外节点）；国内访问延迟约 100–300ms，存档 KB 级基本无感
+
 

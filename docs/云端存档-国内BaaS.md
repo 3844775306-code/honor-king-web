@@ -1,68 +1,68 @@
-# 云端存档 · 国内可用方案（不用梯子）
+# 云端存档 · 国内可用方案（推荐阿里云轻量）
 
 `CloudSync` 已内置三种后端，主菜单 →「云端存档」→ 点「存储后端」切换：
 
 | 后端 | 状态 | 说明 |
 |---|---|---|
-| **Bmob**（推荐） | ✅ 可注册 | 国内 BaaS，官网 `bmob.cn` / `bmobapp.com`，控制台直接访问 |
-| 通用 HTTP | ✅ 任意 | 自建/Serverless/轻量服务器，填 `POST {url}/upload` 兼容服务 |
-| LeanCloud | ⚠️ 仅存量 | **2026-01-12 起停止新用户注册、停止创建应用**；2027-01-12 正式停服（[官方公告](https://docs.leancloud.cn/sdk/announcements/sunset-announcement)）。只有在 2026-01-12 前已注册的账号可用到停服前 |
+| **通用 HTTP（阿里云自建，推荐）** | ✅ | 轻量服务器几十元/年，IP+8788 端口免备案、不用梯子，数据完全自己掌控 |
+| Bmob | ✅ 可注册 | 国内 BaaS，有免费额度但有限制，注册即用、不用买服务器 |
+| LeanCloud | ⚠️ 仅存量 | **2026-01-12 起停止新注册**；2027-01-12 正式停服（[公告](https://docs.leancloud.cn/sdk/announcements/sunset-announcement)）。存量账号可用到停服前 |
 
-> 只同步「段位 + 对战纪录」JSON，不含录像；朋友小圈子用免费档足够。
-
----
-
-## 推荐：Bmob
-
-1. **注册**：<https://www.bmob.cn>（或 <https://www.bmobapp.com>）→ 创建应用。
-2. **拿凭证**：应用 → 设置 → 应用密钥，记下 `Application ID` 和 `REST API Key`。
-3. **建表**：数据表 → 新建表 **`CloudSave`**，字段：
-
-   | 字段名 | 类型 |
-   |---|---|
-   | `pid` | String |
-   | `ts` | Number |
-   | `data` | Object |
-
-   （`data` 里是 `{pid,ts,rank,history}` 整包，不用拆字段；表权限设为「所有用户可读写」。）
-4. **游戏内填**：
-   - 存储后端 → `Bmob（国内 BaaS）`
-   - 服务器地址 → **留空**（默认 `https://api.bmob.cn/1`；换自定义域名才填）
-   - AppID → Application ID
-   - AppKey → REST API Key
-   - 点「↑ 上传到云端」测试
-
-> Bmob 免费开发档有请求/存储额度限制，以官网当期政策为准；朋友规模不够用再升档或换自建。
+> 只同步「段位 + 对战纪录」JSON，不含录像；朋友小圈子足够。
 
 ---
 
-## 备选 1：轻量服务器自建（最稳、几十元/年）
+## 方案 A：阿里云轻量应用服务器（推荐）
 
-买阿里云/华为云/京东云 2C2G 活动机，把仓库里现成的 Node 服务跑起来即可：
+完整步骤见 [`cloudflare/cloud-save/deploy/README.md`](../cloudflare/cloud-save/deploy/README.md)，摘要：
 
-```bash
-cd cloudflare/cloud-save
-CLOUD_TOKEN=你的口令 node dev-server.mjs
-# 想长期跑：pm2 start dev-server.mjs 或 systemd
-```
+1. 阿里云买轻量应用服务器：**Ubuntu 22.04/24.04**，2C2G（活动价几十元/年）
+2. 轻量控制台 → 防火墙 → 放行 **TCP 8788**
+3. 本地 PowerShell 上传：
 
-游戏内后端选「通用 HTTP」，服务器地址填 `http://公网IP:8788`，口令填 `CLOUD_TOKEN`。
-IP+非 80 端口访问无需备案，无梯子，数据在境内。
+   ```powershell
+   scp -r "C:\Users\18749\Documents\honor-king\cloudflare\cloud-save" root@服务器公网IP:/root/
+   ```
+4. 服务器 SSH 一键安装：
 
-## 备选 2：其他 BaaS / Serverless
+   ```bash
+   ssh root@服务器公网IP
+   cd /root/cloud-save
+   CLOUD_TOKEN='换成长随机口令' bash deploy/install.sh
+   ```
+5. 游戏内：后端选 **通用 HTTP（阿里云自建，推荐）**，地址 `http://公网IP:8788`，令牌填 `CLOUD_TOKEN`
 
-- **腾讯云开发 CloudBase**：云函数 + 文档型数据库，有免费额度；需要写一个 HTTP 触发器适配
-  （`/upload`、`/download` 两个路由），客户端仍选「通用 HTTP」。
-- **阿里云 EMAS Serverless / 函数计算 + 表格存储**：同上，需要做一层 HTTP 适配。
-- **Supabase / Cloudflare Workers**：功能可用，但控制台在国内可能需要代理，不建议作为首选。
+脚本会自动装 Node、写 systemd、开机自启，并打印游戏内要填的地址；数据在
+`/opt/honorking-cloud-save/.data/saves.json`，配一条 cron 每天备份即可。
+
+> IP + 8788 这种非 80/443 端口访问**不需要域名备案**；想上 HTTPS 再买备案域名加 Caddy。
+
+---
+
+## 方案 B：Bmob（不想买服务器时）
+
+1. 注册 <https://www.bmob.cn> → 创建应用
+2. 应用 → 设置 → 应用密钥，记下 `Application ID` / `REST API Key`
+3. 数据表 → 新建表 **`CloudSave`**：`pid`(String)、`ts`(Number)、`data`(Object)，权限「所有用户可读写」
+4. 游戏内：后端选 `Bmob（国内 BaaS）`，服务器地址**留空**，AppID/AppKey 填上面两个 key
+
+> Bmob 免费档有请求/存储额度限制，以官网当期政策为准。
+
+---
+
+## 方案 C：其他云（需自己写一层适配）
+
+- 腾讯云开发 CloudBase、阿里云 EMAS Serverless / 函数计算 + 表格存储：实现
+  `POST /upload`、`GET /download?pid=` 两个 HTTP 路由即可，游戏内仍选「通用 HTTP」
+- Cloudflare Workers：本仓库 `cloudflare/cloud-save` 已带模板，但控制台在国内需代理
 
 ---
 
 ## 通用说明
 
-- **换机恢复**：同一份存档靠 `pid` 找行。重装/换机后 `pid` 会变，需要把老设备
-  `player_prefs.json` 里的 `cloud.pid` 抄到新设备（朋友规模手动即可）。
-- **凭证安全**：AppID/AppKey 会存在客户端本地（`player_prefs.json`），只发朋友私有包没问题，
-  不要公开分发带凭证的安装包。
-- **录像/大数据**：当前只同步段位+对战纪录（几十~几百 KB）；10MB 级录像建议后续接对象存储。
-- **本地联调**：后端选「通用 HTTP」+ 仓库内 `cloudflare/cloud-save/dev-server.mjs` 即可离线跑通。
+- **换机恢复**：靠 `pid` 找行；重装/换机后 `pid` 会变，把老设备 `player_prefs.json` 的
+  `cloud.pid` 抄到新设备即可（朋友规模手动）
+- **凭证安全**：口令/AppKey 存在客户端本地，只发朋友私有包
+- **录像**：10MB 级 `.rep` 目前不同步，需要的话再叠加对象存储
+- **本地联调**：后端选「通用 HTTP」+ 仓库内 `dev-server.mjs`（默认 127.0.0.1:8788）即可离线跑通
+
