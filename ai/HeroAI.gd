@@ -78,6 +78,7 @@ func _ready():
 			if child is Hero and child.team != Config.Team.PLAYER:
 				hero = child
 				break
+	hero.ai_path_controlled = true
 	perception = AiPerception.new(hero)
 	threat_model = ThreatModel.new(hero)
 	trade_planner = TradePlanner.new(hero, threat_model, perception)
@@ -173,6 +174,19 @@ func _finish_current_action() -> void:
 	current_action.mark(AIAction.Status.COMPLETED)
 	current_action = AIAction.new(AIAction.Type.IDLE)
 	_task_pause_active = false
+
+
+func _sync_ai_movement() -> void:
+	var t = hero.manual_target
+	if t == null or not is_instance_valid(t) or t.health <= 0.0:
+		return
+	var reach: float = (hero._aa_engage_reach() if not t is JungleMonster else 2.0)
+	var dist: float = hero.global_position.distance_to(t.global_position)
+	if dist > reach:
+		if hero.move_target == Vector3.ZERO or hero.move_target.distance_to(t.global_position) > 1.5:
+			hero.move_target = t.global_position
+	elif hero.move_target != Vector3.ZERO:
+		hero.move_target = Vector3.ZERO
 
 
 func _assign_lane():
@@ -693,6 +707,7 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	_sync_ai_movement()
 	_debug_track()
 
 	# 威胁记忆与换血状态每帧维护：视野消失的敌人仍保留最后位置/血量，不直接消失。
@@ -760,9 +775,9 @@ func _process(delta):
 			_try_use_recover()
 
 	# --- 血包（泉水养伤时不抢血包，否则会半血跑出泉） ---
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW and not hero.is_in_own_fountain() \
+	if hero.health < hero.actual_max_health * 0.60 and not hero.is_in_own_fountain() \
 			and _can_run_environment_action():
-		var pack = perception.find_health_pack_on_lane(lane)
+		var pack = _find_safe_health_pack()
 		if pack and is_instance_valid(pack):
 			_set_action(AIAction.Type.HEALTH_PACK, 860, AIAction.PauseClass.ENVIRONMENT, "血包")
 			hero.move_target = pack.global_position
@@ -1843,6 +1858,50 @@ func _fully_recovered() -> bool:
 	return true
 
 	
+
+
+func _find_safe_health_pack() -> HealthPack:
+	var enemy_pack: HealthPack = null
+	var friend_pack: HealthPack = null
+	var enemy_d := 20.0
+	var friend_d := 20.0
+	for e in hero.get_tree().get_nodes_in_group("health_packs"):
+		if not (e is HealthPack):
+			continue
+		var pack := e as HealthPack
+		if not pack.available:
+			continue
+		var d := hero.global_position.distance_to(pack.global_position)
+		if d > 20.0:
+			continue
+		if int(pack.team) == int(hero.team):
+			if d < friend_d:
+				friend_d = d
+				friend_pack = pack
+		else:
+			if not _enemy_pack_safe(pack):
+				continue
+			if d < enemy_d:
+				enemy_d = d
+				enemy_pack = pack
+	return enemy_pack if enemy_pack != null else friend_pack
+
+
+func _enemy_pack_safe(pack: HealthPack) -> bool:
+	if perception.count_enemy_heroes_near_center(pack.global_position, 20.0) > 0:
+		return false
+	var tower := _enemy_tower_containing(pack.global_position)
+	if tower != null and _sum_ally_minion_hp_near(tower.global_position, AiConfig.TOWER_ATTACK_RANGE) <= 1500.0:
+		return false
+	return true
+
+
+func _enemy_tower_containing(pos: Vector3) -> Turret:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) != int(hero.team) and (e as Turret).health > 0:
+			if pos.distance_to((e as Node3D).global_position) <= (e as Turret).attack_range * 0.01:
+				return e as Turret
+	return null
 
 
 func _find_safe_recall_spot() -> Vector3:

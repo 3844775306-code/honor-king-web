@@ -61,6 +61,7 @@ const MAX_EQUIPMENT_SLOTS = 6
 # ==================== 经验与等级 ====================
 var exp: int = 0
 var is_ai: bool = false   # 是否由AI控制
+var ai_path_controlled: bool = false   # AI自行给 move_target 时关闭 Hero 自动追击
 var ai_enhanced_attack_ok: bool = false   # AI 是否允许把强普位移用于普攻（默认攒着赶路/追击/逃跑）
 # 已被联机真人接管（NetSession._assign_hero_to 置 true；is_ai 仍保持 true 以走同一批原语）。
 # 区别于纯 AI 的关键：普攻/锁定目标不会自动追击超范围敌人——只打射程内目标，超出即脱锁等待玩家走近。
@@ -2159,7 +2160,7 @@ func _physics_process(delta):
 			var dir = move_target - global_position
 			if dir.length() < 0.3: move_target = Vector3.ZERO
 			else: move_vec = dir.normalized()
-		elif is_ai and not net_taken and manual_target and global_position.distance_to(manual_target.global_position) > (_aa_engage_reach() if not manual_target is JungleMonster else 2.0):
+		elif is_ai and not net_taken and not ai_path_controlled and manual_target and global_position.distance_to(manual_target.global_position) > (_aa_engage_reach() if not manual_target is JungleMonster else 2.0):
 			# 纯 AI 才主动追击目标；联机真人接管（net_taken）禁止自动追击——远程玩家自己走位，普攻只打射程内
 			var dir: Vector3
 			dir = manual_target.global_position - global_position
