@@ -160,7 +160,7 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.FINISH_CHASE:
 			return _chase_target == null or not is_instance_valid(_chase_target) or _chase_target.health <= 0.0
 		AIAction.Type.TEMP_CLEAR:
-			return not _temp_clearing
+			return not _temp_clearing or hero.manual_target == null 				or not is_instance_valid(hero.manual_target) or hero.manual_target.health <= 0.0
 		AIAction.Type.TEAM_TASK:
 			return team_task == null or not team_task.is_active()
 		AIAction.Type.SAFE_RECALL:
@@ -780,6 +780,9 @@ func _process(delta):
 		return
 
 	_sync_ai_movement()
+	if _temp_clearing and (hero.manual_target == null or not is_instance_valid(hero.manual_target) \
+			or hero.manual_target.health <= 0.0):
+		_temp_clearing = false
 	_debug_track()
 
 	# 威胁记忆与换血状态每帧维护：视野消失的敌人仍保留最后位置/血量，不直接消失。
@@ -850,7 +853,7 @@ func _process(delta):
 
 	# --- 血包（泉水养伤时不抢血包，否则会半血跑出泉） ---
 	if hero.health < hero.actual_max_health * 0.60 and not hero.is_in_own_fountain() \
-			and _can_run_environment_action():
+			and not _is_action(AIAction.Type.TEMP_CLEAR) and _can_run_environment_action():
 		var pack = _find_safe_health_pack()
 		if pack and is_instance_valid(pack):
 			_set_action(AIAction.Type.HEALTH_PACK, 860, AIAction.PauseClass.ENVIRONMENT, "血包")
@@ -1496,6 +1499,10 @@ func apply_team_lane(new_lane: int) -> void:
 # 敌方 AI：已进入草丛提供视野的视野之灵在附近时，走到 1 米内站定，累计 5 秒将其逼退。
 func _try_vision_spirit_contact() -> bool:
 	if not _can_run_environment_action():
+		return false
+	# 正在清兵/血包/换血/追击/守塔/任务时，不要被视野之灵改写移动目标
+	if current_action != null and current_action.is_active() \
+			and current_action.type not in [AIAction.Type.PUSH_LANE, AIAction.Type.JUNGLE_FARM, AIAction.Type.TEAM_TASK]:
 		return false
 	var tree := hero.get_tree()
 	if tree == null:
