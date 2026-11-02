@@ -759,6 +759,7 @@ func _update_world_hud(t: float) -> void:
 				"ms": int(st2.get("ms", 0)), "as": int(st2.get("as", 0)),
 				"cds": st2.get("cds", []), "cd_total": sd, "slevels": st2.get("slevels", []),
 				"alive": 1 if bool(st2.get("alive", false)) else 0,
+				"revive": float(st2.get("revive", 0.0)),
 				"invis": 1 if bool(st2.get("invis", false)) else 0,
 				"wx": pos3.x, "wz": pos3.z, "is_me": 1 if i == me else 0,
 			})
