@@ -779,10 +779,21 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
-	# 泉水养伤是最高常态约束：只要在己方泉水且未回满，就不允许任何任务/守塔把 AI 拉出泉。
-	if hero.is_in_own_fountain() and not _fully_recovered():
+	# 泉水养伤是最高常态约束：进泉/回城落点附近且未回满时，任何任务都不能把 AI 拉出泉。
+	# 3.6m 是泉水判定圈；8m 是缓冲圈，防止单位互相推挤把 AI 挤出判据圈后直接离泉。
+	var spring := Vector3(-62, 0, 62) if hero.team == Config.Team.PLAYER else Vector3(62, 0, -62)
+	var spring_dist := hero.global_position.distance_to(spring)
+	if spring_dist <= 8.0 and not _fully_recovered():
 		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "泉水养伤")
-		_recall_safe_behavior(delta)
+		hero.manual_target = null
+		if hero.is_recalling:
+			hero.cancel_recall()
+		if spring_dist > 3.0:
+			hero.move_target = spring
+		else:
+			hero.move_target = Vector3.ZERO
+		if hero.is_in_own_fountain():
+			_recall_safe_behavior(delta)
 		return
 	_sync_ai_movement()
 	if _temp_clearing and (hero.manual_target == null or not is_instance_valid(hero.manual_target) \
