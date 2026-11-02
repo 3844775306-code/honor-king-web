@@ -30,6 +30,8 @@ var _ai_path: Array = []
 var _ai_path_goal := Vector3.ZERO
 var _ai_path_time := 0.0
 var _ai_path_index := 0
+var _ai_path_risk := 0.0
+var _ai_path_len := 0.0
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -49,7 +51,6 @@ var _last_hp: float = 0.0
 var _last_enemy_count: int = 0
 var _last_target_ref: GameEntity = null
 var _is_dodging: bool = false
-var _defending_high_turret: Turret = null
 
 # --- 残血追击（收人头）：附近唯一的残血敌人，即使自身血量不高也追 ---
 var _chase_target: Hero = null
@@ -202,7 +203,11 @@ func _sync_ai_movement() -> void:
 		_ai_path = MovementPlanner.plan(hero, _ai_path_goal, threat_model)
 		_ai_path_time = now
 		_ai_path_index = 0
+		_ai_path_len = MovementPlanner.path_length(_ai_path)
+		_ai_path_risk = MovementPlanner.path_risk(hero, _ai_path, threat_model)
 	if _ai_path.is_empty():
+		_ai_path_len = 0.0
+		_ai_path_risk = 0.0
 		hero.move_target = t.global_position
 		return
 	while _ai_path_index < _ai_path.size() - 1 \
@@ -1004,50 +1009,41 @@ func _chip_trade() -> String:
 	return "待机"
 
 
-## 胶囊执行动作：与团队任务区分，粒度到下一步要干什么
+## 胶囊动作：最新 Action + priority + 暂停分类
 func _chip_action() -> String:
-	if hero.is_recalling:
-		return "回城"
-	if hero.is_teleporting:
-		return "支援"
-	if _chase_target != null and is_instance_valid(_chase_target):
-		return "追击"
-	var mt = hero.manual_target
-	if mt != null and is_instance_valid(mt):
-		var d: float = hero.global_position.distance_to(mt.global_position)
-		var reach: float = hero.attack_range * 0.01 + float(mt.get("body_radius") if mt.get("body_radius") != null else 1.0)
-		if d <= reach + 1.0:
-			return "攻击"
-		return "接近"
-	match current_action.type:
-		AIAction.Type.RETURN_TO_BASE: return "撤离"
-		AIAction.Type.DODGE: return "躲技能"
-		AIAction.Type.SAFE_RECALL: return "回城"
-		AIAction.Type.JUNGLE_FARM: return "刷野" if lane == AiConfig.Lane.JUNGLE else "补刀"
-		AIAction.Type.PUSH_LANE:
-			var mn = perception.find_nearest_enemy_minion(AiConfig.PUSH_TARGET_RANGE)
-			if mn != null and is_instance_valid(mn):
-				return "清兵"
-			var tr = perception.find_nearest_enemy_turret(AiConfig.PUSH_TARGET_RANGE)
-			if tr != null and is_instance_valid(tr):
-				return "点塔"
-			return "赶路"
-	return "待命"
+	if current_action == null:
+		return "待命"
+	var txt := current_action.label()
+	if current_action.priority > 0:
+		txt += "p%d" % current_action.priority
+	if current_action.pause_class == AIAction.PauseClass.SURVIVAL:
+		txt += "[生]"
+	elif current_action.pause_class == AIAction.PauseClass.ENVIRONMENT:
+		txt += "[环]"
+	return txt
 
 
-## 胶囊当前任务：只保留团队任务/目标级任务，本地行为交给“意图”字段，避免重复
+## 胶囊任务：团队任务（含暂停状态）/龙团/回城
 func _chip_task() -> String:
 	if team_task != null and is_instance_valid(team_task) and team_task.is_active():
-		return team_task.label()
-	if _defending_high_turret != null and is_instance_valid(_defending_high_turret):
-		return "守高地"
+		var t := team_task.label()
+		if _task_pause_active:
+			t += "(暂停)"
+		return t
 	if is_dragon_rally:
-		return "龙团集合"
+		return "龙团"
 	if hero.is_recalling:
 		return "回城"
 	if hero.is_teleporting:
 		return "支援"
 	return ""
+
+
+## 胶囊路径：R=风险，L=米
+func _chip_path() -> String:
+	if _ai_path.is_empty():
+		return "直行"
+	return "R%.2f L%.0f" % [_ai_path_risk, _ai_path_len]
 
 
 ## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
@@ -1056,11 +1052,13 @@ func debug_chip_info() -> Dictionary:
 	if now < _chip_next_t and not _chip_cache.is_empty():
 		return _chip_cache
 	_chip_next_t = now + 0.25
-	var p1: Array = []
-	p1.append("分路:" + _debug_lane())
+	var lane_short := _debug_lane().replace("路", "")
 	var task := _chip_task()
+	var p1: Array = ["路:" + lane_short, "行:" + _chip_action()]
 	if task != "":
-		p1.append("任务:" + task)
+		p1.append("任:" + task)
+	var line1 := " · ".join(p1)
+
 	var tgt := ""
 	if hero.manual_target != null and is_instance_valid(hero.manual_target):
 		tgt = _safe_name(hero.manual_target)
@@ -1068,29 +1066,27 @@ func debug_chip_info() -> Dictionary:
 		tgt = _safe_name(team_task.target_hero)
 	elif _chase_target != null and is_instance_valid(_chase_target):
 		tgt = _safe_name(_chase_target)
-	if tgt != "":
-		p1.append("目标:" + tgt)
-	var line1 := " · ".join(p1)
 	var threat_txt := _chip_threat()
-	var act := _chip_action()
-	# 任务与动作相同时只保留任务，避免同一词出现两次
-	if act == task:
-		act = ""
-	var p2: Array = ["威胁:" + threat_txt]
-	if act != "":
-		p2.append("意图:" + act)
+	var p2: Array = ["胁:" + threat_txt]
+	if tgt != "":
+		p2.append("标:" + tgt)
+	p2.append("径:" + _chip_path())
 	var trade := _chip_trade()
 	if trade != "待机":
-		p2.append("换血:" + trade)
+		p2.append("血:" + trade)
 	var line2 := " · ".join(p2)
+
 	var col := Color(0.52, 0.78, 1.0)
 	if threat_txt.ends_with("(高)"):
 		col = Color(1.0, 0.46, 0.38)
 	elif threat_txt.ends_with("(中)"):
 		col = Color(1.0, 0.78, 0.34)
+	if current_action != null and current_action.type == AIAction.Type.TOWER_ESCAPE:
+		col = Color(1.0, 0.35, 0.28)
+	elif current_action != null and current_action.type == AIAction.Type.DODGE:
+		col = Color(1.0, 0.62, 0.30)
 	_chip_cache = {"line1": line1, "line2": line2, "r": col.r, "g": col.g, "b": col.b}
 	return _chip_cache
-
 
 ## 单个 AI 的完整思考快照（JSON 安全；F3 与录像共用）
 func debug_snapshot() -> Dictionary:
@@ -1114,6 +1110,10 @@ func debug_snapshot() -> Dictionary:
 	return {
 		"name": hero.display_name, "role": hero.role, "team": int(hero.team),
 		"state": current_action.label(), "lane": _debug_lane(),
+		"action_type": int(current_action.type), "action_priority": int(current_action.priority),
+		"action_pause": int(current_action.pause_class), "team_paused": bool(_task_pause_active),
+		"env_pause_used": bool(_env_pause_used),
+		"path": {"risk": snappedf(_ai_path_risk, 0.01), "len": snappedf(_ai_path_len, 0.1)},
 		"intent": _debug_intent(), "intent_target": _ent_name(hero.manual_target),
 		"hp": int(hero.health), "hp_max": int(hero.actual_max_health),
 		"mana": int(hero.mana), "mana_max": int(hero.actual_mana_max),

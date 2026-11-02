@@ -51,16 +51,26 @@ static func _candidate_paths(start: Vector3, goal: Vector3, team: int) -> Array:
 	return out
 
 
-static func _path_cost(hero: Hero, path: Array, threat: ThreatModel) -> float:
-	var length := 0.0
+static func path_length(path: Array) -> float:
+	var total := 0.0
 	for i in range(1, path.size()):
-		length += (path[i] as Vector3).distance_to(path[i - 1] as Vector3)
-	var travel := length / maxf(1.0, hero.actual_move_speed)
+		total += (path[i] as Vector3).distance_to(path[i - 1] as Vector3)
+	return total
+
+
+static func path_risk(hero: Hero, path: Array, threat: ThreatModel) -> float:
 	var risk := 0.0
 	for p in path:
 		if threat != null:
 			risk += threat.enemy_threat(RISK_RADIUS, p)
 		risk += _tower_risk(hero, p)
+	return risk
+
+
+static func _path_cost(hero: Hero, path: Array, threat: ThreatModel) -> float:
+	var length := path_length(path)
+	var travel := length / maxf(1.0, hero.actual_move_speed)
+	var risk := path_risk(hero, path, threat)
 	return travel + RISK_WEIGHT * (risk / (1.0 + risk))
 
 
