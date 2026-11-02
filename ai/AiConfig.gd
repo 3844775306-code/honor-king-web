@@ -10,7 +10,7 @@ const HEALTH_RECALL: float = 0.25           # 回城阈值
 const HEALTH_LOW: float = 0.4               # 低血量 — 找血包 / 治疗术
 const HEALTH_DEFEND: float = 0.5            # 防守倾向
 const HEALTH_SAFE: float = 0.7              # 安全线 — 可用恢复
-const HEALTH_RECOVERED: float = 0.98        # 泉水养伤完成线 — 血/蓝都回到该比例才离泉（防半血出门）
+const HEALTH_RECOVERED: float = 1.0        # 泉水养伤完成线 — 血/蓝必须回满才离泉
 
 # ==================== 感知范围 ====================
 const SIGHT_HERO: float = 15.0              # 敌我英雄计数范围

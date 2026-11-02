@@ -801,7 +801,8 @@ func _process(delta):
 
 	# --- 复活/泉水检测 ---
 	var spawn = Vector3(-60, 0, 60) if hero.team == Config.Team.PLAYER else Vector3(60, 0, -60)
-	if hero.global_position.distance_to(spawn) < AiConfig.SPAWN_DETECT_RANGE and not has_respawned_recently:
+	if hero.global_position.distance_to(spawn) < AiConfig.SPAWN_DETECT_RANGE \
+			and not has_respawned_recently and _fully_recovered():
 		_assign_lane()
 	if hero.global_position.distance_to(spawn) > AiConfig.SPAWN_LEAVE_RANGE:
 		has_respawned_recently = false
@@ -1993,12 +1994,13 @@ func _fully_recovered() -> bool:
 		if hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max - 0.5:
 			return false
 		return true
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_RECOVERED:
+	# 必须真正回满（留 0.5 浮点容差），不能 98% 就出泉。
+	if hero.health < hero.actual_max_health - 0.5:
 		return false
-	# 张飞不消耗/回复普通蓝，蓝条由狂意值回写，泉水永远回不满；只看血量即可离泉
+	# 张飞不消耗/回复普通蓝，蓝条由狂意值回写；只看血量即可离泉
 	if hero.display_name == "张飞":
 		return true
-	if hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.HEALTH_RECOVERED:
+	if hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max - 0.5:
 		return false
 	return true
 
