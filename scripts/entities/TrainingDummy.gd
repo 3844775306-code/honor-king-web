@@ -1,6 +1,27 @@
 class_name TrainingDummy
-extends GameEntity
-## 训练营木偶：站桩、超高血量、不移动不攻击，供技能/伤害测试。
+extends Minion
+## 训练营木偶：站桩、不移动不攻击，统计承伤（攻击时长/总伤害/分类型/分来源/DPS）。
+
+const DeathRecap = preload("res://scripts/ui/DeathRecapView.gd")
+
+var stats := {
+	"active_time": 0.0, "total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
+	"groups": {}, "last_hit_ms": 0,
+}
+var _pending_skill_id := 0
+var _pending_true := false
+var base_armor_value := 500.0
+var base_mr_value := 500.0
+
+
+## 继承 Minion 以获得普攻/技能的统一可选中过滤；关闭兵线 AI/移动逻辑。
+func _physics_process(_delta: float) -> void:
+	pass
+
+
+func _process(_delta: float) -> void:
+	pass
+
 
 func _ready() -> void:
 	add_to_group("training_dummies")
@@ -66,6 +87,55 @@ func _build_visual() -> void:
 
 func bar_anchor_height() -> float:
 	return 3.25
+
+
+func reset_stats() -> void:
+	stats = {"active_time": 0.0, "total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
+		"groups": {}, "last_hit_ms": 0}
+
+
+func set_resist(v: float) -> void:
+	base_armor_value = maxf(0.0, v)
+	base_mr_value = base_armor_value
+	armor = base_armor_value
+	magic_resist = base_mr_value
+	base_armor = base_armor_value
+	base_magic_resist = base_mr_value
+
+
+func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false,
+		skill_id: int = 0, pen_percent: float = 0.0, is_crit_forced: int = -1):
+	_pending_skill_id = skill_id
+	_pending_true = _next_damage_is_true
+	super.take_damage(amount, source, is_magic, skill_id, pen_percent, is_crit_forced)
+
+
+func _damage_feedback(actual: float, is_magic: bool) -> void:
+	if actual > 0.0:
+		var now := Time.get_ticks_msec()
+		var last: int = int(stats.get("last_hit_ms", 0))
+		if last > 0:
+			var gap := float(now - last) / 1000.0
+			if gap <= 0.5:
+				stats.active_time = float(stats.get("active_time", 0.0)) + gap
+		stats["last_hit_ms"] = now
+		stats["total"] = float(stats.get("total", 0.0)) + actual
+		if _pending_true:
+			stats["true"] = float(stats.get("true", 0.0)) + actual
+		elif is_magic:
+			stats["magic"] = float(stats.get("magic", 0.0)) + actual
+		else:
+			stats["phys"] = float(stats.get("phys", 0.0)) + actual
+		var groups: Dictionary = stats.get("groups", {})
+		var key := str(DeathRecap.skill_key(_pending_skill_id))
+		groups[key] = float(groups.get(key, 0.0)) + actual
+		stats["groups"] = groups
+	super._damage_feedback(actual, is_magic)
+
+
+func dps() -> float:
+	var t: float = float(stats.get("active_time", 0.0))
+	return float(stats.get("total", 0.0)) / t if t > 0.01 else 0.0
 
 
 func die(_killer = null) -> void:

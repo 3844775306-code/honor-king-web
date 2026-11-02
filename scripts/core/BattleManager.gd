@@ -98,6 +98,12 @@ var _training_ai: Array = []
 var _training_ai_count := 0
 var _training_ai_level := 1
 var _training_dummies: Array = []
+var _training_dummy_armor := 500.0
+var _training_dummy_label: Label = null
+var _training_def_btn: Button = null
+var _training_ai_hero_name := ""
+var _training_ai_hero_btn: Button = null
+var _training_stats_t := 0.0
 var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
 var _test_prev_pos := Vector3.ZERO
 var _test_layer: CanvasLayer = null
@@ -561,10 +567,37 @@ func _setup_training_hud() -> void:
 	var b_ai_gold := _training_mk_btn("AI +1000")
 	b_ai_gold.pressed.connect(_training_ai_gold)
 	ai_row2.add_child(b_ai_gold)
+	var hero_btn := _training_mk_btn("切换我的英雄")
+	hero_btn.pressed.connect(_training_cycle_player_hero)
+	vb.add_child(hero_btn)
+	_training_ai_hero_btn = _training_mk_btn("AI 英雄：随机")
+	_training_ai_hero_btn.pressed.connect(_training_cycle_ai_hero)
+	vb.add_child(_training_ai_hero_btn)
+	var def_row := HBoxContainer.new()
+	def_row.add_theme_constant_override("separation", 6)
+	vb.add_child(def_row)
+	_training_def_btn = _training_mk_btn("防御：500")
+	_training_def_btn.pressed.connect(_training_cycle_defense)
+	def_row.add_child(_training_def_btn)
+	var b_def_lo := _training_mk_btn("防 -50")
+	b_def_lo.pressed.connect(func(): _training_set_dummy_resist(_training_dummy_armor - 50.0))
+	def_row.add_child(b_def_lo)
+	var b_def_hi := _training_mk_btn("防 +50")
+	b_def_hi.pressed.connect(func(): _training_set_dummy_resist(_training_dummy_armor + 50.0))
+	def_row.add_child(b_def_hi)
+	_training_dummy_label = Label.new()
+	_training_dummy_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_training_dummy_label.custom_minimum_size = Vector2(0, 220)
+	_training_dummy_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_XS * UiKit.scale())))
+	vb.add_child(_training_dummy_label)
+	var reset_btn := _training_mk_btn("重置木偶统计")
+	reset_btn.pressed.connect(_training_reset_dummy_stats)
+	vb.add_child(reset_btn)
 	var b_back := _training_mk_btn("返回大厅")
 	b_back.pressed.connect(_training_exit)
 	vb.add_child(b_back)
 	_training_refresh_label()
+	_training_refresh_dummy_stats()
 
 
 func _training_refresh_label() -> void:
@@ -637,17 +670,17 @@ func _training_place_dummy() -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
 	var d := TrainingDummyScript.new()
-	var fwd := Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y))
 	var cfg := {
 		"name": "训练木偶", "team": Config.foe_team(),
-		"max_health": 1000000.0, "attack": 0.0, "armor": 0.0,
-		"magic_resist": 0.0, "attack_range": 0.0, "attack_speed": 1.0,
+		"max_health": 10000.0, "attack": 0.0, "armor": _training_dummy_armor,
+		"magic_resist": _training_dummy_armor, "attack_range": 0.0, "attack_speed": 1.0,
 		"move_speed": 0.0, "body_radius": 1.0,
 	}
 	d.setup(cfg)
-	d.actual_max_health = 1000000.0
-	d.health = 1000000.0
-	d.position = hero.global_position + fwd * 4.0
+	d.actual_max_health = 10000.0
+	d.health = 10000.0
+	d.set_resist(_training_dummy_armor)
+	d.position = hero.global_position   # 原地放置
 	add_child(d)
 	_training_dummies.append(d)
 	_training_refresh_label()
@@ -672,7 +705,10 @@ func _training_set_ai_count(n: int) -> void:
 		var before := {}
 		for e in get_tree().get_nodes_in_group("heroes"):
 			before[e.get_instance_id()] = true
-		_create_team_ai(Config.foe_team(), n, [])
+		var forced: Array = []
+		if _training_ai_hero_name != "":
+			forced = [_training_ai_hero_name]
+		_create_team_ai(Config.foe_team(), n, [], forced)
 		for e in get_tree().get_nodes_in_group("heroes"):
 			if e is Hero and e.team == Config.foe_team() and not before.has(e.get_instance_id()):
 				e.level = _training_ai_level
@@ -697,6 +733,108 @@ func _training_ai_gold() -> void:
 		if is_instance_valid(h):
 			h.gold += 1000
 	_training_refresh_label()
+
+
+func _training_tick(delta: float) -> void:
+	_training_stats_t += delta
+	if _training_stats_t >= 0.1:
+		_training_stats_t = 0.0
+		_training_refresh_dummy_stats()
+	_training_refresh_label()
+
+
+func _training_refresh_dummy_stats() -> void:
+	if _training_dummy_label == null:
+		return
+	var d = null
+	for i in range(_training_dummies.size() - 1, -1, -1):
+		if is_instance_valid(_training_dummies[i]):
+			d = _training_dummies[i]
+			break
+	if d == null:
+		_training_dummy_label.text = "尚未放置训练木偶\n（木偶 HP 10000，防御 %.0f）" % _training_dummy_armor
+		return
+	var st: Dictionary = d.stats
+	var groups: Dictionary = st.get("groups", {})
+	var keys: Array = groups.keys()
+	keys.sort_custom(func(a, b): return float(groups[a]) > float(groups[b]))
+	var lines: Array = []
+	lines.append("木偶 HP %d/10000 · 防御 %.0f" % [int(d.health), _training_dummy_armor])
+	lines.append("攻击时长 %.2fs · 总伤害 %d · DPS %.0f" % [
+		float(st.get("active_time", 0.0)), int(st.get("total", 0.0)), d.dps()])
+	lines.append("物理 %d · 法术 %d · 真伤 %d" % [
+		int(st.get("phys", 0.0)), int(st.get("magic", 0.0)), int(st.get("true", 0.0))])
+	var parts: Array = []
+	for k in keys:
+		if parts.size() >= 8:
+			break
+		parts.append("%s %d" % [str(k), int(groups[k])])
+	if not parts.is_empty():
+		lines.append("来源：" + " | ".join(parts))
+	_training_dummy_label.text = "\n".join(lines)
+
+
+func _training_reset_dummy_stats() -> void:
+	for d in _training_dummies:
+		if is_instance_valid(d) and d.has_method("reset_stats"):
+			d.reset_stats()
+	_training_refresh_dummy_stats()
+
+
+func _training_set_dummy_resist(v: float) -> void:
+	_training_dummy_armor = clampi(int(round(v)), 0, 5000)
+	if _training_def_btn != null:
+		_training_def_btn.text = "防御：%d" % int(_training_dummy_armor)
+	for d in _training_dummies:
+		if is_instance_valid(d) and d.has_method("set_resist"):
+			d.set_resist(_training_dummy_armor)
+	_training_refresh_dummy_stats()
+
+
+func _training_cycle_defense() -> void:
+	var tiers := [250.0, 500.0, 1000.0]
+	var nx := 250.0
+	for t in tiers:
+		if t > _training_dummy_armor:
+			nx = t
+			break
+	_training_set_dummy_resist(nx)
+
+
+func _training_cycle_player_hero() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	var names: Array = hero_configs.keys()
+	if names.is_empty():
+		return
+	var cur := names.find(hero.display_name)
+	var nx := 0 if cur < 0 else (cur + 1) % names.size()
+	var nm := str(names[nx])
+	var pos: Vector3 = hero.global_position
+	var lv: int = int(hero.level)
+	var gold: int = int(hero.gold)
+	var old := hero
+	old.queue_free()
+	_create_player_hero(nm)
+	if hero != null and is_instance_valid(hero):
+		hero.global_position = pos
+		hero.level = lv
+		hero.gold = gold
+		hero._recalculate_attributes()
+	_training_refresh_label()
+
+
+func _training_cycle_ai_hero() -> void:
+	var names: Array = hero_configs.keys()
+	if names.is_empty():
+		return
+	var cur := names.find(_training_ai_hero_name) if _training_ai_hero_name != "" else -1
+	var nx := 0 if cur < 0 else (cur + 1) % names.size()
+	_training_ai_hero_name = str(names[nx])
+	if _training_ai_hero_btn != null:
+		_training_ai_hero_btn.text = "AI 英雄：%s" % _training_ai_hero_name
+	if _training_ai_count > 0:
+		_training_set_ai_count(_training_ai_count)
 
 
 func _training_exit() -> void:
@@ -6199,6 +6337,8 @@ func _process(delta):
 	_sync_postfx()
 	if _ai_test_match:
 		_test_tick(delta)
+	elif _training_mode:
+		_training_tick(delta)
 	# 金币自动增长
 		# 摄像机控制
 	if spectate_hero != null:
