@@ -17,7 +17,12 @@ var dragon_pos_by_team: Dictionary = {}  # {int: Vector3} 每队各自最近的�
 var defending: Dictionary = {}           # {int: bool} 本秒该队是否收缩防守
 var defend_lane_by_team: Dictionary = {} # {int: int} 防守收缩到哪条分路
 var push_target_by_team: Dictionary = {} # {int: Vector3} 人数碾压时抱团推塔目标
+var push_lane_by_team: Dictionary = {} # {int: int} 抱团推塔采用的分路
 var invade_target_by_hero: Dictionary = {} # {Hero: Vector3} 人数优势时反野目标
+var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
+var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
+var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
+var support_target_by_hero: Dictionary = {} # {Hero: Hero} 支援接取者 -> 被支援队友
 
 func _init(p_bm: BattleManager) -> void:
 	bm = p_bm
@@ -127,17 +132,47 @@ func _enemy_team(team: int) -> int:
 # ==================== 防守判定 ====================
 # 己方高地为防守核心：水晶告急 / 敌方兵力压到水晶附近 / 经济大幅落后且塔数劣势 → 全队收缩
 func _should_defend(team: int) -> bool:
-	if _base_threatened(team):
-		return true
-	# 英雄回传：多人残血/需要支援时收缩，而不是只靠经济/塔数全知判断
-	var need_help := 0
-	for h in feedback:
-		if is_instance_valid(h) and int((h as Hero).team) == team and bool((feedback[h] as Dictionary).get("need_help", false)):
-			need_help += 1
-	if need_help >= 2:
-		return true
-	var gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
-	return gold_diff <= -AiConfig.GOLD_GAP_DEFEND and _count_turrets_total(team) < _count_turrets_total(_enemy_team(team))
+	return _enemy_minions_near_crystal(team, 30.0).size() > 0
+
+
+func _crystal_of(team: int) -> Turret:
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) == team and (e as Turret).health > 0 \
+				and (e as Turret).display_name == "crystal":
+			return e as Turret
+	return null
+
+
+func _enemy_minions_near_crystal(team: int, radius: float) -> Array:
+	var crystal := _crystal_of(team)
+	var out: Array = []
+	if crystal == null:
+		return out
+	for e in bm.get_tree().get_nodes_in_group("minions"):
+		if e is Minion and int((e as Minion).team) != team and (e as Minion).health > 0:
+			if (e as Node3D).global_position.distance_to(crystal.global_position) <= radius:
+				out.append(e)
+	return out
+
+
+func _defend_assignees(team: int) -> Array:
+	var crystal := _crystal_of(team)
+	if crystal == null:
+		return []
+	var enemy_heroes := 0
+	for e in _get_enemy_heroes(team):
+		if e.global_position.distance_to(crystal.global_position) <= 20.0:
+			enemy_heroes += 1
+	var max_n := 1 + enemy_heroes
+	var candidates := []
+	for h in _get_ally_heroes(team):
+		if h.is_ai:
+			candidates.append(h)
+	candidates.sort_custom(func(a, b):
+		return a.global_position.distance_to(crystal.global_position) < b.global_position.distance_to(crystal.global_position))
+	if candidates.size() > max_n:
+		return candidates.slice(0, max_n)
+	return candidates
 
 
 func _base_threatened(team: int) -> bool:
@@ -326,33 +361,31 @@ func _task_completed(t: TeamTask, h: Hero, now: float) -> bool:
 	t.last_update = now
 	match t.type:
 		TeamTask.Type.PUSH_LANE:
-			if t.lane == AiConfig.Lane.JUNGLE:
+			if t.lane == AiConfig.Lane.JUNGLE or t.initial_lane_tower_count < 0:
 				return false
-			return not _enemy_tower_near(t.target_pos, 6.0, h.team)
+			return _enemy_tower_count_in_lane(h.team, t.lane) <= t.initial_lane_tower_count - 1
 		TeamTask.Type.DEFEND_LANE:
-			if _enemies_near(t.target_pos, 12.0, h.team) == 0:
-				t.quiet_time += dt
-			else:
-				t.quiet_time = 0.0
-			return t.quiet_time >= 2.5
+			return not _enemy_minion_near(t.target_pos, 50.0, h.team)
 		TeamTask.Type.OBJECTIVE:
 			return not _jungle_monster_near(t.target_pos, 10.0)
 		TeamTask.Type.GANK:
 			if t.target_hero == null:
 				return false
 			return not is_instance_valid(t.target_hero) or (t.target_hero as Hero).health <= 0.0
-		TeamTask.Type.PEEL:
-			if t.target_hero == null or not is_instance_valid(t.target_hero) or (t.target_hero as Hero).health <= 0.0:
-				return false
-			if _enemies_near((t.target_hero as Node3D).global_position, 7.0, h.team) == 0:
-				t.quiet_time += dt
-			else:
-				t.quiet_time = 0.0
-			return t.quiet_time >= 2.5
+		TeamTask.Type.PEEL, TeamTask.Type.SUPPORT:
+			return false
 		TeamTask.Type.PUSH_TOWER:
-			return not _enemy_tower_near(t.target_pos, 8.0, h.team)
+			return false
 		TeamTask.Type.INVADE_JUNGLE:
 			return not _jungle_monster_near(t.target_pos, 15.0)
+	return false
+
+
+func _enemy_minion_near(pos: Vector3, radius: float, team: int) -> bool:
+	for e in bm.get_tree().get_nodes_in_group("minions"):
+		if e is Minion and int((e as Minion).team) != team and (e as Minion).health > 0:
+			if (e as Node3D).global_position.distance_to(pos) <= radius:
+				return true
 	return false
 
 
@@ -434,7 +467,12 @@ func allocate_all() -> Dictionary:
 	defending.clear()
 	defend_lane_by_team.clear()
 	push_target_by_team.clear()
+	push_lane_by_team.clear()
 	invade_target_by_hero.clear()
+	defend_assignees.clear()
+	defend_target_by_team.clear()
+	gank_target_by_hero.clear()
+	support_target_by_hero.clear()
 
 	var result: Dictionary = {}
 	var dragon_alive := _is_dragon_alive()
@@ -450,30 +488,43 @@ func allocate_all() -> Dictionary:
 			if pt != Vector3.ZERO:
 				current_mode = SplitMode.PUSH_TOWER
 				push_target_by_team[team] = pt
+				var push_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
 				for h in _get_ally_heroes(team):
 					if h.is_ai:
-						result[h] = ai_lane_of(h)
+						result[h] = push_lane
 				print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
 				continue
 		# 防守优先：高地告急 / 大幅落后 → 全队收缩到压力最大的分路
 		if _should_defend(team):
 			var dl := _defend_lane_for(team)
+			var crystal := _crystal_of(team)
 			defending[team] = true
 			defend_lane_by_team[team] = dl
-			current_mode = SplitMode.DEFEND
-			for h in _get_ally_heroes(team):
-				if h.is_ai:
-					result[h] = dl
-			print("[TeamTactics] t=%.0f %s 进入防守，收缩分路=%d" % [bm.game_time, team_label, dl])
+			defend_target_by_team[team] = crystal.global_position if crystal != null else _own_tower_pos(team, dl)
+			_allocate_team(team, default_mode, result)
+			for h in _defend_assignees(team):
+				defend_assignees[h] = true
+				result[h] = dl
+			print("[TeamTactics] t=%.0f %s 水晶受小兵威胁，%d 人接守塔" % [bm.game_time, team_label, defend_assignees.size()])
 			continue
 		# 4分钟后只要人数有优势，就让打野尝试反野（其余人继续分推）。
 		if ally_alive > enemy_alive:
 			var invader := _find_natural_jungler(team)
 			if invader != null:
 				current_mode = SplitMode.INVADE
-				invade_target_by_hero[invader] = _enemy_jungle_target(team)
+				var target_pos := _enemy_jungle_target(team, invader.global_position)
+				invade_target_by_hero[invader] = target_pos
+				var marksman := _find_carry(team)
+				if marksman != null and marksman != invader:
+					invade_target_by_hero[marksman] = target_pos
+				var candidates := []
+				for h in _get_ally_heroes(team):
+					if h.is_ai and h != invader and h != marksman:
+						candidates.append(h)
+				if not candidates.is_empty():
+					invade_target_by_hero[candidates[randi() % candidates.size()]] = target_pos
 				_allocate_team(team, default_mode, result)
-				print("[TeamTactics] t=%.0f %s 人数优势 %d:%d，%s 尝试反野" % [bm.game_time, team_label, ally_alive, enemy_alive, invader.display_name])
+				print("[TeamTactics] t=%.0f %s 人数优势 %d:%d，%s 带队反野" % [bm.game_time, team_label, ally_alive, enemy_alive, invader.display_name])
 				continue
 		if dragon_alive:
 			var ally_gold := _get_total_team_gold(team)
@@ -494,6 +545,7 @@ func allocate_all() -> Dictionary:
 				print("[TeamTactics] t=%.0f %s 经济差不足，不打龙" % [bm.game_time, team_label])
 		# 不打龙 → 正常分推（使用 default_mode，不受另一队DRAGON影响）
 		_allocate_team(team, default_mode, result)
+		_build_gank_support(team)
 
 	assignments = result
 	# 把分路结果翻译成结构化主线任务；英雄层不再只收到一个 lane。
@@ -510,35 +562,51 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	var now := bm.game_time
 	var role := str(h.role)
 	if push_target_by_team.has(h.team):
-		t.setup(TeamTask.Type.PUSH_TOWER, lane, push_target_by_team[h.team], null, 120, now, 30.0, "人数碾压抱团推塔", role)
+		var pl := int(push_lane_by_team.get(h.team, lane))
+		t.setup(TeamTask.Type.PUSH_TOWER, pl, push_target_by_team[h.team], null, 90, now, 40.0, "抱团推塔", role)
+		t.lane = pl
 		return t
 	if invade_target_by_hero.has(h):
-		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 95, now, 20.0, "人数优势反野", role)
+		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 85, now, 20.0, "人数优势反野", role)
+		return t
+	if defend_assignees.has(h):
+		var dl: int = int(defend_lane_by_team.get(h.team, lane))
+		var dp: Vector3 = defend_target_by_team.get(h.team, _own_tower_pos(h.team, dl))
+		t.setup(TeamTask.Type.DEFEND_LANE, dl, dp, null, 100, now, 18.0, "水晶守小兵", role)
+		return t
+	if gank_target_by_hero.has(h):
+		var gt: Hero = gank_target_by_hero[h]
+		t.setup(TeamTask.Type.GANK, lane, gt.global_position, gt, 70, now, 25.0, "组团抓落单", role)
+		return t
+	if support_target_by_hero.has(h):
+		var st: Hero = support_target_by_hero[h]
+		t.setup(TeamTask.Type.SUPPORT, lane, st.global_position, st, 60, now, 15.0, "支援高威胁队友", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE:
 		# 开局/龙未刷新时只是“继续刷野”，不能把所有打野都派去一个不存在的龙坑。
 		if not _is_dragon_alive():
-			t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 25, now, 18.0, "刷野/回线", role)
+			t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
 			return t
 		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
 		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
 		return t
-	if bool(defending.get(h.team, false)):
-		var dl: int = int(defend_lane_by_team.get(h.team, lane))
-		t.setup(TeamTask.Type.DEFEND_LANE, dl, _own_tower_pos(h.team, dl), null, 90, now, 18.0, "防守压力分路", role)
-		return t
 	if role == "辅助":
 		var carry := _find_carry(h.team)
 		if carry != null:
-			t.setup(TeamTask.Type.PEEL, lane, carry.global_position, carry, 45, now, 20.0, "保护射手", role)
+			t.setup(TeamTask.Type.PEEL, lane, carry.global_position, carry, 50, now, 20.0, "保排", role)
 			return t
-	if role == "刺客" and current_mode == SplitMode.ONE_THREE_ONE:
-		var gp := _lane_front_pos(h.team, lane)
-		t.setup(TeamTask.Type.GANK, lane, gp, null, 55, now, 15.0, "抓单/切后", role)
-		return t
-	var push_pos := _lane_front_pos(h.team, lane)
-	t.setup(TeamTask.Type.PUSH_LANE, lane, push_pos, null, 30, now, 25.0, "推进兵线", role)
+	t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 25.0, "推线/LaneStrategy", role)
+	t.initial_lane_tower_count = _enemy_tower_count_in_lane(h.team, lane)
 	return t
+
+
+func _enemy_tower_count_in_lane(team: int, lane: int) -> int:
+	var n := 0
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) != team and (e as Turret).health > 0 \
+				and (e as Turret).display_name != "crystal" and _get_turret_lane(e as Turret) == lane:
+			n += 1
+	return n
 
 
 func _find_carry(team: int) -> Hero:
@@ -555,6 +623,67 @@ func ai_lane_of(h: Hero) -> int:
 	return AiConfig.Lane.MID
 
 
+func _in_own_half(pos: Vector3, team: int) -> bool:
+	var own := Vector3(-53, 0, 53) if team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	var enemy := Vector3(53, 0, -53) if team == Config.Team.PLAYER else Vector3(-53, 0, 53)
+	return pos.distance_to(own) < pos.distance_to(enemy)
+
+
+func _find_gank_target(team: int) -> Hero:
+	var best: Hero = null
+	var best_score := INF
+	for h in _get_enemy_heroes(team):
+		if h.is_untargetable_by_enemies() or not _in_own_half(h.global_position, team):
+			continue
+		var escort := 0
+		for e in _get_enemy_heroes(team):
+			if e != h and e.global_position.distance_to(h.global_position) <= 10.0:
+				escort += 1
+		if escort > 0:
+			continue
+		var score := h.health / maxf(1.0, h.actual_max_health)
+		if score < best_score:
+			best_score = score
+			best = h
+	return best
+
+
+func _find_support_target(team: int) -> Hero:
+	var best: Hero = null
+	var best_score := INF
+	for h in _get_ally_heroes(team):
+		if not h.is_ai:
+			continue
+		var score := h.health / maxf(1.0, h.actual_max_health)
+		var nearby := 0
+		for e in _get_ally_heroes(team):
+			if e != h and e.global_position.distance_to(h.global_position) <= 30.0:
+				nearby += 1
+		if nearby == 0:
+			continue
+		for e in _get_enemy_heroes(team):
+			if e.global_position.distance_to(h.global_position) <= 10.0:
+				score -= 0.2
+		if score < best_score:
+			best_score = score
+			best = h
+	return best
+
+
+func _build_gank_support(team: int) -> void:
+	if bm.game_time >= 360.0:
+		var gank_target := _find_gank_target(team)
+		if gank_target != null:
+			for h in _get_ally_heroes(team):
+				if h.is_ai and h.global_position.distance_to(gank_target.global_position) <= 40.0:
+					gank_target_by_hero[h] = gank_target
+	var support_target := _find_support_target(team)
+	if support_target != null:
+		for h in _get_ally_heroes(team):
+			if h.is_ai and h != support_target and h.global_position.distance_to(support_target.global_position) <= 30.0:
+				support_target_by_hero[h] = support_target
+
+
 func _find_natural_jungler(team: int) -> Hero:
 	for h in _get_ally_heroes(team):
 		if not h.is_ai:
@@ -566,30 +695,64 @@ func _find_natural_jungler(team: int) -> Hero:
 
 
 func _push_tower_target(team: int) -> Vector3:
-	var best: Turret = null
-	var best_hp := INF
-	for e in bm.get_tree().get_nodes_in_group("turrets"):
-		if not (e is Turret) or int((e as Turret).team) == team or (e as Turret).health <= 0:
+	# 选“己方兵线前线离该路敌方塔最近”的分路，然后该路交给 LaneStrategy 推进。
+	var own_crystal := Vector3(-53, 0, 53) if team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	var best_d := INF
+	var best_tower: Turret = null
+	var best_lane := AiConfig.Lane.MID
+	for lane in [AiConfig.Lane.FARM, AiConfig.Lane.MID, AiConfig.Lane.CLASH]:
+		var front := Vector3.ZERO
+		var front_progress := -INF
+		for e in bm.get_tree().get_nodes_in_group("minions"):
+			if e is Minion and int((e as Minion).team) == team and (e as Minion).health > 0 \
+					and int((e as Minion).line) == lane:
+				var d := own_crystal.distance_to((e as Node3D).global_position)
+				if d > front_progress:
+					front_progress = d
+					front = (e as Node3D).global_position
+		if front == Vector3.ZERO:
 			continue
-		if (e as Turret).display_name == "crystal":
+		var tower := _nearest_tower_in_lane(team, lane, front)
+		if tower == null:
 			continue
-		if (e as Turret).health < best_hp:
-			best_hp = (e as Turret).health
-			best = e as Turret
-	if best != null:
-		return best.global_position
-	for e in bm.get_tree().get_nodes_in_group("turrets"):
-		if e is Turret and int((e as Turret).team) != team and (e as Turret).health > 0:
-			return (e as Node3D).global_position
+		var dist := front.distance_to(tower.global_position)
+		if dist < best_d:
+			best_d = dist
+			best_tower = tower
+			best_lane = lane
+	if best_tower != null:
+		push_lane_by_team[team] = best_lane
+		return best_tower.global_position
 	return Vector3.ZERO
 
 
-func _enemy_jungle_target(team: int) -> Vector3:
+func _nearest_tower_in_lane(team: int, lane: int, from: Vector3) -> Turret:
+	var best: Turret = null
+	var best_d := INF
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == team or (e as Turret).health <= 0:
+			continue
+		if (e as Turret).display_name == "crystal" or _get_turret_lane(e as Turret) != lane:
+			continue
+		var d := from.distance_to((e as Node3D).global_position)
+		if d < best_d:
+			best_d = d
+			best = e as Turret
+	return best
+
+
+func _enemy_jungle_target(team: int, from_pos: Vector3 = Vector3.ZERO) -> Vector3:
+	var best := Vector3.ZERO
+	var best_d := INF
 	for p in bm.jungle_camp_positions:
 		var pos := p as Vector3
-		if BattleManager.in_enemy_jungle_zone(pos, team):
-			return pos
-	return Vector3(24, 0, -24) if team == Config.Team.PLAYER else Vector3(-24, 0, 24)
+		if not BattleManager.in_enemy_jungle_zone(pos, team):
+			continue
+		var d := from_pos.distance_to(pos) if from_pos != Vector3.ZERO else 0.0
+		if d < best_d:
+			best_d = d
+			best = pos
+	return best if best != Vector3.ZERO else (Vector3(24, 0, -24) if team == Config.Team.PLAYER else Vector3(-24, 0, 24))
 
 
 func _lane_front_pos(team: int, lane: int) -> Vector3:

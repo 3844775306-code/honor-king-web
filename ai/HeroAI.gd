@@ -22,6 +22,8 @@ var trade_planner: TradePlanner
 var task_executor: TaskExecutor
 var team_task: TeamTask = null
 var think_timer: float = 0.0
+var _frame_delta: float = 0.0
+var _temp_clearing: bool = false
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -582,6 +584,7 @@ func _try_escape_dash() -> bool:
 
 # ==================== 主循环 ====================
 func _process(delta):
+	_frame_delta = delta
 	# --- 塔攻击检测 ---
 	if hero.under_tower_attack:
 		hero.tower_attack_timer -= delta
@@ -608,6 +611,8 @@ func _process(delta):
 	var _gt_now: float = float(_bm_now.game_time) if _bm_now != null else 0.0
 	threat_model.update(_gt_now)
 	trade_planner.update(delta, _gt_now)
+	if _temp_clearing and team_task != null and team_task.is_active():
+		team_task.expires_at += delta
 
 	# --- 连招链推进：起手技能之后按段间隔自动衔接下一段，目标失效/换目标即中止 ---
 	skill_tactics.update_combo(delta)
@@ -990,18 +995,7 @@ func debug_snapshot() -> Dictionary:
 
 
 func _decide():
-	var tree := hero.get_tree()
-	for turret in tree.get_nodes_in_group("turrets"):
-		if turret.display_name == "crystal" and turret.team == hero.team: 
-			for entity in tree.get_nodes_in_group("minions"):
-				if entity.team != hero.team and turret.global_position.distance_to(entity.global_position) < 15:
-					hero.manual_target = entity
-					state = State.PUSH
-					return
-		
-	# P0: 高地塔/水晶防御（覆盖所有状态）
-	if _handle_high_defense():
-		return
+	# 高地/水晶防御已上移到团队任务层，英雄层不再单独处理。
 
 	# P1: 本线防御塔防御（外塔/内塔）
 	if _handle_lane_turret_defense():
@@ -1052,6 +1046,10 @@ func _decide():
 			state = State.RETREAT
 			return
 
+	# 临时清兵：换血窗口与团队任务之间；周围有敌方小兵时优先锁定小兵，并暂停团队任务计时。
+	if _try_temp_clear():
+		return
+
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt := bm.game_time if bm else 0.0
 
@@ -1071,8 +1069,8 @@ func _decide():
 			if tr.has("move_target"):
 				hero.move_target = tr.get("move_target")
 			state = State.RETREAT if str(tr.get("state", "push")) == "retreat" else State.PUSH
-			# 推线任务仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
-			if team_task.type != TeamTask.Type.PUSH_LANE:
+			# 推线/抱团推塔仍交给 LaneStrategy 找兵/塔；其他任务已给出明确目标，直接返回。
+			if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
 				return
 
 	# 同步分路到策略模块
@@ -1125,6 +1123,46 @@ func _decide():
 				if lane != lane_strategy.lane:
 					lane = lane_strategy.lane
 			state = State.PUSH
+
+
+# 临时清兵任务：15–20m（随移速增加）内有敌方小兵就锁定，清完自动结束。
+func _try_temp_clear() -> bool:
+	var radius := 15.0 + clampf((hero.actual_move_speed - 6.0) / 2.0, 0.0, 5.0)
+	var m: Minion = null
+	var best_d := radius
+	for e in hero.get_tree().get_nodes_in_group("minions"):
+		if not (e is Minion) or int((e as Minion).team) == int(hero.team) or (e as Minion).health <= 0.0:
+			continue
+		var d := hero.global_position.distance_to((e as Node3D).global_position)
+		if d > best_d or _minion_under_unsafe_tower(e as Minion):
+			continue
+		best_d = d
+		m = e as Minion
+	if m == null:
+		_temp_clearing = false
+		return false
+	hero.manual_target = m
+	hero.move_target = Vector3.ZERO
+	state = State.PUSH
+	_temp_clearing = true
+	return true
+
+
+func _minion_under_unsafe_tower(m: Minion) -> bool:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == int(hero.team) or (e as Turret).health <= 0:
+			continue
+		var t := e as Turret
+		if m.global_position.distance_to(t.global_position) > AiConfig.TOWER_ATTACK_RANGE:
+			continue
+		var cover := 0.0
+		for n in hero.get_tree().get_nodes_in_group("minions"):
+			if n is Minion and int((n as Minion).team) == int(hero.team) and (n as Minion).health > 0:
+				if t.global_position.distance_to((n as Node3D).global_position) <= AiConfig.TOWER_ATTACK_RANGE:
+					cover += (n as Minion).health
+		if cover < 500.0:
+			return true
+	return false
 
 
 # 由团队指挥官下发的结构化主线任务

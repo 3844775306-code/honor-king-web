@@ -13,6 +13,7 @@ enum Type {
 	RETREAT,
 	PUSH_TOWER,
 	INVADE_JUNGLE,
+	SUPPORT,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, EXPIRED, REASSIGNED }
@@ -31,6 +32,7 @@ var expires_at := 0.0
 var reason := ""
 var role_hint := ""
 var task_id := ""
+var initial_lane_tower_count := -1
 
 
 func setup(p_type: int, p_lane: int, p_target_pos: Vector3, p_target_hero: Hero,
@@ -79,4 +81,5 @@ func label() -> String:
 		Type.RETREAT: return "撤退"
 		Type.PUSH_TOWER: return "抱团推塔"
 		Type.INVADE_JUNGLE: return "反野"
+		Type.SUPPORT: return "支援"
 	return "待命"
