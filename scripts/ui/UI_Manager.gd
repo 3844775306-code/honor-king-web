@@ -3355,7 +3355,10 @@ func _update_respawn_widgets():
 	var spec_id: int = 0
 	if battle != null and is_instance_valid(battle.spectate_hero):
 		spec_id = battle.spectate_hero.get_instance_id()
-	var sig := "%s|%d" % [player_dead, spec_id]
+	var main_id: int = 0
+	if battle != null and is_instance_valid(battle.hero):
+		main_id = battle.hero.get_instance_id()
+	var sig := "%s|%d|%d" % [player_dead, spec_id, main_id]
 	for h in heroes:
 		if not is_instance_valid(h):
 			continue
@@ -3366,6 +3369,24 @@ func _update_respawn_widgets():
 	for child in respawn_container.get_children():
 		respawn_container.remove_child(child)
 		child.queue_free()
+	# 测试局：全部 10 个英雄头像一行，点任意存活头像切主视角
+	var test_mode: bool = battle != null and bool(battle.get("_ai_test_match"))
+	if test_mode:
+		var test_row := GridContainer.new()
+		test_row.columns = 5
+		test_row.add_theme_constant_override("h_separation", 10)
+		test_row.add_theme_constant_override("v_separation", 6)
+		for h in heroes:
+			if not is_instance_valid(h):
+				continue
+			var tw = RespawnWidget.new()
+			tw.hero = h
+			tw.spectatable = not h.is_dead
+			tw.spectating = is_instance_valid(battle.hero) and battle.hero == h
+			tw.spectate_clicked.connect(_on_respawn_spectate_clicked)
+			test_row.add_child(tw)
+		respawn_container.add_child(test_row)
+		return
 	# 第一排：我方英雄（含残血/复活读秒，始终显示）；玩家阵亡时可点存活队友观战
 	var ally_row := HBoxContainer.new()
 	ally_row.add_theme_constant_override("separation", 10)
@@ -3392,7 +3413,11 @@ func _update_respawn_widgets():
 
 func _on_respawn_spectate_clicked(target: Hero):
 	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
-	if battle != null:
+	if battle == null:
+		return
+	if bool(battle.get("_ai_test_match")) and battle.has_method("set_test_view_hero"):
+		battle.set_test_view_hero(target)
+	else:
 		battle.set_spectate_target(target)
 
 # ---------- 公开控制接口（供移动端触摸按钮调用） ----------
@@ -4825,3 +4850,5 @@ class DeviceStatusArt extends Control:
 			var ry: float = 25.0 - hh
 			draw_rect(Rect2(rx, ry, 5.5, hh), net_col if i < level else Color(1, 1, 1, 0.16))
 		UiKit.text(self, Vector2(nx + 38.0, 24.0), net_txt, 17, bright if net_mode > 0 else dim)
+
+

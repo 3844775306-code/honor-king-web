@@ -451,6 +451,21 @@ func _test_cycle_speed() -> void:
 		_test_speed_btn.text = "%.1f×" % sp
 
 
+## 测试观战：点英雄头像直接切主视角（供 UI 头像点击调用）
+func set_test_view_hero(h: Hero) -> void:
+	if not _ai_test_match or h == null or not is_instance_valid(h) or h.is_dead:
+		return
+	hero = h
+	_test_view_hero = h
+	_test_prev_pos = h.global_position
+	spectate_hero = null
+	_cam_snap = true
+	if is_instance_valid(TouchController):
+		TouchController.set_hero(h)
+	if minimap != null:
+		minimap.heroes = [h, enemy_hero]
+	_test_refresh_label()
+
 func _test_cycle_hero() -> void:
 	var hs: Array = []
 	for e in get_tree().get_nodes_in_group("heroes"):
@@ -7757,3 +7772,4 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
+
