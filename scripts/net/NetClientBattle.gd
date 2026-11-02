@@ -60,6 +60,7 @@ const SNAP_HEALTH_PACKS := 13 # 血包状态 [x,z,team,available,cooldown_timer,
 const SNAP_SKILL_REVEALS := 14 # 技能侦察区域 [x,z,radius]（鲁班2/后羿R）
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
 const MOVE_JUMP_UNITS := 100.0    # 相邻快照样本位移超此即判瞬移/位移技能/回城：直接贴最新，不插值滑行
+const INTERP_DELAY := 0.08        # 实体插值回看窗口：WS（TCP）抖动下始终有下一个样本可插值，避免隔帧贴最新样本冻结
 
 # —— #43 FX 播放参数（与 NetSession 快照 fx 段一致）——
 const SNAP_FX_SEQ := 0      # fx 段 [0] 是 seq；[1..] 为条目
@@ -197,7 +198,8 @@ var _own := {}            # 本帧 own 字典（按 manifest.nid 匹配出来的
 var _score := {}          # 顶部实时战况（host SNAP_SCORE：pk/ek/pg/eg；对局中常显）
 var _respawn_rows: Array = []   # SNAP_RESPAWN：小地图右侧英雄环形头像带行（host _build_respawn_rows）
 var _last_snap_time := 0.0
-var _rtime := -1.0        # 渲染插值时钟（游戏秒）：收到首个快照后每帧按真实时间推进、封顶最新快照时刻 →
+var _rtime := -1.0        # 渲染插值时钟（游戏秒：领先最新快照 INTERP_DELAY，用于其它单位平滑插值）
+var _rtime_self := -1.0   # 本机英雄插值时钟（不延迟：点地移动等未预测时保持即时响应，手感不拖）
                           # 相邻两个快照样本之间逐帧匀速扫过，杜绝 15Hz 离散目标"追赶→被拽走"的一顿一顿
 
 var _views := {}          # net_id -> {node, type, team, name, hp, maxhp, bar_off, target, set}
@@ -446,15 +448,23 @@ func _process(delta: float) -> void:
 	if _owned:
 		if _pending_skill >= 0:
 			_ret_point = _ground_hit(_mouse_screen)
-	# 实体平滑移动：主机 15Hz 快照位置是离散步进，旧版每帧指数逼近离散目标 → 每快照"减速接近后突然被下一目标拽走"的一顿一顿。
-	# 改匀速线性插值：_rtime 每帧按真实时间推进、封顶不越过最新快照时刻，故相邻两个快照样本之间逐帧连续扫过——
-	# 视觉位移全程匀速（渲染滞后恒 ≤1 快照周期，本地局无感）；单样本位移 > MOVE_JUMP_UNITS 判瞬移/回城/复活直接贴最新不过场。
+	# 实体平滑移动：_rtime 每帧按真实时间推进，封顶 = 最新快照时刻 - INTERP_DELAY（回看 80ms）。
+	# WS（TCP）快照会在到达端抖动/成串：若封顶到最新样本，隔帧就会无样本可插值而冻结一下；
+	# 回看一个窗口后始终有「下一个样本」，逐帧匀速插值。本机英雄未预测时用 _rtime_self（不延迟）保手感。
+	# 单样本位移 > MOVE_JUMP_UNITS 判瞬移/回城/复活直接贴最新不过场。
 	if _rtime < 0.0:
-		_rtime = _last_snap_time   # 起步：与最新样本对齐（尚无快照则 0）
+		_rtime = maxf(0.0, _last_snap_time - INTERP_DELAY)   # 起步：落后最新样本一个插值窗口
 	else:
 		_rtime += delta
-		if _rtime > _last_snap_time:
-			_rtime = _last_snap_time
+		var _rt_cap := maxf(0.0, _last_snap_time - INTERP_DELAY)
+		if _rtime > _rt_cap:
+			_rtime = _rt_cap
+	if _rtime_self < 0.0:
+		_rtime_self = _last_snap_time
+	else:
+		_rtime_self += delta
+		if _rtime_self > _last_snap_time:
+			_rtime_self = _last_snap_time
 	for nid in _views:
 		var v: Dictionary = _views[nid]
 		if v.node == null:
@@ -467,10 +477,14 @@ func _process(delta: float) -> void:
 		var h: Array = v.get("his", [])
 		if h.size() < 2:
 			continue
+		# 本机英雄未处于输入预测态（点地移动/被控等）时用不延迟的时钟，保持操作即时响应
+		var rt := _rtime
+		if nid == _self_net and not _pred_on:
+			rt = _rtime_self
 		var a := 0
 		var b := 0
 		for i in range(h.size()):
-			if float(h[i][0]) <= _rtime:
+			if float(h[i][0]) <= rt:
 				a = i
 			else:
 				b = i
@@ -489,7 +503,7 @@ func _process(delta: float) -> void:
 		var ta := float(h[a][0])
 		var tb := float(h[b][0])
 		if tb > ta:
-			f = clampf((_rtime - ta) / (tb - ta), 0.0, 1.0)
+			f = clampf((rt - ta) / (tb - ta), 0.0, 1.0)
 		v.node.global_position = pa.lerp(pb, f)
 		# 筋斗云/腾空：水平位置插值，垂直高度直接取最新快照（避免历史只存 x/z 被压回地面）
 		if v.get("target") is Vector3:
@@ -691,7 +705,9 @@ func _on_snapshot(snap: Array) -> void:
 	_last_snap_time = float(snap[SNAP_TIME])
 	# 渲染时钟起步/卡顿恢复/中途入场：落后最新样本超 0.25s 直接对齐（不逐帧补播历史轨迹，防实体滞留 0.53s 滞后窗口）
 	if _rtime < _last_snap_time - 0.25:
-		_rtime = _last_snap_time
+		_rtime = maxf(0.0, _last_snap_time - INTERP_DELAY)
+	if _rtime_self < _last_snap_time - 0.25:
+		_rtime_self = _last_snap_time
 	var own_dict: Dictionary = snap[SNAP_OWN]
 	if _owned:
 		for pid in own_dict:
@@ -4634,10 +4650,10 @@ func _tick_self_prediction(delta: float) -> void:
 	var drift := _pred_snap - _pred_pos
 	drift.y = 0.0
 	_pred_err = drift.length()
-	if _pred_err > 3.0:
+	if _pred_err > 3.5:
 		_pred_pos = Vector3(_pred_snap.x, node.global_position.y, _pred_snap.z)
-	elif _pred_err > 0.5:
-		_pred_pos += drift * clampf(delta * 6.0, 0.0, 0.25)
+	elif _pred_err > 0.8:
+		_pred_pos += drift * clampf(delta * 4.0, 0.0, 0.2)
 	node.global_position = Vector3(_pred_pos.x, node.global_position.y, _pred_pos.z)
 
 
@@ -6142,6 +6158,9 @@ class _CritMark extends Control:
 			var rad := k * 0.48 if i % 2 == 0 else k * 0.14
 			pts2.append(c + Vector2(cos(ang), sin(ang)) * rad)
 		draw_colored_polygon(pts2, hot)
+
+
+
 
 
 
