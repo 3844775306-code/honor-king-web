@@ -1367,7 +1367,9 @@ func _execute_local_task(jungle: bool) -> void:
 			return
 	if lane_strategy:
 		lane_strategy.update_time(gt)
-		lane_strategy.decide()
+		var force_push := team_task != null and team_task.is_active() \
+			and (team_task.type == TeamTask.Type.PUSH_LANE or team_task.type == TeamTask.Type.PUSH_TOWER)
+		lane_strategy.decide(force_push)
 		if lane != lane_strategy.lane:
 			lane = lane_strategy.lane
 	_set_action(AIAction.Type.PUSH_LANE)
@@ -2418,4 +2420,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-

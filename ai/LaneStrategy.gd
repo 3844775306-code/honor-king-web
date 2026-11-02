@@ -360,7 +360,7 @@ func _get_forward_minion_pos() -> Vector3:
 
 # ==================== 主决策（每秒） ====================
 
-func decide() -> void:
+func decide(force_push: bool = false) -> void:
 	# 开局 AI 先于防御塔创建，默认草丛位当时算不准：塔生成后补算一次
 	if not _bush_resolved:
 		var turrets := hero.get_tree().get_nodes_in_group("turrets")
@@ -377,8 +377,8 @@ func decide() -> void:
 	elif mid_switched_lane >= 0:
 		_try_mid_switch_back()
 
-	# 防守判断
-	if _is_defensive():
+	# 防守判断：团队推线/推塔任务下不由本地防守逻辑接管，避免退回己方最前线塔。
+	if not force_push and _is_defensive():
 		hero.move_target = _get_defensive_position()
 		hero.manual_target = null
 		return
@@ -395,6 +395,10 @@ func decide() -> void:
 	var forward_minion := _get_forward_minion_pos()
 	if forward_minion != Vector3.ZERO:
 		hero.move_target = forward_minion
+		hero.manual_target = null
+	elif force_push:
+		# 推线任务没有己方前排兵：原地等下一波，不退回己方最前线塔。
+		hero.move_target = hero.global_position
 		hero.manual_target = null
 	elif default_bush_pos != Vector3.ZERO:
 		hero.move_target = default_bush_pos
