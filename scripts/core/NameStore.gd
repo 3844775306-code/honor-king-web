@@ -34,6 +34,7 @@ static func save_player_name(n: String) -> void:
 		cf.load(path)
 		cf.set_value("player", "name", nm)
 		if cf.save(path) == OK:
+			CloudSync.schedule_push()
 			return
 
 ## 随机 AI 昵称：两字组合池洗牌后取 n 个，避开 exclude（如玩家昵称）
@@ -59,3 +60,4 @@ static func random_ai_names(n: int, exclude: Array = []) -> Array:
 	while out.size() < n:
 		out.append("影卫%02d" % (out.size() + 1))
 	return out
+

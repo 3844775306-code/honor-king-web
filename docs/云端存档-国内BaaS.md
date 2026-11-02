@@ -9,7 +9,7 @@
 | Bmob | 有免费额度 | 国内 BaaS；注册/额度以官网为准 |
 | LeanCloud | 仅存量 | 2026-01-12 起停止新注册，2027-01-12 停服 |
 
-> 只同步「段位 + 对战纪录」JSON，不含录像。
+> 默认自动同步：账号（本地账号文件）、昵称、段位、灵宝、操作设置、出装方案等所有本地存档；录像不自动同步，点「上传最近录像」手动传。
 
 ---
 
@@ -22,7 +22,7 @@
 - 数据库密码随便设（用不到）
 - **Region 选 Singapore / Tokyo**（离国内近，延迟低）
 
-### 2. 建表 + 权限（SQL Editor 里整段执行）
+### 2. 建表 + 权限（SQL Editor 里整段执行；含录像桶）
 
 ```sql
 create table if not exists public.cloud_saves (
@@ -38,6 +38,27 @@ alter table public.cloud_saves enable row level security;
 create policy cloud_saves_read   on public.cloud_saves for select using (true);
 create policy cloud_saves_insert on public.cloud_saves for insert with check (true);
 create policy cloud_saves_update on public.cloud_saves for update using (true) with check (true);
+
+-- 云端账号（换设备/重装后可按用户名+密码找回存档）
+create table if not exists public.hk_accounts (
+  username text primary key,
+  salt text not null,
+  hash text not null,
+  pid text not null,
+  updated_at bigint not null default 0
+);
+alter table public.hk_accounts enable row level security;
+create policy hk_accounts_read   on public.hk_accounts for select using (true);
+create policy hk_accounts_insert on public.hk_accounts for insert with check (true);
+create policy hk_accounts_update on public.hk_accounts for update using (true) with check (true);
+
+-- 录像手动上传用的存储桶（10MB 级 .rep）
+insert into storage.buckets (id, name, public)
+values ('hk_replays', 'hk_replays', false)
+on conflict (id) do nothing;
+
+create policy hk_replays_insert on storage.objects for insert with check (bucket_id = 'hk_replays');
+create policy hk_replays_read   on storage.objects for select using (bucket_id = 'hk_replays');
 ```
 
 ### 3. 拿地址和 key
@@ -47,18 +68,14 @@ Project Settings → **API**：
 - `Project URL`（形如 `https://xxxx.supabase.co`）
 - `anon public` key
 
-### 4. 游戏内填
+### 4. 游戏内
 
-主菜单 → 云端存档：
+地址和 anon key 已经**内置在客户端**，玩家不用填：
 
-| 字段 | 值 |
-|---|---|
-| 存储后端 | **Supabase（免费档）** |
-| 服务器地址 | `https://xxxx.supabase.co` |
-| AppKey | `anon public` key |
-| 赛后自动上传 | 可选开启 |
-
-点「↑ 上传到云端」，成功后再点「↓ 从云端恢复」验证。
+- 启动游戏会自动拉取云端最新存档（云端比本地新时覆盖）
+- 账号/昵称/段位/灵宝/设置/出装等存档一有变化，2 秒内自动上传
+- 云端存档页可手动「立即同步」「从云端恢复」「上传最近录像」
+- 换机/重装：用原用户名+密码登录，会自动从云端找回账号与全部存档\n- 自动同步防抖：存档变化后 2 秒内自动上传，按玩家 ID 分档、新设备按用户名找回
 
 ### 5. 免费档注意事项
 
@@ -94,3 +111,6 @@ cd cloudflare/cloud-save
 CLOUD_TOKEN=dev-token node dev-server.mjs
 # 游戏内地址 http://127.0.0.1:8788，口令 dev-token
 ```
+
+
+

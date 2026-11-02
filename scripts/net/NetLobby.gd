@@ -197,6 +197,8 @@ func _ready() -> void:
 		else:
 			_route_client()
 		return
+	# 启动自动云同步：云端更新则拉取覆盖本地；失败继续用本地
+	await _cloud_startup_sync()
 	_build_base()
 	_connect_signals()
 	_show_menu()
@@ -919,6 +921,23 @@ func _open_replays() -> void:
 	add_child(panel)
 
 
+# ---------- 云端存档（自动同步，内置 Supabase 免费档） ----------
+
+## 启动同步：最多等 3 秒，失败/超时静默继续（离线也能玩）
+func _cloud_startup_sync() -> void:
+	await get_tree().process_frame   # 等根节点退出 setup，HTTPRequest 才能 add_child
+	CloudSyncScript.ensure_defaults()
+	if not CloudSyncScript.is_configured():
+		return
+	var done := [false]
+	CloudSyncScript.sync_startup(get_tree(), func(_ok: bool, _code: int, msg: String) -> void:
+		print("[Cloud] ", msg)
+		done[0] = true)
+	var frames := 0
+	while not done[0] and frames < 180:
+		await get_tree().process_frame
+		frames += 1
+
 # ---------- 云端存档（段位 + 对战纪录；需自备 HTTP 服务） ----------
 
 func _open_cloud() -> void:
@@ -939,45 +958,25 @@ func _open_cloud() -> void:
 	var title := _mk_label("云端存档", int(_fs(UiKit.FS_HUGE) * 1.6), COL_TITLE)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(title)
-	var tip := _mk_label("把「段位 + 对战纪录」备份到云端，换机可恢复。\n推荐 Supabase 免费档（不用买服务器，配置见 docs/云端存档-国内BaaS.md）；也可阿里云轻量自建。",
+	var tip := _mk_label("云端账号已自动连接（无需填地址/KEY）：账号、昵称、段位、灵宝、操作设置、出装方案等本地数据会自动同步；录像请点下方按钮手动上传。",
 		_fs(UiKit.FS_SM), COL_DIM)
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(tip)
 
-	var cfg := PlayerPrefs.cloud_cfg()
-	# 后端切换：http（自建/Serverless）/ leancloud / bmob（国内 BaaS，免梯子）
-	var backend_btn := _mk_btn("", UiKit.C_TEAM1, false, Vector2(520, 48))
-	backend_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	col.add_child(backend_btn)
-	var _refresh_backend := func() -> void:
-		var names := {"http": "通用 HTTP（阿里云自建）", "supabase": "Supabase（免费档，推荐）", "bmob": "Bmob（国内 BaaS）", "leancloud": "LeanCloud（已停止新注册）"}
-		backend_btn.text = "存储后端：" + str(names.get(CloudSyncScript.backend(), "通用 HTTP"))
-	_refresh_backend.call()
-	backend_btn.pressed.connect(func() -> void:
-		var order := ["http", "supabase", "bmob", "leancloud"]
-		var c := PlayerPrefs.cloud_cfg()
-		c["backend"] = order[(order.find(CloudSyncScript.backend()) + 1) % order.size()]
-		PlayerPrefs.set_cloud_cfg(c)
-		_refresh_backend.call())
-	col.add_child(_cloud_edit_row("服务器地址", "HTTP 地址；LeanCloud 填控制台服务器地址；Bmob 留空", str(cfg.get("url", "")), false))
-	col.add_child(_cloud_edit_row("访问令牌（HTTP）", "通用 HTTP 后端用，可留空", str(cfg.get("token", "")), true))
-	col.add_child(_cloud_edit_row("AppID", "LeanCloud AppID / Bmob Application ID", str(cfg.get("app_id", "")), false))
-	col.add_child(_cloud_edit_row("AppKey", "LeanCloud AppKey / Bmob REST API Key", str(cfg.get("app_key", "")), true))
-	var pid_lab := _mk_label("玩家 ID：%s" % CloudSyncScript.player_id(), _fs(UiKit.FS_SM), COL_TEXT)
+	CloudSyncScript.ensure_defaults()
+	var pid_lab := _mk_label("云端账号：已自动连接（Supabase 免费档）\n玩家 ID：%s" % CloudSyncScript.player_id(), _fs(UiKit.FS_SM), COL_TEXT)
 	col.add_child(pid_lab)
-
-	var status := _mk_label("", _fs(UiKit.FS_SM), COL_GOLD)
+	var status := _mk_label("云端数据会自动同步；换机/重装后启动会自动拉取（录像需手动上传）。", _fs(UiKit.FS_SM), COL_GOLD)
 	col.add_child(status)
 
 	var auto_btn := _mk_btn("", UiKit.C_GOLD, false, Vector2(520, 48))
 	auto_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	col.add_child(auto_btn)
 	var _refresh_auto := func() -> void:
-		auto_btn.text = "赛后自动上传：" + ("开启" if bool(PlayerPrefs.cloud_cfg().get("auto", false)) else "关闭")
+		auto_btn.text = "自动同步：" + ("开启" if bool(PlayerPrefs.cloud_cfg().get("auto", false)) else "关闭")
 	_refresh_auto.call()
 	auto_btn.pressed.connect(func() -> void:
-		_save_cloud_cfg()
 		var c := PlayerPrefs.cloud_cfg()
 		c["auto"] = not bool(c.get("auto", false))
 		PlayerPrefs.set_cloud_cfg(c)
@@ -986,22 +985,30 @@ func _open_cloud() -> void:
 	var act := HBoxContainer.new()
 	act.add_theme_constant_override("separation", 16)
 	col.add_child(act)
-	var b_up := _mk_btn("↑  上传到云端", UiKit.C_GOLD, true, Vector2(320, 60))
-	b_up.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	b_up.pressed.connect(func() -> void:
-		_save_cloud_cfg()
-		status.text = "上传中…"
+	var b_sync := _mk_btn("↑  立即同步", UiKit.C_GOLD, true, Vector2(240, 60))
+	b_sync.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_sync.pressed.connect(func() -> void:
+		CloudSyncScript.ensure_defaults()
+		status.text = "同步中…"
 		CloudSyncScript.upload(get_tree(), func(ok: bool, code: int, msg: String) -> void:
-			status.text = "上传成功" if ok else "上传失败（%d）%s" % [code, msg.left(60)]))
-	act.add_child(b_up)
-	var b_down := _mk_btn("↓  从云端恢复", UiKit.C_TEAM0, false, Vector2(320, 60))
+			status.text = "已同步到云端" if ok else "同步失败（%d）%s" % [code, msg.left(60)]))
+	act.add_child(b_sync)
+	var b_down := _mk_btn("↓  从云端恢复", UiKit.C_TEAM0, false, Vector2(240, 60))
 	b_down.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	b_down.pressed.connect(func() -> void:
-		_save_cloud_cfg()
+		CloudSyncScript.ensure_defaults()
 		status.text = "下载中…"
 		CloudSyncScript.download(get_tree(), func(ok: bool, code: int, msg: String) -> void:
-			status.text = msg if ok else "下载失败（%d）%s" % [code, msg.left(60)]))
+			status.text = msg + "（重启游戏后生效）" if ok else "下载失败（%d）%s" % [code, msg.left(60)]))
 	act.add_child(b_down)
+	var b_rep := _mk_btn("上传最近录像", UiKit.C_TEAM1, false, Vector2(240, 60))
+	b_rep.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_rep.pressed.connect(func() -> void:
+		CloudSyncScript.ensure_defaults()
+		status.text = "上传录像中…"
+		CloudSyncScript.upload_latest_replay(get_tree(), func(ok: bool, code: int, msg: String) -> void:
+			status.text = msg if ok else "录像上传失败（%d）%s" % [code, msg.left(60)]))
+	act.add_child(b_rep)
 
 	var back := _mk_btn("←  返回主菜单", UiKit.C_TEAM0)
 	back.pressed.connect(_show_menu)
@@ -1031,32 +1038,9 @@ func _cloud_edit_row(label_txt: String, placeholder: String, value: String, secr
 	return row
 
 
-# 把当前页面两个输入框写回 PlayerPrefs（pid/auto 保留原值）
+# 云端配置已内置：只保证默认值存在（兼容旧调用）
 func _save_cloud_cfg() -> void:
-	var url := ""
-	var token := ""
-	var app_id := ""
-	var app_key := ""
-	if _stack != null:
-		var edits := _stack.find_children("*", "LineEdit", true, false)
-		if edits.size() > 0:
-			url = (edits[0] as LineEdit).text
-		if edits.size() > 1:
-			token = (edits[1] as LineEdit).text
-		if edits.size() > 2:
-			app_id = (edits[2] as LineEdit).text
-		if edits.size() > 3:
-			app_key = (edits[3] as LineEdit).text
-	var old := PlayerPrefs.cloud_cfg()
-	PlayerPrefs.set_cloud_cfg({
-		"backend": str(old.get("backend", "http")),
-		"url": url.strip_edges(),
-		"token": token.strip_edges(),
-		"app_id": app_id.strip_edges(),
-		"app_key": app_key.strip_edges(),
-		"pid": str(old.get("pid", CloudSyncScript.player_id())),
-		"auto": bool(old.get("auto", false)),
-	})
+	CloudSyncScript.ensure_defaults()
 
 
 # ---------- 操作设置（页内切换，不弹独立窗口） ----------
@@ -3644,3 +3628,5 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
+
+

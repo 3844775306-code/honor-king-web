@@ -23,8 +23,10 @@ static func _load() -> ConfigFile:
 
 static func _save(cf: ConfigFile) -> void:
 	if cf.save(PATH) == OK:
+		CloudSync.schedule_push()
 		return
 	cf.save(PATH_DEV)
+	CloudSync.schedule_push()
 
 
 static func name() -> String:
@@ -68,3 +70,4 @@ static func cycle_color() -> int:
 	cf.set_value("lingbao", "color", i)
 	_save(cf)
 	return i
+

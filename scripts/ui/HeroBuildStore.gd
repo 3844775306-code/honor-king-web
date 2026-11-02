@@ -32,12 +32,20 @@ static func _ensure_loaded() -> void:
 			return
 
 
+## 云端恢复后重新从磁盘加载
+static func reload() -> void:
+	_loaded = false
+	_data = {}
+	_ensure_loaded()
+
+
 static func _flush() -> void:
 	var txt := JSON.stringify(_data, "\t")
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f != null:
 		f.store_string(txt)
 		f.close()
+		CloudSync.schedule_push()
 		return
 	# 受限环境（如编辑器沙箱）user:// 不可写 → 退回项目内 saves/
 	DirAccess.make_dir_recursive_absolute("res://saves")
@@ -108,3 +116,5 @@ static func delete_build(hero_name: String, build_name: String) -> void:
 ## 是否存在某英雄的任何方案
 static func has_builds(hero_name: String) -> bool:
 	return not get_builds(hero_name).is_empty()
+
+

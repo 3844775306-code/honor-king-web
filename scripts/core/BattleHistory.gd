@@ -129,6 +129,7 @@ static func _save(all_records: Array) -> void:
 		return
 	f.store_string(JSON.stringify(all_records))
 	f = null
+	CloudSync.schedule_push()
 
 
 # 云端恢复：本地与云端纪录合并去重（云端在前，保留最新 MAX_RECORDS 条）
@@ -157,5 +158,6 @@ static func import_all(records: Array) -> bool:
 		merged.pop_back()
 	_save(merged)
 	return true
+
 
 
