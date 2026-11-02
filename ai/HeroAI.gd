@@ -159,6 +159,10 @@ func _action_is_complete(action: AIAction) -> bool:
 			return team_task == null or not team_task.is_active()
 		AIAction.Type.SAFE_RECALL:
 			return hero.is_in_own_fountain() and _fully_recovered()
+		AIAction.Type.RETURN_TO_BASE:
+			return _is_under_own_tower() and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) == 0
+		AIAction.Type.DEFEND_TOWER:
+			return _get_lane_turret_under_attack(lane) == null
 		AIAction.Type.HEALTH_PACK:
 			return hero.health > hero.actual_max_health * 0.60
 		AIAction.Type.TRIPOD:
@@ -220,11 +224,18 @@ func _try_teleport():
 	if hero.is_teleporting or hero.teleport_timer > 0:
 		return
 	var battle = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	if battle == null:
+		return
 	var zone = battle._get_teleport_zone_for_hero(hero)
-	if zone:
-		var minion = perception.find_nearest_ally_minion_on_lane(lane)
-		if minion:
-			battle.request_teleport(hero, minion)
+	if zone == null:
+		return
+	var minion = perception.find_nearest_ally_minion_on_lane(lane)
+	if minion == null:
+		return
+	var walk_time: float = hero.global_position.distance_to(minion.global_position) / maxf(1.0, hero.actual_move_speed)
+	if walk_time <= Hero.TELEPORT_DURATION + 2.0:
+		return
+	battle.request_teleport(hero, minion)
 
 
 # ==================== 技能升级 ====================
