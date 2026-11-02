@@ -806,7 +806,7 @@ func _training_refresh_dummy_stats() -> void:
 	var lines: Array = []
 	lines.append("[color=#ffd966][b]HP[/b]  [color=#e8f2ff]%d / 10000[/color]    [color=#ffd966][b]防御[/b]  [color=#e8f2ff]%.0f[/color]" % [int(d.health), _training_dummy_armor])
 	lines.append("[color=#9fd7ff]攻击时长[/color] [color=#ffffff][b]%.2fs[/b][/color]    [color=#9fd7ff]总伤害[/color] [color=#ffffff][b]%d[/b][/color]    [color=#9fd7ff]DPS[/color] [color=#ffd966][b]%.0f[/b][/color]" % [
-		float(st.get("active_time", 0.0)), int(st.get("total", 0.0)), d.dps()])
+		d.active_time(), int(st.get("total", 0.0)), d.dps()])
 	lines.append("[color=#7fe3a0]物理 %d[/color]    [color=#c9a7ff]法术 %d[/color]    [color=#ff9b7a]真伤 %d[/color]" % [
 		int(st.get("phys", 0.0)), int(st.get("magic", 0.0)), int(st.get("true", 0.0))])
 	lines.append("[color=#5e7698]──────── 伤害来源 ────────[/color]")

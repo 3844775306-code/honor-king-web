@@ -121,7 +121,7 @@ func _refresh_stats_label() -> void:
 	if _stats_label == null or not is_instance_valid(_stats_label):
 		return
 	_stats_label.text = "训练木偶\n攻击 %.1fs  总伤害 %d\nDPS %.0f  物/法/真 %d/%d/%d" % [
-		float(stats.get("active_time", 0.0)), int(stats.get("total", 0.0)), dps(),
+		active_time(), int(stats.get("total", 0.0)), dps(),
 		int(stats.get("phys", 0.0)), int(stats.get("magic", 0.0)), int(stats.get("true", 0.0))]
 
 
@@ -147,8 +147,11 @@ func _damage_feedback(actual: float, is_magic: bool) -> void:
 		var last: int = int(stats.get("last_hit_ms", 0))
 		if last > 0:
 			var gap := float(now - last) / 1000.0
+			# 两次伤害间隔在攻击窗口内：整段计入；超过 0.5s 则只结算上一段最后 0.5s
 			if gap <= 0.5:
 				stats.active_time = float(stats.get("active_time", 0.0)) + gap
+			else:
+				stats.active_time = float(stats.get("active_time", 0.0)) + 0.5
 		stats["last_hit_ms"] = now
 		stats["total"] = float(stats.get("total", 0.0)) + actual
 		if _pending_true:
@@ -165,8 +168,17 @@ func _damage_feedback(actual: float, is_magic: bool) -> void:
 	super._damage_feedback(actual, is_magic)
 
 
-func dps() -> float:
+## 攻击总时长：已结算段 + 当前最后一次伤害后 up to 0.5s（超过即暂停）
+func active_time() -> float:
 	var t: float = float(stats.get("active_time", 0.0))
+	var last: int = int(stats.get("last_hit_ms", 0))
+	if last > 0:
+		t += minf(float(Time.get_ticks_msec() - last) / 1000.0, 0.5)
+	return t
+
+
+func dps() -> float:
+	var t: float = active_time()
 	return float(stats.get("total", 0.0)) / t if t > 0.01 else 0.0
 
 
