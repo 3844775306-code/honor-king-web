@@ -85,6 +85,7 @@ var _ai_benchmark := false
 var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
+var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 10x + 赛后自动存档并回大厅
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -304,6 +305,27 @@ func _ready():
 	# 让无头主机能跑一局完整 AI 对局供快照广播。有画面时同样生效，便于本地双开调试。
 	elif "--net-test" in OS.get_cmdline_user_args() or "--ai-bench" in OS.get_cmdline_user_args():
 		call_deferred("_start_game", "亚瑟")
+	elif PlayerPrefs.opt_bool("ai_test_match", false):
+		PlayerPrefs.set_opt("ai_test_match", false)
+		_ai_test_match = true
+		call_deferred("_start_ai_test_match")
+	elif "--ai-test" in OS.get_cmdline_user_args():
+		# CLI/无头测试入口：与主菜单测试模块同一流程
+		_ai_test_match = true
+		call_deferred("_start_ai_test_match")
+
+## 主菜单测试模块：随机英雄开局，双方 10 个 AI，10 倍速；对局结束自动保存录像并回大厅
+func _start_ai_test_match() -> void:
+	var pool: Array = []
+	for nm in hero_configs.keys():
+		if str(nm) != "元流之子":   # 避免测试局弹万物为流选择面板
+			pool.append(str(nm))
+	if pool.is_empty():
+		pool = ["亚瑟"]
+	pool.shuffle()
+	print("[AI-TEST] start random 10 AI at 10x")
+	_start_game(str(pool[0]))
+
 
 func _start_net_lineup(picks: Dictionary) -> void:
 	Config.reset_player_team()
@@ -544,6 +566,10 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	var _bench_args := OS.get_cmdline_user_args()
 	_ai_benchmark = "--ai-bench" in _bench_args
 	_ai_benchmark_keep = "--ai-bench-keep" in _bench_args
+	if _ai_test_match:
+		Config.player_team = Config.Team.PLAYER
+		Engine.time_scale = 10.0
+		print("[AI-TEST] time_scale=10")
 	if _ai_benchmark:
 		for a in _bench_args:
 			if str(a).begins_with("--ai-bench-seed="):
@@ -575,12 +601,16 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	# 创建实体：BP 结果传入（我方 AI 按号位顺序排除玩家席位；网络 host 路径数组为空→原随机）
 	_create_player_hero(hero_type, summoner_id)          # 玩家英雄
 	# 基准模式：玩家席位也交给 HeroAI，保证双方都是 5 个 AI，避免“玩家原地挂机”污染指标
-	if _ai_benchmark and is_instance_valid(hero):
+	if (_ai_benchmark or _ai_test_match) and is_instance_valid(hero):
 		hero.is_ai = true
 		var _bench_ai := HeroAI.new()
 		hero.add_child(_bench_ai)
 	sel_ally_ai_picks = []
-	if _ai_benchmark:
+	if _ai_test_match:
+		# 测试局：双方都由 _create_team_ai 随机补全，不固定阵容
+		sel_ally_ai_picks = []
+		sel_enemy_picks = []
+	elif _ai_benchmark:
 		# 固定双方阵容，避免每次随机 BP 改变对位，导致前后对比混入阵容噪声
 		sel_ally_ai_picks = ["妲己", "李白", "狄仁杰", "太乙真人"]
 		sel_enemy_picks = ["铠", "安琪拉", "兰陵王", "孙尚香", "东皇太一"]
@@ -6733,6 +6763,8 @@ func crystal_destroyed(team: int):
 	# 单机与联机统一走同一套终局演出（水晶爆炸 → EndBanner → 聚光灯舞台 → 个人表现 → 结算页）；
 	# 联机结算数据仍由 NetSession 在 game_over 翻转时广播给客户端，不受演出时长影响。
 	_play_end_sequence(team, winner == Config.player_team)
+	if _ai_test_match:
+		_finish_ai_test_match()
 
 var _end_seq_on: bool = false
 var _pm_stage_node: PostMatchStage = null
@@ -6747,6 +6779,15 @@ var _pm_env: Environment = null
 var _pm_key: DirectionalLight3D = null
 var _pm_hidden: Array = []
 var _pm_lights: Array = []
+
+## 测试局结束：等录像落盘后回主菜单（8 秒真实时间，ignore_time_scale）
+func _finish_ai_test_match() -> void:
+	await get_tree().create_timer(8.0, true, false, true).timeout
+	_ai_test_match = false
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+
 
 ## 终局演出（单机/离线 host）：won=true 为胜利（敌方水晶炸），false 为失败（我方水晶炸）
 func _play_end_sequence(team: int, won: bool) -> void:
