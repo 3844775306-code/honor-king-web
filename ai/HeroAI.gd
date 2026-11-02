@@ -35,6 +35,12 @@ var _ai_path_time := 0.0
 var _ai_path_index := 0
 var _ai_path_risk := 0.0
 var _ai_path_len := 0.0
+var _nav_goal := Vector3.ZERO
+var _nav_path: Array = []
+var _nav_index := 0
+var _nav_time := 0.0
+var _nav_issued := Vector3.ZERO
+var _nav_done := false
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -215,6 +221,56 @@ func _walk_to(goal: Vector3) -> void:
 			and hero.global_position.distance_to(_ai_path[_ai_path_index]) < 1.2:
 		_ai_path_index += 1
 	hero.move_target = _ai_path[_ai_path_index]
+
+func _sync_path_movement() -> void:
+	# 所有非 manual_target 的 AI 移动统一走 MovementPlanner；Hero 只负责沿当前 waypoint 走。
+	if is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
+		_clear_nav_path()
+		return
+	if current_action != null and (current_action.type == AIAction.Type.SAFE_RECALL \
+			or current_action.type == AIAction.Type.RETURN_TO_BASE):
+		_clear_nav_path()
+		return
+	var raw := hero.move_target
+	if raw == Vector3.ZERO:
+		_clear_nav_path()
+		return
+	var now := Time.get_ticks_msec() * 0.001
+	# 策略每次 think 都会重写最终目标；只有目标真的变化时才重规划，避免重置路径索引。
+	if _nav_goal == Vector3.ZERO or (raw.distance_to(_nav_goal) > 1.0 and raw.distance_to(_nav_issued) > 0.8):
+		_nav_goal = raw
+		_nav_done = false
+		_nav_time = now
+		_nav_path = MovementPlanner.plan(hero, _nav_goal, threat_model)
+		_nav_index = 0
+	elif _nav_done:
+		return
+	elif _nav_path.is_empty() or now - _nav_time > 0.8 or _nav_index >= _nav_path.size():
+		_nav_time = now
+		_nav_path = MovementPlanner.plan(hero, _nav_goal, threat_model)
+		_nav_index = 0
+	if _nav_path.is_empty():
+		hero.move_target = _nav_goal
+		_nav_done = true
+		return
+	while _nav_index < _nav_path.size() - 1 \
+			and hero.global_position.distance_to(_nav_path[_nav_index]) < 1.2:
+		_nav_index += 1
+	if _nav_index >= _nav_path.size():
+		hero.move_target = _nav_goal
+		_nav_done = true
+		return
+	hero.move_target = _nav_path[_nav_index]
+	_nav_issued = hero.move_target
+
+
+func _clear_nav_path() -> void:
+	_nav_goal = Vector3.ZERO
+	_nav_path.clear()
+	_nav_index = 0
+	_nav_done = false
+	_nav_issued = Vector3.ZERO
+
 
 func _sync_ai_movement() -> void:
 	var t = hero.manual_target
@@ -2632,6 +2688,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
-
