@@ -423,6 +423,9 @@ func _finish_task(t: TeamTask, status: int) -> void:
 		TeamTask.Status.FAILED: task_stats["failed"] += 1
 		TeamTask.Status.EXPIRED: task_stats["expired"] += 1
 		TeamTask.Status.REASSIGNED: task_stats["reassigned"] += 1
+	# 重分配不立刻清空英雄手上的旧任务：让 HeroAI 按优先级决定是否抢占。
+	if status == TeamTask.Status.REASSIGNED:
+		return
 	var owner := t.owner
 	if owner != null and is_instance_valid(owner):
 		for child in owner.get_children():
@@ -482,19 +485,7 @@ func allocate_all() -> Dictionary:
 		var team_label := "玩家方" if team == Config.Team.PLAYER else "敌方"
 		var ally_alive := _get_ally_heroes(team).size()
 		var enemy_alive := _get_enemy_heroes(team).size()
-		# 人数碾压：敌方≤1 且我方≥3，全队放弃分推/打龙，直接抱团推塔。
-		if enemy_alive <= 1 and ally_alive >= 3:
-			var pt := _push_tower_target(team)
-			if pt != Vector3.ZERO:
-				current_mode = SplitMode.PUSH_TOWER
-				push_target_by_team[team] = pt
-				var push_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
-				for h in _get_ally_heroes(team):
-					if h.is_ai:
-						result[h] = push_lane
-				print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
-				continue
-		# 防守优先：高地告急 / 大幅落后 → 全队收缩到压力最大的分路
+		# 优先级：DEFEND(100) > PUSH_TOWER(90) > INVADE(85) > OBJECTIVE(80)。
 		if _should_defend(team):
 			var dl := _defend_lane_for(team)
 			var crystal := _crystal_of(team)
@@ -507,6 +498,18 @@ func allocate_all() -> Dictionary:
 				result[h] = dl
 			print("[TeamTactics] t=%.0f %s 水晶受小兵威胁，%d 人接守塔" % [bm.game_time, team_label, defend_assignees.size()])
 			continue
+		# 人数碾压：敌方≤1 且我方≥3，全队放弃分推/打龙，直接抱团推塔。
+		if enemy_alive <= 1 and ally_alive >= 3:
+			var pt := _push_tower_target(team)
+			if pt != Vector3.ZERO:
+				current_mode = SplitMode.PUSH_TOWER
+				push_target_by_team[team] = pt
+				var push_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
+				for h in _get_ally_heroes(team):
+					if h.is_ai:
+						result[h] = push_lane
+				print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
+				continue
 		# 4分钟后只要人数有优势，就让打野尝试反野（其余人继续分推）。
 		if ally_alive > enemy_alive:
 			var invader := _find_natural_jungler(team)
@@ -561,6 +564,11 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	task_stats["issued"] += 1
 	var now := bm.game_time
 	var role := str(h.role)
+	if defend_assignees.has(h):
+		var dl: int = int(defend_lane_by_team.get(h.team, lane))
+		var dp: Vector3 = defend_target_by_team.get(h.team, _own_tower_pos(h.team, dl))
+		t.setup(TeamTask.Type.DEFEND_LANE, dl, dp, null, 100, now, 18.0, "水晶守小兵", role)
+		return t
 	if push_target_by_team.has(h.team):
 		var pl := int(push_lane_by_team.get(h.team, lane))
 		t.setup(TeamTask.Type.PUSH_TOWER, pl, push_target_by_team[h.team], null, 90, now, 40.0, "抱团推塔", role)
@@ -569,10 +577,9 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	if invade_target_by_hero.has(h):
 		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 85, now, 20.0, "人数优势反野", role)
 		return t
-	if defend_assignees.has(h):
-		var dl: int = int(defend_lane_by_team.get(h.team, lane))
-		var dp: Vector3 = defend_target_by_team.get(h.team, _own_tower_pos(h.team, dl))
-		t.setup(TeamTask.Type.DEFEND_LANE, dl, dp, null, 100, now, 18.0, "水晶守小兵", role)
+	if lane == AiConfig.Lane.JUNGLE and _is_dragon_alive():
+		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
+		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
 		return t
 	if gank_target_by_hero.has(h):
 		var gt: Hero = gank_target_by_hero[h]
@@ -583,12 +590,7 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 		t.setup(TeamTask.Type.SUPPORT, lane, st.global_position, st, 60, now, 15.0, "支援高威胁队友", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE:
-		# 开局/龙未刷新时只是“继续刷野”，不能把所有打野都派去一个不存在的龙坑。
-		if not _is_dragon_alive():
-			t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
-			return t
-		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
-		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
+		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
 		return t
 	if role == "辅助":
 		var carry := _find_carry(h.team)

@@ -24,6 +24,7 @@ var team_task: TeamTask = null
 var think_timer: float = 0.0
 var _frame_delta: float = 0.0
 var _temp_clearing: bool = false
+var _task_commit_until: float = -999.0
 var recall_timer: float = 0.0
 var buy_timer: float = 5.0
 var has_respawned_recently: bool = false
@@ -1167,9 +1168,18 @@ func _minion_under_unsafe_tower(m: Minion) -> bool:
 
 # 由团队指挥官下发的结构化主线任务
 func assign_team_task(task: TeamTask) -> void:
-	team_task = task
 	if task == null:
 		return
+	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	var now := bm.game_time if bm else 0.0
+	if team_task != null and team_task.is_active():
+		# 高优先级立即抢占；低优先级保留当前任务；同优先级在承诺窗口内不换。
+		if task.priority < team_task.priority:
+			return
+		if task.priority == team_task.priority and now < _task_commit_until:
+			return
+	team_task = task
+	_task_commit_until = now + 2.0
 	if task.type == TeamTask.Type.OBJECTIVE:
 		is_dragon_rally = true
 		dragon_rally_pos = task.target_pos
