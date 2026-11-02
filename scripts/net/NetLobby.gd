@@ -823,13 +823,13 @@ func _status_text(text: String, color: Color) -> void:
 
 # ---------- 动作：单机 / 建房 / 加入 ----------
 
-## 主菜单测试模块：随机 10 AI、10 倍速，对局结束录像自动保存并回大厅
+## 主菜单测试模块：随机 10 AI、4 倍速，对局结束录像自动保存并回大厅
 func _start_ai_test_match() -> void:
 	if _connecting or _route_pending != "":
 		return
 	PlayerPrefs.set_opt("ai_test_match", true)
 	_set_menu_enabled(false)
-	_status_text("测试模块：随机 10 AI · 10 倍速开局…", COL_SUB)
+	_status_text("测试模块：随机 10 AI · 4 倍速开局…", COL_SUB)
 	_show_loading_then("res://scenes/battle.tscn")
 
 

@@ -85,7 +85,7 @@ var _ai_benchmark := false
 var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
-var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 10x + 赛后自动存档并回大厅
+var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
 var team_gold_diff_history: Array = [0]  # 每分钟蓝方减红方经济差
 var player_base_health: int = 5000
 var enemy_base_health: int = 5000
@@ -314,7 +314,7 @@ func _ready():
 		_ai_test_match = true
 		call_deferred("_start_ai_test_match")
 
-## 主菜单测试模块：随机英雄开局，双方 10 个 AI，10 倍速；对局结束自动保存录像并回大厅
+## 主菜单测试模块：随机英雄开局，双方 10 个 AI，4 倍速；对局结束自动保存录像并回大厅
 func _start_ai_test_match() -> void:
 	var pool: Array = []
 	for nm in hero_configs.keys():
@@ -323,7 +323,7 @@ func _start_ai_test_match() -> void:
 	if pool.is_empty():
 		pool = ["亚瑟"]
 	pool.shuffle()
-	print("[AI-TEST] start random 10 AI at 10x")
+	print("[AI-TEST] start random 10 AI at 4x")
 	_start_game(str(pool[0]))
 
 
@@ -568,8 +568,8 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	_ai_benchmark_keep = "--ai-bench-keep" in _bench_args
 	if _ai_test_match:
 		Config.player_team = Config.Team.PLAYER
-		Engine.time_scale = 10.0
-		print("[AI-TEST] time_scale=10")
+		Engine.time_scale = 4.0
+		print("[AI-TEST] time_scale=4")
 	if _ai_benchmark:
 		for a in _bench_args:
 			if str(a).begins_with("--ai-bench-seed="):
