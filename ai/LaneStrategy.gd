@@ -62,6 +62,36 @@ func _get_outermost_tower() -> Turret:
 	return best
 
 
+func _get_enemy_outermost_tower() -> Turret:
+	var enemy_team := Config.Team.ENEMY if hero.team == Config.Team.PLAYER else Config.Team.PLAYER
+	var own_crystal := Vector3(-53, 0, 53) if hero.team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	var best: Turret = null
+	var best_dist := 9999.0
+	for entity in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (entity is Turret) or entity.health <= 0 or entity.team != enemy_team:
+			continue
+		var turret := entity as Turret
+		if turret.display_name == "crystal" or _get_turret_lane(turret) != lane:
+			continue
+		var dist := turret.global_position.distance_to(own_crystal)
+		if dist < best_dist:
+			best_dist = dist
+			best = turret
+	return best
+
+
+func _get_enemy_tower_outside_pos() -> Vector3:
+	var tower := _get_enemy_outermost_tower()
+	if tower == null:
+		return Vector3.ZERO
+	var own_crystal := Vector3(-53, 0, 53) if hero.team == Config.Team.PLAYER else Vector3(53, 0, -53)
+	var dir := (own_crystal - tower.global_position)
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return Vector3.ZERO
+	return tower.global_position + dir.normalized() * (tower.attack_range * 0.01 + 2.0)
+
+
 func _get_lane_default_pos() -> Vector3:
 	# 分路按几何判定（x+z：>0 发育路 / <0 对抗路 / =0 中路），所以默认点也用同样的几何中点，
 	# 不能按阵营镜像——之前发育路/对抗路都落在中路对角线上，AI 开局会一起往中路跑。
@@ -360,6 +390,14 @@ func _get_forward_minion_pos() -> Vector3:
 
 # ==================== 主决策（每秒） ====================
 
+func _pick_nearer_goal(a: Vector3, b: Vector3) -> Vector3:
+	if a == Vector3.ZERO:
+		return b
+	if b == Vector3.ZERO:
+		return a
+	return a if hero.global_position.distance_to(a) <= hero.global_position.distance_to(b) else b
+
+
 func decide(force_push: bool = false) -> void:
 	# 开局 AI 先于防御塔创建，默认草丛位当时算不准：塔生成后补算一次
 	if not _bush_resolved:
@@ -391,13 +429,17 @@ func decide(force_push: bool = false) -> void:
 		
 		return
 
-	# 默认位置：优先跟随前方己方小兵，否则去草丛
+	# 默认位置：己方兵线 / 敌方塔外兵线，选距离自己更近的一个
 	var forward_minion := _get_forward_minion_pos()
-	if forward_minion != Vector3.ZERO:
-		hero.move_target = forward_minion
+	var enemy_line := Vector3.ZERO
+	if force_push or game_time >= AiConfig.EARLY_GAME_END:
+		enemy_line = _get_enemy_tower_outside_pos()
+	var push_goal := _pick_nearer_goal(forward_minion, enemy_line)
+	if push_goal != Vector3.ZERO:
+		hero.move_target = push_goal
 		hero.manual_target = null
 	elif force_push:
-		# 推线任务没有己方前排兵：不在本路时先回本路等待，已在路上则原地等下一波。
+		# 推线任务两侧都没有兵线：不在本路时先回本路等待，已在路上则原地等下一波。
 		var lane_goal := _get_lane_default_pos()
 		if lane_goal != Vector3.ZERO and hero.global_position.distance_to(lane_goal) > 12.0:
 			hero.move_target = lane_goal
