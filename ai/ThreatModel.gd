@@ -88,6 +88,32 @@ func enemy_count_near(radius: float) -> int:
 	return n
 
 
+## 对当前英雄威胁最大的敌方英雄（与 enemy_threat 同一评分口径）
+func most_threatening_enemy() -> Hero:
+	var best: Hero = null
+	var best_score := 0.0
+	var r := dynamic_radius()
+	var now := Time.get_ticks_msec() * 0.001
+	for rec in memory.values():
+		var h = rec.get("node")
+		if h == null or not is_instance_valid(h) or not (h is Hero) or (h as Hero).health <= 0.0:
+			continue
+		var age := maxf(0.0, now - float(rec.get("seen", now)))
+		if age > MEMORY_MAX_AGE:
+			continue
+		var ep: Vector3 = rec.get("pos", Vector3.ZERO)
+		if ep.distance_to(hero.global_position) > r:
+			continue
+		var df := clampf(1.0 - ep.distance_to(hero.global_position) / r, 0.0, 1.0)
+		var tf := exp(-age / 5.0)
+		var hp_ratio := clampf(float(rec.get("hp", 1.0)) / float(rec.get("max_hp", 1.0)), 0.0, 1.0)
+		var score := hp_ratio * df * tf
+		if score > best_score:
+			best_score = score
+			best = h as Hero
+	return best
+
+
 ## 敌方威胁总和：血量比例 × 距离系数 × 视野时间衰减。
 func enemy_threat(radius: float = -1.0, at_pos: Vector3 = Vector3.ZERO) -> float:
 	var r := dynamic_radius() if radius <= 0.0 else radius
@@ -159,3 +185,4 @@ func safe_position() -> Vector3:
 	dest.x = clampf(dest.x, -half, half)
 	dest.z = clampf(dest.z, -half, half)
 	return dest
+

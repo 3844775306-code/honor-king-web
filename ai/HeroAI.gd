@@ -26,8 +26,6 @@ var _temp_clearing: bool = false
 var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
-var _retreat_away_t := 0.0     # 撤退：远离最近敌方英雄的 1 秒计时
-var _retreat_away_from: Hero = null
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -1115,6 +1113,15 @@ func _nearest_desc(e) -> String:
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
 
 
+## 高威胁状态：敌方威胁很高或明显劣于敌方
+func _is_threat_high() -> bool:
+	if threat_model == null:
+		return false
+	var et: float = threat_model.enemy_threat()
+	var at: float = threat_model.ally_threat()
+	return et >= 1.2 or (at - et) <= -1.0
+
+
 func _is_threat_low() -> bool:
 	if threat_model == null:
 		return true
@@ -1353,8 +1360,8 @@ func _build_action_candidates() -> Array[AIAction]:
 	var trade_intent := trade_planner.evaluate()
 	if not trade_intent.is_empty():
 		var tact := str(trade_intent.get("action", ""))
-		if tact == "exit":
-			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "换血退出")
+		if tact == "exit" and _is_threat_high() and trade_planner.cooldown > 0.0:
+			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "高威胁换血退出")
 			a.data = trade_intent
 			out.append(a)
 		elif tact == "enter" or tact == "hold":
@@ -1363,6 +1370,10 @@ func _build_action_candidates() -> Array[AIAction]:
 				var a := AIAction.new(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "换血")
 				a.target = tt
 				out.append(a)
+
+	# 撤退触发：高威胁 + 换血冷却中（不依赖换血是否刚好退出）
+	if _is_threat_high() and trade_planner.cooldown > 0.0:
+		out.append(AIAction.new(AIAction.Type.RETURN_TO_BASE, 880, AIAction.PauseClass.SURVIVAL, "高威胁撤退"))
 
 	# 临时清兵
 	if _can_run_environment_action():
@@ -1784,29 +1795,17 @@ func _move_to_friendly_turret() -> void:
 # 撤退行为：仅在 TradePlanner 退出后执行，只去它给的安全点；威胁降到低即完成。
 func _retreat_behavior(delta: float = 0.0) -> void:
 	hero.manual_target = null
-	# 撤退门控：只在自己血量低于「最近的敌方英雄」时撤退，否则跳过撤退状态
-	var nearest: Hero = perception.find_nearest_enemy_hero(AiConfig.SIGHT_HERO) if perception != null else null
-	if nearest == null or _health_not_lower_than(nearest):
-		_retreat_away_t = 0.0
-		_retreat_away_from = null
+	# 撤退执行：向远离「威胁最大的敌方英雄」的方向移动，直到回到低威胁状态
+	var threat_enemy: Hero = threat_model.most_threatening_enemy() if threat_model != null else null
+	if threat_enemy == null or _is_threat_low():
 		hero.move_target = Vector3.ZERO
 		_finish_current_action()
 		return
-	if _retreat_away_from != nearest or _retreat_away_t <= 0.0:
-		_retreat_away_from = nearest
-		_retreat_away_t = 1.0
-	_retreat_away_t = maxf(0.0, _retreat_away_t - delta)
-	# 朝远离最近敌方英雄的方向移动 1 秒；期间若血量仍低会继续重新计时
-	var away: Vector3 = hero.global_position - nearest.global_position
+	var away: Vector3 = hero.global_position - threat_enemy.global_position
 	away.y = 0.0
 	if away.length() < 0.05:
 		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
 	hero.move_target = hero.global_position + away.normalized() * 4.0
-
-
-## 撤退门控：自己血量是否不低于该敌方英雄
-func _health_not_lower_than(enemy: Hero) -> bool:
-	return enemy == null or not is_instance_valid(enemy) or hero.health >= enemy.health
 
 
 # 选撤退目标：己方塔 + 泉水，按 A* 路径风险和距离评分。
@@ -2633,5 +2632,6 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
 
