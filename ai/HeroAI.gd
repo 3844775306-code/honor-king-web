@@ -1042,11 +1042,14 @@ func _chip_action() -> String:
 
 
 ## 胶囊任务：团队任务（含暂停状态）/龙团/回城
-func _chip_task() -> String:
+func _chip_task(now: float = -1.0) -> String:
 	if team_task != null and is_instance_valid(team_task) and team_task.is_active():
 		var t := team_task.label()
 		if _task_pause_active:
 			t += "(暂停)"
+		elif now >= 0.0:
+			var left := maxf(0.0, float(team_task.expires_at) - now)
+			t += " %ds" % int(ceil(left))
 		return t
 	if is_dragon_rally:
 		return "龙团"
@@ -1071,7 +1074,7 @@ func debug_chip_info() -> Dictionary:
 		return _chip_cache
 	_chip_next_t = now + 0.25
 	var lane_short := _debug_lane().replace("路", "")
-	var task := _chip_task()
+	var task := _chip_task(_game_time_now())
 	var p1: Array = ["路:" + lane_short, "行:" + _chip_action()]
 	if task != "":
 		p1.append("任:" + task)
@@ -1106,8 +1109,16 @@ func debug_chip_info() -> Dictionary:
 	_chip_cache = {"line1": line1, "line2": line2, "r": col.r, "g": col.g, "b": col.b}
 	return _chip_cache
 
+## 当前对局时间（秒）；团队任务 expires_at 用的就是这个时钟
+func _game_time_now() -> float:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	return float(bm.game_time) if bm != null else 0.0
+
+
 ## 单个 AI 的完整思考快照（JSON 安全；F3 与录像共用）
 func debug_snapshot() -> Dictionary:
+	var _gnow := _game_time_now()
+	var _task_on: bool = team_task != null and is_instance_valid(team_task) and team_task.is_active()
 	var sn: Dictionary = perception.snapshot()
 	var tactics := {}
 	if skill_tactics != null and skill_tactics.has_method("debug_snapshot"):
@@ -1172,6 +1183,10 @@ func debug_snapshot() -> Dictionary:
 		},
 		"strategy": {"lane": lane_txt, "jungle": jungle_txt},
 		"chip": debug_chip_info(),
+		"game_time": snappedf(_gnow, 0.1),
+		"task": team_task.label() if _task_on else "",
+		"task_left": snappedf(maxf(0.0, float(team_task.expires_at) - _gnow), 0.1) if _task_on else -1.0,
+		"task_paused": bool(_task_pause_active),
 		"log": _dbg_log.duplicate(),
 	}
 
@@ -1829,8 +1844,9 @@ func _update_finish_chase(delta: float) -> bool:
 	_chase_time += delta
 	# Hero 自身带 AI 追击：manual_target 在射程外会自动朝目标移动（move_target 必须清空，否则优先于追击）
 	hero.manual_target = _chase_target
-	hero.move_target = Vector3.ZERO
 	_set_action(AIAction.Type.FINISH_CHASE, 940, AIAction.PauseClass.SURVIVAL, "残血追击")
+	# AI 自动追击已关闭；这里必须重新写 move_target，否则仅设 manual_target 会原地站住。
+	_sync_ai_movement()
 	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
 	if _try_chase_dash(_chase_target):
 		return true
@@ -2402,3 +2418,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
