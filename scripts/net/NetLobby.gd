@@ -244,6 +244,16 @@ func _mount_boot_intro(layer: CanvasLayer, use_3d: bool) -> void:
 func _show_login_panel() -> void:
 	if _login_completed:
 		return
+	# 30 天免登录：本机会话有效则直接进菜单，不再弹登录页
+	if AccountService.has_valid_session():
+		_login_completed = true
+		var keep_pid := AccountService.session_pid()
+		if keep_pid != "":
+			UserScope.set_active(keep_pid)
+			PlayerPrefs.reload()
+			RankSystem.reload()
+			HeroBuildStore.reload()
+		return
 	if _login_layer != null and is_instance_valid(_login_layer):
 		return
 	_login_layer = CanvasLayer.new()
@@ -3752,3 +3762,5 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
+
+

@@ -90,6 +90,12 @@ static func session_username() -> String:
 	return str(_load_session().get("username", ""))
 
 
+static func session_pid() -> String:
+	if not has_valid_session():
+		return ""
+	return str(_load_session().get("pid", ""))
+
+
 static func last_username() -> String:
 	return str(_load_accounts().get("last_user", ""))
 
@@ -231,6 +237,7 @@ static func _hash(password: String, salt: String) -> String:
 static func _cb(cb: Callable, ok: bool, msg: String) -> void:
 	if cb.is_valid():
 		cb.call(ok, msg)
+
 
 
 
