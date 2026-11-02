@@ -166,7 +166,7 @@ func _action_is_complete(action: AIAction) -> bool:
 		AIAction.Type.SAFE_RECALL:
 			return _fully_recovered()
 		AIAction.Type.RETURN_TO_BASE:
-			return _is_under_own_tower() and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) == 0
+			return _is_threat_low()
 		AIAction.Type.DEFEND_TOWER:
 			return _get_lane_turret_under_attack(lane) == null
 		AIAction.Type.HEALTH_PACK:
@@ -983,6 +983,14 @@ func _nearest_desc(e) -> String:
 	return "%s(%s) d%.1f" % [_safe_name(e), str(e.get_class()), d]
 
 
+func _is_threat_low() -> bool:
+	if threat_model == null:
+		return true
+	var et: float = threat_model.enemy_threat()
+	var at: float = threat_model.ally_threat()
+	return et < 0.35 and (at - et) > -1.0
+
+
 ## 胶囊威胁指标：ThreatModel 的敌方/我方威胁值（血量×距离×视野衰减）
 func _chip_threat() -> String:
 	if threat_model == null:
@@ -1194,18 +1202,12 @@ func _build_action_candidates() -> Array[AIAction]:
 	elif hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
 
-	# 撤退
-	if hero.health < hero.actual_max_health * AiConfig.HEALTH_LOW \
-			and not _is_under_own_tower() \
-			and perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) > 0:
-		out.append(AIAction.new(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "撤退"))
-
 	# 换血
 	var trade_intent := trade_planner.evaluate()
 	if not trade_intent.is_empty():
 		var tact := str(trade_intent.get("action", ""))
 		if tact == "exit":
-			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "换血退出")
+			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "换血退出")
 			a.data = trade_intent
 			out.append(a)
 		elif tact == "enter" or tact == "hold":
@@ -1280,11 +1282,11 @@ func _execute_candidate(a: AIAction):
 			_set_action(AIAction.Type.SAFE_RECALL, a.priority, a.pause_class, a.reason)
 		AIAction.Type.RETURN_TO_BASE:
 			hero.manual_target = null
+			var retreat_pos := Vector3.ZERO
 			if a.data.has("pos"):
-				var p = a.data.get("pos", Vector3.ZERO)
-				if p != Vector3.ZERO:
-					hero.move_target = p
-			_set_action(AIAction.Type.RETURN_TO_BASE, a.priority, a.pause_class, a.reason)
+				retreat_pos = a.data.get("pos", Vector3.ZERO)
+			hero.move_target = retreat_pos
+			_set_action(AIAction.Type.RETURN_TO_BASE, 900, a.pause_class, a.reason)
 		AIAction.Type.TRADE:
 			hero.manual_target = a.target
 			hero.move_target = Vector3.ZERO
@@ -1316,7 +1318,7 @@ func _execute_team_task() -> void:
 	if tr.has("move_target"):
 		hero.move_target = tr.get("move_target")
 	if str(tr.get("state", "push")) == "retreat":
-		_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "任务撤退")
+		_set_action(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "任务撤退")
 	else:
 		_set_action(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label())
 	if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
@@ -1604,13 +1606,16 @@ func _move_to_friendly_turret() -> void:
 	_follow_safe_route(goal)
 
 
-# 撤退行为：清目标、按 A* 安全路线回己方塔/泉水（不主动接战，不直线撞墙）
+# 撤退行为：仅在 TradePlanner 退出后执行，只去它给的安全点；威胁降到低即完成。
 func _retreat_behavior() -> void:
 	hero.manual_target = null
-	# 被贴身且血量偏低：先用位移拉开，再走安全路线
-	if _try_escape_dash():
-		return
-	_move_to_friendly_turret()
+	var goal := Vector3.ZERO
+	if current_action != null and current_action.data.has("pos"):
+		goal = current_action.data.get("pos", Vector3.ZERO)
+	if goal != Vector3.ZERO:
+		_follow_safe_route(goal)
+	else:
+		hero.move_target = Vector3.ZERO
 
 
 # 选撤退目标：己方塔 + 泉水，按 A* 路径风险和距离评分。
