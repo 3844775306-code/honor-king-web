@@ -99,7 +99,7 @@ var _training_ai_count := 0
 var _training_ai_level := 1
 var _training_dummies: Array = []
 var _training_dummy_armor := 500.0
-var _training_dummy_label: Label = null
+var _training_dummy_label: RichTextLabel = null
 var _training_def_btn: Button = null
 var _training_ai_hero_name := ""
 var _training_ai_hero_btn: Button = null
@@ -506,6 +506,12 @@ func _training_mk_btn(txt: String) -> Button:
 	b.text = txt
 	b.custom_minimum_size = Vector2(158, 42)
 	b.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	b.add_theme_color_override("font_color", Color(0.93, 0.96, 1.0))
+	b.add_theme_color_override("font_hover_color", UiKit.C_GOLD)
+	b.add_theme_stylebox_override("normal", UiKit.skin_button("normal", Color(0.45, 0.62, 0.9), false))
+	b.add_theme_stylebox_override("hover", UiKit.skin_button("hover", UiKit.C_GOLD, false))
+	b.add_theme_stylebox_override("pressed", UiKit.skin_button("pressed", UiKit.C_GOLD, true))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	return b
 
 
@@ -515,16 +521,31 @@ func _setup_training_hud() -> void:
 	_training_hud = CanvasLayer.new()
 	_training_hud.layer = 120
 	add_child(_training_hud)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_training_hud.add_child(root)
+
+	# 左侧：训练操作
 	var panel := PanelContainer.new()
 	panel.position = Vector2(40, 520)
-	panel.custom_minimum_size = Vector2(380, 0)
-	_training_hud.add_child(panel)
+	panel.custom_minimum_size = Vector2(400, 0)
+	panel.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD, false, 0.94))
+	root.add_child(panel)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 6)
+	vb.add_theme_constant_override("separation", 7)
 	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "训 练 营"
+	title.add_theme_font_size_override("font_size", int(round(UiKit.FS_LG * UiKit.scale())))
+	title.add_theme_color_override("font_color", UiKit.C_GOLD)
+	vb.add_child(title)
 	_training_label = Label.new()
 	_training_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	_training_label.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
 	vb.add_child(_training_label)
+	var sep := HSeparator.new()
+	vb.add_child(sep)
 	_training_minion_btn = _training_mk_btn("兵线：关")
 	_training_minion_btn.pressed.connect(_training_toggle_minions)
 	vb.add_child(_training_minion_btn)
@@ -543,7 +564,7 @@ func _setup_training_hud() -> void:
 	var b_gold := _training_mk_btn("+1000 金币")
 	b_gold.pressed.connect(_training_add_gold)
 	vb.add_child(b_gold)
-	var b_dummy := _training_mk_btn("放置木偶")
+	var b_dummy := _training_mk_btn("放置木偶（原地）")
 	b_dummy.pressed.connect(_training_place_dummy)
 	vb.add_child(b_dummy)
 	var b_clear := _training_mk_btn("清除木偶")
@@ -585,17 +606,37 @@ func _setup_training_hud() -> void:
 	var b_def_hi := _training_mk_btn("防 +50")
 	b_def_hi.pressed.connect(func(): _training_set_dummy_resist(_training_dummy_armor + 50.0))
 	def_row.add_child(b_def_hi)
-	_training_dummy_label = Label.new()
-	_training_dummy_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_training_dummy_label.custom_minimum_size = Vector2(0, 220)
-	_training_dummy_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_XS * UiKit.scale())))
-	vb.add_child(_training_dummy_label)
-	var reset_btn := _training_mk_btn("重置木偶统计")
-	reset_btn.pressed.connect(_training_reset_dummy_stats)
-	vb.add_child(reset_btn)
 	var b_back := _training_mk_btn("返回大厅")
 	b_back.pressed.connect(_training_exit)
 	vb.add_child(b_back)
+
+	# 右上：木偶详细统计（避开左下角操作按钮）
+	var stats_panel := PanelContainer.new()
+	stats_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	stats_panel.offset_left = -int(560.0 * UiKit.scale())
+	stats_panel.offset_right = -int(40.0 * UiKit.scale())
+	stats_panel.offset_top = int(150.0 * UiKit.scale())
+	stats_panel.offset_bottom = int(620.0 * UiKit.scale())
+	stats_panel.add_theme_stylebox_override("panel", UiKit.skin_card(Color(0.55, 0.78, 1.0), false, 0.94))
+	root.add_child(stats_panel)
+	var svb := VBoxContainer.new()
+	svb.add_theme_constant_override("separation", 8)
+	stats_panel.add_child(svb)
+	var stitle := Label.new()
+	stitle.text = "木偶伤害统计"
+	stitle.add_theme_font_size_override("font_size", int(round(UiKit.FS_LG * UiKit.scale())))
+	stitle.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
+	svb.add_child(stitle)
+	_training_dummy_label = RichTextLabel.new()
+	_training_dummy_label.bbcode_enabled = true
+	_training_dummy_label.fit_content = false
+	_training_dummy_label.scroll_active = false
+	_training_dummy_label.custom_minimum_size = Vector2(0, 350)
+	_training_dummy_label.add_theme_font_size_override("normal_font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	svb.add_child(_training_dummy_label)
+	var reset_btn := _training_mk_btn("重置木偶统计")
+	reset_btn.pressed.connect(_training_reset_dummy_stats)
+	svb.add_child(reset_btn)
 	_training_refresh_label()
 	_training_refresh_dummy_stats()
 
@@ -646,16 +687,16 @@ func _training_toggle_jungle() -> void:
 func _training_level_up() -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
-	hero.level = mini(15, int(hero.level) + 1)
-	hero._recalculate_attributes()
+	if hero.level < 15:
+		hero.level_up()
 	_training_refresh_label()
 
 
 func _training_max_level() -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
-	hero.level = 15
-	hero._recalculate_attributes()
+	while hero.level < 15:
+		hero.level_up()
 	_training_refresh_label()
 
 
@@ -711,8 +752,8 @@ func _training_set_ai_count(n: int) -> void:
 		_create_team_ai(Config.foe_team(), n, [], forced)
 		for e in get_tree().get_nodes_in_group("heroes"):
 			if e is Hero and e.team == Config.foe_team() and not before.has(e.get_instance_id()):
-				e.level = _training_ai_level
-				e._recalculate_attributes()
+				while e.level < _training_ai_level:
+					e.level_up()
 				_training_ai.append(e)
 		if not _training_ai.is_empty():
 			enemy_hero = _training_ai[0]
@@ -723,8 +764,8 @@ func _training_ai_level_up() -> void:
 	_training_ai_level = mini(15, _training_ai_level + 1)
 	for h in _training_ai:
 		if is_instance_valid(h):
-			h.level = _training_ai_level
-			h._recalculate_attributes()
+			while h.level < _training_ai_level:
+				h.level_up()
 	_training_refresh_label()
 
 
@@ -752,25 +793,25 @@ func _training_refresh_dummy_stats() -> void:
 			d = _training_dummies[i]
 			break
 	if d == null:
-		_training_dummy_label.text = "尚未放置训练木偶\n（木偶 HP 10000，防御 %.0f）" % _training_dummy_armor
+		_training_dummy_label.text = "[color=#9fb3cc]尚未放置训练木偶[/color]\n[color=#6f829a]HP 10000 · 防御 %.0f[/color]" % _training_dummy_armor
 		return
 	var st: Dictionary = d.stats
 	var groups: Dictionary = st.get("groups", {})
 	var keys: Array = groups.keys()
 	keys.sort_custom(func(a, b): return float(groups[a]) > float(groups[b]))
 	var lines: Array = []
-	lines.append("木偶 HP %d/10000 · 防御 %.0f" % [int(d.health), _training_dummy_armor])
-	lines.append("攻击时长 %.2fs · 总伤害 %d · DPS %.0f" % [
+	lines.append("[color=#ffd966][b]HP[/b]  [color=#e8f2ff]%d / 10000[/color]    [color=#ffd966][b]防御[/b]  [color=#e8f2ff]%.0f[/color]" % [int(d.health), _training_dummy_armor])
+	lines.append("[color=#9fd7ff]攻击时长[/color] [color=#ffffff][b]%.2fs[/b][/color]    [color=#9fd7ff]总伤害[/color] [color=#ffffff][b]%d[/b][/color]    [color=#9fd7ff]DPS[/color] [color=#ffd966][b]%.0f[/b][/color]" % [
 		float(st.get("active_time", 0.0)), int(st.get("total", 0.0)), d.dps()])
-	lines.append("物理 %d · 法术 %d · 真伤 %d" % [
+	lines.append("[color=#7fe3a0]物理 %d[/color]    [color=#c9a7ff]法术 %d[/color]    [color=#ff9b7a]真伤 %d[/color]" % [
 		int(st.get("phys", 0.0)), int(st.get("magic", 0.0)), int(st.get("true", 0.0))])
-	var parts: Array = []
+	lines.append("[color=#5e7698]──────── 伤害来源 ────────[/color]")
 	for k in keys:
-		if parts.size() >= 8:
+		if keys.find(k) >= 10:
 			break
-		parts.append("%s %d" % [str(k), int(groups[k])])
-	if not parts.is_empty():
-		lines.append("来源：" + " | ".join(parts))
+		lines.append("[color=#c7d7ec]%s[/color]    [color=#ffffff][b]%d[/b][/color]" % [str(k), int(groups[k])])
+	if keys.is_empty():
+		lines.append("[color=#6f829a]暂无伤害记录[/color]")
 	_training_dummy_label.text = "\n".join(lines)
 
 

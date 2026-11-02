@@ -76,19 +76,39 @@ func _build_visual() -> void:
 		rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		ring.material_override = rm
 		add_child(ring)
+	# 深色半透明背板，提升头顶统计可读性
+	var plate := MeshInstance3D.new()
+	var quad := QuadMesh.new()
+	quad.size = Vector2(6.4, 3.2)
+	plate.mesh = quad
+	var pm := StandardMaterial3D.new()
+	pm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pm.albedo_color = Color(0.02, 0.035, 0.07, 0.78)
+	pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	pm.no_depth_test = true
+	plate.material_override = pm
+	plate.position = Vector3(0, 3.55, 0)
+	add_child(plate)
 	var lab := Label3D.new()
 	lab.text = "训练木偶"
 	_stats_label = lab
-	lab.font_size = 36
-	lab.outline_size = 8
+	lab.font_size = 48
+	lab.outline_size = 14
+	lab.outline_modulate = Color(0.01, 0.02, 0.05, 0.95)
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	lab.position.y = 3.1
-	lab.modulate = Color(1.0, 0.88, 0.55)
+	lab.no_depth_test = true
+	lab.fixed_size = true
+	lab.pixel_size = 0.0032
+	lab.width = 1050.0
+	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lab.position.y = 3.55
+	lab.modulate = Color(1.0, 0.92, 0.62)
 	add_child(lab)
 
 
 func bar_anchor_height() -> float:
-	return 3.25
+	return 4.4
 
 
 func reset_stats() -> void:
