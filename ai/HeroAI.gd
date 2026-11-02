@@ -2312,6 +2312,26 @@ func _enemy_tower_containing(pos: Vector3) -> Turret:
 	return null
 
 
+## 己方水晶位置（优先真实水晶塔，兜底固定坐标）
+func _own_crystal_pos() -> Vector3:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and int((e as Turret).team) == int(hero.team) and str((e as Turret).display_name) == "crystal" and (e as Turret).health > 0.0:
+			return (e as Turret).global_position
+	return Vector3(-53, 0, 53) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(53, 0, -53)
+
+
+## 回城点：塔往己方水晶方向偏移 2 米（不站塔中心）
+func _recall_spot_for_turret(t: Turret) -> Vector3:
+	var dir := _own_crystal_pos() - t.global_position
+	dir.y = 0.0
+	if dir.length() < 0.5:
+		var fountain := Vector3(-62, 0, 62) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62, 0, -62)
+		dir = fountain - t.global_position
+		dir.y = 0.0
+	if dir.length() < 0.01:
+		return t.global_position
+	return t.global_position + dir.normalized() * 2.0
+
 func _find_safe_recall_spot() -> Vector3:
 	var now := Time.get_ticks_msec() * 0.001
 	if _recall_spot_cache != Vector3.ZERO and now - _recall_spot_time < 0.8:
@@ -2322,8 +2342,7 @@ func _find_safe_recall_spot() -> Vector3:
 	# 只在塔区/草丛附近没有敌方英雄时选点：读条 7 秒，敌人贴脸就会被打断甚至带走
 	var turret := _pick_safe_recall_turret()
 	if turret and is_instance_valid(turret):
-		var dir = (hero.global_position - turret.global_position).normalized()
-		_recall_spot_cache = turret.global_position + dir * 2
+		_recall_spot_cache = _recall_spot_for_turret(turret)
 		_recall_spot_time = now
 		return _recall_spot_cache
 	var bush := perception.find_nearest_bush(AiConfig.FRIENDLY_TURRET_FAR)
@@ -2369,7 +2388,7 @@ func _pick_safe_recall_turret() -> Turret:
 		# 塔正在被敌方小兵攻击，或没有己方小兵掩护，不选为回城塔。
 		if _recall_tower_under_minions(t):
 			continue
-		var spot: Vector3 = t.global_position + (hero.global_position - t.global_position).normalized() * 2.0
+		var spot: Vector3 = _recall_spot_for_turret(t)
 		# 用实际 A* 路线风险选塔，而不是只比较直线距离
 		var score := _path_risk(spot) * 10.0 + d * 0.15
 		score += _recall_memory_risk(spot, AiConfig.RECALL_SPOT_CLEAR) * 8.0
@@ -2688,3 +2707,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
