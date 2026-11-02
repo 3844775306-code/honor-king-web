@@ -12,6 +12,7 @@ var _pending_skill_id := 0
 var _pending_true := false
 var base_armor_value := 500.0
 var base_mr_value := 500.0
+var _stats_label: Label3D = null
 
 
 ## 继承 Minion 以获得普攻/技能的统一可选中过滤；关闭兵线 AI/移动逻辑。
@@ -77,7 +78,8 @@ func _build_visual() -> void:
 		add_child(ring)
 	var lab := Label3D.new()
 	lab.text = "训练木偶"
-	lab.font_size = 42
+	_stats_label = lab
+	lab.font_size = 36
 	lab.outline_size = 8
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.position.y = 3.1
@@ -92,6 +94,15 @@ func bar_anchor_height() -> float:
 func reset_stats() -> void:
 	stats = {"active_time": 0.0, "total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
 		"groups": {}, "last_hit_ms": 0}
+	_refresh_stats_label()
+
+
+func _refresh_stats_label() -> void:
+	if _stats_label == null or not is_instance_valid(_stats_label):
+		return
+	_stats_label.text = "训练木偶\n攻击 %.1fs  总伤害 %d\nDPS %.0f  物/法/真 %d/%d/%d" % [
+		float(stats.get("active_time", 0.0)), int(stats.get("total", 0.0)), dps(),
+		int(stats.get("phys", 0.0)), int(stats.get("magic", 0.0)), int(stats.get("true", 0.0))]
 
 
 func set_resist(v: float) -> void:
@@ -130,6 +141,7 @@ func _damage_feedback(actual: float, is_magic: bool) -> void:
 		var key := str(DeathRecap.skill_key(_pending_skill_id))
 		groups[key] = float(groups.get(key, 0.0)) + actual
 		stats["groups"] = groups
+		_refresh_stats_label()
 	super._damage_feedback(actual, is_magic)
 
 
