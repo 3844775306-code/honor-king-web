@@ -102,11 +102,15 @@ func _ready():
 func _set_action(action_type: int, priority: int = 0, pause_class: int = AIAction.PauseClass.NONE, reason: String = "", data: Dictionary = {}) -> void:
 	if current_action != null and current_action.is_active():
 		if current_action.type == action_type:
+			if not data.is_empty():
+				current_action.data = data.duplicate()
 			return
 		if priority < current_action.priority:
 			return
 		current_action.mark(AIAction.Status.INTERRUPTED)
 	current_action = AIAction.new(action_type, priority, pause_class, reason)
+	if not data.is_empty():
+		current_action.data = data.duplicate()
 
 	if pause_class == AIAction.PauseClass.NONE:
 		_task_pause_active = false
