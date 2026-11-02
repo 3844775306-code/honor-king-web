@@ -2383,8 +2383,15 @@ func distribute_experience(source: GameEntity, killer: GameEntity = null):
 	elif source is JungleMonster:
 		if game_time >= 600: base_exp = int(base_exp * 2.2)
 
-	# 收集范围内己方英雄
-	var heroes = _get_nearby_heroes(source.global_position, 12.0,source.team)
+	# 野怪奖励只给击杀者同队；普通单位沿用原“排除来源队伍=奖励对方”的逻辑。
+	var same_team := false
+	var reward_team = source.team
+	if source is JungleMonster:
+		if not (killer is Hero):
+			return
+		reward_team = killer.team
+		same_team = true
+	var heroes = _get_nearby_heroes(source.global_position, 12.0, reward_team, same_team)
 	if heroes.is_empty(): return
 
 	# 多人分配
@@ -2440,7 +2447,14 @@ func distribute_gold(source:GameEntity, killer: GameEntity):
 
 	# 自然金币（附近己方英雄平分？不，小兵金币只给补刀者+附近队友）
 
-	var nearby_heroes = _get_nearby_heroes(source.global_position, 12.0,source.team)
+	var same_team := false
+	var reward_team = source.team
+	if source is JungleMonster:
+		if not (killer is Hero):
+			return
+		reward_team = killer.team
+		same_team = true
+	var nearby_heroes = _get_nearby_heroes(source.global_position, 12.0, reward_team, same_team)
 
 	for hero in nearby_heroes:
 		var lane_gold = get_lane_gold(base_gold, nearby_heroes.size())
@@ -2483,12 +2497,15 @@ func distribute_gold(source:GameEntity, killer: GameEntity):
 		if bm.ui and hero == bm.hero:
 			bm.ui.show_gold_popup(hero.global_position, lane_gold, hero == killer,
 				hero == killer and source is Minion)
-func _get_nearby_heroes(center: Vector3, radius: float,team) -> Array:
+func _get_nearby_heroes(center: Vector3, radius: float, team, same_team: bool = false) -> Array:
 	var result = []
 	for entity in get_tree().get_nodes_in_group("heroes"):
 		if entity is Hero and entity.health > 0:
 			if entity.global_position.distance_to(center) <= radius:
-				if entity.team==team:continue
+				if same_team and entity.team != team:
+					continue
+				if not same_team and entity.team == team:
+					continue
 				result.append(entity)
 	return result
 

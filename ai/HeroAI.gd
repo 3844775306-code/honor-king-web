@@ -1137,6 +1137,9 @@ func _try_temp_clear() -> bool:
 		var d := hero.global_position.distance_to((e as Node3D).global_position)
 		if d > best_d or _minion_under_unsafe_tower(e as Minion):
 			continue
+		# 不仅目标不能在我方塔下，去目标的整条路线也不能穿过敌方塔射程。
+		if not _temp_clear_path_safe(e as Minion):
+			continue
 		best_d = d
 		m = e as Minion
 	if m == null:
@@ -1146,6 +1149,20 @@ func _try_temp_clear() -> bool:
 	hero.move_target = Vector3.ZERO
 	state = State.PUSH
 	_temp_clearing = true
+	return true
+
+
+func _temp_clear_path_safe(m: Minion) -> bool:
+	if not PathFinder.initialized:
+		return false
+	var path := PathFinder.find_path(hero.global_position, m.global_position, Vector3.ZERO, hero.team)
+	if path.is_empty():
+		return false
+	for p in path:
+		for e in hero.get_tree().get_nodes_in_group("turrets"):
+			if e is Turret and int((e as Turret).team) != int(hero.team) and (e as Turret).health > 0:
+				if p.distance_to((e as Node3D).global_position) <= (e as Turret).attack_range * 0.01 + 1.0:
+					return false
 	return true
 
 
