@@ -528,7 +528,11 @@ func _setup_training_hud() -> void:
 
 	# 左侧：训练操作
 	var panel := PanelContainer.new()
-	panel.position = Vector2(40, 520)
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.offset_left = -200
+	panel.offset_right = 200
+	panel.offset_top = 36
 	panel.custom_minimum_size = Vector2(400, 0)
 	panel.add_theme_stylebox_override("panel", UiKit.skin_card(UiKit.C_GOLD, false, 0.94))
 	root.add_child(panel)
@@ -613,10 +617,10 @@ func _setup_training_hud() -> void:
 	# 右上：木偶详细统计（避开左下角操作按钮）
 	var stats_panel := PanelContainer.new()
 	stats_panel.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	stats_panel.offset_left = -int(560.0 * UiKit.scale())
-	stats_panel.offset_right = -int(40.0 * UiKit.scale())
-	stats_panel.offset_top = int(150.0 * UiKit.scale())
-	stats_panel.offset_bottom = int(620.0 * UiKit.scale())
+	stats_panel.offset_left = -int(520.0 * UiKit.scale())
+	stats_panel.offset_right = -int(30.0 * UiKit.scale())
+	stats_panel.offset_top = int(36.0 * UiKit.scale())
+	stats_panel.offset_bottom = int(380.0 * UiKit.scale())
 	stats_panel.add_theme_stylebox_override("panel", UiKit.skin_card(Color(0.55, 0.78, 1.0), false, 0.94))
 	root.add_child(stats_panel)
 	var svb := VBoxContainer.new()
@@ -631,8 +635,8 @@ func _setup_training_hud() -> void:
 	_training_dummy_label.bbcode_enabled = true
 	_training_dummy_label.fit_content = false
 	_training_dummy_label.scroll_active = false
-	_training_dummy_label.custom_minimum_size = Vector2(0, 350)
-	_training_dummy_label.add_theme_font_size_override("normal_font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	_training_dummy_label.custom_minimum_size = Vector2(0, 230)
+	_training_dummy_label.add_theme_font_size_override("normal_font_size", int(round(UiKit.FS_XS * UiKit.scale())))
 	svb.add_child(_training_dummy_label)
 	var reset_btn := _training_mk_btn("重置木偶统计")
 	reset_btn.pressed.connect(_training_reset_dummy_stats)

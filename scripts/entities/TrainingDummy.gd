@@ -79,7 +79,7 @@ func _build_visual() -> void:
 	# 深色半透明背板，提升头顶统计可读性
 	var plate := MeshInstance3D.new()
 	var quad := QuadMesh.new()
-	quad.size = Vector2(6.4, 3.2)
+	quad.size = Vector2(4.6, 2.25)
 	plate.mesh = quad
 	var pm := StandardMaterial3D.new()
 	pm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -88,27 +88,27 @@ func _build_visual() -> void:
 	pm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	pm.no_depth_test = true
 	plate.material_override = pm
-	plate.position = Vector3(0, 3.55, 0)
+	plate.position = Vector3(0, 3.25, 0)
 	add_child(plate)
 	var lab := Label3D.new()
 	lab.text = "训练木偶"
 	_stats_label = lab
-	lab.font_size = 48
-	lab.outline_size = 14
+	lab.font_size = 30
+	lab.outline_size = 8
 	lab.outline_modulate = Color(0.01, 0.02, 0.05, 0.95)
 	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lab.no_depth_test = true
 	lab.fixed_size = true
-	lab.pixel_size = 0.0032
-	lab.width = 1050.0
+	lab.pixel_size = 0.0021
+	lab.width = 760.0
 	lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	lab.position.y = 3.55
+	lab.position.y = 3.25
 	lab.modulate = Color(1.0, 0.92, 0.62)
 	add_child(lab)
 
 
 func bar_anchor_height() -> float:
-	return 4.4
+	return 3.9
 
 
 func reset_stats() -> void:
