@@ -628,6 +628,11 @@ func _show_menu() -> void:
 	b_heroes.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	b_heroes.pressed.connect(_open_hero_codex)
 	rec_row.add_child(b_heroes)
+	var b_training := _mk_btn("🎯  训练营", UiKit.C_TEAM0, false, Vector2(1, 52))
+	b_training.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b_training.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_training.pressed.connect(_start_training_camp)
+	rec_row.add_child(b_training)
 	var b_test := _mk_btn("⚡  测试模块", UiKit.C_TEAM0, false, Vector2(1, 52))
 	b_test.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b_test.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
@@ -638,7 +643,7 @@ func _show_menu() -> void:
 	b_replay.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
 	b_replay.pressed.connect(_open_replays)
 	rec_row.add_child(b_replay)
-	_menu_btns = [b_single, b_host, b_join, b_loadout, b_history, b_controls, b_cloud, b_heroes, b_test, b_replay]
+	_menu_btns = [b_single, b_host, b_join, b_loadout, b_history, b_controls, b_cloud, b_heroes, b_training, b_test, b_replay]
 
 	var diff_row := HBoxContainer.new()
 	diff_row.add_theme_constant_override("separation", 10)
@@ -822,6 +827,16 @@ func _status_text(text: String, color: Color) -> void:
 
 
 # ---------- 动作：单机 / 建房 / 加入 ----------
+
+## 主菜单训练营：正常操控英雄，自由控制兵线/野怪/等级/金币/木偶/AI
+func _start_training_camp() -> void:
+	if _connecting or _route_pending != "":
+		return
+	PlayerPrefs.set_opt("training_mode", true)
+	_set_menu_enabled(false)
+	_status_text("训练营：自由测试技能与伤害…", COL_SUB)
+	_show_loading_then("res://scenes/battle.tscn")
+
 
 ## 主菜单测试模块：随机 10 AI、4 倍速，对局结束录像自动保存并回大厅
 func _start_ai_test_match() -> void:

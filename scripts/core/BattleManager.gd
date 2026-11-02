@@ -86,6 +86,18 @@ var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
 var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
+var _training_mode := false          # 主菜单训练营
+var _training_minions := false
+var _training_jungle := false
+var _training_minion_changed := false
+var _training_hud: CanvasLayer = null
+var _training_label: Label = null
+var _training_minion_btn: Button = null
+var _training_jungle_btn: Button = null
+var _training_ai: Array = []
+var _training_ai_count := 0
+var _training_ai_level := 1
+var _training_dummies: Array = []
 var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
 var _test_prev_pos := Vector3.ZERO
 var _test_layer: CanvasLayer = null
@@ -323,6 +335,10 @@ func _ready():
 		# CLI/无头测试入口：与主菜单测试模块同一流程
 		_ai_test_match = true
 		call_deferred("_start_ai_test_match")
+	elif PlayerPrefs.opt_bool("training_mode", false) or "--training-camp" in OS.get_cmdline_user_args():
+		PlayerPrefs.set_opt("training_mode", false)
+		_training_mode = true
+		call_deferred("_start_training_camp")
 
 ## 主菜单测试模块：随机英雄开局，双方 10 个 AI，4 倍速；对局结束自动保存录像并回大厅
 func _start_ai_test_match() -> void:
@@ -467,6 +483,229 @@ func test_hero_action(h: Hero, kind: String, slot: int = 0) -> void:
 		TouchController.flash_skill(slot)
 
 
+## 训练营：开局提示 + 控制面板
+func _start_training_camp() -> void:
+	_training_mode = true
+	_training_minions = false
+	_training_jungle = false
+	_training_ai_count = 0
+	_training_ai_level = 1
+	_training_ai.clear()
+	_training_dummies.clear()
+	_start_game("亚瑟")
+
+
+func _training_mk_btn(txt: String) -> Button:
+	var b := Button.new()
+	b.text = txt
+	b.custom_minimum_size = Vector2(158, 42)
+	b.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	return b
+
+
+func _setup_training_hud() -> void:
+	if _training_hud != null and is_instance_valid(_training_hud):
+		return
+	_training_hud = CanvasLayer.new()
+	_training_hud.layer = 120
+	add_child(_training_hud)
+	var panel := PanelContainer.new()
+	panel.position = Vector2(40, 520)
+	panel.custom_minimum_size = Vector2(380, 0)
+	_training_hud.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	panel.add_child(vb)
+	_training_label = Label.new()
+	_training_label.add_theme_font_size_override("font_size", int(round(UiKit.FS_SM * UiKit.scale())))
+	vb.add_child(_training_label)
+	_training_minion_btn = _training_mk_btn("兵线：关")
+	_training_minion_btn.pressed.connect(_training_toggle_minions)
+	vb.add_child(_training_minion_btn)
+	_training_jungle_btn = _training_mk_btn("野怪：关")
+	_training_jungle_btn.pressed.connect(_training_toggle_jungle)
+	vb.add_child(_training_jungle_btn)
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 6)
+	vb.add_child(row1)
+	var b_lv := _training_mk_btn("等级 +1")
+	b_lv.pressed.connect(_training_level_up)
+	row1.add_child(b_lv)
+	var b_max := _training_mk_btn("满级")
+	b_max.pressed.connect(_training_max_level)
+	row1.add_child(b_max)
+	var b_gold := _training_mk_btn("+1000 金币")
+	b_gold.pressed.connect(_training_add_gold)
+	vb.add_child(b_gold)
+	var b_dummy := _training_mk_btn("放置木偶")
+	b_dummy.pressed.connect(_training_place_dummy)
+	vb.add_child(b_dummy)
+	var b_clear := _training_mk_btn("清除木偶")
+	b_clear.pressed.connect(_training_clear_dummies)
+	vb.add_child(b_clear)
+	var ai_row := HBoxContainer.new()
+	ai_row.add_theme_constant_override("separation", 6)
+	vb.add_child(ai_row)
+	var b_ai_add := _training_mk_btn("AI +1")
+	b_ai_add.pressed.connect(func(): _training_set_ai_count(_training_ai_count + 1))
+	ai_row.add_child(b_ai_add)
+	var b_ai_sub := _training_mk_btn("AI -1")
+	b_ai_sub.pressed.connect(func(): _training_set_ai_count(_training_ai_count - 1))
+	ai_row.add_child(b_ai_sub)
+	var ai_row2 := HBoxContainer.new()
+	ai_row2.add_theme_constant_override("separation", 6)
+	vb.add_child(ai_row2)
+	var b_ai_lv := _training_mk_btn("AI 等级 +1")
+	b_ai_lv.pressed.connect(_training_ai_level_up)
+	ai_row2.add_child(b_ai_lv)
+	var b_ai_gold := _training_mk_btn("AI +1000")
+	b_ai_gold.pressed.connect(_training_ai_gold)
+	ai_row2.add_child(b_ai_gold)
+	var b_back := _training_mk_btn("返回大厅")
+	b_back.pressed.connect(_training_exit)
+	vb.add_child(b_back)
+	_training_refresh_label()
+
+
+func _training_refresh_label() -> void:
+	if _training_label == null:
+		return
+	var lv := 1
+	var gold := 0
+	if hero != null and is_instance_valid(hero):
+		lv = int(hero.level)
+		gold = int(hero.gold)
+	_training_label.text = "训练营 · Lv.%d · 金币 %d · AI %d(等级%d)" % [lv, gold, _training_ai_count, _training_ai_level]
+	if _training_minion_btn != null:
+		_training_minion_btn.text = "兵线：%s" % ("开" if _training_minions else "关")
+	if _training_jungle_btn != null:
+		_training_jungle_btn.text = "野怪：%s" % ("开" if _training_jungle else "关")
+
+
+func _training_toggle_minions() -> void:
+	_training_minions = not _training_minions
+	if not _training_minions:
+		for m in get_tree().get_nodes_in_group("minions"):
+			if is_instance_valid(m):
+				m.queue_free()
+		_minion_spawn_queue.clear()
+	else:
+		minion_spawn_timer = 0.0
+		_spawn_minion_wave()
+	_training_refresh_label()
+
+
+func _training_toggle_jungle() -> void:
+	_training_jungle = not _training_jungle
+	if not _training_jungle:
+		_pending_jungle_spawns.clear()
+		_jungle_group_queue.clear()
+		for j in get_tree().get_nodes_in_group("jungle_monsters"):
+			if is_instance_valid(j):
+				j.queue_free()
+		jungle_monsters.clear()
+	else:
+		_create_jungle()
+		_update_pending_jungle_spawns()
+	_training_refresh_label()
+
+
+func _training_level_up() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	hero.level = mini(15, int(hero.level) + 1)
+	hero._recalculate_attributes()
+	_training_refresh_label()
+
+
+func _training_max_level() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	hero.level = 15
+	hero._recalculate_attributes()
+	_training_refresh_label()
+
+
+func _training_add_gold() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	hero.gold += 1000
+	_training_refresh_label()
+
+
+func _training_place_dummy() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	var d := TrainingDummyScript.new()
+	var fwd := Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y))
+	var cfg := {
+		"name": "训练木偶", "team": Config.foe_team(),
+		"max_health": 1000000.0, "attack": 0.0, "armor": 0.0,
+		"magic_resist": 0.0, "attack_range": 0.0, "attack_speed": 1.0,
+		"move_speed": 0.0, "body_radius": 1.0,
+	}
+	d.setup(cfg)
+	d.actual_max_health = 1000000.0
+	d.health = 1000000.0
+	d.position = hero.global_position + fwd * 4.0
+	add_child(d)
+	_training_dummies.append(d)
+	_training_refresh_label()
+
+
+func _training_clear_dummies() -> void:
+	for d in _training_dummies:
+		if is_instance_valid(d):
+			d.queue_free()
+	_training_dummies.clear()
+
+
+func _training_set_ai_count(n: int) -> void:
+	n = clampi(n, 0, 5)
+	for h in _training_ai:
+		if is_instance_valid(h):
+			h.queue_free()
+	_training_ai.clear()
+	_training_ai_count = n
+	enemy_hero = null
+	if n > 0:
+		var before := {}
+		for e in get_tree().get_nodes_in_group("heroes"):
+			before[e.get_instance_id()] = true
+		_create_team_ai(Config.foe_team(), n, [])
+		for e in get_tree().get_nodes_in_group("heroes"):
+			if e is Hero and e.team == Config.foe_team() and not before.has(e.get_instance_id()):
+				e.level = _training_ai_level
+				e._recalculate_attributes()
+				_training_ai.append(e)
+		if not _training_ai.is_empty():
+			enemy_hero = _training_ai[0]
+	_training_refresh_label()
+
+
+func _training_ai_level_up() -> void:
+	_training_ai_level = mini(15, _training_ai_level + 1)
+	for h in _training_ai:
+		if is_instance_valid(h):
+			h.level = _training_ai_level
+			h._recalculate_attributes()
+	_training_refresh_label()
+
+
+func _training_ai_gold() -> void:
+	for h in _training_ai:
+		if is_instance_valid(h):
+			h.gold += 1000
+	_training_refresh_label()
+
+
+func _training_exit() -> void:
+	_training_mode = false
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+
+
 func _start_net_lineup(picks: Dictionary) -> void:
 	Config.reset_player_team()
 	# 大厅选人结果开局：picks = { peer_id: { hero, summoner, role } }
@@ -602,7 +841,7 @@ func _start_game(hero_type: String, summoner_id: String = "flash"):
 	if sel_build_hero == hero_type and not sel_build_ids.is_empty():
 		ItemDatabase.set_recommended_override(hero_type, sel_build_ids)
 	# 随机分配玩家阵营（加载界面/出生点/镜头都由 Config.player_team 决定；联机保持蓝方）
-	if NetSession.mode == NetSession.Mode.NONE:
+	if NetSession.mode == NetSession.Mode.NONE and not _training_mode:
 		Config.roll_player_team()
 	# 全部玩家选定英雄后：先走 5 秒倒计时，再进入加载界面
 	await _play_pick_countdown()
@@ -710,6 +949,10 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		Config.player_team = Config.Team.PLAYER
 		Engine.time_scale = 4.0
 		print("[AI-TEST] time_scale=4")
+	if _training_mode:
+		Config.player_team = Config.Team.PLAYER
+		Engine.time_scale = 1.0
+		print("[TRAINING] start")
 	if _ai_benchmark:
 		for a in _bench_args:
 			if str(a).begins_with("--ai-bench-seed="):
@@ -746,7 +989,12 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		var _bench_ai := HeroAI.new()
 		hero.add_child(_bench_ai)
 	sel_ally_ai_picks = []
-	if _ai_test_match:
+	if _training_mode:
+		sel_ally_ai_picks = []
+		sel_enemy_picks = []
+		_training_minions = false
+		_training_jungle = false
+	elif _ai_test_match:
 		# 测试局：双方都由 _create_team_ai 随机补全，不固定阵容
 		sel_ally_ai_picks = []
 		sel_enemy_picks = []
@@ -759,16 +1007,19 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 			if i != sel_player_seat and str(sel_ally_picks[i]) != "":
 				sel_ally_ai_picks.append(str(sel_ally_picks[i]))
 	await _load_step(0.26)
-	_create_team_ai(Config.player_team, 4, [], sel_ally_ai_picks)  # 4个己方AI
+	if not _training_mode:
+		_create_team_ai(Config.player_team, 4, [], sel_ally_ai_picks)  # 4个己方AI
 	await _load_step(0.44)
-	_create_team_ai(Config.foe_team(), 5, [], sel_enemy_picks)    # 5个敌方AI
+	if not _training_mode:
+		_create_team_ai(Config.foe_team(), 5, [], sel_enemy_picks)    # 5个敌方AI
 	sel_ally_picks = []
 	sel_enemy_picks = []
 	sel_taken = {}
 	await _load_step(0.56)
 	_create_turrets()
 	await _load_step(0.66)
-	_create_jungle()
+	if not _training_mode:
+		_create_jungle()
 	await _load_step(0.74)
 
 	# 元流之子·万物为流：玩家开局泉水四选一（弹出面板，AI 已在生成时随机选好）
@@ -789,6 +1040,8 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	await _load_step(1.0)
 	if _ai_test_match:
 		_setup_test_hud()
+	if _training_mode:
+		_setup_training_hud()
 	# 加载完成后停留 2 秒（进度条 100% 展示完整）再进入战斗
 	if loading_screen != null and is_instance_valid(loading_screen):
 		await get_tree().create_timer(2.0).timeout
@@ -1568,6 +1821,7 @@ void fragment() {
 
 const LingbaoScript = preload("res://scripts/entities/Lingbao.gd")
 const ReplayScript = preload("res://scripts/core/ReplayRecorder.gd")   # 对局录像（P1）
+const TrainingDummyScript = preload("res://scripts/entities/TrainingDummy.gd")
 
 func _create_player_hero(type: String, summoner_id: String = "flash"):
 	var config = hero_configs[type].duplicate()
@@ -2031,6 +2285,8 @@ func _get_epic_phase() -> int:
 
 
 func _update_epic_monsters(delta):
+	if _training_mode and not _training_jungle:
+		return   # 训练营关闭野怪时不刷龙
 	var ph := _get_epic_phase()
 	if ph != epic_phase:
 		_on_phase_transition(epic_phase, ph)
@@ -6549,6 +6805,8 @@ func _get_minion_stats(type: String, game_time_min: float, is_mid: bool) -> Dict
 		"magic_resist": base.get("mr", 0)
 	}
 func _spawn_minion_wave():
+	if _training_mode and not _training_minions:
+		return
 	var include_siege = game_time > 240.0   # 4分钟后出炮车
 	# 出生偏移：跑车离水晶最近(最后)，近战/超级离高地塔最近(最前)
 	const OFFSET_MELEE: float = 5.0      # 近战/超级/主宰 — 最前
@@ -6877,6 +7135,8 @@ var winner: int = -1
 var rank_result: Dictionary = {}   # 本局单机排位结算（升/降星、晋升信息），联机为空
 
 func crystal_destroyed(team: int):
+	if _training_mode:
+		return   # 训练营不结算胜负，允许继续测试
 	if game_over: return
 	game_over = true
 	# 赛后统计：记录最终数据
