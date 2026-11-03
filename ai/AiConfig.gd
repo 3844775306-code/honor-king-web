@@ -67,7 +67,6 @@ const GANK_TOWER_RADIUS: float = 20.0        # 可抓指标：目标到其最近
 const GANK_SCORE_SCALE: float = 240.0        # 可抓指标 → 任务优先级换算
 const GANK_MIN_SCORE: float = 2.0            # 可抓指标大于该值才抓
 const GANK_PRIORITY_MAX: int = 900           # 抓人任务最高优先级
-const USE_UTILITY_AI: bool = true             # true=任务意愿评分接管；false=回退固定优先级
 const PUSH_TOWER_GOLD_COOLDOWN: float = 90.0 # 抱团推塔：经济差触发后的冷却（秒）
 const RESPAWN_COOLDOWN: float = 1.0          # 复活后重新分配路线延迟
 const SKILL_WINDOW_THRESHOLD: float = 4.5    # 技能窗口期上限
