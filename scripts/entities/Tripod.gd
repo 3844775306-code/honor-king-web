@@ -363,6 +363,9 @@ func _quad_bezier(a: Vector3, b: Vector3, c: Vector3, t: float) -> Vector3:
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id: int = -1, pen_percent: float = 0.0, is_crit_forced: int = -1):
 	if is_r_tripod:
 		return  # 大招鼎不可被攻击
+	# 规则：鼎只吃英雄普攻；技能伤害（skill_id>0）与非英雄来源（小兵/野怪/塔）全部免疫
+	if source == null or not (source is Hero) or int(skill_id) > 0:
+		return
 	health -= amount
 	if health <= 0:
 		if tripod_owner and is_instance_valid(tripod_owner):
@@ -379,3 +382,4 @@ func _clear_attackers() -> void:
 				h.manual_target = null
 			if h.current_target == self:
 				h.current_target = null
+

@@ -404,6 +404,7 @@ func _find_target():
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity == self or entity.health <= 0: continue
 		if entity is JungleMonster:continue
+		if entity is Tripod: continue   # 小兵不会主动攻击大禹的鼎
 		if entity.collision_layer == 0: continue  # 隐身不可锁定
 		if entity is Hero and entity.hidden_in_bush: continue
 		if entity is Hero and entity.wd_timer>0:continue
@@ -480,3 +481,4 @@ func _start_sink_away() -> void:
 	tw.tween_interval(fall)
 	tw.tween_property(self, "position:y", global_position.y - depth, sink) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+
