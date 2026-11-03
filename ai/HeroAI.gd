@@ -456,6 +456,48 @@ func _try_upgrade_skills():
 # ==================== 赶路位移（非战斗位移技能） ====================
 # 位移/加速赶路：只要离 move_target 超过普攻距离就尝试（技能类型4/self_displacement>0，如孙尚香Q翻滚、
 # 马可波罗W漫游）；施法/受控/回城/有锁定目标时不触发。闪现只用于追击/逃跑，不用于赶路。
+## 是否处于长距离赶路（移动目标 >6m）
+func _is_traveling() -> bool:
+	return is_instance_valid(hero) and hero.move_target != Vector3.ZERO \
+		and hero.global_position.distance_to(hero.move_target) > 6.0
+
+
+## 马超赶路投枪：没强化普攻时朝移动方向丢 W/Q，枪落在前方，走过去捡枪后接强化普攻位移
+func _try_machao_travel_spear(dest: Vector3, dist: float) -> bool:
+	if not is_instance_valid(hero) or str(hero.display_name) != "马超":
+		return false
+	if hero.stat_timer > 0.0:
+		return false          # 已有强化普攻，先交给 _try_enhanced_aa_travel 位移
+	if dist < 6.0:
+		return false          # 只用于赶路，不贴脸丢枪
+	if perception.find_nearest_enemy_hero(10.0) != null:
+		return false          # 附近有敌人：留着技能打人
+	var dir: Vector3 = dest - hero.global_position
+	dir.y = 0.0
+	if dir.length() < 0.5:
+		return false
+	dir = dir.normalized()
+	# W（槽1）落点可控优先；Q（槽0）射程更远次之
+	var slot := -1
+	for cand in [1, 0]:
+		if cand >= hero.skills.size() or hero.skills[cand] == null:
+			continue
+		if cand >= hero.skill_levels.size() or hero.skill_levels[cand] <= 0:
+			continue
+		if cand >= hero.skill_cooldowns.size() or hero.skill_cooldowns[cand] > 0.0:
+			continue
+		slot = cand
+		break
+	if slot < 0:
+		return false
+	var sk: Skill = hero.skills[slot]
+	if sk == null or hero.mana < float(sk.mana_cost):
+		return false
+	# 落点放在移动方向前方（W cast_range 5，保守 4.2m），人继续往目标走即可顺路捡枪
+	var aim: Vector3 = hero.global_position + dir * minf(dist - 1.0, 4.2)
+	hero._start_casting(slot, sk, aim)
+	return true
+
 func _try_travel_dash():
 	# 位移/加速：只要离目标点超过普攻距离就使用（不再限制 PUSH/FARM/9m/附近敌人）
 	if not is_instance_valid(hero) or hero.is_dead or hero.is_reviving:
@@ -475,6 +517,9 @@ func _try_travel_dash():
 	if dist <= hero.attack_range * 0.01:
 		return
 	# 闪现只在追击/逃跑时使用，不用于赶路
+	# 马超赶路：朝移动方向投枪（W优先/Q次之），沿路捡枪后用强化普攻提速
+	if _try_machao_travel_spear(dest, dist):
+		return
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return
@@ -708,7 +753,7 @@ func _ai_update_enhanced_attack_flag() -> void:
 func _try_collect_enhanced_charge() -> bool:
 	if not is_instance_valid(hero) or str(hero.display_name) != "马超":
 		return false
-	if not _is_action(AIAction.Type.PUSH_LANE) and not _is_action(AIAction.Type.JUNGLE_FARM):
+	if not _is_action(AIAction.Type.PUSH_LANE) and not _is_action(AIAction.Type.JUNGLE_FARM) and not _is_traveling():
 		return false
 	if hero.stat_timer >= 8.0:
 		return false
@@ -2845,3 +2890,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
