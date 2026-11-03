@@ -14,7 +14,7 @@ static func plan(hero: Hero, goal: Vector3, threat: ThreatModel) -> Array:
 	var start: Vector3 = hero.global_position
 	var best: Array = []
 	var best_cost := INF
-	for path in _candidate_paths(start, goal, hero.team):
+	for path in _candidate_paths(start, goal, hero.team, hero):
 		if path.is_empty():
 			continue
 		var cost := _path_cost(hero, path, threat)
@@ -24,7 +24,7 @@ static func plan(hero: Hero, goal: Vector3, threat: ThreatModel) -> Array:
 	return best
 
 
-static func _candidate_paths(start: Vector3, goal: Vector3, team: int) -> Array:
+static func _candidate_paths(start: Vector3, goal: Vector3, team: int, hero: Hero = null) -> Array:
 	var out: Array = []
 	var base := PathFinder.find_path(start, goal, Vector3.ZERO, team)
 	if not base.is_empty():
@@ -48,6 +48,35 @@ static func _candidate_paths(start: Vector3, goal: Vector3, team: int) -> Array:
 			for i in range(1, b.size()):
 				combined.append(b[i])
 			out.append(combined)
+	# 绕开敌方持续地面区域：给每个压在路线上的区域补左右绕行候选
+	if hero != null:
+		for e in hero.get_tree().get_nodes_in_group("ai_ground_zones"):
+			if not (e is Node3D) or not is_instance_valid(e) or not (e as Node3D).is_inside_tree():
+				continue
+			if int(e.get_meta("zone_team", -1)) == int(team):
+				continue
+			var zc: Vector3 = (e as Node3D).global_position
+			var radius: float = float(e.get_meta("zone_radius", 3.0))
+			var ab: Vector3 = goal - start
+			ab.y = 0.0
+			if ab.length_squared() < 0.01:
+				continue
+			var t: float = clampf((zc - start).dot(ab) / ab.length_squared(), 0.0, 1.0)
+			if (start + ab * t).distance_to(zc) > radius + 2.0:
+				continue
+			var zperp := Vector3(-ab.z, 0.0, ab.x).normalized()
+			for sign in [-1.0, 1.0]:
+				var wp2: Vector3 = zc + zperp * (radius + 2.0) * sign
+				if not PathFinder.is_walkable_world(wp2):
+					continue
+				var a2 := PathFinder.find_path(start, wp2, Vector3.ZERO, team)
+				var b2 := PathFinder.find_path(wp2, goal, Vector3.ZERO, team)
+				if a2.is_empty() or b2.is_empty():
+					continue
+				var combined2: Array = Array(a2)
+				for i in range(1, b2.size()):
+					combined2.append(b2[i])
+				out.append(combined2)
 	return out
 
 
@@ -64,7 +93,25 @@ static func path_risk(hero: Hero, path: Array, threat: ThreatModel) -> float:
 		if threat != null:
 			risk += threat.enemy_threat(RISK_RADIUS, p)
 		risk += _tower_risk(hero, p)
+		risk += _ground_zone_risk(hero, p)
 	return risk
+
+
+## 持续地面技能危险：路点越靠近敌方危险区中心，代价越高
+static func _ground_zone_risk(hero: Hero, p: Vector3) -> float:
+	var total := 0.0
+	if hero == null or not is_instance_valid(hero):
+		return 0.0
+	for e in hero.get_tree().get_nodes_in_group("ai_ground_zones"):
+		if not (e is Node3D) or not is_instance_valid(e) or not (e as Node3D).is_inside_tree():
+			continue
+		if int(e.get_meta("zone_team", -1)) == int(hero.team):
+			continue
+		var radius: float = float(e.get_meta("zone_radius", 3.0))
+		var d: float = p.distance_to((e as Node3D).global_position)
+		if d < radius + 1.0:
+			total += (1.0 - d / maxf(0.1, radius + 1.0)) * 3.0
+	return total
 
 
 static func _path_cost(hero: Hero, path: Array, threat: ThreatModel) -> float:
