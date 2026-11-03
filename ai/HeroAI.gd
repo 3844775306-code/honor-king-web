@@ -850,13 +850,19 @@ func _try_travel_dash():
 	var sk: Skill = hero.skills[idx]
 	if sk == null:
 		return
-	# 沿指向 move_target 的方向跳技能本身位移长度
+	# 沿指向 move_target 的方向跳技能本身位移长度（含非type4的实际位移技能）
+	var dash_len: float = sk.self_displacement
+	if dash_len <= 0.5:
+		var dmeta: Dictionary = SkillDatabase.displacement_info(str(hero.display_name), idx)
+		dash_len = float(dmeta.get("len", 0.0))
+	if dash_len <= 0.5:
+		dash_len = sk.cast_range
 	var dir := dest - hero.global_position
 	dir.y = 0.0
 	if dir.length() < 0.01:
 		return
 	dir = dir.normalized()
-	var end := _resolve_dash_end(hero.global_position, dir, sk.self_displacement)
+	var end := _resolve_dash_end(hero.global_position, dir, dash_len)
 	if end == Vector3.ZERO:
 		return
 	hero._start_casting(idx, sk, dest)
@@ -903,8 +909,14 @@ func _pick_travel_dash_skill(skip_mana_cost: bool = false) -> int:
 		if i >= hero.skills.size() or hero.skills[i] == null:
 			continue
 		var sk: Skill = hero.skills[i]
-		# 只认引擎内「位移」类型(4)且确有位移距离；李白Q为type3三段折返、会记录回原点，排除
-		if sk.type != 4 or sk.self_displacement <= 0.0:
+		# 位移按实际效果识别，不只看 type=4（火舞Q/R、英睿W、元流W等）
+		var dash_len: float = sk.self_displacement
+		if dash_len <= 0.5:
+			var dmeta: Dictionary = SkillDatabase.displacement_info(str(hero.display_name), i)
+			dash_len = float(dmeta.get("len", 0.0))
+		if dash_len <= 0.5 and sk.type == 4:
+			dash_len = sk.cast_range
+		if dash_len <= 0.5:
 			continue
 		if skip_mana_cost and sk.mana_cost > 0.0:
 			continue   # 低蓝赶路：耗蓝位移技能不用，零蓝耗位移仍可用
@@ -995,18 +1007,25 @@ func _pick_dash_skill() -> Dictionary:
 		if hero.skill_cooldowns[i] > 0.0:
 			continue
 		var sk: Skill = hero.skills[i]
-		if sk == null or sk.type != 4:
+		if sk == null:
 			continue
 		if hero.mana < sk.mana_cost:
 			continue
-		# 与 Hero 执行同口径：优先 self_displacement，没有就用 cast_range
-		var dash_len: float = sk.self_displacement if sk.self_displacement > 0.0 else sk.cast_range
+		# 不能只看 type=4：火舞Q/R、李白Q、英睿W、元流W 等线性/指向技能也会位移
+		var dash_len: float = sk.self_displacement
+		var point_dash := false
+		if dash_len <= 0.5:
+			var dmeta: Dictionary = SkillDatabase.displacement_info(str(hero.display_name), i)
+			dash_len = float(dmeta.get("len", 0.0))
+			point_dash = bool(dmeta.get("point", false))
+		if dash_len <= 0.5 and sk.type == 4:
+			dash_len = sk.cast_range
 		if dash_len <= 0.5:
 			continue
 		# 英雄前置门槛（兰陵王需隐身等）不满足时不选，避免反复白试
 		if hero.skill_prereq_blocked(i):
 			continue
-		return {"index": i, "skill": sk, "len": dash_len}
+		return {"index": i, "skill": sk, "len": dash_len, "point": point_dash}
 	return {}
 
 
@@ -1291,8 +1310,11 @@ func _try_chase_dash(target: GameEntity) -> bool:
 	if dir.length() < 0.1:
 		return false
 	dir = dir.normalized()
+	var dash_len: float = float(d["len"])
+	if bool(d.get("point", false)):
+		dash_len = minf(dash_len, maxf(1.0, dist - 0.8))   # 点落位移不要越过目标
 	# 落点做墙面修正：dash_move_to 不受碰撞约束，不修正会穿墙/卡在墙里
-	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, float(d["len"]))
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, dash_len)
 	if end == Vector3.ZERO:
 		return false                      # 穿墙绕路不值得/落点危险
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，免得突进被移动逻辑覆盖

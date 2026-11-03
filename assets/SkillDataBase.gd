@@ -3978,6 +3978,22 @@ func _init_skills():
 	sk.damage = 1500.0; sk.bonus_ratio = 0.0; sk.type = 0; sk.cast_range = 3.0
 	skills["smite"] = sk
 
+## 非 type=4 但实际会位移的技能：AI 不能只看技能类型，位移长度/落点模式单独登记。
+## point=true：技能把施法者移动到瞄准点（如火舞Q/R）；否则为沿方向固定距离突进。
+static func displacement_info(hero_name: String, slot: int) -> Dictionary:
+	match hero_name:
+		"不知火舞":
+			if slot == 0: return {"len": 4.0, "point": true}   # 飞翔龙锥：冲拳后移动到落点
+			if slot == 2: return {"len": 6.0, "point": true}   # 必杀·狂舞：命中后移动到落点
+		"李白":
+			if slot == 0: return {"len": 2.5, "point": false}  # 将进酒：每段固定2.5m
+		"英睿":
+			if slot == 1: return {"len": 2.0, "point": false}  # 肘击：每段2m
+		"元流之子":
+			if slot == 1: return {"len": 2.5, "point": false}  # 破釜之箭：施放时小位移2.5m
+	return {}
+
+
 func get_skill(skill_id: String) -> Skill:
 	var skill = skills.get(skill_id)
 	if skill:
