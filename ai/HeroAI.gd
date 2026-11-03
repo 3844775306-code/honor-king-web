@@ -1969,6 +1969,21 @@ func _is_dragon_alive() -> bool:
 	return false
 
 
+## 若目标点正好是某座塔的中心，改成塔外侧可站立点（塔碰撞圈内走不到，会表现为「回城目标=塔中心」）
+func _tower_standoff(p: Vector3) -> Vector3:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0.0:
+			continue
+		var tp: Vector3 = (e as Turret).global_position
+		if p.distance_to(tp) > 0.8:
+			continue
+		var dir: Vector3 = hero.global_position - tp
+		dir.y = 0.0
+		if dir.length() < 0.1:
+			dir = Vector3(0, 0, 1)
+		return tp + dir.normalized() * 2.7
+	return p
+
 func _move_to_friendly_turret() -> void:
 	var goal := _choose_safe_retreat_goal()
 	if goal == Vector3.ZERO:
@@ -1977,6 +1992,7 @@ func _move_to_friendly_turret() -> void:
 			goal = turret.global_position
 	if goal == Vector3.ZERO:
 		goal = Vector3(-62, 0, 62) if hero.team == Config.Team.PLAYER else Vector3(62, 0, -62)
+	goal = _tower_standoff(goal)
 	_follow_safe_route(goal)
 
 
@@ -2949,3 +2965,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
