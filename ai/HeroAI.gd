@@ -607,6 +607,33 @@ func _try_yingrui_w_travel(dest: Vector3, dist: float) -> bool:
 	return true
 
 
+## 英睿W起手：近身敌人时主动开W，后续由 _yingrui_chain_w 连打3段
+func _try_yingrui_open_w() -> bool:
+	if hero == null or hero.display_name != "英睿" or hero.is_dead:
+		return false
+	if hero.casting_skill or hero.channeling_skill_index >= 0 or hero.is_recalling:
+		return false
+	if hero.skill_window_timers.size() <= 1 or float(hero.skill_window_timers[1]) > 0.0:
+		return false
+	if hero.skill_levels.size() <= 1 or int(hero.skill_levels[1]) <= 0:
+		return false
+	if hero.skill_cooldowns.size() <= 1 or float(hero.skill_cooldowns[1]) > 0.0:
+		return false
+	var sk: Skill = hero.skills[1]
+	if sk == null or hero.mana < sk.mana_cost:
+		return false
+	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
+		return false
+	var target: GameEntity = hero.manual_target
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		target = perception.find_nearest_enemy_hero(3.5)
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	_yingrui_w_aim = target.global_position
+	hero.move_target = Vector3.ZERO
+	hero._start_casting(1, sk, target.global_position)
+	return true
+
 ## 英睿W窗口内自动连打剩余段数（不依赖 SkillTactics 的固定连招/冷却判断）
 func _yingrui_chain_w() -> bool:
 	if hero == null or hero.display_name != "英睿" or hero.is_dead:
@@ -1166,7 +1193,9 @@ func _process(delta):
 			_recall_safe_behavior(delta)
 		return
 
-	# 英睿W窗口：3段必须连续打完
+	# 英睿W：近身主动起手 + 窗口内3段连打
+	if _try_yingrui_open_w():
+		return
 	if _yingrui_chain_w():
 		return
 	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
@@ -3284,5 +3313,6 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
 
