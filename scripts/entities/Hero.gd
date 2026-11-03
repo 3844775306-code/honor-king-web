@@ -968,8 +968,8 @@ func is_untargetable_by_enemies() -> bool:
 func _ready():
 	add_to_group("heroes")
 	_create_visual()
-	if not is_ai:
-		_create_attack_range_ring()
+	# 范围圈所有英雄都创建（默认隐藏）；测试模块可在创建后打开 show_attack_range_always
+	_create_attack_range_ring()
 	kill_exp = 200
 	kill_gold = 200
 	last_health = health
