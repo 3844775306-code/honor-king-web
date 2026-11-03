@@ -17,6 +17,10 @@ const SNAPSHOT_HZ := 30.0
 const SNAPSHOT_INTERVAL := 1.0 / SNAPSHOT_HZ
 const WEB_SNAPSHOT_INTERVAL := 1.0 / 15.0   # 浏览器经 Cloudflare 隧道：降到15Hz，减轻TCP抖动/解析压力
 var _web_snap_timer := 0.0
+var _last_snap_bytes := 0
+var _last_snap_bytes_ms := 0
+var rtt_ms := -1
+var _ping_ms := 0
 
 const TEAM_PLAYER := 0   # 与 Config.Team.PLAYER 一致，避免跨 autoload 解析
 
@@ -924,6 +928,7 @@ func debug_net_status() -> Dictionary:
 		"players": players.size(), "map": _map_payload.size(),
 		"snaps": _snap_count, "manifest": _manifest.size(),
 		"ack_map": _map_acked.size(), "ack_take": _takeover_acked.size(),
+		"snap_kb": _last_snap_bytes / 1024, "rtt": rtt_ms,
 	}
 
 
@@ -1114,6 +1119,25 @@ func _rpc_takeover(manifest: Dictionary) -> void:
 
 
 # ---------- RPC：意图指令（client→host） ----------
+
+func ping_server() -> void:
+	if mode != Mode.CLIENT:
+		return
+	_ping_ms = Time.get_ticks_msec()
+	_rpc_ping.rpc_id(1, _ping_ms)
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_ping(ms: int) -> void:
+	if multiplayer.is_server():
+		_rpc_pong.rpc_id(multiplayer.get_remote_sender_id(), ms)
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_pong(ms: int) -> void:
+	if not multiplayer.is_server():
+		rtt_ms = maxi(0, Time.get_ticks_msec() - ms)
+
 
 func request_battle_resync(need_map: bool = true) -> void:
 	if mode == Mode.CLIENT:
@@ -2751,6 +2775,10 @@ func _rpc_game_over(payload: Dictionary) -> void:
 func _rpc_snapshot(snap: Array) -> void:
 	if multiplayer.is_server():
 		return  # 主机已有真相
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _last_snap_bytes_ms >= 1000:
+		_last_snap_bytes_ms = now_ms
+		_last_snap_bytes = var_to_bytes(snap).size()
 	_last_snap = snap
 	_snap_count += 1
 	_update_overlay()

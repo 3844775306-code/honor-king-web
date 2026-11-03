@@ -373,6 +373,9 @@ func _ready() -> void:
 	if OS.has_feature("web"):
 		_interp_delay = 0.14   # 浏览器经隧道 15Hz 快照：加大回看窗口，避免排队抖动造成一卡一卡
 		Vfx.quality = 1
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+		get_viewport().screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+		get_viewport().scaling_3d_scale = 0.8
 	var world := Node3D.new()
 	world.name = "World"
 	add_child(world)
@@ -440,11 +443,13 @@ func _process(delta: float) -> void:
 	if _net_dbg != null:
 		_net_dbg_t -= delta
 		if _net_dbg_t <= 0.0:
-			_net_dbg_t = 0.5
+			_net_dbg_t = 1.0
+			NetSession.ping_server()
 			var d := NetSession.debug_net_status()
-			_net_dbg.text = "NET mode=%d phase=%d conn=%d fps=%d players=%d map=%dB snaps=%d manifest=%d own=%s map_ok=%s" % [
+			_net_dbg.text = "NET mode=%d phase=%d conn=%d fps=%d rtt=%dms snap=%dKB players=%d map=%dB snaps=%d manifest=%d own=%s map_ok=%s" % [
 				int(d.get("mode", -1)), int(d.get("phase", -1)), int(d.get("conn", -1)),
-				Engine.get_frames_per_second(), int(d.get("players", 0)), int(d.get("map", 0)), int(d.get("snaps", 0)),
+				Engine.get_frames_per_second(), int(d.get("rtt", -1)), int(d.get("snap_kb", 0)),
+				int(d.get("players", 0)), int(d.get("map", 0)), int(d.get("snaps", 0)),
 				int(d.get("manifest", 0)), str(_owned), str(_map_applied)]
 	_tick_intro_loading()
 	_atk_ring_flash = maxf(0.0, _atk_ring_flash - delta)
