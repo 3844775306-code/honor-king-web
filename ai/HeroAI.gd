@@ -525,11 +525,15 @@ func _try_travel_dash():
 	if dist <= hero.attack_range * 0.01:
 		return
 	# 闪现只在追击/逃跑时使用，不用于赶路
+	# 蓝量低于 40%：不再用位移/加速技能赶路（追击/逃跑逻辑不受影响）
+	var low_mana: bool = hero.actual_mana_max > 0.0 and hero.mana / hero.actual_mana_max < 0.40
 	# 马超赶路：朝移动方向投枪（W优先/Q次之），沿路捡枪后用强化普攻提速
-	if _try_machao_travel_spear(dest, dist):
+	if not low_mana and _try_machao_travel_spear(dest, dist):
 		return
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
+		return
+	if low_mana:
 		return
 	var idx := _pick_travel_dash_skill()
 	if idx < 0:
@@ -1541,7 +1545,8 @@ func _build_action_candidates() -> Array[AIAction]:
 
 	# 大禹鼎
 	var pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
-	if pot != null and _can_run_environment_action():
+	if pot != null:
+		# 拆鼎任务不限制次数：即使团队任务环境暂停额度已用完也继续拆
 		var a := AIAction.new(AIAction.Type.TRIPOD, 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
 		a.target = pot
 		out.append(a)
@@ -3052,4 +3057,5 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
