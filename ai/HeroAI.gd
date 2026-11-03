@@ -1691,7 +1691,7 @@ func _build_action_candidates() -> Array[AIAction]:
 	elif hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
 	# 低蓝且未到危急线：主动去击败附近蓝 buff（打蓝时允许用耗蓝技能）
-	if _is_low_mana() and not _is_mana_critical():
+	if _is_low_mana() and not _is_mana_critical() and not bool(hero.blue_buff_active):
 		var bb := _find_nearby_blue_buff()
 		if bb != null:
 			var ba := AIAction.new(AIAction.Type.BLUE_BUFF, 870, AIAction.PauseClass.ENVIRONMENT, "蓝量不足·打蓝")
