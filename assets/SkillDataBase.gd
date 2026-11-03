@@ -3551,7 +3551,7 @@ func _init_skills():
 	# ==================== 兰陵王 ====================
 	sk = Skill.new()
 	sk.skill_name = "秘技·极意"; sk.cooldown = 5.0; sk.mana_cost = 30
-	sk.cd_bonus = 0.2; sk.type = 0;
+	sk.cd_bonus = 0.2; sk.type = 0; sk.cast_range = 3.0
 	skills["lanling_q"] = sk
 
 	sk = Skill.new()

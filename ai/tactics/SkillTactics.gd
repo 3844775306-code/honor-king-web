@@ -141,17 +141,38 @@ func _clear_combo() -> void:
 	_combo_wait = 0.0
 
 
-## 技能是否在自身实际施法距离内；0距离技能视为自身/AOE，不做距离限制。
+## 技能是否在自身实际施法距离内。
+## 距离来源优先级：cast_range（具体技能数据）> 技能自身半径/弹道距离/位移距离。
+## 不能把 cast_range=0 一律当成“无限制”，否则 AI 会隔着很远对目标放近身技能。
 func _skill_in_range(index: int, target: GameEntity) -> bool:
 	if target == null or not is_instance_valid(target):
 		return true
 	if index < 0 or index >= hero.skills.size() or hero.skills[index] == null:
 		return false
 	var sk: Skill = hero.skills[index]
-	if sk.type == 2 or sk.type == 6 or sk.cast_range <= 0.0:
+	# 纯自身增益/护盾没有施法目标距离限制（带 cast_range 的位移/跳斩仍要按距离）
+	if (sk.type == 2 or sk.type == 6) and sk.cast_range <= 0.0:
 		return true
-	var reach: float = sk.cast_range + float(target.body_radius) + 0.6
-	return hero.global_position.distance_to(target.global_position) <= reach
+	var reach := _effective_skill_range(sk)
+	if reach <= 0.0:
+		return false
+	return hero.global_position.distance_to(target.global_position) <= reach + float(target.body_radius) + 0.35
+
+
+## 具体技能的有效施法距离：数据里的 cast_range 优先，缺失时回退到技能形态自带范围
+func _effective_skill_range(sk: Skill) -> float:
+	if sk == null:
+		return 0.0
+	if sk.cast_range > 0.0:
+		return sk.cast_range
+	match int(sk.type):
+		0, 1, 5:
+			return sk.radius
+		3:
+			return maxf(maxf(sk.bullet_range, sk.radius), sk.self_displacement)
+		4:
+			return sk.self_displacement
+	return 0.0
 
 
 ## 逃跑时只放低前摇的远程伤害或控制技能（≤0.4s），不因长前摇停下送人头。
