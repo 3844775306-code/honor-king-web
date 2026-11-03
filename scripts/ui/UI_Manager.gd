@@ -1898,22 +1898,24 @@ func _get_recommended_items(hero) -> Array:
 func _get_best_recommended_item(hero: Hero) -> String:
 	var list = _get_recommended_items(hero)
 
-	# 槽满时：尝试消耗素材合成推荐大件（支持部分素材补差价）
+	# 槽满时：只推荐「消耗已有素材合成、且合成后不新增槽位」的装备
 	if hero.equipment_slots.size() >= Hero.MAX_EQUIPMENT_SLOTS:
-		# 1. 遍历推荐列表，能合成就推荐
+		# 1. 遍历推荐列表，能消耗已有素材合成才推荐
 		for id in list:
 			if hero.equipment_slots.has(id): continue
+			if not _fits_without_new_slot(hero, id): continue
 			var reqs = ItemDatabase.get_item(id).get("requires", [])
 			for req_id in reqs:
 				if hero.equipment_slots.has(req_id):
-					return id  # 至少拥有1件素材，可以补差价合成
-		# 2. 无法合成→升级已有的低级装备（遍历所有槽位）
+					return id  # 至少拥有1件素材，合成后槽位不增加
+		# 2. 升级已有低级装备（同样要求合成后不新增槽位）
 		for owned_id in hero.equipment_slots:
 			var owned_tier = ItemDatabase.get_item(owned_id).get("tier", 1)
 			if owned_tier >= 3: continue
 			if owned_tier == 2:
 				for rid in list:
 					if hero.equipment_slots.has(rid): continue
+					if not _fits_without_new_slot(hero, rid): continue
 					if owned_id in ItemDatabase.get_item(rid).get("requires", []):
 						return rid
 			else:
@@ -1922,13 +1924,15 @@ func _get_best_recommended_item(hero: Hero) -> String:
 					if hero.equipment_slots.has(rid): continue
 					for mid_id in ItemDatabase.get_item(rid).get("requires", []):
 						if hero.equipment_slots.has(mid_id): continue
+						if not _fits_without_new_slot(hero, mid_id): continue
 						if owned_id in ItemDatabase.get_item(mid_id).get("requires", []):
 							return mid_id
-		# 3. 兜底：推荐列表中第一个未拥有的
+		# 3. 兜底：只从「不新增槽位」的候选中选，绝不推荐需要空槽的新装备
 		for id in list:
-			if not hero.equipment_slots.has(id):
+			if hero.equipment_slots.has(id): continue
+			if _fits_without_new_slot(hero, id):
 				return id
-		return list[0]
+		return ""
 
 	# 1. 素材齐全 → 推荐合成大件
 	for id in list:
@@ -1954,6 +1958,23 @@ func _get_best_recommended_item(hero: Hero) -> String:
 	return ""
 
 # 合成路径上仍缺的节点（大件 → 叶子顺序），按每个父件里的需求份数计缺失
+## 当前装备槽下购买该装备后是否不增加槽位（槽满时只有消耗已有素材的合成才允许）
+func _fits_without_new_slot(hero: Hero, id: String) -> bool:
+	if hero.equipment_slots.size() < Hero.MAX_EQUIPMENT_SLOTS:
+		return true
+	var item: Dictionary = ItemDatabase.get_item(id)
+	if item.is_empty():
+		return false
+	var owned_components := 0
+	var remaining: Array = item.get("requires", []).duplicate()
+	for oid in hero.equipment_slots:
+		var idx = remaining.find(oid)
+		if idx >= 0:
+			owned_components += 1
+			remaining.remove_at(idx)
+	return hero.equipment_slots.size() - owned_components + 1 <= Hero.MAX_EQUIPMENT_SLOTS
+
+
 func _collect_missing_path(hero: Hero, id: String, out: Array) -> void:
 	var item: Dictionary = ItemDatabase.get_item(id)
 	if item.is_empty(): return
@@ -2401,6 +2422,9 @@ func _recommended_options(hero: Hero, best_id: String, list: Array) -> Array:
 	for mid in path:
 		var oid := str(mid)
 		if seen.has(oid) or hero.equipment_slots.has(oid):
+			order += 1
+			continue
+		if not _fits_without_new_slot(hero, oid):
 			order += 1
 			continue
 		seen[oid] = true
@@ -4850,5 +4874,3 @@ class DeviceStatusArt extends Control:
 			var ry: float = 25.0 - hh
 			draw_rect(Rect2(rx, ry, 5.5, hh), net_col if i < level else Color(1, 1, 1, 0.16))
 		UiKit.text(self, Vector2(nx + 38.0, 24.0), net_txt, 17, bright if net_mode > 0 else dim)
-
-
