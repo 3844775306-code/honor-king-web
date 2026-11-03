@@ -1018,6 +1018,13 @@ func _process(delta):
 	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
 	if _react_to_hero_attack(delta):
 		return
+	# 回城读条期间锁定移动：守塔/推线等决策可能把 move_target 改成塔中心，导致看起来在往塔里回城
+	if hero.is_recalling:
+		hero.move_target = Vector3.ZERO
+		_ai_path.clear()
+		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城")
+		_recall_safe_behavior(delta)
+		return
 	_sync_ai_movement()
 	# 目标死亡后的“附近是否还有其他小兵”交给 _action_is_complete 的 TEMP_CLEAR 分支处理
 	_debug_track()
@@ -1979,6 +1986,9 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 	# 撤退时允许回身放瞬发/低前摇的远程伤害/控制，不因长前摇停下送人头。
 	var chaser: Hero = perception.find_nearest_enemy_hero(30.0)
 	if chaser != null:
+		if "--ai-skill-probe" in OS.get_cmdline_user_args():
+			print("[AISKILL] retreat attempt %s chaser=%s dist=%.1f" % [
+				hero.display_name, chaser.display_name, hero.global_position.distance_to(chaser.global_position)])
 		skill_tactics.try_escape_skill(chaser)
 	var goal := Vector3.ZERO
 	if current_action != null and current_action.data.has("pos"):
@@ -2210,7 +2220,11 @@ func _update_finish_chase(delta: float) -> bool:
 	if _try_chase_dash(_chase_target):
 		return true
 	# SkillTactics 内部按技能实际 cast_range 过滤；这里不再用固定 10m 卡远程技能。
-	_try_use_skills(_chase_target)
+	var _chase_cast := _try_use_skills(_chase_target)
+	if _chase_cast and "--ai-skill-probe" in OS.get_cmdline_user_args():
+		print("[AISKILL] chase %s -> %s  dist=%.1f" % [
+			hero.display_name, _chase_target.display_name,
+			hero.global_position.distance_to(_chase_target.global_position)])
 	return true
 
 
@@ -2688,8 +2702,8 @@ func _leave_recall_spot() -> void:
 	_move_to_friendly_turret()
 
 # ==================== 技能使用 ====================
-func _try_use_skills(target: GameEntity):
-	skill_tactics.try_best_combo(target, brain.get_combos(target))
+func _try_use_skills(target: GameEntity) -> bool:
+	return skill_tactics.try_best_combo(target, brain.get_combos(target))
 
 
 # ==================== 购买 ====================
@@ -2904,7 +2918,13 @@ func _handle_lane_turret_defense() -> bool:
 	# 还没走到塔边 → 先赶路；否则接手塔的仇恨目标
 	if dist > AiConfig.FRIENDLY_TURRET_CLOSE:
 		hero.manual_target = null
-		hero.move_target = turret.global_position
+		# 贴到塔外侧可站立处（塔中心有碰撞推挤，走不到）
+		var from_t := hero.global_position - turret.global_position
+		from_t.y = 0.0
+		if from_t.length() < 0.1:
+			from_t = Vector3(0, 0, 1)
+		var stand := turret.global_position + from_t.normalized() * 2.7
+		hero.move_target = stand
 		_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
 		return true
 	var defender := _defense_target_for_turret(turret)
@@ -2929,9 +2949,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
-
-
-
 
