@@ -144,6 +144,7 @@ const DODGE_GROUND_MARGIN: float = 0.8       # 地面持续技能：离开危险
 # ==================== 保持安全距离（迟滞） ====================
 const SAFE_DISTANCE_ENTER_HP: float = 0.40    # 低于该血量才进入保持安全距离
 const SAFE_DISTANCE_EXIT_HP: float = 0.45     # 高于该血量退出，避免40%附近反复触发
+const SAFE_DISTANCE_BAIL_HP: float = 0.25     # 低于该血量立刻退出安全距离，交给回城/撤退等生存决策
 const SAFE_DISTANCE_LEAVE_MARGIN: float = 1.5 # 退出安全距离时额外拉开的边距
 const SAFE_DISTANCE_GOAL_MARGIN: float = 2.2  # 后撤目标点比安全距离多出的距离
 const SAFE_DISTANCE_MIN_TIME: float = 0.5     # 进入后至少持续该时间才允许退出

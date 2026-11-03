@@ -431,6 +431,11 @@ func _try_keep_safe_distance() -> bool:
 	var now := Time.get_ticks_msec() * 0.001
 	var active := _is_action(AIAction.Type.SAFE_DISTANCE)
 	var hp_ratio: float = hero.health / maxf(hero.actual_max_health, 1.0)
+	# 极低血：不要卡在“保持安全距离”，退出交给回城/撤退等生存决策
+	if hp_ratio < AiConfig.SAFE_DISTANCE_BAIL_HP:
+		if active:
+			_end_safe_distance(now)
+		return false
 	# 血量迟滞：<40% 进入，>45% 退出；避免 40% 附近回血/掉血反复切换
 	if hp_ratio >= AiConfig.SAFE_DISTANCE_EXIT_HP:
 		if active:
