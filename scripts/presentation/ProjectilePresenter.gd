@@ -67,10 +67,11 @@ static func tower_orb(radius: float) -> Node3D:
 
 
 ## 英雄弹体元素色拖尾（host 原：Vfx.attach_trail(self, color_for_hero, 0.20, 0.30, 8)）
-static func attach_hero_trail(host: Node3D, hero_name: String) -> void:
+static func attach_hero_trail(host: Node3D, hero_name: String, accent: Color = Color(0, 0, 0, 0)) -> void:
 	if host == null or hero_name == "":
 		return
-	Vfx.attach_trail(host, Vfx.color_for_hero(hero_name), 0.20, 0.30, 8)
+	var col: Color = accent if accent.a > 0.0 else Vfx.color_for_hero(hero_name)
+	Vfx.attach_trail(host, col, 0.20, 0.30, 8)
 
 
 ## 联机/回放：kind（0..5 / 1000+vkind）→ 与 host 同形的弹体节点

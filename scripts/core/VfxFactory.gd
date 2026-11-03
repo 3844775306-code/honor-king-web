@@ -149,6 +149,15 @@ func cast_burst(hero_name: String, pos: Vector3, dir: Vector3 = Vector3.ZERO, sc
 	_ring(Vector3(pos.x, 0.15, pos.z), 0.9 * scale_f, el["c"], 0.30, scale_f)
 	_light(pos, el["light"], 2.2 * scale_f, 0.14)
 
+## 皮肤技能特效：在原有技能 FX 外再叠一层皮肤强调色爆发/法阵，不改判定
+func skin_spell_burst(pos: Vector3, accent: Color) -> void:
+	if quality <= 0 or _near_limit(1):
+		return
+	_burst(accent, accent.lightened(0.35), pos + Vector3.UP * 0.5, 14, 0.55, 0.55, 8.0, Vector3.UP, 60.0, 5.0)
+	_ring(Vector3(pos.x, ground_pos(pos).y + 0.16, pos.z), 1.8, accent, 0.38, 1.1)
+	_light(pos, accent, 1.4, 0.18)
+
+
 ## 命中火花：任何子弹/技能命中的统一反馈（P0 全技能生效）
 func hit_spark(pos: Vector3, color: Color, dir: Vector3 = Vector3.UP, scale_f: float = 1.0) -> void:
 	if quality <= 0 or _near_limit(1):

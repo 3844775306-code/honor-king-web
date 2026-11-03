@@ -29,6 +29,17 @@ static func skin_name(hero_name: String, skin_id: String) -> String:
 	return str(s.get("name", "经典")) if not s.is_empty() else "经典"
 
 
+static func accent_for(hero_name: String, skin_id: String) -> Color:
+	var s := get_skin(hero_name, skin_id)
+	if s.is_empty():
+		return Color(0.6, 0.75, 0.95)
+	return s.get("accent", Color(0.6, 0.75, 0.95))
+
+
+static func is_custom(hero_name: String, skin_id: String) -> bool:
+	return skin_id != "" and skin_id != default_id(hero_name)
+
+
 static func selected_id(hero_name: String) -> String:
 	var arr := skins_for(hero_name)
 	if arr.is_empty():
@@ -89,6 +100,8 @@ static func apply_to(root: Node3D, hero_name: String, skin_id: String) -> void:
 		return
 	_tint_meshes(root, body, accent)
 	_add_aura(root, accent)
+	_add_cape(root, accent)
+	_add_orbs(root, accent)
 
 
 static func _tint_meshes(node: Node, body: Color, accent: Color) -> void:
@@ -104,10 +117,10 @@ static func _tint_meshes(node: Node, body: Color, accent: Color) -> void:
 				if mat is StandardMaterial3D:
 					var m := (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
 					var base := m.albedo_color
-					m.albedo_color = Color(base.r * body.r, base.g * body.g, base.b * body.b, base.a)
+					m.albedo_color = base.lerp(Color(body.r, body.g, body.b, base.a), 0.72)
 					m.emission_enabled = true
 					m.emission = accent
-					m.emission_energy_multiplier = maxf(m.emission_energy_multiplier, 0.7)
+					m.emission_energy_multiplier = maxf(m.emission_energy_multiplier, 0.85)
 					m.roughness = clampf(m.roughness * 0.92, 0.18, 0.9)
 					mi.set_surface_override_material(si, m)
 				elif mat == null:
@@ -143,3 +156,73 @@ static func _add_aura(root: Node3D, accent: Color) -> void:
 	ring.position = Vector3(0.0, 0.05, 0.0)
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(ring)
+
+
+static func _add_cape(root: Node3D, accent: Color) -> void:
+	var old := root.get_node_or_null("SkinCape")
+	if old != null and is_instance_valid(old):
+		old.queue_free()
+	var cape := MeshInstance3D.new()
+	cape.name = "SkinCape"
+	var q := QuadMesh.new()
+	q.size = Vector2(1.45, 1.9)
+	cape.mesh = q
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(accent.r * 0.7, accent.g * 0.7, accent.b * 0.7, 0.42)
+	m.emission_enabled = true
+	m.emission = accent
+	m.emission_energy_multiplier = 0.9
+	cape.material_override = m
+	cape.position = Vector3(0.0, 1.15, -0.75)
+	cape.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	cape.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(cape)
+
+
+static func _add_orbs(root: Node3D, accent: Color) -> void:
+	for i in range(3):
+		var old := root.get_node_or_null("SkinOrb%d" % i)
+		if old != null and is_instance_valid(old):
+			old.queue_free()
+		var orb := MeshInstance3D.new()
+		orb.name = "SkinOrb%d" % i
+		var sm := SphereMesh.new()
+		sm.radius = 0.13
+		sm.height = 0.26
+		orb.mesh = sm
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = accent
+		m.emission_enabled = true
+		m.emission = accent
+		m.emission_energy_multiplier = 2.2
+		orb.material_override = m
+		var ang := TAU * float(i) / 3.0
+		orb.position = Vector3(cos(ang) * 0.72, 1.55 + 0.18 * float(i), sin(ang) * 0.72)
+		orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(orb)
+
+
+## 子弹/技能特效按皮肤强调色染色（只改表现，不改伤害/判定）
+static func apply_fx_color(node: Node, accent: Color) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			if mi.mesh != null:
+				for si in range(mi.mesh.get_surface_count()):
+					var mat: Material = mi.get_surface_override_material(si)
+					if mat == null:
+						mat = mi.mesh.surface_get_material(si)
+					if mat is StandardMaterial3D:
+						var m := (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+						m.albedo_color = m.albedo_color.lerp(Color(accent.r, accent.g, accent.b, m.albedo_color.a), 0.75)
+						m.emission_enabled = true
+						m.emission = accent
+						m.emission_energy_multiplier = maxf(m.emission_energy_multiplier, 1.2)
+						mi.set_surface_override_material(si, m)
+		apply_fx_color(child, accent)

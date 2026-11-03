@@ -21,7 +21,9 @@ const ROLE_COLORS := {
 	"坦克": Color(0.45, 0.6, 0.75),
 }
 
-## 英雄皮肤名（立绘用模型为通用底模，皮肤名仅作展示文案）
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
+
+## 旧版展示名兜底（新皮肤表优先）
 const HERO_SKIN := {
 	"吕布": "天魔缭乱", "亚瑟": "狮心王", "铠": "曙光守护者", "东皇太一": "龙渊", "夏侯惇": "不羁之风",
 	"英睿": "铁血战将", "马超": "神威天将", "李白": "凤求凰", "兰陵王": "暗影猎手", "孙悟空": "齐天大圣",
@@ -242,6 +244,9 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 	art.size = Vector2(452, 360)
 	art.clip_contents = true
 	body.add_child(art)
+	var card_skin := str(entry.get("skin", ""))
+	if card_skin == "" and hero_name != "" and hero_name != "—":
+		card_skin = HeroSkinTable.selected_id(hero_name) if bool(entry.get("is_player", false)) else HeroSkinTable.auto_id(hero_name, 0)
 	if hero_name != "" and hero_name != "—":
 		var pv := HeroPreview.new()
 		pv.render_size = Vector2i(452, 360)
@@ -250,7 +255,7 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 		pv.position = Vector2.ZERO
 		art.add_child(pv)
 		pv.set_accent(role_color)
-		pv.set_hero(hero_name)
+		pv.set_hero(hero_name, card_skin)
 	else:
 		var disc := Panel.new()
 		disc.size = Vector2(140, 140)
@@ -329,7 +334,7 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 	var nm := _mk_label(hero_name if hero_name != "" else "—", int(round(UiKit.FS_LG * UiKit.scale())), UiKit.C_GOLD)
 	nm.add_theme_color_override("font_color", UiKit.C_GOLD)
 	name_row.add_child(nm)
-	var skin := _mk_label("「%s」" % _skin_for(hero_name), int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_TEXT_DIM)
+	var skin := _mk_label("「%s」" % _skin_for(hero_name, card_skin), int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_TEXT_DIM)
 	skin.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_row.add_child(skin)
 	var role_lab := _mk_label(role if role != "" else ("我方 %d 号位" % (idx + 1)), int(round(UiKit.FS_XS * UiKit.scale())), role_color.lightened(0.3))
@@ -358,9 +363,12 @@ func _rank_for(entry: Dictionary, idx: int) -> String:
 	return RankSystem.ai_label(hero_name + "|" + str(idx), center_tier)
 
 
-func _skin_for(hero_name: String) -> String:
+func _skin_for(hero_name: String, skin_id: String = "") -> String:
 	if hero_name == "" or hero_name == "—":
 		return "—"
+	var nm := HeroSkinTable.skin_name(hero_name, skin_id)
+	if nm != "经典":
+		return nm
 	return str(HERO_SKIN.get(hero_name, "经典皮肤"))
 
 

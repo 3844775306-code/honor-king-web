@@ -1,5 +1,7 @@
 class_name Bullet
 extends Area3D
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
+var _skin_fx_accent := Color(0, 0, 0, 0)
 var attacked:Array=[]
 var speed: float = 20.0
 var damage: float = 0.0
@@ -72,6 +74,8 @@ var dayu_r1: bool = false         # 大禹R1乾鼎标记
 var transferring: bool = false              # 防重入：弹射协程运行时阻止重复触发
 func _ready():
 	add_to_group("projectiles")
+	if source is Hero and source.has_method("skin_is_custom") and source.skin_is_custom():
+		_skin_fx_accent = source.skin_accent_color()
 	# 普攻/塔/兵弹道统一走程序化能量弹（双端同源）；技能弹保留原有定制视觉
 	var _vk := BulletVisual.vkind_for(self)
 	if _vk > 0:
@@ -119,7 +123,9 @@ func _ready():
 			add_child(visual_mesh)
 	# P0：英雄来源弹道统一挂元素色拖尾（移动端 8 粒子，超并发预算时 Vfx 内部自动丢弃）
 	if source is Hero and visual_mesh:
-		ProjectilePresenter.attach_hero_trail(self, str(source.display_name))
+		if _skin_fx_accent.a > 0.0:
+			HeroSkinTable.apply_fx_color(visual_mesh, _skin_fx_accent)
+		ProjectilePresenter.attach_hero_trail(self, str(source.display_name), _skin_fx_accent)
 	# 线性技能弹（模型路径）：整体放大，判定见 hit_radius
 	if linear_dir != Vector3.ZERO and int(skill_id) != 0 and visual_mesh and is_instance_valid(visual_mesh):
 		visual_mesh.scale *= 1.5
@@ -135,7 +141,12 @@ func _build_unified_visual() -> void:
 	# 箭矢类（弓兵实体箭 / 后羿箭）需要俯仰跟随弹道，球体光效不需要
 	var shape := int(spec["shape"])
 	_pitch_visual = shape == BulletVisual.SHAPE_BOLT or shape == BulletVisual.SHAPE_ARROW
-	visual_mesh = BulletVisual.build(shape, spec["c1"], spec["c2"], base)
+	var _c1: Color = spec["c1"]
+	var _c2: Color = spec["c2"]
+	if _skin_fx_accent.a > 0.0:
+		_c1 = _skin_fx_accent
+		_c2 = _skin_fx_accent.lightened(0.35)
+	visual_mesh = BulletVisual.build(shape, _c1, _c2, base)
 	_recursive_set_shadow(visual_mesh, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 	add_child(visual_mesh)
 	var spn := visual_mesh.get_node_or_null("Spin")
@@ -146,8 +157,8 @@ func _build_unified_visual() -> void:
 		# 技能弹只在「真弹道」（直线飞行 + 有伤害）挂拖尾；原地爆炸载体不挂，防刷爆预算
 		var is_skill := int(skill_id) != 0
 		if not is_skill or (linear_dir != Vector3.ZERO and float(damage) > 0.0):
-			Vfx.attach_trail(self, spec["c1"], float(spec["trail_size"]), float(spec["trail_life"]), 8, spec["c2"])
-		Vfx.muzzle(global_position, _aim_dir(), spec["c1"], spec["c2"])
+			Vfx.attach_trail(self, _c1, float(spec["trail_size"]), float(spec["trail_life"]), 8, _c2)
+		Vfx.muzzle(global_position, _aim_dir(), _c1, _c2)
 	# 出手弹跳：0.7 → 1.08 → 1.0（缩放只作用于视觉根，不影响碰撞）
 	visual_mesh.scale = Vector3.ONE * base * 0.7
 	var tw := create_tween()
@@ -786,4 +797,3 @@ func _recursive_set_shadow(node: Node, mode: int):
 		node.cast_shadow = mode
 	for child in node.get_children():
 		_recursive_set_shadow(child, mode)
-

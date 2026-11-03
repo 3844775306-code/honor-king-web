@@ -1037,6 +1037,7 @@ func _start_net_lineup(picks: Dictionary) -> void:
 	selected_hero_type = host_hero
 	hero_selected = true
 	GameEntity.debug_show_path = true
+	selected_skin_id = str(host_pick.get("skin", ""))
 	_create_player_hero(host_hero, host_summ)          # host 本人
 	# 其余人类席：按各自选择阵营生成（蓝方/红方），is_ai=true 但不挂 HeroAI（等接管）
 	var occupied_roles := [str(host_pick.get("role", ""))]
@@ -1066,6 +1067,7 @@ func _start_net_lineup(picks: Dictionary) -> void:
 		gh.position = (Vector3(-58 + randf_range(-2, 2), 0, 58 + randf_range(-2, 2)) if camp == 0
 			else Vector3(58 + randf_range(-2, 2), 0, -58 + randf_range(-2, 2)))
 		gh.setup_skills_from_database(cfg.get("skills", []), summ)
+		gh.hero_skin_id = str(p.get("skin", ""))
 		add_child(gh)
 		if gh.display_name == "元流之子":
 			gh.yuanliu_pick = ["生机", "穿心", "迅疾", "凝神"][randi() % 4]
@@ -1170,12 +1172,17 @@ func _start_game(hero_type: String, summoner_id: String = "flash"):
 			var ent := {"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.player_team}
 			if i == sel_player_seat:
 				ent["is_player"] = true
+				ent["skin"] = selected_skin_id if selected_skin_id != "" else HeroSkinTable.selected_id(hn)
+			elif hn != "":
+				ent["skin"] = HeroSkinTable.auto_id(hn, i)
 			heroes.append(ent)
 		for i in 5:
 			var hn := str(sel_enemy_picks[i])
-			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.foe_team()})
+			heroes.append({"name": hn if hn != "" else "—", "role": _hero_role(hn), "team": Config.foe_team(),
+				"skin": HeroSkinTable.auto_id(hn, i) if hn != "" else ""})
 	else:
-		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": Config.player_team, "is_player": true})
+		heroes.append({"name": hero_type, "role": _hero_role(hero_type), "team": Config.player_team, "is_player": true,
+			"skin": selected_skin_id if selected_skin_id != "" else HeroSkinTable.selected_id(hero_type)})
 		for i in 4:
 			heroes.append({"name": "—", "role": "我方 %d 号位" % (i + 2), "team": Config.player_team})
 		for i in 5:

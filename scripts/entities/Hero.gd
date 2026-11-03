@@ -4856,7 +4856,10 @@ func _finish_casting():
 			pos = manual_target.global_position
 	# P0/P1：技能真正出手表现（签名大招查 SpellFxTable，其余走通用元素爆发；伤害时序不变）
 	var _cast_fwd := Vector3(sin(rotation.y), 0.0, cos(rotation.y))
-	Vfx.play_spell(display_name, pending_skill_index, global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, skill, _cast_fwd, not is_ai)	
+	Vfx.play_spell(display_name, pending_skill_index, global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, pos, skill, _cast_fwd, not is_ai)
+	# 定制皮肤：额外叠一层皮肤强调色技能爆发，让技能特效明显换色
+	if skin_is_custom():
+		Vfx.skin_spell_burst(global_position + Vector3.UP * 1.2 + _cast_fwd * 0.65, skin_accent_color())	
 	var _replay_rec = get_tree().get_first_node_in_group("replay_recorder")
 	if _replay_rec != null:
 		_replay_rec.call("note_cast", display_name, pending_skill_index,
@@ -5875,6 +5878,19 @@ const HERO_MODEL_MAP = {
 	"英睿":     ["res://model/hero/character-male-d.glb", ""],
 
 }
+
+## 皮肤强调色：经典皮肤仍用原英雄元素色
+func skin_accent_color() -> Color:
+	if hero_skin_id == "" or HeroSkinTable.get_skin(display_name, hero_skin_id).is_empty():
+		return Vfx.color_for_hero(display_name)
+	if not HeroSkinTable.is_custom(display_name, hero_skin_id):
+		return Vfx.color_for_hero(display_name)
+	return HeroSkinTable.accent_for(display_name, hero_skin_id)
+
+
+func skin_is_custom() -> bool:
+	return HeroSkinTable.is_custom(display_name, hero_skin_id)
+
 
 func _load_hero_model() -> Node3D:
 	var entry = HERO_MODEL_MAP.get(display_name, [])

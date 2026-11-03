@@ -537,7 +537,7 @@ func _autofill_red_peer(pid: int, lane: String) -> void:
 	if pick == "":
 		return
 	_picks[pid] = {"hero": pick, "summoner": "flash",
-		"role": str(HeroPickData.HERO_ROLE.get(pick, "")), "team": 1}
+		"role": str(HeroPickData.HERO_ROLE.get(pick, "")), "team": 1, "skin": ""}
 	print("[Net] 红方真人自动配英雄 peer=", pid, " hero=", pick, " lane=", lane)
 
 
@@ -569,11 +569,11 @@ func _rpc_lobby_state(state: Dictionary) -> void:
 # ---------- 选人阶段 RPC（guest→host 上报选人；host→guest 拒绝回执） ----------
 
 @rpc("any_peer", "reliable", "call_remote")
-func _rpc_set_pick(hero: String, summoner: String) -> void:
+func _rpc_set_pick(hero: String, summoner: String, skin: String = "") -> void:
 	if not multiplayer.is_server():
 		return
 	var pid := multiplayer.get_remote_sender_id()
-	if not _apply_pick(pid, hero, summoner):
+	if not _apply_pick(pid, hero, summoner, skin):
 		var msg := "该职责已被他人选择，或本方席位已满"
 		if not draft.is_empty() and not _draft_is_turn_of(pid):
 			msg = "还没轮到你选人，请等待当前席位"
@@ -751,15 +751,15 @@ func _all_active_picked() -> bool:
 	return true
 
 
-func send_pick(hero: String, summoner: String) -> bool:
+func send_pick(hero: String, summoner: String, skin: String = "") -> bool:
 	# host 本地选人直接落地；guest 走 rpc（返回 true 表示已发出，最终以主机广播为准）
 	if mode == Mode.CLIENT:
-		rpc("_rpc_set_pick", hero, summoner)
+		rpc("_rpc_set_pick", hero, summoner, skin)
 		return true
-	return _apply_pick(1, hero, summoner)
+	return _apply_pick(1, hero, summoner, skin)
 
 
-func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
+func _apply_pick(pid: int, hero: String, summoner: String, skin: String = "") -> bool:
 	if mode != Mode.HOST:
 		return false
 	if not HeroPickData.HERO_ROLE.has(hero):
@@ -791,7 +791,7 @@ func _apply_pick(pid: int, hero: String, summoner: String) -> bool:
 	# 顺序选人：只允许本回合玩家上报，且不与展示阵容冲突
 	if not _draft_allows(pid, hero):
 		return false
-	_picks[pid] = { "hero": hero, "summoner": summoner, "role": role, "team": my_team }
+	_picks[pid] = { "hero": hero, "summoner": summoner, "role": role, "team": my_team, "skin": skin }
 	print("[Net] 选人锁定 peer=", pid, " hero=", hero, " role=", role)
 	_broadcast_lobby_state()
 	return true

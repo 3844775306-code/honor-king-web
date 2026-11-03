@@ -22,6 +22,7 @@ extends Control
 enum UIState { MENU, ROOM, SELECT }
 
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 const MenuBackdropScript = preload("res://scripts/ui/MenuBackdrop.gd")
 const TacticalMapScript = preload("res://scripts/ui/TacticalMap.gd")
 const ReplayBrowserPanelScript = preload("res://scripts/ui/ReplayBrowserPanel.gd")
@@ -99,6 +100,7 @@ var _auto_join_from_query := false
 var _sel_hero := ""          # 本机当前选中英雄
 var _sel_summ := ""          # 本机当前选中召唤师名（中文）
 var _sel_sid := ""           # 其 SkillDatabase id
+var _sel_skin := ""           # 本机当前选中皮肤 id
 var _pick_status: Label = null
 var _pick_summary: Label = null
 var _pick_confirm_btn: Button = null
@@ -134,6 +136,7 @@ var _summ_manual := false              # 玩家是否手动改过召唤师（fal
 var _summ_tip: PanelContainer = null   # 召唤师卡悬停浮层
 var _prev_role_chip: PanelContainer = null
 var _prev_summ_chip: PanelContainer = null
+var _prev_skin_btn: Button = null
 var _prev_chip_row: HBoxContainer = null
 # --- 分路（PlayerPrefs，菜单选择 → 房间显示 → 联机选人锁职责） ---
 var _lane_btns := {}                   # 分路 -> 菜单页芯片按钮
@@ -400,6 +403,7 @@ func _clear_stack() -> void:
 	_pick_confirm_center = null
 	_auto_start_lab = null
 	_prev = null
+	_prev_skin_btn = null
 	_stage_title = null
 	_stage_sub = null
 	_countdown_lab = null
@@ -1863,6 +1867,12 @@ func _tick_route(delta: float) -> void:
 func _loading_heroes() -> Array:
 	var out: Array = []
 	var rows := _seat_rows(_last_state)
+	var pick_skins := {}
+	for pid in NetSession.get_picks():
+		var pk: Dictionary = NetSession.get_picks()[pid]
+		var ph := str(pk.get("hero", ""))
+		if ph != "":
+			pick_skins[ph] = str(pk.get("skin", "")) if str(pk.get("skin", "")) != "" else HeroSkinTable.auto_id(ph, 0)
 	var ally_seats: Array = rows.get("seats", [])
 	var foe_seats: Array = rows.get("enemy_seats", [])
 	var t_ally: int = Config.player_team
@@ -1875,10 +1885,13 @@ func _loading_heroes() -> Array:
 		var role := str(a.get("role", ""))
 		if role == "":
 			role = str(HeroPickData.HERO_ROLE.get(hn, ""))
+		var skin_a := str(pick_skins.get(hn, ""))
+		if skin_a == "" and hn != "":
+			skin_a = HeroSkinTable.selected_id(hn) if bool(a.get("is_me", false)) else HeroSkinTable.auto_id(hn, i)
 		out.append({ "name": hn if hn != "" else "—",
 			"role": role if role != "" else "我方 %d 号位" % (i + 1), "team": t_ally,
 			"nick": str(a.get("name", "")), "rank": str(a.get("rank", "")),
-			"is_player": bool(a.get("is_me", false)) })
+			"is_player": bool(a.get("is_me", false)), "skin": skin_a })
 	for i in 5:
 		var f: Dictionary = foe_seats[i] if i < foe_seats.size() and foe_seats[i] is Dictionary else {}
 		var hn2 := str(f.get("hero", ""))
@@ -1887,10 +1900,13 @@ func _loading_heroes() -> Array:
 		var role2 := str(f.get("role", ""))
 		if role2 == "":
 			role2 = str(HeroPickData.HERO_ROLE.get(hn2, ""))
+		var skin_f := str(pick_skins.get(hn2, ""))
+		if skin_f == "" and hn2 != "":
+			skin_f = HeroSkinTable.auto_id(hn2, i)
 		out.append({ "name": hn2 if hn2 != "" else "—",
 			"role": role2 if role2 != "" else "敌方 %d 号位" % (i + 1), "team": t_foe,
 			"nick": str(f.get("name", "")), "rank": str(f.get("rank", "")),
-			"is_player": false })
+			"is_player": false, "skin": skin_f })
 	return out
 
 
@@ -2346,6 +2362,7 @@ func _adopt_self_choice(state: Dictionary, data: Dictionary) -> void:
 	if not mine.is_empty():
 		_sel_hero = str(mine.get("hero", ""))
 		_sel_sid = str(mine.get("summoner", ""))
+		_sel_skin = str(mine.get("skin", "")) if str(mine.get("skin", "")) != "" else HeroSkinTable.selected_id(_sel_hero)
 		_sel_summ = _summoner_name(_sel_sid)
 		return
 	if _sel_hero != "" and HeroPickData.HERO_ROLE.has(_sel_hero):
@@ -2720,6 +2737,17 @@ func _build_center_stage() -> Control:
 	srow.add_child(_preview_summ)
 	_prev_summ_chip.add_child(srow)
 	chip_row.add_child(_prev_summ_chip)
+	_prev_skin_btn = Button.new()
+	_prev_skin_btn.text = "皮肤 · 经典"
+	_prev_skin_btn.custom_minimum_size = Vector2(210, 40)
+	_prev_skin_btn.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	_prev_skin_btn.add_theme_color_override("font_color", COL_GOLD)
+	_prev_skin_btn.add_theme_stylebox_override("normal", UiKit.skin_chip(UiKit.C_GOLD, 0.9, 12))
+	_prev_skin_btn.add_theme_stylebox_override("hover", UiKit.skin_chip(UiKit.C_GOLD, 1.0, 12))
+	_prev_skin_btn.add_theme_stylebox_override("pressed", UiKit.skin_chip(UiKit.C_GOLD, 0.7, 12))
+	_prev_skin_btn.focus_mode = Control.FOCUS_NONE
+	_prev_skin_btn.pressed.connect(_cycle_sel_skin)
+	chip_row.add_child(_prev_skin_btn)
 
 	_prev_chip_row = HBoxContainer.new()
 	_prev_chip_row.add_theme_constant_override("separation", 8)
@@ -3290,6 +3318,7 @@ func _pick_hero(hname: String) -> void:
 	if _blocked_roles.has(role):
 		return
 	_sel_hero = hname
+	_sel_skin = HeroSkinTable.selected_id(hname)
 	_pick_stage = false
 	if not _summ_manual:
 		_apply_recommended_summoner(hname)
@@ -3428,6 +3457,15 @@ func _refresh_my_seat_live() -> void:
 
 
 # 中栏立绘/覆盖层：随本机草稿实时刷新（未选 = 提示胶囊，已选 = 3D 模型 + 职责色 + chip 行）
+## 联机大厅：切换本机当前英雄皮肤（持久化并随 pick 同步给房主）
+func _cycle_sel_skin() -> void:
+	if _sel_hero == "":
+		return
+	_sel_skin = HeroSkinTable.cycle(_sel_hero, _sel_skin)
+	HeroSkinTable.set_selected(_sel_hero, _sel_skin)
+	_refresh_preview()
+
+
 func _refresh_preview() -> void:
 	if _preview_name == null:
 		return
@@ -3439,9 +3477,13 @@ func _refresh_preview() -> void:
 		role = str(HeroPickData.HERO_ROLE.get(_sel_hero, ""))
 		rcol = HeroPickData.ROLE_COLORS.get(role, UiKit.C_TEAM0)
 		_preview_name.text = _sel_hero
+		if _sel_skin == "":
+			_sel_skin = HeroSkinTable.selected_id(_sel_hero)
 		if _prev != null and is_instance_valid(_prev):
-			_prev.set_hero(_sel_hero)
+			_prev.set_hero(_sel_hero, _sel_skin)
 			_prev.set_accent(rcol)
+		if _prev_skin_btn != null:
+			_prev_skin_btn.text = "皮肤 · " + HeroSkinTable.skin_name(_sel_hero, _sel_skin)
 	else:
 		_preview_name.text = "请选择英雄"
 	_preview_role.text = ("定位 · " + role) if role != "" else "定位 —"
@@ -3841,7 +3883,7 @@ func _on_pick_confirm() -> void:
 		if not NetSession.send_pick(_sel_hero, _sel_sid):
 			_show_pick_error("该职责已被他人选择或本方席位已满，请另选英雄")
 	else:
-		NetSession.send_pick(_sel_hero, _sel_sid)
+		NetSession.send_pick(_sel_hero, _sel_sid, _sel_skin)
 		if _pick_status != null:
 			_pick_status.text = "已提交，等待房主确认…"
 			_pick_status.add_theme_color_override("font_color", COL_SUB)
