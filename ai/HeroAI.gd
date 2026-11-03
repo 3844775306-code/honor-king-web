@@ -28,6 +28,7 @@ var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
 var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
+var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
@@ -131,6 +132,8 @@ func _set_action(action_type: int, priority: int = 0, pause_class: int = AIActio
 			_retreat_started_at = Time.get_ticks_msec() * 0.001
 	else:
 		_retreat_started_at = -1.0
+	if action_type != AIAction.Type.SAFE_RECALL:
+		_walk_home = false
 
 	if pause_class == AIAction.PauseClass.NONE:
 		_task_pause_active = false
@@ -2548,6 +2551,26 @@ func _recall_safe_behavior(delta):
 		if _fully_recovered():
 			_assign_lane()
 		return
+	# 判断直接走回泉水是否比「走到安全点+读条 7 秒」更快；更快就直接走回，不读条
+	if not hero.is_recalling:
+		var fountain: Vector3 = Vector3(-62, 0, 62) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62, 0, -62)
+		var spd: float = maxf(hero.actual_move_speed * 0.01, 0.1)
+		if _walk_home:
+			hero.manual_target = null
+			hero.move_target = fountain
+			return
+		var walk_time: float = hero.global_position.distance_to(fountain) / spd
+		var spot := _find_safe_recall_spot()
+		var recall_time: float = hero.RECALL_DURATION
+		if spot != Vector3.ZERO:
+			recall_time += hero.global_position.distance_to(spot) / spd
+		if walk_time < recall_time:
+			_walk_home = true
+			hero.manual_target = null
+			hero.move_target = fountain
+			return
+		else:
+			_walk_home = false
 	# 读条中敌人/兵线压过来（AI 读条期间不能动）：立刻取消，换到别的安全点再回城
 	if hero.is_recalling and _recall_point_threatened(hero.global_position):
 		hero.cancel_recall()
@@ -3099,6 +3122,7 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
 
 
