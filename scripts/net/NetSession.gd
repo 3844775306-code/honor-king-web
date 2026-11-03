@@ -1483,12 +1483,20 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 				and not _pos_in_vision(Vector3(bl.global_position.x, 0.0, bl.global_position.z), sources):
 			continue
 		var bsz := 0
+		var bsrc = bl.source
 		if bl.is_houyi_ult:
 			bsz = 2
 		else:
-			var bsrc = bl.source
 			if bsrc != null and is_instance_valid(bsrc) and (bsrc is Hero or bsrc is Turret):
 				bsz = 1
+		var skin_r := 0.0
+		var skin_g := 0.0
+		var skin_b := 0.0
+		if bsrc is Hero and bsrc.has_method("skin_is_custom") and bsrc.skin_is_custom():
+			var sc: Color = bsrc.skin_accent_color()
+			skin_r = sc.r
+			skin_g = sc.g
+			skin_b = sc.b
 		# idx8：全图技能弹标记（1=后羿R / 2=鲁班七号2技能），客户端小地图据此画全图子弹
 		var gsf := 0
 		if bl.houyi_r:
@@ -1498,7 +1506,8 @@ func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 		var bflags := _bullet_flags(bl)
 		bullets.append([int(bl.get_instance_id()),
 			bl.global_position.x, bl.global_position.y, bl.global_position.z,
-			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl), gsf, bflags])
+			int(bl.team), bsz, _bullet_kind(bl), _bullet_vkind(bl), gsf, bflags,
+			skin_r, skin_g, skin_b])
 	out.append(bullets)
 
 	# #43 FX 段：[seq, [fid,kind,x,y,z,team,r,life], …]——事件保留 ~0.35s（约5帧快照）防 unreliable 丢包；

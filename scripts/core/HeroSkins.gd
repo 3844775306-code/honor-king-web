@@ -219,6 +219,9 @@ static func apply_fx_color(node: Node, accent: Color) -> void:
 					if mat == null:
 						mat = mi.mesh.surface_get_material(si)
 					if mat is StandardMaterial3D:
+						var okey := "_skin_fx_orig_%d" % si
+						if not mi.has_meta(okey):
+							mi.set_meta(okey, mi.get_surface_override_material(si))
 						var m := (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
 						m.albedo_color = m.albedo_color.lerp(Color(accent.r, accent.g, accent.b, m.albedo_color.a), 0.75)
 						m.emission_enabled = true
@@ -226,3 +229,19 @@ static func apply_fx_color(node: Node, accent: Color) -> void:
 						m.emission_energy_multiplier = maxf(m.emission_energy_multiplier, 1.2)
 						mi.set_surface_override_material(si, m)
 		apply_fx_color(child, accent)
+
+
+## 清掉 apply_fx_color 造成的染色（子弹回池复用给非皮肤英雄时用）
+static func clear_fx_color(node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			if mi.mesh != null:
+				for si in range(mi.mesh.get_surface_count()):
+					var okey := "_skin_fx_orig_%d" % si
+					if mi.has_meta(okey):
+						mi.set_surface_override_material(si, mi.get_meta(okey))
+						mi.remove_meta(okey)
+		clear_fx_color(child)

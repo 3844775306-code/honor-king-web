@@ -1048,8 +1048,18 @@ func _apply_bullets(snap: Array) -> void:
 			var bkind := int(row[6]) if row.size() > 6 else (4 if int(row[5]) >= 2 else int(row[5]))
 			var vkind := int(row[7]) if row.size() > 7 else 0
 			var bflags := int(row[9]) if row.size() > 9 else 0
+			var bacc := Color(0, 0, 0, 0)
+			if row.size() > 12:
+				bacc = Color(float(row[10]), float(row[11]), float(row[12]))
 			var vis_id := (1000 + vkind) if vkind > 0 else bkind
 			b = _obtain_bullet(team, vis_id, bflags)
+			b["skin_accent"] = bacc
+			var _bm = b.get("m")
+			if _bm != null and is_instance_valid(_bm):
+				if bacc.a > 0.0:
+					HeroSkinTable.apply_fx_color(_bm, bacc)
+				else:
+					HeroSkinTable.clear_fx_color(_bm)
 			b.x = bx; b.y = by; b.z = bz
 			b.px = bx; b.py = by; b.pz = bz
 			b.arr_ms = now
@@ -1070,6 +1080,16 @@ func _apply_bullets(snap: Array) -> void:
 		b.team = team
 		b.arr_ms = now
 		b.gs = gsf
+		if row.size() > 12:
+			var _new_acc := Color(float(row[10]), float(row[11]), float(row[12]))
+			if Color(b.get("skin_accent", Color(0, 0, 0, 0))) != _new_acc:
+				b["skin_accent"] = _new_acc
+				var _bm2 = b.get("m")
+				if _bm2 != null and is_instance_valid(_bm2):
+					if _new_acc.a > 0.0:
+						HeroSkinTable.apply_fx_color(_bm2, _new_acc)
+					else:
+						HeroSkinTable.clear_fx_color(_bm2)
 		if row.size() > 9:
 			b["flags"] = int(row[9])
 		_bullets[bid] = b
@@ -1217,6 +1237,10 @@ func _apply_fx(snap: Array) -> void:
 		# 完整技能事件：直接复用单机 Vfx.play_spell（签名大招/元素爆发/技能道具全同款）
 		if kind == FX_SPELL_FULL and row.size() >= 24:
 			_spawn_full_spell_fx(row, caster)
+			if caster != "":
+				var _acc := _skin_accent_for_caster(caster)
+				if _acc.a > 0.0:
+					Vfx.skin_spell_burst(p, _acc)
 			_fx_seen_fid[fid] = true
 			continue
 		# 旧版/其他技能类：直接调用 host 同款 Vfx 原语（cast_burst / cast_glow / shockwave / pillar）
@@ -1371,6 +1395,15 @@ func _build_fx(kind: int, team: int, r: float, life: float = 0.0, caster: String
 
 # 完整技能事件：行尾附加 [slot, caster xyz, target xyz, facing xz, skill 参数]，
 # 直接调用单机同一个 Vfx.play_spell，签名大招/元素爆发/技能道具都不会再走客户端简化版。
+func _skin_accent_for_caster(caster: String) -> Color:
+	for v in _views.values():
+		if v is Dictionary and str(v.get("name", "")) == caster:
+			var sid := str(v.get("skin", ""))
+			if sid != "":
+				return HeroSkinTable.accent_for(caster, sid)
+	return Color(0, 0, 0, 0)
+
+
 func _spawn_full_spell_fx(row: Array, caster: String) -> void:
 	if caster == "":
 		return

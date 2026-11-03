@@ -3182,6 +3182,14 @@ func _play_cast_fx(ev: Dictionary) -> void:
 	var skd: Dictionary = ev.get("sk", {})
 	SkillFxPresenter.play_spell(caster_name, int(ev.get("s", 0)), cp - Vector3.UP * 1.2 - fd * 0.65,
 		tp, fd, str(ev.get("sid", "")), skd, int(ev.get("tm", 0)), self, true)
+	for hh in _heroes:
+		if hh is Dictionary and str(hh.get("name", "")) == caster_name:
+			var _sk := str(hh.get("skin", ""))
+			if _sk != "":
+				var _acc: Color = HeroSkinTable.accent_for(caster_name, _sk)
+				if _acc.a > 0.0:
+					Vfx.skin_spell_burst(cp, _acc)
+			break
 	# 施法起手动作（同一时刻，与 host 的 cast 动画同源）
 	_play_cast_anim(_hero_index_by_name(caster_name))
 
