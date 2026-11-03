@@ -54,7 +54,8 @@ const HERO_ROLE := {
 }
 
 # 英雄推荐召唤师技能（与 BM hero_configs 的 summoner 字段一致；其余默认闪现）
-const HERO_SUMMONER := {"马超": "smite", "李白": "smite", "孙悟空": "smite"}
+const HERO_SUMMONER := {"马超": "smite", "李白": "smite", "孙悟空": "smite", "兰陵王": "smite"}
 
 static func recommended_summoner(hero_name: String) -> String:
 	return HERO_SUMMONER.get(hero_name, "flash")
+
