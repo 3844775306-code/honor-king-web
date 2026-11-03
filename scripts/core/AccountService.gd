@@ -211,6 +211,7 @@ static func _finish_login(tree: SceneTree, username: String, acc: Dictionary, cb
 	PlayerPrefs.reload()
 	RankSystem.reload()
 	HeroBuildStore.reload()
+	CloudSync.ensure_defaults()
 	var cfg := PlayerPrefs.cloud_cfg()
 	cfg["pid"] = pid
 	cfg["token"] = token

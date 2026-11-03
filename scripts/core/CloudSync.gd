@@ -117,6 +117,7 @@ static func payload() -> Dictionary:
 
 ## 上传（cb(ok, code, msg) 可选）
 static func upload(tree: SceneTree, cb: Callable = Callable()) -> void:
+	ensure_defaults()
 	if not is_configured():
 		_cb(cb, false, 0, "未配置云端服务")
 		return
@@ -133,6 +134,7 @@ static func upload(tree: SceneTree, cb: Callable = Callable()) -> void:
 
 ## 下载并写回本地（cb(ok, code, msg) 可选）
 static func download(tree: SceneTree, cb: Callable = Callable()) -> void:
+	ensure_defaults()
 	if not is_configured():
 		_cb(cb, false, 0, "未配置云端服务")
 		return
@@ -471,6 +473,8 @@ static func _do_download(tree: SceneTree, url: String, headers: PackedStringArra
 		return
 	var req := HTTPRequest.new()
 	req.timeout = 60.0
+	if OS.has_feature("web"):
+		req.use_threads = false
 	tree.root.add_child(req)
 	var err := req.request_raw(url, headers, HTTPClient.METHOD_GET, PackedByteArray())
 	if err != OK:
@@ -815,6 +819,8 @@ static func _do_bytes(tree: SceneTree, method: int, url: String, data: PackedByt
 		return
 	var req := HTTPRequest.new()
 	req.timeout = 60.0
+	if OS.has_feature("web"):
+		req.use_threads = false
 	tree.root.add_child(req)
 	var err := req.request_raw(url, headers, method, data)
 	if err != OK:
@@ -834,6 +840,8 @@ static func _do_headers(tree: SceneTree, method: int, url: String, body: String,
 		return
 	var req := HTTPRequest.new()
 	req.timeout = TIMEOUT
+	if OS.has_feature("web"):
+		req.use_threads = false
 	tree.root.add_child(req)
 	var err := req.request(url, headers, method, body)
 	if err != OK:
