@@ -1173,7 +1173,8 @@ func _ai_strafe(delta: float) -> void:
 			return
 		var rx: float = hero.global_position.x - tt.global_position.x
 		var rz: float = hero.global_position.z - tt.global_position.z
-		var r: float = clampf(sqrt(rx * rx + rz * rz), 1.2, maxf(1.3, aa - 0.15))
+		var min_r: float = 2.7 if tt is Turret else 1.2
+		var r: float = clampf(sqrt(rx * rx + rz * rz), min_r, maxf(min_r, aa - 0.15))
 		var ang: float = atan2(rx, rz) + _strafe_side * 1.7 * delta
 		hero.move_target = tt.global_position + Vector3(sin(ang) * r, 0.0, cos(ang) * r)
 		return
@@ -1181,7 +1182,7 @@ func _ai_strafe(delta: float) -> void:
 		return
 	_strafe_cd = randf_range(0.45, 0.9)
 	var t: GameEntity = hero.manual_target
-	if t == null or not is_instance_valid(t) or not (t is Hero) or t.health <= 0.0:
+	if t == null or not is_instance_valid(t) or t.health <= 0.0:
 		return
 	if hero.attack_timer <= 0.0 or hero.casting_skill or hero.is_recalling or hero.is_teleporting:
 		return
@@ -1193,8 +1194,11 @@ func _ai_strafe(delta: float) -> void:
 				AIAction.Type.DODGE, AIAction.Type.HEALTH_PACK, AIAction.Type.TEMP_CLEAR, AIAction.Type.VISION_SPIRIT]:
 			return
 	var aa2: float = hero.attack_range * 0.01
+	var min_r2: float = 2.7 if t is Turret else 1.4
+	if aa2 <= min_r2 + 0.2:
+		return   # 攻击距离太短，绕塔/绕目标会脱离攻击范围
 	var dist: float = hero.global_position.distance_to(t.global_position)
-	if dist < 1.4 or dist > aa2 - 0.15:
+	if dist < min_r2 or dist > aa2 - 0.15:
 		return
 	if randf() > 0.42:
 		return
@@ -3046,3 +3050,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
