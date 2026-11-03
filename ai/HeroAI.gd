@@ -649,6 +649,28 @@ func _try_machao_spear_toward(dest: Vector3, max_aim: float = 4.2) -> bool:
 	return true
 
 
+## 李白1技能（将进酒）赶路：前2段突进，第3段会回原点，不在赶路时使用
+func _try_libai_q_travel(dest: Vector3, dist: float) -> bool:
+	if hero.display_name != "李白" or dist < 3.0:
+		return false
+	if hero.skill_levels.size() <= 0 or int(hero.skill_levels[0]) <= 0:
+		return false
+	if perception.find_nearest_enemy_hero(10.0) != null:
+		return false
+	if hero.skill_window_timers.size() > 0 and float(hero.skill_window_timers[0]) > 0.0:
+		if hero.skill_uses.size() > 0 and int(hero.skill_uses[0]) >= 2:
+			return false   # 第3段会回原点，赶路不交
+	else:
+		if hero.skill_cooldowns.size() <= 0 or float(hero.skill_cooldowns[0]) > 0.0:
+			return false
+		var sk: Skill = hero.skills[0]
+		if sk == null or hero.mana < sk.mana_cost:
+			return false
+	hero.move_target = Vector3.ZERO
+	hero._start_casting(0, hero.skills[0], dest)
+	return true
+
+
 ## 英睿W（肘击）赶路：每段2m，3段共6m；窗口内连续施放
 func _try_yingrui_w_travel(dest: Vector3, dist: float) -> bool:
 	if hero.display_name != "英睿" or dist < 3.0:
@@ -748,6 +770,9 @@ func _try_travel_dash():
 	var low_mana: bool = hero.actual_mana_max > 0.0 and hero.mana / hero.actual_mana_max < 0.40
 	# 英睿2技能（W肘击）也可赶路：朝目标点连续肘击3段
 	if not low_mana and _try_yingrui_w_travel(dest, dist):
+		return
+	# 李白1技能（将进酒）赶路：只放前2段突进，不交第3段（第3段会回到原点）
+	if not low_mana and _try_libai_q_travel(dest, dist):
 		return
 	# 马超赶路：朝移动方向投枪（W优先/Q次之），沿路捡枪后用强化普攻提速
 	if not low_mana and _try_machao_travel_spear(dest, dist):
