@@ -229,6 +229,9 @@ func _card(r: Dictionary, rank: int, ally_side: bool, rect: Rect2) -> void:
 	var role := str(r.get("role", ""))
 	if role != "":
 		sub += "  ·  " + role
+	var mk_lv := int(r.get("mark", 0))
+	if mk_lv > 0:
+		sub += "  ·  原初 Lv.%d" % mk_lv
 	if dead:
 		sub += "  ·  %ds 复活" % int(ceil(float(r.get("respawn", 0.0))))
 	elif float(r.get("hp_ratio", 1.0)) < 0.3:

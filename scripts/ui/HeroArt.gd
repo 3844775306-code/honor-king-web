@@ -88,25 +88,31 @@ static func draw_primitive_mark(ci: CanvasItem, center: Vector2, radius: float, 
 	if lv <= 0 or radius < 2.5:
 		return
 	var col: Color = MARK_TIER_COL[lv]
-	var rr := radius * 1.14
-	var pip := maxf(radius * 0.15, 1.15)
-	# 5/6 级：外发光环；6 级再加内环，和 5 级拉开差距
+	var rr := radius * 1.16
+	var pip := maxf(radius * 0.20, 1.5)
+	# 深色底环 + 段位色主环：让标记在头像边缘一眼可见
+	var band := maxf(radius * 0.11, 1.7)
+	ci.draw_arc(center, rr, 0.0, TAU, 40, Color(0, 0, 0, 0.55), band + 1.6, true)
+	ci.draw_arc(center, rr, 0.0, TAU, 40, Color(col.r, col.g, col.b, 0.88), band, true)
+	# 5/6 级：额外外发光；6 级再加内环，和 5 级拉开差距
 	if lv >= 5:
-		ci.draw_arc(center, rr, 0.0, TAU, 30, Color(col.r, col.g, col.b, 0.22 if lv == 5 else 0.34),
-			maxf(radius * 0.22, 2.2), true)
+		ci.draw_arc(center, rr, 0.0, TAU, 30, Color(col.r, col.g, col.b, 0.30 if lv == 5 else 0.42),
+			maxf(radius * 0.24, 2.4), true)
 	if lv >= 6:
 		ci.draw_arc(center, radius * 0.74, -PI * 0.5, PI * 1.5, 24,
-			Color(col.r, col.g, col.b, 0.55), maxf(radius * 0.10, 1.2), true)
+			Color(col.r, col.g, col.b, 0.65), maxf(radius * 0.12, 1.4), true)
 	for i in lv:
 		var a := -PI * 0.5 + TAU * float(i) / 6.0
 		var p := center + Vector2(cos(a), sin(a)) * rr
 		var up := Vector2(cos(a), sin(a))
 		var side := Vector2(-up.y, up.x)
+		# 符文外发光，小图标也读得出亮了几枚
+		ci.draw_circle(p, pip * 1.25, Color(col.r, col.g, col.b, 0.28))
 		var pts := PackedVector2Array([p - up * pip, p - side * pip * 0.72,
 			p + up * pip, p + side * pip * 0.72])
-		ci.draw_colored_polygon(pts, col)
+		ci.draw_colored_polygon(pts, col.lightened(0.10))
 		ci.draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]),
-			Color(0, 0, 0, 0.55), maxf(pip * 0.30, 1.0))
+			Color(0, 0, 0, 0.65), maxf(pip * 0.35, 1.1))
 
 static func draw_portrait(ci: CanvasItem, center: Vector2, radius: float, hero_name: String,
 		team_col: Color, dead := false) -> void:
