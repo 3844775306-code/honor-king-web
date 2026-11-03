@@ -2676,17 +2676,45 @@ func _retreat_from_turret(turret: Turret) -> void:
 	hero.manual_target = null
 
 
+## 检测敌方持续地面危险区（甄姬大招水区 / 李元芳大招风暴等，由 SkillDataBase 打 ai_ground_zones 组）
+func _danger_ground_zone() -> Dictionary:
+	if hero == null or not is_instance_valid(hero):
+		return {}
+	for z in get_tree().get_nodes_in_group("ai_ground_zones"):
+		if not (z is Node3D) or not is_instance_valid(z) or not z.is_inside_tree():
+			continue
+		var team := int(z.get_meta("zone_team", -1))
+		if team < 0 or team == int(hero.team):
+			continue
+		var radius: float = float(z.get_meta("zone_radius", 3.0))
+		var d: float = hero.global_position.distance_to((z as Node3D).global_position)
+		if d <= radius + float(hero.body_radius) + AiConfig.DODGE_GROUND_MARGIN:
+			return {"pos": (z as Node3D).global_position, "radius": radius, "dist": d}
+	return {}
+
+
 func _dodge_threats() -> bool:
-	# 检测弹道威胁并侧移躲避
+	# 检测弹道威胁 + 持续地面技能
 	var threats = perception.find_threatening_projectiles(AiConfig.DODGE_RANGE, AiConfig.DODGE_MARGIN)
-	if threats.is_empty():
+	var ground := _danger_ground_zone()
+	if threats.is_empty() and ground.is_empty():
 		_is_dodging = false
 		return false
-	# 首次检测到威胁时掷骰子决定是否躲避
+	# 地面持续技能必躲；弹道按概率决定是否躲避
 	if not _is_dodging:
-		if randf() > AiConfig.DODGE_CHANCE:
+		if ground.is_empty() and randf() > AiConfig.DODGE_CHANCE:
 			return false
 		_is_dodging = true
+	if not ground.is_empty():
+		var c: Vector3 = ground["pos"]
+		var away: Vector3 = hero.global_position - c
+		away.y = 0.0
+		if away.length() < 0.05:
+			away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+		var step: float = maxf(float(ground["radius"]) + float(hero.body_radius) + AiConfig.DODGE_GROUND_MARGIN - float(ground["dist"]), 1.5)
+		hero.move_target = hero.global_position + away.normalized() * step
+		hero.manual_target = null
+		return true
 	# 计算躲避方向：取所有威胁方向的反方向加权平均（越近权重越大）
 	var dodge_dir := Vector2.ZERO
 	var total_weight := 0.0

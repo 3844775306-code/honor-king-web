@@ -621,7 +621,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					if bpos_valid:
 						break
 				# 创建水区域
-				var water_zone = _create_water_zone(hero.get_parent(), bpos, 4.0)
+				var water_zone = _create_water_zone(hero.get_parent(), bpos, 4.0, hero.team)
 				for i in range(5):
 					# 脉冲波浪效果
 					_create_water_pulse(hero.get_parent(), bpos, 4.0, hero)
@@ -2752,7 +2752,7 @@ func _create_water_splash(parent: Node, pos: Vector3):
 
 # 创建水区域（甄姬大招用）
 # 创建水区域（甄姬大招用）
-func _create_water_zone(parent: Node, pos: Vector3, radius: float) -> Node3D:
+func _create_water_zone(parent: Node, pos: Vector3, radius: float, team: int = -1) -> Node3D:
 	var zone_root = Node3D.new()
 	zone_root.position = pos
 	# 水面圆盘（抬高到地面之上并加亮：原先贴地且颜色与河道同色，完全不可见）
@@ -2787,6 +2787,9 @@ func _create_water_zone(parent: Node, pos: Vector3, radius: float) -> Node3D:
 	var vt = create_tween()
 	vt.tween_property(vortex, "rotation_degrees:y", 720.0, 5.0).as_relative()
 	parent.add_child(zone_root)
+	zone_root.add_to_group("ai_ground_zones")
+	zone_root.set_meta("zone_team", int(team))
+	zone_root.set_meta("zone_radius", float(radius))
 	# #43 网络 FX：水域地面盘（persist ~4s，固定水系蓝，颜色与阵营无关）
 	if NetSession.mode == NetSession.Mode.HOST:
 		NetSession.push_net_fx(NetSession.FX_WATER_ZONE, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0, "甄姬")
@@ -3077,7 +3080,7 @@ func _lyf_r(hero, lv: int, pos: Vector3) -> void:
 	if not is_instance_valid(hero) or hero.health <= 0.0:
 		return
 	var dot := int(140.0 + 70.0 * (lv - 1) + float(hero.bonus_attack) * 0.4)
-	var zone = _lyf_storm_visual(hero.get_parent(), ep0, 3.0)
+	var zone = _lyf_storm_visual(hero.get_parent(), ep0, 3.0, hero.team)
 	for i in 10:
 		if not is_instance_valid(hero) or hero.health <= 0.0:
 			zone.queue_free()
@@ -3097,10 +3100,13 @@ func _lyf_r(hero, lv: int, pos: Vector3) -> void:
 
 
 # R落点风暴的简易视觉（暗橙半透明风域 + 亮环 + 中心高亮）
-func _lyf_storm_visual(parent: Node, pos: Vector3, radius: float) -> Node3D:
+func _lyf_storm_visual(parent: Node, pos: Vector3, radius: float, team: int = -1) -> Node3D:
 	var zone_root := Node3D.new()
 	zone_root.position = pos
 	parent.add_child(zone_root)   # 先入树：下面的 create_tween 需要节点在树内
+	zone_root.add_to_group("ai_ground_zones")
+	zone_root.set_meta("zone_team", int(team))
+	zone_root.set_meta("zone_radius", float(radius))
 	var pool := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
 	cyl.top_radius = radius

@@ -139,6 +139,7 @@ const DEFEND_RECALL_RANGE: float = 40.0       # 防御无塔时回城范围
 const DODGE_RANGE: float = 8.0               # 检测弹道的范围
 const DODGE_MARGIN: float = 1.5              # 弹道碰撞安全边距
 const DODGE_CHANCE: float = 0.6              # 躲避概率（0-1）
+const DODGE_GROUND_MARGIN: float = 0.8       # 地面持续技能：离开危险圈的额外边距
 
 # ==================== 位移类技能（追击 / 逃跑） ====================
 # AI 以前只会直线走位，位移技能（type=4）几乎只靠连招顺带放。
