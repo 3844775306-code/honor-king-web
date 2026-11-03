@@ -1455,6 +1455,10 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	# 买装备 / 升级技能：最高优先级，先处理再进入任何战斗/任务决策
+	_try_buy_equipment()
+	_try_upgrade_skills()
+
 	# 安琪拉大招引导：持续把光束转向目标；目标离开光束范围/需要生存/移动时取消引导
 	if hero.angela_ult_active:
 		if _handle_angela_ult(delta):
@@ -1552,7 +1556,6 @@ func _process(delta):
 		
 		_decide()
 		_try_teleport_route()
-		_try_upgrade_skills()
 		_ai_update_enhanced_attack_flag()   # 只有能收掉残血目标时才把强普位移交给普攻
 		_try_travel_dash()   # 非战斗位移技能赶路（孙尚香/马可波罗等）
 		# 敌方AI在无敌人视野时隐身
@@ -1561,12 +1564,6 @@ func _process(delta):
 			var has_enemy_minion := perception.find_nearest_enemy_minion(AiConfig.SIGHT_MINION) != null
 			var has_enemy_turret := perception.find_nearest_enemy_turret(AiConfig.SIGHT_TURRET) != null
 			hero.visible = has_enemy_near or has_enemy_minion or has_enemy_turret
-
-	# --- 购买 ---
-	buy_timer -= delta
-	if buy_timer <= 0:
-		buy_timer = AiConfig.BUY_INTERVAL
-		_try_buy_equipment()
 
 	# --- 恢复 ---
 	if hero.skill_cooldowns[4] <= 0:
