@@ -413,8 +413,26 @@ func _try_keep_safe_distance() -> bool:
 	if hero.is_recalling:
 		hero.cancel_recall()
 	hero.manual_target = null
-	hero.move_target = hero.global_position + away.normalized() * (safe - dist + 0.8)
-	_ai_path.clear()
+	var dir := away.normalized()
+	var half := Config.MAP_SIZE * 0.5
+	var goal: Vector3 = target.global_position + dir * (safe + 0.8)
+	goal.x = clampf(goal.x, -half, half)
+	goal.z = clampf(goal.z, -half, half)
+	# 落点不可走/被墙挡住时先找最近可站点，并尝试左右偏移绕开墙面
+	if not PathFinder.is_walkable_world(goal):
+		var alt := PathFinder.nearest_walkable_world(goal, dir)
+		if alt != Vector3.ZERO:
+			goal = alt
+	if not PathFinder.is_walkable_world(goal):
+		for ang in [45.0, -45.0, 90.0, -90.0]:
+			var cand: Vector3 = target.global_position + dir.rotated(Vector3.UP, deg_to_rad(ang)) * (safe + 0.8)
+			cand.x = clampf(cand.x, -half, half)
+			cand.z = clampf(cand.z, -half, half)
+			if PathFinder.is_walkable_world(cand):
+				goal = cand
+				break
+	# 走 A* 绕墙，避免直接朝墙后退把自己顶在墙上
+	_walk_to(goal)
 	if not _is_action(AIAction.Type.SAFE_DISTANCE):
 		if current_action != null:
 			current_action.mark(AIAction.Status.INTERRUPTED)
