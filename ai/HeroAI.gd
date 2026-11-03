@@ -3169,6 +3169,13 @@ func _recall_safe_behavior(delta):
 	# 英雄特判（孙悟空筋斗云飞行中/已在泉水）→ 本英雄自行处理
 	if brain.handle_recall_safe():
 		return
+	# 残留的 SAFE_RECALL：既不在读条、也不在泉水，且血量/蓝量都不需要回城时，直接结束动作
+	if not hero.is_recalling and not hero.is_in_own_fountain() \
+			and hero.health >= hero.actual_max_health * AiConfig.HEALTH_RECALL \
+			and not _is_low_mana():
+		_finish_current_action()
+		_assign_lane()
+		return
 	# 已回满：不管是否还在泉水判定圈内，都结束回城，避免走出泉边后又去安全点二次回城。
 	if _fully_recovered():
 		if hero.is_recalling:
