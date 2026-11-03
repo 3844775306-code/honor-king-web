@@ -85,6 +85,9 @@ var _dbg_last_casting := false
 var _dbg_last_recall := false
 var _chip_cache: Dictionary = {}
 var _chip_next_t := 0.0
+var _chip_path_txt := ""
+var _chip_path_at := 0.0
+var _chip_path_goal := Vector3.ZERO
 
 func _ready():
 	if get_parent() is Hero:
@@ -1348,9 +1351,25 @@ func _chip_task(now: float = -1.0) -> String:
 
 ## 胶囊路径：R=风险，L=米
 func _chip_path() -> String:
-	if _ai_path.is_empty():
+	if not _ai_path.is_empty():
+		return "R%.2f L%.0f" % [_ai_path_risk, _ai_path_len]
+	# 没有普攻追击路径时，也按当前走路目标用 A* 估算（缓存 0.8s），避免胶囊几乎永远显示「直行」
+	var dest: Vector3 = hero.move_target
+	if dest == Vector3.ZERO or hero.global_position.distance_to(dest) < 1.0:
 		return "直行"
-	return "R%.2f L%.0f" % [_ai_path_risk, _ai_path_len]
+	var now := Time.get_ticks_msec() * 0.001
+	if _chip_path_txt != "" and now - _chip_path_at < 0.8 and _chip_path_goal.distance_to(dest) < 2.0:
+		return _chip_path_txt
+	var path: Array = PathFinder.find_path(hero.global_position, dest, Vector3.ZERO, int(hero.team))
+	if path.is_empty():
+		_chip_path_txt = "直行"
+	else:
+		var risk: float = MovementPlanner.path_risk(hero, path, threat_model) if threat_model != null else 0.0
+		var length: float = MovementPlanner.path_length(path)
+		_chip_path_txt = "R%.2f L%.0f" % [risk, length]
+	_chip_path_at = now
+	_chip_path_goal = dest
+	return _chip_path_txt
 
 
 ## AI 决策胶囊简要信息（两行；血条 HUD / 联机广播共用，0.25s 缓存避免每帧感知开销）
@@ -2890,4 +2909,5 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
