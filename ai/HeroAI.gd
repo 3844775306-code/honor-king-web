@@ -1216,25 +1216,26 @@ func _ai_strafe(delta: float) -> void:
 		if tt == null or not is_instance_valid(tt) or tt.health <= 0.0:
 			_strafe_t = 0.0
 			return
-		var aa: float = hero.attack_range * 0.01
+		var aa: float = hero._aa_engage_reach()
 		var d: float = hero.global_position.distance_to(tt.global_position)
-		if d > aa + 0.8 or hero.casting_skill or hero.is_recalling:
+		if d > aa + 0.35 or hero.casting_skill or hero.is_recalling or hero.is_teleporting:
 			_strafe_t = 0.0
 			return
 		var rx: float = hero.global_position.x - tt.global_position.x
 		var rz: float = hero.global_position.z - tt.global_position.z
 		var min_r: float = 2.7 if tt is Turret else 1.2
-		var r: float = clampf(sqrt(rx * rx + rz * rz), min_r, maxf(min_r, aa - 0.15))
-		var ang: float = atan2(rx, rz) + _strafe_side * 1.7 * delta
+		var r: float = clampf(sqrt(rx * rx + rz * rz), min_r, maxf(min_r, aa - 0.2))
+		var ang: float = atan2(rx, rz) + _strafe_side * 1.35 * delta
 		hero.move_target = tt.global_position + Vector3(sin(ang) * r, 0.0, cos(ang) * r)
 		return
 	if _strafe_cd > 0.0:
 		return
-	_strafe_cd = randf_range(0.45, 0.9)
+	_strafe_cd = randf_range(0.28, 0.65)
 	var t: GameEntity = hero.manual_target
 	if t == null or not is_instance_valid(t) or t.health <= 0.0:
 		return
-	if hero.attack_timer <= 0.0 or hero.casting_skill or hero.is_recalling or hero.is_teleporting:
+	# 只在两次普攻之间的冷却窗口内走位，避免打断出手
+	if hero.attack_timer <= 0.02 or hero.casting_skill or hero.is_recalling or hero.is_teleporting:
 		return
 	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
 		return
@@ -1243,16 +1244,17 @@ func _ai_strafe(delta: float) -> void:
 		if ty in [AIAction.Type.SAFE_RECALL, AIAction.Type.RETURN_TO_BASE, AIAction.Type.TOWER_ESCAPE,
 				AIAction.Type.DODGE, AIAction.Type.HEALTH_PACK, AIAction.Type.TEMP_CLEAR, AIAction.Type.VISION_SPIRIT]:
 			return
-	var aa2: float = hero.attack_range * 0.01
+	var aa2: float = hero._aa_engage_reach()
 	var min_r2: float = 2.7 if t is Turret else 1.4
-	if aa2 <= min_r2 + 0.2:
-		return   # 攻击距离太短，绕塔/绕目标会脱离攻击范围
+	if aa2 <= min_r2 + 0.25:
+		return   # 攻击距离太短，绕目标会脱离攻击范围
 	var dist: float = hero.global_position.distance_to(t.global_position)
-	if dist < min_r2 or dist > aa2 - 0.15:
+	if dist < min_r2 or dist > aa2 - 0.2:
 		return
-	if randf() > 0.42:
+	if randf() > 0.7:
 		return
-	_strafe_t = randf_range(0.16, 0.3)
+	# 走位持续时间不超过本次普攻间隔，确保下一发普攻前回到可攻击位置
+	_strafe_t = minf(randf_range(0.14, 0.28), maxf(0.08, hero.attack_timer * 0.75))
 	_strafe_side = 1.0 if randf() < 0.5 else -1.0
 
 func _debug_lane() -> String:
