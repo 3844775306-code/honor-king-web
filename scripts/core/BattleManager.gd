@@ -2974,8 +2974,8 @@ func _spawn_shadow_dragon_vanguard(killer: Hero):
 	if killer == null:
 		return
 	var team := killer.team
-	# 暗影之径：优先选择「敌方英雄距离己方水晶最近」的那一路；
-	# 没有存活敌方英雄时回退到原塔数差逻辑（平局中路优先）。
+	# 暗影之径：优先选择「敌方小兵距离己方水晶最近」的那一路；
+	# 没有存活敌方小兵时回退到原塔数差逻辑（平局中路优先）。
 	var best_lane := 1
 	var own_crystal: Turret = null
 	for _ct in turrets:
@@ -2987,17 +2987,17 @@ func _spawn_shadow_dragon_vanguard(killer: Hero):
 	var _nearest_enemy_dist := INF
 	var _nearest_lane := -1
 	if own_crystal != null:
-		for _eh in get_tree().get_nodes_in_group("heroes"):
-			if not is_instance_valid(_eh) or not (_eh is Hero) or _eh.team == team or _eh.health <= 0.0:
+		for _em in get_tree().get_nodes_in_group("minions"):
+			if not is_instance_valid(_em) or not (_em is Minion) or _em.team == team or _em.health <= 0.0:
 				continue
-			var _d: float = _eh.global_position.distance_to(own_crystal.global_position)
+			var _d: float = _em.global_position.distance_to(own_crystal.global_position)
 			if _d < _nearest_enemy_dist:
 				_nearest_enemy_dist = _d
-				_nearest_lane = _lane_of_position(_eh.global_position)
+				_nearest_lane = _lane_of_position(_em.global_position)
 	if _nearest_lane >= 0:
 		best_lane = _nearest_lane
 	else:
-		# 没有敌方英雄：沿用（敌方防御塔数量 - 己方防御塔数量）最大的一路
+		# 没有敌方小兵：沿用（敌方防御塔数量 - 己方防御塔数量）最大的一路
 		var best_diff := -999
 		for ln in [1, 0, 2]:
 			var enemy_towers := 0
