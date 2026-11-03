@@ -255,6 +255,7 @@ var attack_range_ring: MeshInstance3D
 var _melee_anim_flip := false   # 近战普攻左右挥砍交替
 var _aa_ring_leap := false  # 攻击范围圈当前是否处于跳跃强化普攻状态（×2+金色）
 var _aa_ring_show_timer := 0.0   # 攻击范围圈剩余显示时间（普攻出手才亮，>0 时可见）
+var show_attack_range_always := false   # 测试观战：AI 英雄也常显普攻范围圈
 var under_tower_attack: bool = false
 var tower_attacker: Turret = null
 var tower_attack_timer: float = 0.0
@@ -2426,12 +2427,12 @@ func _physics_process(delta):
 	else:
 		target_indicator.visible = false
 	# 攻击范围圈：按住普攻键即显示（不必等真正出手），松开后按 0.45s 余辉收起
-	if not is_ai and attack_range_ring and is_instance_valid(attack_range_ring):
+	if (not is_ai or show_attack_range_always) and attack_range_ring and is_instance_valid(attack_range_ring):
 		_aa_ring_show_timer = maxf(0.0, _aa_ring_show_timer - delta)
 		var atk_held_ring: bool = health > 0.0 and (Input.is_action_pressed("ui_accept") or TouchController.get_attack_held())
 		# 强化普攻就绪时自动常显范围环，不必按住普攻键；出手后由 show_timer 余辉收起
 		var enhanced_ready: bool = health > 0.0 and _enhanced_aa_queued()
-		var show_ring: bool = _aa_ring_show_timer > 0.0 or atk_held_ring or enhanced_ready
+		var show_ring: bool = show_attack_range_always or _aa_ring_show_timer > 0.0 or atk_held_ring or enhanced_ready
 		if attack_range_ring.visible != show_ring:
 			attack_range_ring.visible = show_ring
 		if _aa_ring_leap != enhanced_ready:

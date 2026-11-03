@@ -1388,6 +1388,11 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	await _load_step(0.44)
 	if not _training_mode:
 		_create_team_ai(Config.foe_team(), 5, [], sel_enemy_picks)    # 5个敌方AI
+	# 测试观战：双方 AI 也常显普攻范围圈（便于观察攻距）
+	if _ai_test_match:
+		for _th in get_tree().get_nodes_in_group("heroes"):
+			if _th is Hero:
+				_th.show_attack_range_always = true
 	sel_ally_picks = []
 	sel_enemy_picks = []
 	sel_taken = {}
