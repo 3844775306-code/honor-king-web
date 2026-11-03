@@ -547,6 +547,44 @@ func _try_machao_travel_spear(dest: Vector3, dist: float) -> bool:
 	hero._start_casting(slot, sk, aim)
 	return true
 
+## 马超：朝目标点投掷 Q/W 枪（追击/逃跑共用），枪落在前方，走过去自动捡枪获得强化普攻/移速
+func _try_machao_spear_toward(dest: Vector3, max_aim: float = 4.2) -> bool:
+	if not is_instance_valid(hero) or str(hero.display_name) != "马超":
+		return false
+	if hero.casting_skill or hero.is_recalling or hero.is_teleporting or hero.teleport_timer > 0.0:
+		return false
+	if hero.stat_timer > 0.0:
+		return false   # 已有强化普攻，优先交给强化普攻位移
+	var d := dest - hero.global_position
+	d.y = 0.0
+	var dist0 := d.length()
+	if dist0 < 1.0:
+		return false
+	d = d.normalized()
+	var slot := -1
+	for cand in [1, 0]:
+		if cand >= hero.skills.size() or hero.skills[cand] == null:
+			continue
+		if cand >= hero.skill_levels.size() or hero.skill_levels[cand] <= 0:
+			continue
+		if cand >= hero.skill_cooldowns.size() or hero.skill_cooldowns[cand] > 0.0:
+			continue
+		if hero.mana < float(hero.skills[cand].mana_cost):
+			continue
+		if hero.skill_prereq_blocked(cand):
+			continue
+		slot = cand
+		break
+	if slot < 0:
+		return false
+	var aim_dist := minf(clampf(max_aim, 1.0, 4.6), maxf(1.0, dist0 - 0.2))
+	var aim: Vector3 = hero.global_position + d * aim_dist
+	if _dash_landing_in_enemy_turret(aim) and slot == 1:
+		return false   # W 固定落点：不要主动把枪送进敌方塔范围
+	hero._start_casting(slot, hero.skills[slot], aim)
+	return true
+
+
 func _try_travel_dash():
 	# 位移/加速：只要离目标点超过普攻距离就使用（不再限制 PUSH/FARM/9m/附近敌人）
 	if not is_instance_valid(hero) or hero.is_dead or hero.is_reviving:
@@ -952,6 +990,9 @@ func _try_chase_dash(target: GameEntity) -> bool:
 		return false
 	# 强化普攻追击（马超/铠/不知火舞冲脸；亚瑟Q/孙悟空跳向目标）
 	if _try_enhanced_aa_chase(target):
+		return true
+	# 马超没有强化普攻时，先向前方投枪，捡枪后再接强化普攻追击
+	if str(hero.display_name) == "马超" and _try_machao_spear_toward(target.global_position, 4.2):
 		return true
 	var d := _pick_dash_skill()
 	if d.is_empty():
@@ -2138,6 +2179,11 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 	hero.manual_target = null
 	# 撤退时允许回身放瞬发/低前摇的远程伤害/控制，不因长前摇停下送人头。
 	var chaser: Hero = perception.find_nearest_enemy_hero(30.0)
+	# 马超逃跑：先朝安全点投枪，沿撤退路线自动捡枪获得移速/强化普攻
+	if str(hero.display_name) == "马超" and hero.stat_timer <= 0.0:
+		var safe_dir := _choose_safe_retreat_goal()
+		if safe_dir != Vector3.ZERO:
+			_try_machao_spear_toward(safe_dir, 4.2)
 	if chaser != null:
 		if "--ai-skill-probe" in OS.get_cmdline_user_args():
 			print("[AISKILL] retreat attempt %s chaser=%s dist=%.1f" % [
@@ -2539,7 +2585,11 @@ func _blue_buff_behavior() -> void:
 		hero.move_target = Vector3.ZERO
 		return
 	_sync_ai_movement()
-	_try_use_skills(t)
+	var _bb_ok := _try_use_skills(t)
+	if "--ai-mana-probe" in OS.get_cmdline_user_args():
+		print("[AIMANA] blue atk %s target=%s dist=%.1f hp=%.0f mana=%.0f cast=%s" % [
+			hero.display_name, t.display_name, hero.global_position.distance_to(t.global_position),
+			(float(t.health) if t is GameEntity else 0.0), hero.mana, str(_bb_ok)])
 
 
 # ==================== 恢复 ====================

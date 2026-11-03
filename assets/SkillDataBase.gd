@@ -306,21 +306,49 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				Vfx.slash_fx(hero.global_position, hero.global_position + fwd * q_radius, Color(0.85, 0.2, 0.22))
 				preview.queue_free()
 			2:
-				var preview = create_preview(3.0,pos,hero.team)
+				# 贪狼之握：以自身为中心，只命中面前150°扇形区域
+				var preview = create_preview(3.0, hero.global_position, hero.team)
 				preview.visible = true
 				hero.get_parent().add_child(preview)
 				await hero.get_tree().create_timer(0.5).timeout
-				if pos:
-					var ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
-					var dir = Vector3(cos(ang),0,-sin(ang))
-					var bonus_ad = hero.bonus_attack
-					var bullet = create_bullet(int(100 + 0.35*bonus_ad),0,0,20*level,false,hero,dir,2)
-					bullet.damage_range=3.0
-					bullet.slow_dur = 3
-					bullet.slow_per = 0.12+level*0.03
-					bullet.set_goal(pos)
-					hero.get_parent().add_child(bullet)
-				await hero.get_tree().create_timer(0.5).timeout
+				var hero_flat := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
+				var aim_flat := Vector3(pos.x, 0.0, pos.z)
+				var to_aim := aim_flat - hero_flat
+				var fwd: Vector3
+				if to_aim.length() > 0.5:
+					fwd = to_aim.normalized()
+					hero.rotation.y = atan2(fwd.x, fwd.z)
+				else:
+					fwd = Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y)).normalized()
+				if fwd.length() < 0.01:
+					fwd = Vector3.FORWARD
+				var bonus_ad = hero.bonus_attack
+				var w_dmg: int = int(100 + 0.35 * bonus_ad) + 20 * int(level)
+				var half_cos := cos(deg_to_rad(75.0))   # 150°扇形 = 左右各75°
+				var w_radius := 3.0
+				var hit_count := 0
+				hero.stat = 1
+				for ent in hero.get_tree().get_nodes_in_group("entities"):
+					if ent == hero or ent.health <= 0.0 or ent.team == hero.team:
+						continue
+					if ent is Turret:
+						continue
+					var to_ent := Vector3(ent.global_position.x - hero_flat.x, 0.0, ent.global_position.z - hero_flat.z)
+					var d := to_ent.length()
+					if d < 0.01 or d > w_radius + float(ent.body_radius):
+						continue
+					if fwd.dot(to_ent / d) < half_cos:
+						continue
+					hit_count += 1
+					ent.take_damage(float(w_dmg), hero, false, 2, 0)
+					ent.apply_move_pct_buff("ms_slow", 3.0, -(0.12 + 0.03 * level), true)
+				# 贪狼之握命中后获得护盾（沿用原吕布W附魔护盾量，最多叠3层）
+				if hit_count > 0 and hero.stat >= 1:
+					var _lv1 = hero.skill_levels[1]
+					var _bhp = hero.actual_max_health - hero.max_health
+					var _sh = int(280 + 70 * _lv1 + 0.07 * _bhp)
+					hero.shield_remaining = minf(hero.shield_remaining + _sh, 3.0 * _sh)
+				Vfx.slash_fx(hero.global_position, hero.global_position + fwd * w_radius, Color(0.58, 0.32, 0.92))
 				preview.queue_free()
 			3:  # 魔神降世：落地斩击+法阵边缘伤害
 				# 大招范围预览圈
@@ -2331,6 +2359,7 @@ func get_skill_fx(hero: Hero, i: int) -> Dictionary:
 			if i == 0:
 				texts.append("以自身为中心，对面前120°扇形区域内的敌人造成物理伤害")
 			elif i == 1:
+				texts.append("以自身为中心，对面前150°扇形区域内的敌人造成物理伤害并减速")
 				fx.append({"t": "slow", "v": 12.0 + 3.0 * lv, "d": 3.0})
 			elif i == 2:
 				fx.append({"t": "knockup", "v": 1.0})
