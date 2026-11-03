@@ -533,11 +533,9 @@ func _try_travel_dash():
 	# 强化普攻赶路（马超/铠/不知火舞空放，亚瑟Q/孙悟空借小兵/野怪跳）
 	if _try_enhanced_aa_travel(dest):
 		return
-	if low_mana:
-		return
-	var idx := _pick_travel_dash_skill()
+	var idx := _pick_travel_dash_skill(low_mana)
 	if idx < 0:
-		var acc_idx := _pick_acceleration_skill()
+		var acc_idx := _pick_acceleration_skill(low_mana)
 		if acc_idx >= 0:
 			hero._start_casting(acc_idx, hero.skills[acc_idx], dest)
 			return
@@ -569,7 +567,7 @@ func _try_travel_sprint() -> bool:
 	return true
 
 
-func _pick_acceleration_skill() -> int:
+func _pick_acceleration_skill(skip_mana_cost: bool = false) -> int:
 	for i in range(mini(3, hero.skills.size())):
 		if i >= hero.skill_levels.size() or hero.skill_levels[i] <= 0:
 			continue
@@ -578,6 +576,8 @@ func _pick_acceleration_skill() -> int:
 		var sk: Skill = hero.skills[i]
 		if sk == null:
 			continue
+		if skip_mana_cost and sk.mana_cost > 0.0:
+			continue   # 低蓝赶路：耗蓝加速技能不用
 		if sk.restore > 0.0 and (i >= hero.skill_restores.size() or hero.skill_restores[i] <= 0):
 			continue
 		var mcost := sk.mana_cost - sk.power_bonus * maxi(hero.skill_levels[i] - 1, 0)
@@ -591,7 +591,7 @@ func _pick_acceleration_skill() -> int:
 	return -1
 
 
-func _pick_travel_dash_skill() -> int:
+func _pick_travel_dash_skill(skip_mana_cost: bool = false) -> int:
 	var best := -1
 	var best_cd := INF
 	for i in range(2):
@@ -601,6 +601,8 @@ func _pick_travel_dash_skill() -> int:
 		# 只认引擎内「位移」类型(4)且确有位移距离；李白Q为type3三段折返、会记录回原点，排除
 		if sk.type != 4 or sk.self_displacement <= 0.0:
 			continue
+		if skip_mana_cost and sk.mana_cost > 0.0:
+			continue   # 低蓝赶路：耗蓝位移技能不用，零蓝耗位移仍可用
 		# 多段/持续窗口技能进行中不打断（保持窗口逻辑自洽）
 		if i < hero.skill_window_timers.size() and hero.skill_window_timers[i] > 0.0:
 			continue
@@ -3057,5 +3059,6 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
 
