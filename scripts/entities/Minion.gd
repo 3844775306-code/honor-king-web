@@ -398,26 +398,10 @@ func _physics_process(delta):
 	
 
 
-## 拆塔中小兵被敌方小兵攻击：优先切最近的敌方小兵，附近没有小兵再走常规最近目标搜索
+## 拆塔中小兵被敌方小兵攻击：重新做一次「最近目标」搜索；若防御塔仍最近则继续打塔
 func _retarget_on_minion_hit() -> void:
-	var best: GameEntity = null
-	var best_dist: float = vision_range
-	for entity in get_tree().get_nodes_in_group("entities"):
-		if not is_instance_valid(entity) or entity == self or entity.health <= 0.0:
-			continue
-		if not (entity is Minion) or int((entity as Minion).team) == int(team):
-			continue
-		if entity.collision_layer == 0:
-			continue
-		var d := global_position.distance_to(entity.global_position)
-		if d < best_dist:
-			best_dist = d
-			best = entity
-	if best != null:
-		current_target = best
-		attack_timer = 0.0
-	else:
-		_find_target()
+	current_target = null
+	_find_target()
 
 
 func _find_target():
