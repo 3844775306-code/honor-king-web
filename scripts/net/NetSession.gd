@@ -15,6 +15,7 @@ extends Node
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 const SNAPSHOT_HZ := 30.0
 const SNAPSHOT_INTERVAL := 1.0 / SNAPSHOT_HZ
+const MAP_STREAM_FLOATS := 4096          # 每帧最多 16KB 墙体数据，避免浏览器大包断连
 const WEB_SNAPSHOT_INTERVAL := 1.0 / 15.0   # 浏览器经 Cloudflare 隧道：降到15Hz，减轻TCP抖动/解析压力
 var _web_snap_timer := 0.0
 var _last_snap_bytes := 0
@@ -109,6 +110,13 @@ var _attack_time := {}      # host：peer_id -> 最近 C_ATTACK_AUTO 墙钟秒�
 
 # --- M4：静态地图布局（墙/草丛/营地坐标） ---
 var _map_payload := {}      # client：收到的 _rpc_map 载荷
+var _map_stream_total := 0
+var _map_stream_got := 0
+var _map_stream_chunks := {}
+var _map_stream_bushes: Array = []
+var _map_stream_camps: Array = []
+var _map_stream_packs: Array = []
+var _map_streaming_to := {}   # host：正在分帧发送的 peer
 var _roster_payload := []   # client：收到的 _rpc_roster 载荷（属性 C / 队伍 T 面板行）
 var _prev_alive := {}   # P3e host：pid→上次 alive，死亡跃迁 1→0 时对该 pid 推一次死亡回放
 var _result_sent := false   # P3f host：game_over 翻转时已广播结算（新一局重置）
@@ -2501,12 +2509,37 @@ func _broadcast_map_if_needed() -> void:
 		var peer_id := int(pid)
 		if peer_id == 1 or _map_acked.has(peer_id):
 			continue
-		rpc_id(peer_id, "_rpc_map", payload)
+		_stream_map_to(peer_id, payload)
 		_map_sent_to[peer_id] = true
 		sent = true
-		print("[Net] 地图布局已发 peer=", peer_id, " 等待ACK")
+		print("[Net] 地图布局分帧发送 peer=", peer_id)
 	if sent:
 		_map_send_at = now + 1.5
+
+
+func _stream_map_to(peer_id: int, payload: Dictionary) -> void:
+	if _map_streaming_to.has(peer_id):
+		return
+	_map_streaming_to[peer_id] = true
+	var walls = payload.get("walls", PackedFloat32Array())
+	var total: int = walls.size() if walls is PackedFloat32Array else 0
+	var bushes: Array = payload.get("bushes", [])
+	var camps: Array = payload.get("camps", [])
+	var packs: Array = payload.get("packs", [])
+	rpc_id(peer_id, "_rpc_map_stream_begin", bushes, camps, packs, total)
+	var i := 0
+	var chunk_index := 0
+	while i < total:
+		if not players.has(peer_id):
+			_map_streaming_to.erase(peer_id)
+			return
+		var n := mini(MAP_STREAM_FLOATS, total - i)
+		rpc_id(peer_id, "_rpc_map_stream_chunk", chunk_index, walls.slice(i, i + n))
+		i += n
+		chunk_index += 1
+		await get_tree().process_frame
+	rpc_id(peer_id, "_rpc_map_stream_end")
+	_map_streaming_to.erase(peer_id)
 
 
 func _resync_peer(pid: int, need_map: bool = true) -> void:
@@ -2517,8 +2550,8 @@ func _resync_peer(pid: int, need_map: bool = true) -> void:
 		return
 	# 地图重发（客户端已收到地图时只补接管/快照，避免每 2s 重发 300KB 墙体）
 	if need_map:
-		rpc_id(pid, "_rpc_map", _collect_map_payload(bm))
-		_map_sent_to[pid] = true
+		_stream_map_to(int(pid), _collect_map_payload(bm))
+		_map_sent_to[int(pid)] = true
 	# 当前接管清单
 	if _assign_hero.has(pid) and is_instance_valid(_assign_hero[pid]):
 		var h: Hero = _assign_hero[pid]
@@ -2585,6 +2618,45 @@ static func decode_walls(raw) -> Array:
 			if row is Array and (row as Array).size() >= 3:
 				out.append(row)
 	return out
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_map_stream_begin(bushes: Array, camps: Array, packs: Array, total_floats: int) -> void:
+	if multiplayer.is_server():
+		return
+	_map_stream_bushes = bushes
+	_map_stream_camps = camps
+	_map_stream_packs = packs
+	_map_stream_total = total_floats
+	_map_stream_got = 0
+	_map_stream_chunks = {}
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_map_stream_chunk(index: int, data: PackedFloat32Array) -> void:
+	if multiplayer.is_server():
+		return
+	_map_stream_chunks[index] = data
+	_map_stream_got += data.size()
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_map_stream_end() -> void:
+	if multiplayer.is_server():
+		return
+	if _map_stream_got < _map_stream_total:
+		printerr("[Net] 地图分帧不完整 got=", _map_stream_got, "/", _map_stream_total)
+		return
+	var walls := PackedFloat32Array()
+	var idx := 0
+	while _map_stream_chunks.has(idx):
+		walls.append_array(_map_stream_chunks[idx])
+		idx += 1
+	_map_payload = { "bushes": _map_stream_bushes, "walls": walls,
+		"camps": _map_stream_camps, "packs": _map_stream_packs }
+	_map_stream_chunks = {}
+	print("[Net] 收到地图布局(分帧) bushes=", _map_stream_bushes.size(),
+		" walls=", walls.size(), " camps=", _map_stream_camps.size())
 
 
 @rpc("any_peer", "reliable", "call_remote")
