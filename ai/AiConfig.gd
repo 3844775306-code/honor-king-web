@@ -248,13 +248,38 @@ static func tower_guarding_hero(hero: Hero, target: Hero) -> Turret:
 	return null
 
 
-## 是否值得打塔下英雄：有己方小兵掩护，或目标残血可越塔
+## 越塔前确认自己当前能够攻击到目标（普攻或冷却好的攻击技能）
+static func can_attack_hero(h: Hero, target: Hero) -> bool:
+	if h == null or target == null or not is_instance_valid(target):
+		return false
+	var dist: float = h.global_position.distance_to(target.global_position)
+	if dist <= h.attack_range * 0.01 + float(target.body_radius) + 0.5:
+		return true
+	for i in range(mini(3, h.skills.size())):
+		if i >= h.skill_levels.size() or int(h.skill_levels[i]) <= 0:
+			continue
+		if i >= h.skill_cooldowns.size() or float(h.skill_cooldowns[i]) > 0.0:
+			continue
+		var sk: Skill = h.skills[i]
+		if sk == null or int(sk.type) not in [0, 1, 3, 5] or sk.cast_range <= 0.0:
+			continue
+		if h.mana < sk.mana_cost:
+			continue
+		if dist <= sk.cast_range + float(target.body_radius) + 0.5:
+			return true
+	return false
+
+
+## 是否值得打塔下英雄：有己方小兵掩护，或目标残血可越塔；且必须确保自己攻击得到
 static func should_engage_tower_hero(hero: Hero, target: Hero) -> bool:
 	if hero == null or target == null or not is_instance_valid(target) or target.health <= 0.0:
 		return false
 	var tower := tower_guarding_hero(hero, target)
 	if tower == null:
 		return true
+	# 先确认自己能攻击到目标，避免“越塔但够不到”
+	if not can_attack_hero(hero, target):
+		return false
 	# 有兵线掩护：塔会优先清兵，可以打
 	if tower_ally_minion_hp(hero, tower) >= UNSAFE_TOWER_MINION_HP:
 		return true
