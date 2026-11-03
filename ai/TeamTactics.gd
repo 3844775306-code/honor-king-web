@@ -23,6 +23,7 @@ var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
 var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
 var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
 var _push_gold_cd_until: Dictionary = {}   # {int: float} 经济差推塔冷却结束时间
+var _push_dragon_cd_until: Dictionary = {} # {int: float} 打龙后推塔冷却结束时间
 var _force_push_by_team: Dictionary = {}   # {int: bool} 本次推塔是否经济差触发（高优先级）
 
 func _init(p_bm: BattleManager) -> void:
@@ -527,20 +528,27 @@ func allocate_all() -> Dictionary:
 		var team_gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
 		var gold_push_ready: bool = team_gold_diff > AiConfig.PUSH_TOWER_GOLD_LEAD \
 			and bm.game_time >= float(_push_gold_cd_until.get(team, 0.0))
-		if (enemy_alive <= 1 and ally_alive >= 3) or gold_push_ready:
+		var dragon_push_ready: bool = bm.last_dragon_kill_team == team \
+			and bm.game_time - float(bm.last_dragon_kill_time) <= 12.0 \
+			and bm.game_time >= float(_push_dragon_cd_until.get(team, 0.0))
+		if (enemy_alive <= 1 and ally_alive >= 3) or gold_push_ready or dragon_push_ready:
 			var pt := _push_tower_target(team)
 			if pt != Vector3.ZERO:
 				current_mode = SplitMode.PUSH_TOWER
 				push_target_by_team[team] = pt
-				_force_push_by_team[team] = gold_push_ready
+				_force_push_by_team[team] = gold_push_ready or dragon_push_ready
 				if gold_push_ready:
 					_push_gold_cd_until[team] = bm.game_time + AiConfig.PUSH_TOWER_GOLD_COOLDOWN
+				if dragon_push_ready:
+					_push_dragon_cd_until[team] = bm.game_time + AiConfig.PUSH_TOWER_GOLD_COOLDOWN
 				var push_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
 				for h in _get_ally_heroes(team):
 					if h.is_ai:
 						result[h] = push_lane
 				if gold_push_ready:
 					print("[TeamTactics] t=%.0f %s 经济差=%d>%d，抱团推塔（90s冷却）" % [bm.game_time, team_label, team_gold_diff, AiConfig.PUSH_TOWER_GOLD_LEAD])
+				elif dragon_push_ready:
+					print("[TeamTactics] t=%.0f %s 刚击杀龙，抱团推进（90s冷却）" % [bm.game_time, team_label])
 				else:
 					print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
 				continue
@@ -828,5 +836,4 @@ func _own_tower_pos(team: int, lane: int) -> Vector3:
 		AiConfig.Lane.MID: return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
 	return Vector3.ZERO
-
 

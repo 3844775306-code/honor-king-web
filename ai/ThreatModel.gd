@@ -231,12 +231,12 @@ func retreat_direction() -> Vector3:
 			var to_t := tp - hero.global_position
 			to_t.y = 0.0
 			if to_t.length() > 0.1:
-				dir += to_t.normalized() * w * 1.2
+				dir += to_t.normalized() * w * 2.5
 		else:
 			var away_t := hero.global_position - tp
 			away_t.y = 0.0
 			if away_t.length() > 0.1:
-				dir += away_t.normalized() * w * 1.2
+				dir += away_t.normalized() * w * 2.5
 	if dir.length() < 0.1:
 		return Vector3.ZERO
 	return dir.normalized()
@@ -252,3 +252,4 @@ func safe_position() -> Vector3:
 	dest.x = clampf(dest.x, -half, half)
 	dest.z = clampf(dest.z, -half, half)
 	return dest
+

@@ -2783,6 +2783,9 @@ func on_epic_died(monster: JungleMonster, killer: Hero):
 		return
 	var mname := monster.display_name
 	print("[EPIC] t=%.0f %s 被击杀 killer=%s" % [game_time, mname, killer.display_name if killer else "null"])
+	if killer != null:
+		last_dragon_kill_team = int(killer.team)
+		last_dragon_kill_time = game_time
 
 	# 存活标记 + 4分钟刷新
 	match mname:
@@ -7499,6 +7502,8 @@ func _set_camera_mode(first_person: bool):
 var game_over: bool = false
 var winner: int = -1
 var rank_result: Dictionary = {}   # 本局单机排位结算（升/降星、晋升信息），联机为空
+var last_dragon_kill_team := -1      # 最近一条龙（史诗生物）击杀方
+var last_dragon_kill_time := -999.0  # 最近一条龙击杀的游戏时间
 
 func crystal_destroyed(team: int):
 	if _training_mode:
@@ -7826,3 +7831,4 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
+
