@@ -19,6 +19,7 @@ var team_player_heroes: Array = []
 var team_enemy_heroes: Array = []
 var current_tab: int = 0
 var _rank_result: Dictionary = {}
+var suppress_rank := false   # 测试/观战：只显示当前段位，不执行 RankSystem.apply_result
 var _self_is_mvp := false
 var _gauges: Array = []
 
@@ -152,7 +153,7 @@ func _prepare_rank() -> void:
 	var rr = _m_rank_result()
 	if rr is Dictionary and not (rr as Dictionary).is_empty():
 		_rank_result = rr
-	elif bool(_model.get("suppress_rank", false)):
+	elif suppress_rank or bool(_model.get("suppress_rank", false)):
 		_rank_result = {}
 	elif _rank_result.is_empty():
 		var rating := _calculate_rating(ph) if ph != null else 0.0

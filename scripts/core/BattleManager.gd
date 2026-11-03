@@ -7474,7 +7474,8 @@ func crystal_destroyed(team: int):
 	SfxManager.play_announce("victory" if winner == Config.player_team else "defeat")
 	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看）
 	# 排位结算：胜 +1 星、负 -1 星；联机客户端由 NetResultPanel 各自结算
-	var local_rank_match := not ("--net-test" in OS.get_cmdline_user_args())
+	# 测试局只演出不结算：不为玩家加减排位积分，也不写入玩家战绩/云端
+	var local_rank_match := not ("--net-test" in OS.get_cmdline_user_args()) and not _ai_test_match
 	if local_rank_match:
 		var player_mvp := is_instance_valid(hero) and hero.is_mvp
 		# 奖牌：铜 +12 / 银 +33 / 金 +100；评分 >90 额外 +200（均叠加在基础胜负积分上）
@@ -7489,18 +7490,17 @@ func crystal_destroyed(team: int):
 		rank_result["medal_bonus"] = medal_bonus
 		rank_result["top_bonus"] = top_bonus
 		rank_result["rating"] = pm_rating
-	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看，含段位/推塔/分项数据）
-	var __hist := BattleHistory.payload_from_battle(self)
-	__hist["rank"] = rank_result
-	BattleHistory.record(__hist, "联机" if NetSession.is_online() else "单机")
-	# 云端存档：开启「赛后自动上传」时把段位+对战纪录同步到云端（未配置则空操作）
-	CloudSyncScript.auto_upload(get_tree())
+	# 对战纪录/云端：测试局不写入玩家数据
+	if not _ai_test_match:
+		var __hist := BattleHistory.payload_from_battle(self)
+		__hist["rank"] = rank_result
+		BattleHistory.record(__hist, "联机" if NetSession.is_online() else "单机")
+		# 云端存档：开启「赛后自动上传」时把段位+对战纪录同步到云端（未配置则空操作）
+		CloudSyncScript.auto_upload(get_tree())
 	# 终局：先播 5 秒水晶爆炸 → 中央美术字（胜利/失败）→ 再进结算面板并冻结战场
 	# 单机与联机统一走同一套终局演出（水晶爆炸 → EndBanner → 聚光灯舞台 → 个人表现 → 结算页）；
 	# 联机结算数据仍由 NetSession 在 game_over 翻转时广播给客户端，不受演出时长影响。
 	_play_end_sequence(team, winner == Config.player_team)
-	if _ai_test_match:
-		_finish_ai_test_match()
 
 var _end_seq_on: bool = false
 var _pm_stage_node: PostMatchStage = null
@@ -7733,11 +7733,20 @@ func _crystal_explosion(pos: Vector3, won: bool) -> void:
 	fx.play(pos, won)
 
 func _show_game_over(halt: bool = false):
+	var _is_test := _ai_test_match
+	if _is_test:
+		# 测试局结束：恢复时间倍速、清暂停、隐藏测试控制条；结算面板抑制排位加减
+		Engine.time_scale = 1.0
+		_test_paused = false
+		_ai_test_match = false
+		if _test_layer != null and is_instance_valid(_test_layer):
+			_test_layer.visible = false
 	get_tree().paused = false  # 取消暂停以便结算面板交互
 	if ui and ui.death_overlay:
 		ui.death_overlay.visible = false
 	var panel = ResultsPanel.new()
 	add_child(panel)
+	panel.suppress_rank = _is_test
 	panel.setup(self)
 	if halt:
 		# 终局：冻结战场上的所有进程（结算面板自身是 PROCESS_MODE_ALWAYS，不受影响）
@@ -7772,4 +7781,3 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
-
