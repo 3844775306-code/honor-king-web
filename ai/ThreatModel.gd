@@ -191,87 +191,64 @@ func threat_balance(radius: float = -1.0) -> float:
 	return ally_threat(radius) - enemy_threat(radius)
 
 
-## 从当前威胁质心向外找安全方向；找不到威胁返回 ZERO。
-func safe_position() -> Vector3:
+## 撤退方向：威胁英雄方向 + 附近友方防御塔方向 + 附近敌方防御塔方向的加权和
+## 权重规则：威胁值越高 → 威胁英雄权重越高；离防御塔越近 → 该塔权重越高
+func retreat_direction() -> Vector3:
 	var now := Time.get_ticks_msec() * 0.001
-	var weighted := Vector3.ZERO
-	var weight := 0.0
+	var dir := Vector3.ZERO
+	var r := dynamic_radius()
+	# 威胁英雄：按威胁值加权，方向为远离该英雄
 	for rec in memory.values():
 		var age := maxf(0.0, now - float(rec.get("seen", now)))
 		if age > MEMORY_MAX_AGE:
 			continue
 		var ep: Vector3 = rec.get("pos", Vector3.ZERO)
 		var d := hero.global_position.distance_to(ep)
-		if d > dynamic_radius() or d < 0.1:
+		if d > r or d < 0.1:
 			continue
-		var w := (1.0 - d / dynamic_radius()) * exp(-age / 5.0)
-		weighted += ep * w
-		weight += w
-	if weight <= 0.001:
-		return Vector3.ZERO
-	var centroid := weighted / weight
-	var away := hero.global_position - centroid
-	away.y = 0.0
-	if away.length() < 0.2:
-		# 被完全贴身：沿远离地图中心的方向退
-		away = Vector3(hero.global_position.x, 0.0, hero.global_position.z).normalized()
-	if away.length() < 0.1:
-		return Vector3.ZERO
-	# 候选方向：以远离威胁为基准左右各偏 45°/90°，选「离敌方塔远 + 靠近己方泉水」的点
-	var own_fountain := Vector3(-62.0, 0.0, 62.0) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62.0, 0.0, -62.0)
-	var best_dest := Vector3.ZERO
-	var best_score := -1.0e20
-	for ang in [0.0, 45.0, -45.0, 90.0, -90.0]:
-		var dir3: Vector3 = away.normalized().rotated(Vector3.UP, deg_to_rad(ang))
-		var cand: Vector3 = hero.global_position + dir3 * 6.0
-		var half := Config.MAP_SIZE / 2.0
-		cand.x = clampf(cand.x, -half, half)
-		cand.z = clampf(cand.z, -half, half)
-		if _in_enemy_tower_reach(cand):
+		var df := clampf(1.0 - d / r, 0.0, 1.0)
+		var tf := exp(-age / 5.0)
+		var hp_ratio := clampf(float(rec.get("hp", 1.0)) / float(rec.get("max_hp", 1.0)), 0.0, 1.0)
+		var threat := hp_ratio * df * tf
+		if threat <= 0.0:
 			continue
-		var tower_d := _nearest_enemy_tower_dist(cand)
-		var score := tower_d - cand.distance_to(own_fountain) * 0.45
-		if score > best_score:
-			best_score = score
-			best_dest = cand
-	if best_dest == Vector3.ZERO:
-		# 所有方向都在敌方塔范围内（例如已经被压到敌方塔下）：朝己方泉水方向的扇区里，
-		# 选「离敌方塔最远」的方向撤，避免继续往敌方塔方向跑。
-		var to_base := own_fountain - hero.global_position
-		to_base.y = 0.0
-		if to_base.length() > 0.1:
-			var base_dir := to_base.normalized()
-			var dirs: Array[Vector3] = []
-			for ang in [0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0]:
-				dirs.append(base_dir.rotated(Vector3.UP, deg_to_rad(ang)))
-			# 己方泉水方向若正好穿过最近的敌方塔：补一组「背离塔」的方向，优先拉开
-			var nt := _nearest_enemy_tower_pos(hero.global_position)
-			if nt != Vector3.ZERO:
-				var away_t := hero.global_position - nt
-				away_t.y = 0.0
-				if away_t.length() > 0.1:
-					for ang in [0.0, 30.0, -30.0, 60.0, -60.0]:
-						dirs.append(away_t.normalized().rotated(Vector3.UP, deg_to_rad(ang)))
-			var fb_best := Vector3.ZERO
-			var fb_score := -1.0e20
-			for d3 in dirs:
-				var cand := hero.global_position + d3 * 6.0
-				var half2 := Config.MAP_SIZE / 2.0
-				cand.x = clampf(cand.x, -half2, half2)
-				cand.z = clampf(cand.z, -half2, half2)
-				var score := _nearest_enemy_tower_dist(cand) * 2.0 - cand.distance_to(own_fountain) * 0.1
-				if score > fb_score:
-					fb_score = score
-					fb_best = cand
-			best_dest = fb_best
-	var dest := best_dest
+		var away := hero.global_position - ep
+		away.y = 0.0
+		if away.length() < 0.1:
+			continue
+		dir += away.normalized() * threat
+	# 防御塔：越近权重越高；友方塔→朝塔，敌方塔→远离塔
+	var tower_range := 30.0
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0.0:
+			continue
+		var tp: Vector3 = (e as Turret).global_position
+		var td := hero.global_position.distance_to(tp)
+		if td > tower_range or td < 0.1:
+			continue
+		var w := clampf(1.0 - td / tower_range, 0.0, 1.0)
+		if int((e as Turret).team) == int(hero.team):
+			var to_t := tp - hero.global_position
+			to_t.y = 0.0
+			if to_t.length() > 0.1:
+				dir += to_t.normalized() * w * 1.2
+		else:
+			var away_t := hero.global_position - tp
+			away_t.y = 0.0
+			if away_t.length() > 0.1:
+				dir += away_t.normalized() * w * 1.2
+	if dir.length() < 0.1:
+		return Vector3.ZERO
+	return dir.normalized()
+
+
+## 撤退安全点：沿加权撤退方向前进 6m；无方向返回 ZERO
+func safe_position() -> Vector3:
+	var dir := retreat_direction()
+	if dir == Vector3.ZERO:
+		return Vector3.ZERO
+	var dest := hero.global_position + dir * 6.0
 	var half := Config.MAP_SIZE / 2.0
 	dest.x = clampf(dest.x, -half, half)
 	dest.z = clampf(dest.z, -half, half)
 	return dest
-
-
-
-
-
-

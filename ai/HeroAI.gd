@@ -2062,6 +2062,8 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 		var safe_goal := _choose_safe_retreat_goal()
 		if safe_goal != Vector3.ZERO:
 			goal = safe_goal
+	# 友方塔方向会把点带到塔心，统一转成塔外可站立点
+	goal = _tower_standoff(goal)
 	# 只走安全点。
 	_follow_safe_route(goal)
 
