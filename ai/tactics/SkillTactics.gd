@@ -152,8 +152,8 @@ func _skill_in_range(index: int, target: GameEntity) -> bool:
 	return hero.global_position.distance_to(target.global_position) <= reach
 
 
-## 逃跑时只放瞬发/低前摇的远程伤害或控制技能，不因长前摇停下送人头。
-func try_escape_skill(target: GameEntity, max_cast_time: float = 0.15) -> bool:
+## 逃跑时只放低前摇的远程伤害或控制技能（≤0.4s），不因长前摇停下送人头。
+func try_escape_skill(target: GameEntity, max_cast_time: float = 0.40) -> bool:
 	if target == null or not is_instance_valid(target) or target.health <= 0.0:
 		return false
 	if _turret_blocked(target):
@@ -161,13 +161,32 @@ func try_escape_skill(target: GameEntity, max_cast_time: float = 0.15) -> bool:
 	if skill_feed_timer > 0.0:
 		return false
 	var candidates := _get_candidates(target)
+	if "--ai-skill-probe" in OS.get_cmdline_user_args():
+		var dbg: Array = []
+		for c in candidates:
+			var sk: Skill = c["skill"]
+			dbg.append("%s(t=%d,ct=%.2f,chan=%s,dmg=%.0f,ctl=%s,rng=%.1f)" % [
+				sk.skill_name, sk.type, sk.cast_time, str(sk.is_channeling), sk.damage, str(_has_control(sk)), sk.cast_range])
+		var raw_dbg: Array = []
+		for ii in range(mini(3, hero.skills.size())):
+			var raw: Skill = hero.skills[ii]
+			if raw == null:
+				continue
+			raw_dbg.append("%s lv=%d cd=%.1f" % [raw.skill_name, hero.skill_levels[ii], hero.skill_cooldowns[ii]])
+		print("[AISKILL] escape try %s -> %s dist=%.1f feed=%.1f cand=%s | raw=%s" % [
+			hero.display_name, target.display_name,
+			hero.global_position.distance_to(target.global_position), skill_feed_timer,
+			",".join(dbg) if not dbg.is_empty() else "NONE", ",".join(raw_dbg)])
 	var best: Dictionary = {}
 	for c in candidates:
 		var sk: Skill = c["skill"]
-		if sk.cast_time > max_cast_time or sk.is_channeling:
+		# 注意：SkillDataBase 把 type 1/3/4 统一标 is_channeling=true（非指向标记），
+		# 不能据此过滤，否则会屏蔽大部分远程消耗技能；实际长前摇由 cast_time 限制。
+		if sk.cast_time > max_cast_time:
 			continue
-		# 只要伤害/控制/减速，不要赶路位移和纯增益
-		if sk.damage <= 0.0 and not _has_control(sk):
+		# 只要进攻/控制/减速，不要赶路位移和纯增益；
+		# 部分英雄的实际伤害写在 _finish_casting，数据库 sk.damage=0，因此按技能形态兜底
+		if not _is_offensive_skill(sk):
 			continue
 		if best.is_empty() or float(c["score"]) > float(best["score"]):
 			best = c
@@ -175,6 +194,11 @@ func try_escape_skill(target: GameEntity, max_cast_time: float = 0.15) -> bool:
 		return false
 	skill_feed_timer = AiConfig.SKILL_FEED_COOLDOWN
 	hero._start_casting(int(best["index"]), best["skill"], _aim_pos(target))
+	if "--ai-skill-probe" in OS.get_cmdline_user_args():
+		print("[AISKILL] escape %s -> %s  dist=%.1f  skill=%s  cast=%.2f" % [
+			hero.display_name, target.display_name,
+			hero.global_position.distance_to(target.global_position),
+			str(best["skill"].skill_name), float(best["skill"].cast_time)])
 	return true
 
 
@@ -317,6 +341,15 @@ func _ult_allowed(target: GameEntity) -> bool:
 
 
 ## 是否带控制效果（眩晕/击飞/减速）
+func _is_offensive_skill(sk: Skill) -> bool:
+	if sk == null:
+		return false
+	if sk.damage > 0.0 or _has_control(sk):
+		return true
+	# type 0 目标 / 1 AOE / 3 直线：有射程即视为可消耗的进攻技能
+	return sk.type in [0, 1, 3] and sk.cast_range > 0.0
+
+
 func _has_control(sk: Skill) -> bool:
 	if sk == null:
 		return false
