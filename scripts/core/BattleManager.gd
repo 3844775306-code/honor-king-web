@@ -117,6 +117,7 @@ var _training_invincible := false
 var _training_no_cd := false
 var _training_invincible_btn: Button = null
 var _training_no_cd_btn: Button = null
+var _training_skin_btn: Button = null
 var _test_view_hero: Hero = null     # 测试观战主英雄（可切换）
 var _test_prev_pos := Vector3.ZERO
 var _test_layer: CanvasLayer = null
@@ -642,6 +643,9 @@ func _setup_training_hud() -> void:
 	var hero_btn := _training_mk_btn("切换我的英雄")
 	hero_btn.pressed.connect(_training_cycle_player_hero)
 	vb.add_child(hero_btn)
+	_training_skin_btn = _training_mk_btn("我的皮肤：经典")
+	_training_skin_btn.pressed.connect(_training_cycle_player_skin)
+	vb.add_child(_training_skin_btn)
 	_training_ai_hero_btn = _training_mk_btn("AI 英雄：随机")
 	_training_ai_hero_btn.pressed.connect(_training_cycle_ai_hero)
 	vb.add_child(_training_ai_hero_btn)
@@ -708,6 +712,7 @@ func _setup_training_hud() -> void:
 	svb.add_child(reset_btn)
 	_training_refresh_label()
 	_training_refresh_dummy_stats()
+	_training_refresh_skin_btn()
 
 
 func _training_handle_hotkey(event: InputEventKey) -> bool:
@@ -1000,6 +1005,33 @@ func _training_cycle_player_hero() -> void:
 		hero.training_invincible = keep_inv
 		hero.training_no_cooldown = keep_nocd
 		hero._recalculate_attributes()
+	_training_refresh_label()
+	_training_refresh_skin_btn()
+
+
+func _training_refresh_skin_btn() -> void:
+	if _training_skin_btn == null:
+		return
+	if hero == null or not is_instance_valid(hero):
+		_training_skin_btn.text = "我的皮肤：—"
+		return
+	var sid := str(hero.hero_skin_id)
+	if sid == "":
+		sid = HeroSkinTable.selected_id(hero.display_name)
+	_training_skin_btn.text = "我的皮肤：%s" % HeroSkinTable.skin_name(hero.display_name, sid)
+
+
+func _training_cycle_player_skin() -> void:
+	if hero == null or not is_instance_valid(hero):
+		return
+	var cur := str(hero.hero_skin_id)
+	if cur == "":
+		cur = HeroSkinTable.selected_id(hero.display_name)
+	var nxt := HeroSkinTable.cycle(hero.display_name, cur)
+	hero.hero_skin_id = nxt
+	HeroSkinTable.set_selected(hero.display_name, nxt)
+	HeroSkinTable.apply_to(hero.visual_mesh, hero.display_name, nxt)
+	_training_refresh_skin_btn()
 	_training_refresh_label()
 
 
@@ -2229,6 +2261,9 @@ func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_he
 		ai_hero.player_name = str(_match_ai_names[_ai_name_cursor % _match_ai_names.size()])
 		_ai_name_cursor += 1
 		ai_hero.gold = 500
+		# 测试模式：给每个 AI 随机分配一套皮肤
+		if _ai_test_match or "--ai-bench" in OS.get_cmdline_user_args():
+			ai_hero.hero_skin_id = HeroSkinTable.random_test_id(ai_hero.display_name)
 		if team == Config.Team.PLAYER:
 			ai_hero.position = Vector3(-60 + randf_range(-0.4,0.4), 0, 60 + randf_range(-0.4,0.4))
 		else:

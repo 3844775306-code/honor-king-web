@@ -80,6 +80,22 @@ static func auto_id(hero_name: String, seed: int) -> String:
 	return str((arr[idx] as Dictionary).get("id", "classic"))
 
 
+## 测试模式：每局给 AI 随机分配皮肤（优先定制皮肤，也保留少量经典概率）
+static func random_test_id(hero_name: String) -> String:
+	var arr := skins_for(hero_name)
+	if arr.is_empty():
+		return ""
+	if arr.size() <= 1:
+		return default_id(hero_name)
+	# 75% 概率抽非经典皮肤，25% 概率抽经典，保证每局组合随机
+	var idx := 0
+	if randf() < 0.75:
+		idx = 1 + (randi() % (arr.size() - 1))
+	else:
+		idx = randi() % arr.size()
+	return str((arr[idx] as Dictionary).get("id", "classic"))
+
+
 const SKIN_SHADER_CODE := """
 shader_type spatial;
 render_mode diffuse_burley, specular_schlick_ggx;
@@ -151,6 +167,8 @@ static func apply_to(root: Node3D, hero_name: String, skin_id: String) -> void:
 		return
 	if str(root.get_meta("_skin_id", "")) == sid:
 		return
+	# 先恢复上一次皮肤改过的原材质/清掉皮肤挂件，再套新皮肤
+	clear_skin(root)
 	root.set_meta("_skin_id", sid)
 	var body: Color = skin.get("body", Color.WHITE)
 	var accent: Color = skin.get("accent", Color.WHITE)
@@ -178,6 +196,9 @@ static func _tint_meshes(node: Node, body: Color, accent: Color) -> void:
 					# 透明材质（翅膀/纱/特效件）保持原样，避免被不透明皮肤材质覆盖
 					if m.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
 						continue
+					var okey := "_skin_orig_%d" % si
+					if not mi.has_meta(okey):
+						mi.set_meta(okey, mi.get_surface_override_material(si))
 					var sm := ShaderMaterial.new()
 					sm.shader = _get_skin_shader()
 					sm.set_shader_parameter("base_color", m.albedo_color)
@@ -191,6 +212,9 @@ static func _tint_meshes(node: Node, body: Color, accent: Color) -> void:
 					sm.set_shader_parameter("has_normal", m.normal_texture != null)
 					mi.set_surface_override_material(si, sm)
 				elif mat == null:
+					var okey2 := "_skin_orig_%d" % si
+					if not mi.has_meta(okey2):
+						mi.set_meta(okey2, mi.get_surface_override_material(si))
 					var sm2 := ShaderMaterial.new()
 					sm2.shader = _get_skin_shader()
 					sm2.set_shader_parameter("base_color", Color.WHITE)
@@ -286,6 +310,31 @@ static func _add_orbs(root: Node3D, accent: Color) -> void:
 		orb.position = Vector3(cos(ang) * 0.72, 1.55 + 0.18 * float(i), sin(ang) * 0.72)
 		orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(orb)
+
+
+## 恢复皮肤前的原始材质并移除皮肤挂件（切换皮肤/回经典时用）
+static func clear_skin(root: Node3D) -> void:
+	if root == null or not is_instance_valid(root):
+		return
+	for nm in ["SkinAura", "SkinCape", "SkinOrb0", "SkinOrb1", "SkinOrb2"]:
+		var n := root.get_node_or_null(nm)
+		if n != null and is_instance_valid(n):
+			n.free()
+	_clear_skin_materials(root)
+	root.remove_meta("_skin_id")
+
+
+static func _clear_skin_materials(node: Node) -> void:
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			var mi := child as MeshInstance3D
+			if mi.mesh != null:
+				for si in range(mi.mesh.get_surface_count()):
+					var okey := "_skin_orig_%d" % si
+					if mi.has_meta(okey):
+						mi.set_surface_override_material(si, mi.get_meta(okey))
+						mi.remove_meta(okey)
+		_clear_skin_materials(child)
 
 
 ## 子弹/技能特效按皮肤强调色染色（只改表现，不改伤害/判定）
