@@ -26,7 +26,6 @@ var _temp_clearing: bool = false
 var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
-var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
 var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
 var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
@@ -221,7 +220,9 @@ func _action_is_complete(action: AIAction) -> bool:
 			if ht == null or not is_instance_valid(ht) or ht.health <= 0.0:
 				return true
 			var hd: float = hero.global_position.distance_to(ht.global_position)
-			return hd > hero.attack_range * 0.01 or (ht is Hero and hd <= _safe_distance_to(ht as Hero))
+			if str(hero.role) == "射手" and hd <= hero.attack_range * 0.01 and hd > _safe_distance_to(ht as Hero):
+				return false
+			return not _has_ready_skill_in_range(ht as Hero)
 		AIAction.Type.SAFE_DISTANCE:
 			return false
 		AIAction.Type.VISION_SPIRIT:
@@ -261,33 +262,37 @@ func _has_ready_skill_in_range(target: Hero) -> bool:
 		if hero.mana < sk.mana_cost:
 			continue
 		var reach: float = sk.cast_range if sk.cast_range > 0.0 else hero.attack_range * 0.01
-		if dist <= maxf(reach, hero.attack_range * 0.01):
+		if dist <= reach:
 			return true
 	return false
 
 
-## 消耗目标：射手专属；目标在普攻距离内、冷却好的技能射程内、且距离大于安全距离
+## 消耗目标：全英雄通用；目标在冷却好的攻击技能射程内即可
+## 射手额外条件：目标在普攻范围内且距离大于安全距离（此条件只普攻）
 func _harass_target() -> Hero:
-	if str(hero.role) != "射手" or hero.is_dead:
+	if hero.is_dead:
 		return null
 	var target: Hero = null
 	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
 		target = hero.manual_target
+	var search_r := maxf(hero.attack_range * 0.01, 20.0)
 	if target == null:
-		target = perception.find_nearest_enemy_hero(hero.attack_range * 0.01)
+		target = perception.find_nearest_enemy_hero(search_r)
 	if target == null or not is_instance_valid(target) or target.health <= 0.0:
 		return null
 	var dist := hero.global_position.distance_to(target.global_position)
-	if dist > hero.attack_range * 0.01 or dist <= _safe_distance_to(target):
-		return null
-	if not _has_ready_skill_in_range(target):
-		return null
-	return target
+	# 通用：有冷却好的攻击技能能打到目标
+	if _has_ready_skill_in_range(target):
+		return target
+	# 射手额外：在普攻范围内且距离大于安全距离
+	if str(hero.role) == "射手" and dist <= hero.attack_range * 0.01 and dist > _safe_distance_to(target):
+		return target
+	return null
 
 
-## 保持安全距离：射手目标进入安全距离内时先后撤，回到安全距离即停（优先级 910）
+## 保持安全距离：目标进入安全距离内时先后撤，回到安全距离即停（优先级 910）
 func _try_keep_safe_distance() -> bool:
-	if str(hero.role) != "射手" or hero.is_dead:
+	if hero.is_dead:
 		return false
 	var target: Hero = null
 	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
@@ -351,47 +356,6 @@ func _try_counter_attack() -> bool:
 		trade_planner.force_engage(chaser)
 	_set_action(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "反击对拼")
 	return true
-
-## 被敌方英雄攻击的反应：返回 true 表示本帧已接管（撤退中，跳过其他决策）
-func _react_to_hero_attack(delta: float) -> bool:
-	# 射手不再按“被攻击”被动撤退，统一由“保持安全距离”逻辑处理 	if str(hero.role) == "射手": 		return false 
-	var atk: Hero = hero.last_hero_attacker
-	var now: float = Time.get_ticks_msec() * 0.001
-	if atk == null or not is_instance_valid(atk) or atk.health <= 0.0 or now - hero.last_hero_attacker_at > 1.2:
-		atk = null
-	# 对方已停手：结束被攻击撤退
-	if _attack_retreat_target != null:
-		if atk == null or atk != _attack_retreat_target or _attack_retreat_target.health <= 0.0:
-			_attack_retreat_target = null
-			return false
-	if atk == null:
-		return false
-	# 已经在撤退：持续远离，直到对方不再攻击
-	if _attack_retreat_target == atk:
-		_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
-		_retreat_from_hero(atk, delta)
-		return true
-	if hero.casting_skill:
-		return false
-	# 立即判断是否主动换血；主动换血则交给正常决策打
-	if trade_planner != null and trade_planner.should_trade_with(atk):
-		return false
-	_attack_retreat_target = atk
-	_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
-	_retreat_from_hero(atk, delta)
-	return true
-
-
-## 远离指定敌方英雄（被攻击撤退用）
-func _retreat_from_hero(enemy: Hero, delta: float = 0.0) -> void:
-	hero.manual_target = null
-	if hero.is_recalling:
-		hero.cancel_recall()
-	var away: Vector3 = hero.global_position - enemy.global_position
-	away.y = 0.0
-	if away.length() < 0.05:
-		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
-	hero.move_target = hero.global_position + away.normalized() * 4.0
 
 ## 朝指定点走（A* 绕墙；泉水养伤/回城落点用）
 func _walk_to(goal: Vector3) -> void:
@@ -1295,9 +1259,6 @@ func _process(delta):
 		return
 	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
 	_try_counter_attack()
-	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
-	if _react_to_hero_attack(delta):
-		return
 	# 回城读条期间锁定移动：守塔/推线等决策可能把 move_target 改成塔中心，导致看起来在往塔里回城
 	if hero.is_recalling:
 		hero.move_target = Vector3.ZERO
