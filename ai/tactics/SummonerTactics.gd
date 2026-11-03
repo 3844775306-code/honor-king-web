@@ -69,17 +69,44 @@ func set_chase_target(t: Hero) -> void:
 
 
 func _in_chase() -> bool:
-	if chase_target != null and is_instance_valid(chase_target) and chase_target.health > 0.0:
-		return hero.global_position.distance_to(chase_target.global_position) <= AiConfig.CHASE_START_RANGE
+	var t := _flash_chase_target()
+	if t != null:
+		return hero.global_position.distance_to(t.global_position) <= AiConfig.CHASE_START_RANGE
 	return state == AIAction.Type.FINISH_CHASE \
 		and perception.find_nearest_enemy_hero(AiConfig.CHASE_START_RANGE) != null
 
 
-## 闪现逃生：仅血量 <20% 且高威胁时使用
+## 追击闪现的目标：残血追击目标，或换血中的低血目标
+func _flash_chase_target() -> Hero:
+	if chase_target != null and is_instance_valid(chase_target) and chase_target.health > 0.0:
+		return chase_target
+	if trade_planner != null:
+		var t := trade_planner.active_target
+		if t != null and is_instance_valid(t) and t.health > 0.0 \
+				and t.health <= t.actual_max_health * 0.35:
+			return t
+	return null
+
+
+## 闪现逃生：血量 <35% 且被近身；1v1 时要求残血/刚被攻击，2 人以上直接交
 func _in_flee() -> bool:
-	if hero.health >= hero.actual_max_health * 0.20:
+	var ratio: float = hero.health / maxf(hero.actual_max_health, 1.0)
+	if ratio >= 0.35:
 		return false
-	return perception.count_enemy_heroes_near(AiConfig.RETREAT_RANGE) >= AiConfig.FLEE_ENEMY_COUNT
+	var nearest := perception.find_nearest_enemy_hero(8.0)
+	if nearest == null:
+		return false
+	if perception.count_enemy_heroes_near(8.0) >= 2:
+		return true
+	if ratio < 0.20:
+		return true
+	# 1v1：只有刚被该敌人攻击且对方还在近处才交闪现
+	var atk := hero.last_hero_attacker
+	if atk == null or not is_instance_valid(atk) or atk.health <= 0.0:
+		return false
+	var now := Time.get_ticks_msec() * 0.001
+	return now - hero.last_hero_attacker_at <= 2.0 \
+		and hero.global_position.distance_to(atk.global_position) <= 8.0
 
 
 ## 换血窗口：TradePlanner 正在主动换血（无 planner 时用近身交战兜底）
@@ -166,7 +193,9 @@ func _try_flash() -> bool:
 		return true
 	# 追击：向敌人闪（贴脸距离内不浪费）
 	if _in_chase():
-		var enemy2 = chase_target if (chase_target != null and is_instance_valid(chase_target) and chase_target.health > 0.0) else perception.find_nearest_enemy_hero(AiConfig.CHASE_START_RANGE)
+		var enemy2 = _flash_chase_target()
+		if enemy2 == null:
+			enemy2 = perception.find_nearest_enemy_hero(AiConfig.CHASE_START_RANGE)
 		if enemy2 == null:
 			return false
 		if hero.global_position.distance_to(enemy2.global_position) <= AiConfig.MELEE_RANGE:
