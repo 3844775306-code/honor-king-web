@@ -150,6 +150,43 @@ func ally_threat(radius: float = -1.0) -> float:
 	return total
 
 
+## 点是否落在敌方防御塔攻击范围（含安全余量）内
+func _in_enemy_tower_reach(p: Vector3) -> bool:
+	if hero == null or not is_instance_valid(hero) or hero.get_tree() == null:
+		return false
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and (e as Turret).health > 0.0 and int((e as Turret).team) != int(hero.team):
+			if p.distance_to((e as Turret).global_position) <= (e as Turret).attack_range * 0.01 + 2.0:
+				return true
+	return false
+
+
+## 最近的敌方防御塔位置（无塔返回 ZERO）
+func _nearest_enemy_tower_pos(p: Vector3) -> Vector3:
+	if hero == null or not is_instance_valid(hero) or hero.get_tree() == null:
+		return Vector3.ZERO
+	var best := 1.0e9
+	var bp := Vector3.ZERO
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and (e as Turret).health > 0.0 and int((e as Turret).team) != int(hero.team):
+			var d: float = p.distance_to((e as Turret).global_position)
+			if d < best:
+				best = d
+				bp = (e as Turret).global_position
+	return bp
+
+
+## 点到最近敌方防御塔的距离（无塔返回大数）
+func _nearest_enemy_tower_dist(p: Vector3) -> float:
+	if hero == null or not is_instance_valid(hero) or hero.get_tree() == null:
+		return 1.0e9
+	var best := 1.0e9
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and (e as Turret).health > 0.0 and int((e as Turret).team) != int(hero.team):
+			best = minf(best, p.distance_to((e as Turret).global_position))
+	return best
+
+
 func threat_balance(radius: float = -1.0) -> float:
 	return ally_threat(radius) - enemy_threat(radius)
 
@@ -180,9 +217,61 @@ func safe_position() -> Vector3:
 		away = Vector3(hero.global_position.x, 0.0, hero.global_position.z).normalized()
 	if away.length() < 0.1:
 		return Vector3.ZERO
-	var dest := hero.global_position + away.normalized() * 6.0
+	# 候选方向：以远离威胁为基准左右各偏 45°/90°，选「离敌方塔远 + 靠近己方泉水」的点
+	var own_fountain := Vector3(-62.0, 0.0, 62.0) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62.0, 0.0, -62.0)
+	var best_dest := Vector3.ZERO
+	var best_score := -1.0e20
+	for ang in [0.0, 45.0, -45.0, 90.0, -90.0]:
+		var dir3: Vector3 = away.normalized().rotated(Vector3.UP, deg_to_rad(ang))
+		var cand: Vector3 = hero.global_position + dir3 * 6.0
+		var half := Config.MAP_SIZE / 2.0
+		cand.x = clampf(cand.x, -half, half)
+		cand.z = clampf(cand.z, -half, half)
+		if _in_enemy_tower_reach(cand):
+			continue
+		var tower_d := _nearest_enemy_tower_dist(cand)
+		var score := tower_d - cand.distance_to(own_fountain) * 0.45
+		if score > best_score:
+			best_score = score
+			best_dest = cand
+	if best_dest == Vector3.ZERO:
+		# 所有方向都在敌方塔范围内（例如已经被压到敌方塔下）：朝己方泉水方向的扇区里，
+		# 选「离敌方塔最远」的方向撤，避免继续往敌方塔方向跑。
+		var to_base := own_fountain - hero.global_position
+		to_base.y = 0.0
+		if to_base.length() > 0.1:
+			var base_dir := to_base.normalized()
+			var dirs: Array[Vector3] = []
+			for ang in [0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0]:
+				dirs.append(base_dir.rotated(Vector3.UP, deg_to_rad(ang)))
+			# 己方泉水方向若正好穿过最近的敌方塔：补一组「背离塔」的方向，优先拉开
+			var nt := _nearest_enemy_tower_pos(hero.global_position)
+			if nt != Vector3.ZERO:
+				var away_t := hero.global_position - nt
+				away_t.y = 0.0
+				if away_t.length() > 0.1:
+					for ang in [0.0, 30.0, -30.0, 60.0, -60.0]:
+						dirs.append(away_t.normalized().rotated(Vector3.UP, deg_to_rad(ang)))
+			var fb_best := Vector3.ZERO
+			var fb_score := -1.0e20
+			for d3 in dirs:
+				var cand := hero.global_position + d3 * 6.0
+				var half2 := Config.MAP_SIZE / 2.0
+				cand.x = clampf(cand.x, -half2, half2)
+				cand.z = clampf(cand.z, -half2, half2)
+				var score := _nearest_enemy_tower_dist(cand) * 2.0 - cand.distance_to(own_fountain) * 0.1
+				if score > fb_score:
+					fb_score = score
+					fb_best = cand
+			best_dest = fb_best
+	var dest := best_dest
 	var half := Config.MAP_SIZE / 2.0
 	dest.x = clampf(dest.x, -half, half)
 	dest.z = clampf(dest.z, -half, half)
 	return dest
+
+
+
+
+
 

@@ -1987,7 +1987,12 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 		hero.move_target = Vector3.ZERO
 		_finish_current_action()
 		return
-	# 只走 TradePlanner 给出的安全点，不用最近塔/泉水替代。
+	# 撤退点不能落在敌方塔范围（TradePlanner safe_position 可能被威胁质心带偏到敌方塔方向）
+	if _dash_landing_in_enemy_turret(goal):
+		var safe_goal := _choose_safe_retreat_goal()
+		if safe_goal != Vector3.ZERO:
+			goal = safe_goal
+	# 只走安全点。
 	_follow_safe_route(goal)
 
 # 选撤退目标：己方塔 + 泉水，按 A* 路径风险和距离评分。
@@ -2038,7 +2043,8 @@ func _follow_safe_route(goal: Vector3) -> void:
 		return
 	while _safe_route_index < _safe_route_path.size() \
 			and (hero.global_position.distance_to(_safe_route_path[_safe_route_index]) < 1.4 \
-				or _waypoint_inside_tower(_safe_route_path[_safe_route_index])):
+				or _waypoint_inside_tower(_safe_route_path[_safe_route_index]) \
+				or _dash_landing_in_enemy_turret(_safe_route_path[_safe_route_index])):
 		_safe_route_index += 1
 	if _safe_route_index >= _safe_route_path.size():
 		hero.move_target = goal
@@ -2923,6 +2929,8 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
+
 
 
 
