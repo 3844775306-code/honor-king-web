@@ -256,6 +256,8 @@ func _ready():
 		_generate_jungle_arc_walls()
 		return
 	add_to_group("battle_manager")
+	# --damage-audit：单机/训练营统一开启伤害审计日志
+	GameEntity.damage_audit_enabled = "--damage-audit" in OS.get_cmdline_user_args()
 	# AI 思考过程覆盖层（F3 开关；懒创建面板）
 	var _dbg_cl := CanvasLayer.new()
 	_dbg_cl.name = "AIDebugLayer"
@@ -728,7 +730,12 @@ func _setup_training_hud() -> void:
 
 	# 原英雄头像位置：木偶详细统计（直接覆盖头像区）
 	_training_stats_panel = PanelContainer.new()
-	_training_stats_panel.position = Vector2(500 + UiKit.safe_left(), 28 + UiKit.safe_top())
+	# 贴右上角布局：不再用固定 x=500 与左侧训练面板重叠（高缩放下训练面板会更宽）
+	_training_stats_panel.anchor_left = 1.0
+	_training_stats_panel.anchor_right = 1.0
+	_training_stats_panel.offset_left = -540.0 - UiKit.safe_right()
+	_training_stats_panel.offset_right = -40.0 - UiKit.safe_right()
+	_training_stats_panel.offset_top = 28.0 + UiKit.safe_top()
 	_training_stats_panel.custom_minimum_size = Vector2(500, 0)
 	_training_stats_panel.add_theme_stylebox_override("panel", UiKit.skin_card(Color(0.55, 0.78, 1.0), false, 0.96))
 	root.add_child(_training_stats_panel)
@@ -915,6 +922,7 @@ func _training_clear_dummies() -> void:
 		if is_instance_valid(d):
 			d.queue_free()
 	_training_dummies.clear()
+	_training_refresh_dummy_stats()
 
 
 func _training_set_ai_count(n: int) -> void:
@@ -983,9 +991,10 @@ func _training_refresh_dummy_stats() -> void:
 	var keys: Array = groups.keys()
 	keys.sort_custom(func(a, b): return float(groups[a]) > float(groups[b]))
 	var lines: Array = []
-	lines.append("[color=#ffd966][b]HP[/b]  [color=#e8f2ff]%d / 10000[/color]    [color=#ffd966][b]防御[/b]  [color=#e8f2ff]%.0f[/color]" % [int(d.health), _training_dummy_armor])
-	lines.append("[color=#9fd7ff]攻击时长[/color] [color=#ffffff][b]%.2fs[/b][/color]    [color=#9fd7ff]总伤害[/color] [color=#ffffff][b]%d[/b][/color]    [color=#9fd7ff]DPS[/color] [color=#ffd966][b]%.0f[/b][/color]" % [
-		d.active_time(), int(st.get("total", 0.0)), d.dps()])
+	var dummy_max: float = maxf(d.actual_max_health, 1.0)
+	lines.append("[color=#ffd966][b]HP[/b]  [color=#e8f2ff]%d / %d[/color]    [color=#ffd966][b]防御[/b]  [color=#e8f2ff]%.0f[/color]" % [int(d.health), int(dummy_max), d.armor])
+	lines.append("[color=#9fd7ff]攻击时长[/color] [color=#ffffff][b]%.2fs[/b][/color]    [color=#9fd7ff]命中[/color] [color=#ffffff][b]%d[/b][/color]    [color=#9fd7ff]总伤害[/color] [color=#ffffff][b]%d[/b][/color]    [color=#9fd7ff]DPS[/color] [color=#ffd966][b]%.0f[/b][/color]" % [
+		d.active_time(), int(st.get("hits", 0)), int(st.get("total", 0.0)), d.dps()])
 	lines.append("[color=#7fe3a0]物理 %d[/color]    [color=#c9a7ff]法术 %d[/color]    [color=#ff9b7a]真伤 %d[/color]" % [
 		int(st.get("phys", 0.0)), int(st.get("magic", 0.0)), int(st.get("true", 0.0))])
 	lines.append("[color=#5e7698]──────── 伤害来源 ────────[/color]")

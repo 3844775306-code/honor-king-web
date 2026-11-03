@@ -5,8 +5,9 @@ extends Minion
 const DeathRecap = preload("res://scripts/ui/DeathRecapView.gd")
 
 var stats := {
-	"active_time": 0.0, "total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
-	"groups": {}, "last_hit_ms": 0,
+	"first_hit_ms": 0, "last_hit_ms": 0, "hits": 0,
+	"total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
+	"groups": {},
 }
 var _pending_skill_id := 0
 var _pending_true := false
@@ -112,16 +113,16 @@ func bar_anchor_height() -> float:
 
 
 func reset_stats() -> void:
-	stats = {"active_time": 0.0, "total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0,
-		"groups": {}, "last_hit_ms": 0}
+	stats = {"first_hit_ms": 0, "last_hit_ms": 0, "hits": 0,
+		"total": 0.0, "phys": 0.0, "magic": 0.0, "true": 0.0, "groups": {}}
 	_refresh_stats_label()
 
 
 func _refresh_stats_label() -> void:
 	if _stats_label == null or not is_instance_valid(_stats_label):
 		return
-	_stats_label.text = "训练木偶\n攻击 %.1fs  总伤害 %d\nDPS %.0f  物/法/真 %d/%d/%d" % [
-		active_time(), int(stats.get("total", 0.0)), dps(),
+	_stats_label.text = "训练木偶\n攻击 %.2fs  命中 %d  总伤害 %d\nDPS %.0f  物/法/真 %d/%d/%d" % [
+		active_time(), int(stats.get("hits", 0)), int(stats.get("total", 0.0)), dps(),
 		int(stats.get("phys", 0.0)), int(stats.get("magic", 0.0)), int(stats.get("true", 0.0))]
 
 
@@ -144,15 +145,10 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 func _damage_feedback(actual: float, is_magic: bool) -> void:
 	if actual > 0.0:
 		var now := Time.get_ticks_msec()
-		var last: int = int(stats.get("last_hit_ms", 0))
-		if last > 0:
-			var gap := float(now - last) / 1000.0
-			# 两次伤害间隔在攻击窗口内：整段计入；超过 0.5s 则只结算上一段最后 0.5s
-			if gap <= 0.5:
-				stats.active_time = float(stats.get("active_time", 0.0)) + gap
-			else:
-				stats.active_time = float(stats.get("active_time", 0.0)) + 0.5
+		if int(stats.get("first_hit_ms", 0)) <= 0:
+			stats["first_hit_ms"] = now
 		stats["last_hit_ms"] = now
+		stats["hits"] = int(stats.get("hits", 0)) + 1
 		stats["total"] = float(stats.get("total", 0.0)) + actual
 		if _pending_true:
 			stats["true"] = float(stats.get("true", 0.0)) + actual
@@ -168,13 +164,13 @@ func _damage_feedback(actual: float, is_magic: bool) -> void:
 	super._damage_feedback(actual, is_magic)
 
 
-## 攻击总时长：已结算段 + 当前最后一次伤害后 up to 0.5s（超过即暂停）
+## 攻击总时长：从第一次伤害到最近一次伤害的真实时间差（不再把 >0.5s 的间隔截断）
 func active_time() -> float:
-	var t: float = float(stats.get("active_time", 0.0))
+	var first: int = int(stats.get("first_hit_ms", 0))
 	var last: int = int(stats.get("last_hit_ms", 0))
-	if last > 0:
-		t += minf(float(Time.get_ticks_msec() - last) / 1000.0, 0.5)
-	return t
+	if first <= 0 or last <= 0:
+		return 0.0
+	return maxf(float(last - first) / 1000.0, 0.1)
 
 
 func dps() -> float:
