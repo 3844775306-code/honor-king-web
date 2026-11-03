@@ -258,6 +258,11 @@ func _ready():
 	add_to_group("battle_manager")
 	# --damage-audit：单机/训练营统一开启伤害审计日志
 	GameEntity.damage_audit_enabled = "--damage-audit" in OS.get_cmdline_user_args()
+	if GameEntity.damage_audit_enabled:
+		var _stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_").replace(" ", "_")
+		var _mode := "training" if "--training-camp" in OS.get_cmdline_user_args() else "battle"
+		GameEntity.damage_audit_path = "user://damage_audit_%s_%s.log" % [_mode, _stamp]
+		print("[DMG_AUDIT] 本局日志: ", ProjectSettings.globalize_path(GameEntity.damage_audit_path))
 	# AI 思考过程覆盖层（F3 开关；懒创建面板）
 	var _dbg_cl := CanvasLayer.new()
 	_dbg_cl.name = "AIDebugLayer"

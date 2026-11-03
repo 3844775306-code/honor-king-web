@@ -55,6 +55,9 @@ var _net_prev: Vector3 = Vector3.ZERO
 static var debug_show_path: bool = true   # 默认显示AI移动路径（F4可关）
 static var debug_show_ai_chip: bool = true  # 显示AI决策胶囊（F5可关）
 static var damage_audit_enabled: bool = false  # --damage-audit：单机/训练营伤害审计日志
+static var damage_audit_path: String = ""      # 本局审计文件（user://）
+static var _damage_audit_file: FileAccess = null
+static var _damage_audit_open_path: String = ""
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
 const DEBUG_PATH_Y := 0.22          # 抬到兵线面(0.14)/高地砖(0.177)之上，否则路径被地面盖住看不见
 var _astar_log_cd: float = 0.0
@@ -772,10 +775,20 @@ func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt: float = bm.game_time if bm != null else 0.0
 	var sn: String = str(src.display_name) if src != null and is_instance_valid(src) else "null"
-	print("[DMG_AUDIT] t=%.1f src=%s tgt=%s skill=%d magic=%d crit=%d raw=%.1f pre=%.1f res=%.1f flat_pen=%.1f pen_pct=%.2f expected=%.1f after_mit=%.1f actual=%.1f shield=%.1f post_delta=%.1f" % [
+	var line := "[DMG_AUDIT] t=%.1f src=%s tgt=%s skill=%d magic=%d crit=%d raw=%.1f pre=%.1f res=%.1f flat_pen=%.1f pen_pct=%.2f expected=%.1f after_mit=%.1f actual=%.1f shield=%.1f post_delta=%.1f" % [
 		gt, sn, str(display_name), skill_id, 1 if is_magic else 0, 1 if is_crit else 0,
 		raw, pre, res, flat_pen, pen_pct, expected, after_mit, final_actual, shield_absorbed,
-		after_mit - expected])
+		after_mit - expected]
+	print(line)
+	if damage_audit_path != "":
+		if _damage_audit_file == null or _damage_audit_open_path != damage_audit_path:
+			if _damage_audit_file != null:
+				_damage_audit_file.close()
+			_damage_audit_open_path = damage_audit_path
+			_damage_audit_file = FileAccess.open(damage_audit_path, FileAccess.WRITE)
+		if _damage_audit_file != null:
+			_damage_audit_file.store_line(line)
+			_damage_audit_file.flush()
 
 
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id:int=0, pen_percent: float = 0.0, is_crit_forced: int = -1):
