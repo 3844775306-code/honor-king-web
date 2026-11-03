@@ -135,6 +135,9 @@ var _base_state_snap: Dictionary = {}
 var _base_state_captured := false
 var channeling_skill_index: int = -1
 var channeling_preview_pos: Vector3 = Vector3.ZERO
+# 安琪拉大招引导态：期间只转向不移动；再次按大招取消
+var angela_ult_active: bool = false
+var angela_ult_beam: Node3D = null
 var casting_skill: bool = false
 var aim_slot: int = -1                  # 正在按住瞄准的技能槽（-1=没在瞄准；小地图瞄准线用）
 var aim_world: Vector3 = Vector3.ZERO   # 当前瞄准点（世界坐标）
@@ -2202,6 +2205,28 @@ func _physics_process(delta):
 		# 移动端摇杆：世界方向移动（屏幕右→+X，屏幕上→-Z），并朝移动方向转向
 		# 玩家在红方时镜头绕Y轴转180°：屏幕方向整体取反，保持与蓝方同一手感
 		var cam_flip := -1.0 if Config.player_team == Config.Team.ENEMY else 1.0
+		var _angela_lock: bool = angela_ult_active and display_name == "安琪拉"
+		if _angela_lock:
+			# 安琪拉大招期间不可移动，只允许调整朝向；光束方向由 rotation.y 实时读取
+			var face_dir := Vector3.ZERO
+			if joy_vec.length() > 0.1:
+				face_dir = Vector3(joy_vec.x * cam_flip, 0.0, -joy_vec.y * cam_flip)
+			elif input_dir.length() > 0.1:
+				if _net_move_mode() == TouchController.MOVE_MODE_TURN and absf(input_dir.x) > 0.1:
+					turn_timer -= delta
+					if turn_timer <= 0.0:
+						rotation.y += input_dir.x * deg_to_rad(-15.0) * cam_flip
+						turn_timer = 0.05
+				else:
+					face_dir = Vector3(input_dir.x * cam_flip, 0.0, -input_dir.z * cam_flip)
+			elif is_ai and manual_target and is_instance_valid(manual_target):
+				face_dir = manual_target.global_position - global_position
+				face_dir.y = 0.0
+			if face_dir.length() > 0.01:
+				rotation.y = atan2(face_dir.x, face_dir.z)
+			joy_vec = Vector2.ZERO
+			input_dir = Vector3.ZERO
+			move_target = Vector3.ZERO
 		if joy_vec.length() > 0.1:
 			move_vec = Vector3(joy_vec.x * cam_flip, 0, -joy_vec.y * cam_flip).normalized()
 			move_target = Vector3.ZERO
@@ -2243,6 +2268,10 @@ func _physics_process(delta):
 		# AI 回城引导中：不能移动/攻击/施法（玩家侧由移动输入取消回城，AI 直接锁住动作）
 		if is_ai and is_recalling:
 			move_vec = Vector3.ZERO
+		if _angela_lock:
+			# 大招引导期间完全禁止位移（转向已在上面处理）
+			move_vec = Vector3.ZERO
+			move_target = Vector3.ZERO
 		# 走A：攻击瞬间锁移动 0.5s，让攻击动画原地播完（玩家与 AI 一致；锁定期仍可继续普攻）
 		if Time.get_ticks_msec() * 0.001 < _move_lock_until:
 			move_vec = Vector3.ZERO
@@ -2280,7 +2309,7 @@ func _physics_process(delta):
 			_clamp_to_map_edge()
 		else:
 			# 自动追击：锁定目标在「射程 + 追击距离」内但还没进射程 → 站定时自动靠近（移动输入会打断）
-			if not is_ai and manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
+			if not is_ai and not _angela_lock and manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
 				var _chase_m := _auto_chase_margin()
 				if _chase_m > 0.0:
 					var _cdir: Vector3 = manual_target.global_position - global_position
@@ -2306,7 +2335,7 @@ func _physics_process(delta):
 				var auto_atk_on: bool = PlayerPrefs.opt_bool("auto_atk", true)
 				# 自动普攻只在真正站定时触发；自动追击的移动帧只走路，不边追边打。
 				# 按住普攻/手动操作保留走A能力，不受此限制。
-				var should_attack = kai_enh_gate and not casting_skill and not (is_ai and is_recalling) \
+				var should_attack = not (angela_ult_active and display_name == "安琪拉") and kai_enh_gate and not casting_skill and not (is_ai and is_recalling) \
 					and (is_ai or ((Input.is_action_pressed("ui_accept") or TouchController.get_attack_held()) and can_act) \
 						or (auto_atk_on and not auto_chase_moved and manual_target and is_instance_valid(manual_target)) \
 						or (mode_auto and not auto_chase_moved))
@@ -4387,6 +4416,10 @@ func _handle_skill_input(delta):
 	# 触摸按下：进入瞄准（不立即施放，等松开）；太乙Q特例：炼药中再按 → 立即引爆
 	for i in range(3):
 		if TouchController.consume_skill_press(i):
+			# 安琪拉大招引导中再次按大招：取消引导
+			if angela_ult_active and i == 2:
+				cancel_angela_ult()
+				continue
 			# 沈梦溪W：触摸再按引爆（疾跑引燃中）
 			if shen_fuse_active and i == 1:
 				_shen_w_explode()
@@ -4405,6 +4438,10 @@ func _handle_skill_input(delta):
 	# 键盘/桌面：非引导技能按下即施放（瞄准=鼠标位置）
 	for i in range(3):
 		if Input.is_action_just_pressed("skill_%d" % i) and i < skills.size() and silence_timer <= 0:
+			# 安琪拉大招引导中再次按大招：取消引导
+			if angela_ult_active and i == 2:
+				cancel_angela_ult()
+				continue
 			# 沈梦溪W：键盘再按引爆（疾跑引燃中）
 			if shen_fuse_active and i == 1:
 				_shen_w_explode()
@@ -4708,10 +4745,23 @@ func _try_walk_attack() -> void:
 	_perform_attack(target)
 	attack_timer = 1.0 / attack_speed
 
+## 取消安琪拉大招引导（再次按大招 / AI 判断需要移动时）
+func cancel_angela_ult() -> void:
+	if not angela_ult_active:
+		return
+	angela_ult_active = false
+	if angela_ult_beam != null and is_instance_valid(angela_ult_beam):
+		Vfx.fade_out(angela_ult_beam, 0.12)
+	angela_ult_beam = null
+
+
 func _start_casting(index: int, skill: Skill, target_pos: Vector3):
 	aim_slot = -1   # 松手施放：小地图瞄准线立即消失
 	# AI 回城引导中禁止施法（玩家施法/移动会取消回城，AI 直接不允许动作）
 	if is_ai and is_recalling:
+		return
+	# 安琪拉大招引导期间：除再次按大招取消外，不允许释放其他技能/普攻
+	if angela_ult_active and display_name == "安琪拉" and index != 2:
 		return
 	# 前摇期间重复按技能键忽略（不重置 pending / 不叠加前摇）
 	if casting_skill and _cast_windup_left > 0.0:

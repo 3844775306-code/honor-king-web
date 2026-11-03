@@ -1049,6 +1049,11 @@ func _process(delta):
 		has_respawned_recently = false
 		return
 
+	# 安琪拉大招引导：持续把光束转向目标；目标离开光束范围/需要生存/移动时取消引导
+	if hero.angela_ult_active:
+		if _handle_angela_ult(delta):
+			return
+
 	# 泉水养伤是最高常态约束：进泉/回城落点附近且未回满时，任何任务都不能把 AI 拉出泉。
 	# 3.6m 是泉水判定圈；8m 是缓冲圈，防止单位互相推挤把 AI 挤出判据圈后直接离泉。
 	var spring := Vector3(-62, 0, 62) if hero.team == Config.Team.PLAYER else Vector3(62, 0, -62)
@@ -1203,6 +1208,41 @@ func _process(delta):
 # ==================== 决策 ====================
 # 每个 think tick 评估一次：先处理高地/塔防御与撤退/回城，再交给分路/打野策略
 # ==================== 调试：思考过程 ====================
+
+## 安琪拉大招引导期间的AI控制：调整光束方向；必要时取消引导去移动/保命
+func _handle_angela_ult(delta: float) -> bool:
+	if hero == null or not is_instance_valid(hero) or not hero.angela_ult_active:
+		return false
+	# 需要生存/回城/移动的行为：立刻取消引导
+	if current_action != null:
+		var ty: int = int(current_action.type)
+		if ty in [AIAction.Type.SAFE_RECALL, AIAction.Type.RETURN_TO_BASE, AIAction.Type.TOWER_ESCAPE,
+				AIAction.Type.DODGE, AIAction.Type.HEALTH_PACK]:
+			hero.cancel_angela_ult()
+			return false
+	if hero.health < hero.actual_max_health * 0.25:
+		hero.cancel_angela_ult()
+		return false
+	var target: GameEntity = hero.manual_target
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		target = perception.find_nearest_enemy_hero(10.0)
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		target = perception.find_nearest_enemy_minion(10.0)
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		hero.cancel_angela_ult()
+		return false
+	var to_t := target.global_position - hero.global_position
+	to_t.y = 0.0
+	if to_t.length() > 9.5:
+		# 目标已离开光束射程：取消大招，交给普通AI移动追击
+		hero.cancel_angela_ult()
+		return false
+	if to_t.length() > 0.01:
+		hero.rotation.y = atan2(to_t.x, to_t.z)
+	# 引导期间不移动、不放其他技能，继续由 Hero 的 channel 结算光束
+	delta = maxf(delta, 0.0)
+	return true
+
 
 ## 普攻间隙随机走A：以目标为圆心横移一小段，半径始终限制在普攻距离内
 func _ai_strafe(delta: float) -> void:

@@ -1075,9 +1075,11 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				a2_vis.material_override = a2_mat
 				a2_bullet.add_child(a2_vis)
 				hero.get_parent().add_child(a2_bullet)
-			3:  # 炽热光辉
+			3:  # 炽热光辉：3秒引导，期间只转向不移动；再次按大招取消
 				var a3_ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
 				var a3_dir = Vector3(cos(a3_ang), 0, -sin(a3_ang))
+				# 面朝施法方向，后续光束方向实时跟随英雄朝向
+				hero.rotation.y = atan2(a3_dir.x, a3_dir.z)
 				# 护盾+霸体
 				var a3_shield = 400 + 450*level + hero.actual_ability_power * 0.88
 				hero.shield_remaining = max(hero.shield_remaining, a3_shield)
@@ -1085,10 +1087,17 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				hero.bt_timer = 3.0
 				# 视觉：多层能量光束（外层柔光 + 白热内核 + 螺旋光带 + 脉动端头 + 枪口光）
 				var a3_beam: Node3D = Vfx.angela_beam(hero.global_position + Vector3.UP * 1.0, a3_dir, 10.0, 1.2)
-				# 每0.25秒造成伤害，持续3秒
+				hero.angela_ult_active = true
+				hero.angela_ult_beam = a3_beam
+				# 每0.25秒造成伤害，持续3秒；方向/位置每 tick 跟随英雄
 				for _tick in range(12):
 					await hero.get_tree().create_timer(0.25).timeout
-					if hero.health <= 0: break
+					if not hero.angela_ult_active or hero.health <= 0:
+						break
+					a3_dir = Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y))
+					if a3_dir.length() < 0.01:
+						a3_dir = Vector3.FORWARD
+					a3_dir = a3_dir.normalized()
 					var b_origin = hero.global_position + Vector3.UP * 1.0
 					for ent in hero.get_tree().get_nodes_in_group("entities"):
 						if ent != hero and ent.health > 0 and ent.team != hero.team:
@@ -1099,9 +1108,14 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 								if perp < 1.2:
 									var a3_dmg = 110 + 40*level + hero.actual_ability_power * 0.21
 									ent.take_damage(a3_dmg, hero, true, 3, 0)
-					# 更新光束位置（跟随英雄移动；方向在施法时锁定）
-					a3_beam.position = hero.global_position + Vector3.UP * 1.0
-				Vfx.fade_out(a3_beam, 0.25)
+					if is_instance_valid(a3_beam):
+						a3_beam.position = b_origin
+						a3_beam.rotation.y = atan2(a3_dir.x, a3_dir.z)
+				if is_instance_valid(a3_beam):
+					Vfx.fade_out(a3_beam, 0.25)
+				if hero.angela_ult_beam == a3_beam:
+					hero.angela_ult_beam = null
+				hero.angela_ult_active = false
 		# ==================== 妲己 ====================
 		"妲己":match  skill_id:
 			1:  # 灵魂冲击波：5米宽冲击波，飞行10米
