@@ -80,6 +80,65 @@ static func auto_id(hero_name: String, seed: int) -> String:
 	return str((arr[idx] as Dictionary).get("id", "classic"))
 
 
+const SKIN_SHADER_CODE := """
+shader_type spatial;
+render_mode diffuse_burley, specular_schlick_ggx;
+
+uniform vec4 base_color : source_color = vec4(1.0);
+uniform sampler2D base_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec4 tint_color : source_color = vec4(1.0);
+uniform vec4 accent_color : source_color = vec4(0.6, 0.8, 1.0, 1.0);
+uniform float tint_strength = 0.55;
+uniform float metallic_base = 0.08;
+uniform float roughness_base = 0.72;
+uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap;
+uniform bool has_normal = false;
+
+varying vec3 v_local;
+
+void vertex() {
+	v_local = VERTEX;
+}
+
+void fragment() {
+	vec4 base = texture(base_tex, UV) * base_color;
+	// 上下渐变 + 斜向流光条：保留原材质纹理，不再整身纯色
+	float h = clamp(v_local.y * 0.28 + 0.5, 0.0, 1.0);
+	vec3 skin = mix(tint_color.rgb, accent_color.rgb, h * 0.55);
+	float stripe = smoothstep(0.55, 0.92, sin((v_local.x + v_local.z * 0.7 + v_local.y * 0.45) * 12.0) * 0.5 + 0.5);
+	vec3 colored = mix(base.rgb, base.rgb * skin * 1.25 + vec3(0.025), tint_strength);
+	colored = mix(colored, colored * 1.18 + vec3(0.03), stripe * 0.28);
+	ALBEDO = colored;
+	METALLIC = metallic_base;
+	ROUGHNESS = roughness_base;
+	float rim = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 2.2);
+	EMISSION = accent_color.rgb * (0.035 + stripe * 0.075 + rim * 0.12);
+	if (has_normal) {
+		NORMAL_MAP = texture(normal_tex, UV).rgb;
+		NORMAL_MAP_DEPTH = 1.0;
+	}
+}
+"""
+
+static var _skin_shader: Shader = null
+static var _skin_white_tex: ImageTexture = null
+
+
+static func _get_skin_shader() -> Shader:
+	if _skin_shader == null:
+		_skin_shader = Shader.new()
+		_skin_shader.code = SKIN_SHADER_CODE
+	return _skin_shader
+
+
+static func _get_white_tex() -> ImageTexture:
+	if _skin_white_tex == null:
+		var img := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+		img.fill(Color.WHITE)
+		_skin_white_tex = ImageTexture.create_from_image(img)
+	return _skin_white_tex
+
+
 ## 把皮肤应用到英雄模型根（或 HeroPreview 的 PreviewModel 根）
 static func apply_to(root: Node3D, hero_name: String, skin_id: String) -> void:
 	if root == null or not is_instance_valid(root):
@@ -115,21 +174,33 @@ static func _tint_meshes(node: Node, body: Color, accent: Color) -> void:
 				if mat == null:
 					mat = mi.mesh.surface_get_material(si)
 				if mat is StandardMaterial3D:
-					var m := (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
-					var base := m.albedo_color
-					m.albedo_color = base.lerp(Color(body.r, body.g, body.b, base.a), 0.72)
-					m.emission_enabled = true
-					m.emission = accent
-					m.emission_energy_multiplier = maxf(m.emission_energy_multiplier, 0.85)
-					m.roughness = clampf(m.roughness * 0.92, 0.18, 0.9)
-					mi.set_surface_override_material(si, m)
+					var m := mat as StandardMaterial3D
+					# 透明材质（翅膀/纱/特效件）保持原样，避免被不透明皮肤材质覆盖
+					if m.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED:
+						continue
+					var sm := ShaderMaterial.new()
+					sm.shader = _get_skin_shader()
+					sm.set_shader_parameter("base_color", m.albedo_color)
+					sm.set_shader_parameter("base_tex", m.albedo_texture if m.albedo_texture != null else _get_white_tex())
+					sm.set_shader_parameter("tint_color", body)
+					sm.set_shader_parameter("accent_color", accent)
+					sm.set_shader_parameter("tint_strength", 0.55)
+					sm.set_shader_parameter("metallic_base", maxf(m.metallic, 0.06))
+					sm.set_shader_parameter("roughness_base", clampf(m.roughness * 0.86, 0.24, 0.9))
+					sm.set_shader_parameter("normal_tex", m.normal_texture if m.normal_texture != null else _get_white_tex())
+					sm.set_shader_parameter("has_normal", m.normal_texture != null)
+					mi.set_surface_override_material(si, sm)
 				elif mat == null:
-					var m2 := StandardMaterial3D.new()
-					m2.albedo_color = body
-					m2.emission_enabled = true
-					m2.emission = accent
-					m2.emission_energy_multiplier = 0.7
-					mi.set_surface_override_material(si, m2)
+					var sm2 := ShaderMaterial.new()
+					sm2.shader = _get_skin_shader()
+					sm2.set_shader_parameter("base_color", Color.WHITE)
+					sm2.set_shader_parameter("base_tex", _get_white_tex())
+					sm2.set_shader_parameter("tint_color", body)
+					sm2.set_shader_parameter("accent_color", accent)
+					sm2.set_shader_parameter("tint_strength", 0.6)
+					sm2.set_shader_parameter("metallic_base", 0.06)
+					sm2.set_shader_parameter("roughness_base", 0.74)
+					mi.set_surface_override_material(si, sm2)
 		_tint_meshes(child, body, accent)
 
 
@@ -171,10 +242,21 @@ static func _add_cape(root: Node3D, accent: Color) -> void:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.albedo_color = Color(accent.r * 0.7, accent.g * 0.7, accent.b * 0.7, 0.42)
+	var grad := Gradient.new()
+	grad.colors = PackedColorArray([Color(accent.r * 0.45, accent.g * 0.45, accent.b * 0.45, 0.16),
+		Color(accent.r, accent.g, accent.b, 0.58)])
+	grad.offsets = PackedFloat32Array([0.0, 1.0])
+	var gtex := GradientTexture2D.new()
+	gtex.width = 16
+	gtex.height = 64
+	gtex.fill_from = Vector2(0, 0)
+	gtex.fill_to = Vector2(0, 1)
+	gtex.gradient = grad
+	m.albedo_texture = gtex
+	m.albedo_color = Color.WHITE
 	m.emission_enabled = true
 	m.emission = accent
-	m.emission_energy_multiplier = 0.9
+	m.emission_energy_multiplier = 0.55
 	cape.material_override = m
 	cape.position = Vector3(0.0, 1.15, -0.75)
 	cape.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
