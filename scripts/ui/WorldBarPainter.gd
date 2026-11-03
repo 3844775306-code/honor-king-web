@@ -151,6 +151,13 @@ func _draw_unit(r: Dictionary) -> void:
 					Color(1, 1, 1, 0.14), 1.0)
 				tx += step
 
+	# 塔盾下一触发点：白色短线（仅前4分钟由 HUD 下发 shield_next）
+	var _shield_next: float = float(r.get("shield_next", -1.0))
+	if _shield_next > 0.0:
+		var _sx: float = p.x + w * clampf(_shield_next, 0.0, 1.0)
+		draw_line(Vector2(_sx, p.y - 2.0), Vector2(_sx, p.y + h + 2.0), Color(0.02, 0.03, 0.05, 0.70), 3.0)
+		draw_line(Vector2(_sx, p.y - 2.0), Vector2(_sx, p.y + h + 2.0), Color(1.0, 1.0, 1.0, 0.95), 1.5)
+
 	# 受伤闪橙（渐变段 + 亮边）
 	var ft: float = float(r.get("flash_t", 0.0))
 	if ft > 0.0:

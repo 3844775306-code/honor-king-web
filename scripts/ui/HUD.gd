@@ -215,12 +215,25 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 			if hp < _aa:
 				row["last_hit"] = true
 	row["shield_icon"] = false
+	row["shield_next"] = -1.0
 	if is_turret:
 		var turret = entity as Turret
 		if turret.interfere_timer > 0 and turret.interfere_max > 0:
 			row["interfere"] = clampf(turret.interfere_timer / turret.interfere_max, 0.0, 1.0)
 		row["shield"] = float(turret.tower_shield)
 		row["shield_icon"] = turret.shield_protected_no_minion
+		# 前 4 分钟：在血条上标出下一个塔盾触发点（75/50/25%）
+		if _bm != null and _bm.game_time < 240.0 and turret.health > 0.0:
+			var _hr: float = clampf(turret.health / maxf(1.0, turret.max_health), 0.0, 1.0)
+			var _candidates := [
+				[0.75, turret.shield_stage_75],
+				[0.50, turret.shield_stage_50],
+				[0.25, turret.shield_stage_25],
+			]
+			for _cand in _candidates:
+				if not bool(_cand[1]) and _hr > float(_cand[0]):
+					row["shield_next"] = float(_cand[0])
+					break
 	else:
 		row["shield"] = float(entity.shield_remaining)
 		if is_epic:
@@ -259,4 +272,3 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 			if cnt > 0:
 				mlist.append({"name": str(src.display_name), "count": cnt, "type": ""})
 	_row_buf.append(row)
-
