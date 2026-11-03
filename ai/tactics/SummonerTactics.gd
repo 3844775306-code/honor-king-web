@@ -157,13 +157,27 @@ func _flash_end(dir: Vector3) -> Vector3:
 	var from: Vector3 = hero.global_position
 	var end: Vector3 = from + dir * AiConfig.FLASH_DISTANCE
 	if not PathFinder.is_walkable_world(end):
-		end = PathFinder.nearest_walkable_world(end, dir)
-		if end == Vector3.ZERO:
-			return Vector3.ZERO
-		if from.distance_to(end) < 1.0:
-			return Vector3.ZERO
-	if from.distance_to(end) > AiConfig.FLASH_DISTANCE + 0.5:
-		return Vector3.ZERO      # 推近的可落点超过闪现距离，不能穿
+		var snapped := PathFinder.nearest_walkable_world(end, dir)
+		snapped.y = from.y
+		if PathFinder.is_walkable_world(snapped) and from.distance_to(snapped) >= 1.0:
+			end = snapped
+		else:
+			var found := false
+			for extra in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]:
+				var cand: Vector3 = from + dir * (AiConfig.FLASH_DISTANCE + extra)
+				var half := Config.MAP_SIZE * 0.5
+				cand.x = clampf(cand.x, -half, half)
+				cand.z = clampf(cand.z, -half, half)
+				if PathFinder.is_walkable_world(cand):
+					end = cand
+					found = true
+					break
+			if not found:
+				return Vector3.ZERO
+	if from.distance_to(end) < 1.0:
+		return Vector3.ZERO
+	if from.distance_to(end) > AiConfig.FLASH_DISTANCE + 2.0:
+		return Vector3.ZERO
 	return end
 
 

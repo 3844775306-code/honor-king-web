@@ -2970,6 +2970,36 @@ func _auto_chase_margin() -> float:
 	return 3.0
 
 # 位移落点（考虑墙体）：沿 dir 前进 dist，撞墙则停在墙前 0.4m
+## 闪现落点：允许穿墙，但不允许落在墙里；落点被墙挡住时取最近可站点
+func flash_landing(dir: Vector3, dist: float = 5.0) -> Vector3:
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length() < 0.01:
+		return global_position
+	flat = flat.normalized()
+	var from := global_position
+	var half := Config.MAP_SIZE * 0.5
+	var direct := from + flat * dist
+	direct.x = clampf(direct.x, -half, half)
+	direct.z = clampf(direct.z, -half, half)
+	if PathFinder.is_walkable_world(direct):
+		return direct if from.distance_to(direct) >= 1.0 else from
+	# 关键：不像普通位移那样用射线把落点截在墙前，而是允许落到墙后
+	var snapped := PathFinder.nearest_walkable_world(direct, flat)
+	snapped.y = from.y
+	snapped.x = clampf(snapped.x, -half, half)
+	snapped.z = clampf(snapped.z, -half, half)
+	if PathFinder.is_walkable_world(snapped) and from.distance_to(snapped) >= 1.0:
+		return snapped
+	# 最近可站点仍在墙里/非法：沿闪现方向多推一点，落到墙后的可站立点
+	for extra in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0]:
+		var cand: Vector3 = from + flat * (dist + extra)
+		cand.x = clampf(cand.x, -half, half)
+		cand.z = clampf(cand.z, -half, half)
+		if PathFinder.is_walkable_world(cand) and from.distance_to(cand) >= 1.0:
+			return cand
+	return from
+
+
 func clamp_dash_landing(dir: Vector3, dist: float) -> Vector3:
 	var flat := Vector3(dir.x, 0.0, dir.z)
 	if flat.length() < 0.01:
@@ -2995,10 +3025,12 @@ func _update_dash_preview() -> void:
 		return
 	var dir := Vector3.ZERO
 	var dist := 0.0
+	var flash_preview := false
 	var sum_drag := TouchController.get_summoner_drag()
 	if sum_drag.length() > 20.0 and summoner_skill != null and str(summoner_skill.skill_name) == "闪现":
 		dir = _resolve_flash_dir(sum_drag)
 		dist = 5.0
+		flash_preview = true
 	else:
 		for i in range(mini(skills.size(), 3)):
 			if TouchController.get_skill_held(i) and skills[i] != null and int(skills[i].type) == 4:
@@ -3019,7 +3051,7 @@ func _update_dash_preview() -> void:
 		if _dash_preview != null and is_instance_valid(_dash_preview):
 			_dash_preview.visible = false
 		return
-	var endp := clamp_dash_landing(dir, dist)
+	var endp := flash_landing(dir, dist) if flash_preview else clamp_dash_landing(dir, dist)
 	if _dash_preview == null or not is_instance_valid(_dash_preview):
 		_dash_preview = MeshInstance3D.new()
 		var tm := TorusMesh.new()
@@ -5141,7 +5173,7 @@ func _use_summoner(aim_dir: Vector2 = Vector2.ZERO, world_dir: bool = false):
 			var _flash_dir: Vector3 = _resolve_flash_dir(aim_dir)
 			if world_dir and aim_dir.length() > 20.0:
 				_flash_dir = Vector3(aim_dir.x, 0.0, aim_dir.y).normalized()
-			var _flash_to := clamp_dash_landing(_flash_dir, 5.0)
+			var _flash_to := flash_landing(_flash_dir, 5.0)
 			_flash_to.y = 0.5
 			Vfx.cast_burst(display_name, _flash_from + Vector3.UP * 1.0, Vector3.UP, 0.7)
 			Vfx.cast_burst(display_name, _flash_to + Vector3.UP * 1.0, Vector3.UP, 0.8)
