@@ -271,6 +271,10 @@ func _get_candidates(target: GameEntity = null) -> Array:
 
 # 后羿大招只打英雄等英雄特判：统一问 brain，通用代码不写 display_name
 func _can_use_skill_on(index: int, target: GameEntity) -> bool:
+	# 后羿大招（3技能位）只允许对英雄释放：所有候选/连招/随机/逃生入口统一拦截
+	if hero != null and str(hero.display_name) == "后羿" and index == 2:
+		if target == null or not is_instance_valid(target) or not (target is Hero):
+			return false
 	if brain:
 		return brain.can_cast_on(index, target)
 	return true
@@ -337,6 +341,9 @@ func _skill_radius(sk: Skill) -> float:
 func _ult_allowed(target: GameEntity) -> bool:
 	if hero.skills.size() <= 2 or hero.skills[2] == null:
 		return true
+	# 后羿大招没有“打小兵守塔”例外：目标必须是敌方英雄
+	if hero.display_name == "后羿":
+		return target != null and is_instance_valid(target) and target is Hero
 	var sk: Skill = hero.skills[2]
 	var rng := _skill_radius(sk)
 	if perception.count_enemy_heroes_near(rng) > 0:
