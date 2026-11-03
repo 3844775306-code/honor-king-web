@@ -638,6 +638,14 @@ func _show_menu() -> void:
 	# iOS/移动端：标准 LineEdit 触摸可能不弹系统键盘，绑定兜底输入
 	UiKit.bind_mobile_text_edit(ip_edit, "主机 IP（如 192.168.1.10）", true, true, 15)
 	UiKit.bind_mobile_text_edit(port_edit, "房间端口（默认 7000）", true, false, 5)
+	if Config.on_web():
+		# 浏览器页面在 GitHub Pages 上是 HTTPS，浏览器会拦截 ws://；必须由主机提供 wss://。
+		ip_edit.placeholder_text = "主机域名/IP（wss）"
+		port_edit.text = "443"
+		var web_tip := _mk_label("网页版为 HTTPS：必须连接 wss:// 主机（Cloudflare Tunnel/反向代理），不能直连 ws://；端口通常 443。", _fs(UiKit.FS_XS), COL_DIM)
+		web_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		web_tip.tooltip_text = "例如：cloudflared tunnel --url http://127.0.0.1:7000，然后把生成的域名填入主机框，端口 443"
+		right.add_child(web_tip)
 
 	# 功能按钮拆成两行两列：原来 4 个挤一行，最小宽度会把右栏撑出屏幕
 	var act_row1 := HBoxContainer.new()
@@ -3848,5 +3856,3 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
-
-

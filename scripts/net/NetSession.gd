@@ -302,15 +302,34 @@ func _setup_peer() -> void:
 # 联机地址：ws://host:port；Web 版可用页面 URL 参数 ?host=ip:port 覆盖
 func _web_ws_url() -> String:
 	var addr := join_address.strip_edges()
-	# 容错：用户可能把 ws:// / http:// 一起粘进来
+	# 容错：用户可能把 ws:// / wss:// / http:// / https:// 一起粘进来
+	var explicit_scheme := ""
 	for pre in ["ws://", "wss://", "http://", "https://"]:
 		if addr.begins_with(pre):
+			explicit_scheme = pre.trim_suffix("://")
 			addr = addr.substr(pre.length())
 			break
 	if addr.ends_with("/"):
 		addr = addr.substr(0, addr.length() - 1)
 	var port := host_port
+	# 支持在主机框直接填 host:port
+	if addr.count(":") == 1 and not addr.begins_with("["):
+		var hp_parts := addr.split(":", false, 1)
+		if hp_parts.size() == 2 and hp_parts[1].is_valid_int():
+			addr = hp_parts[0]
+			port = hp_parts[1].to_int()
+	if explicit_scheme == "http":
+		explicit_scheme = "ws"
+	elif explicit_scheme == "https":
+		explicit_scheme = "wss"
+	var scheme := explicit_scheme
 	if OS.has_feature("web"):
+		var proto := str(JavaScriptBridge.eval("window.location.protocol", true))
+		# 网页通过 HTTPS 打开时浏览器会拦截 ws://（mixed content），必须走 wss://。
+		if scheme == "":
+			scheme = "wss" if proto.begins_with("https") else "ws"
+		elif proto.begins_with("https") and scheme == "ws":
+			scheme = "wss"
 		var q := str(JavaScriptBridge.eval("window.location.search", true))
 		var m := RegEx.create_from_string("[?&]host=([^&]+)").search(q)
 		if m != null:
@@ -320,7 +339,9 @@ func _web_ws_url() -> String:
 				port = int(hp.get_slice(":", 1))
 			else:
 				addr = hp
-	return "ws://%s:%d" % [addr, port]
+	elif scheme == "":
+		scheme = "ws"
+	return "%s://%s:%d" % [scheme, addr, port]
 
 
 func _on_peer_connected(id: int) -> void:
@@ -2882,5 +2903,3 @@ func _pack_jg_dead() -> Array:
 	if mm == null or not is_instance_valid(mm) or not mm.has_method("jg_dead_list"):
 		return []
 	return mm.jg_dead_list()
-
-
