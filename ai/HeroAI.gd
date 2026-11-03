@@ -2015,6 +2015,13 @@ func _choose_safe_retreat_goal() -> Vector3:
 	return best
 
 
+## 航点是否落在某座塔的碰撞圈内（塔半径 1.96 + 单位余量）；是则跳过，避免 move_target 指向塔心被推挤
+func _waypoint_inside_tower(p: Vector3) -> bool:
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and (e as Turret).health > 0.0 and p.distance_to((e as Turret).global_position) < 2.45:
+			return true
+	return false
+
 # 用 A* 航点跟随目标；每 1 秒或目标变化时重规划。
 func _follow_safe_route(goal: Vector3) -> void:
 	if goal == Vector3.ZERO:
@@ -2030,7 +2037,8 @@ func _follow_safe_route(goal: Vector3) -> void:
 		hero.move_target = goal
 		return
 	while _safe_route_index < _safe_route_path.size() \
-			and hero.global_position.distance_to(_safe_route_path[_safe_route_index]) < 1.4:
+			and (hero.global_position.distance_to(_safe_route_path[_safe_route_index]) < 1.4 \
+				or _waypoint_inside_tower(_safe_route_path[_safe_route_index])):
 		_safe_route_index += 1
 	if _safe_route_index >= _safe_route_path.size():
 		hero.move_target = goal
@@ -2532,7 +2540,13 @@ func _recall_spot_for_turret(t: Turret) -> Vector3:
 		dir.y = 0.0
 	if dir.length() < 0.01:
 		return t.global_position
-	return t.global_position + dir.normalized() * 2.0
+	var spot: Vector3 = t.global_position + dir.normalized() * 2.0
+	# 2m 可能仍在塔碰撞圈内（塔半径 1.96 + 英雄碰撞约 0.53 ≈ 2.49m）→ 会被持续推开、走不到。
+	# 保持「塔往水晶方向」的方位，但把落点推到可站立半径外。
+	var clearance: float = 1.96 + float(hero.body_radius) * 0.35 + 0.2
+	if spot.distance_to(t.global_position) < clearance:
+		spot = t.global_position + dir.normalized() * clearance
+	return spot
 
 func _find_safe_recall_spot() -> Vector3:
 	var now := Time.get_ticks_msec() * 0.001
@@ -2909,5 +2923,7 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
+
 
 
