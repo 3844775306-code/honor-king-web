@@ -4757,6 +4757,15 @@ func cancel_angela_ult() -> void:
 
 
 func _start_casting(index: int, skill: Skill, target_pos: Vector3):
+	# AI 最终落点二次钳制：候选阶段可能在目标移动后过期，确保非全图技能不超过 cast_range；
+	# 沈梦溪 1 技能连发沿用首次落点时也不会飞出施法距离。
+	if is_ai and skill != null and skill.cast_range > 0.0:
+		var _gprof: Dictionary = SkillDatabase.global_shot_profile(display_name, index)
+		if _gprof.is_empty():
+			var _aim_delta: Vector3 = target_pos - global_position
+			_aim_delta.y = 0.0
+			if _aim_delta.length() > skill.cast_range:
+				target_pos = global_position + _aim_delta.normalized() * skill.cast_range
 	aim_slot = -1   # 松手施放：小地图瞄准线立即消失
 	# AI 回城引导中禁止施法（玩家施法/移动会取消回城，AI 直接不允许动作）
 	if is_ai and is_recalling:
