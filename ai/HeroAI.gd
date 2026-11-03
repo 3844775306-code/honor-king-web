@@ -28,6 +28,7 @@ var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
 var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
+var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
@@ -585,6 +586,55 @@ func _try_machao_spear_toward(dest: Vector3, max_aim: float = 4.2) -> bool:
 	return true
 
 
+## 英睿W（肘击）赶路：每段2m，3段共6m；窗口内连续施放
+func _try_yingrui_w_travel(dest: Vector3, dist: float) -> bool:
+	if hero.display_name != "英睿" or dist < 3.0:
+		return false
+	if hero.skill_levels.size() <= 1 or int(hero.skill_levels[1]) <= 0:
+		return false
+	if perception.find_nearest_enemy_hero(10.0) != null:
+		return false
+	var win_open: bool = hero.skill_window_timers.size() > 1 and float(hero.skill_window_timers[1]) > 0.0
+	if not win_open:
+		if hero.skill_cooldowns.size() <= 1 or float(hero.skill_cooldowns[1]) > 0.0:
+			return false
+		var sk: Skill = hero.skills[1]
+		if sk == null or hero.mana < sk.mana_cost:
+			return false
+	_yingrui_w_aim = dest
+	hero.move_target = Vector3.ZERO
+	hero._start_casting(1, hero.skills[1], dest)
+	return true
+
+
+## 英睿W窗口内自动连打剩余段数（不依赖 SkillTactics 的固定连招/冷却判断）
+func _yingrui_chain_w() -> bool:
+	if hero == null or hero.display_name != "英睿" or hero.is_dead:
+		return false
+	if hero.skill_window_timers.size() <= 1 or float(hero.skill_window_timers[1]) <= 0.0:
+		_yingrui_w_aim = Vector3.ZERO
+		return false
+	if hero.yingrui_w_stage <= 0 or hero.yingrui_w_stage >= 3:
+		return false
+	if hero.casting_skill or hero.channeling_skill_index >= 0:
+		return false
+	if hero.skill_levels.size() <= 1 or int(hero.skill_levels[1]) <= 0:
+		return false
+	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
+		return false
+	var aim: Vector3 = _yingrui_w_aim
+	var tgt: GameEntity = hero.manual_target
+	if tgt == null or not is_instance_valid(tgt) or tgt.health <= 0.0:
+		tgt = perception.find_nearest_enemy_hero(8.0)
+	if tgt != null and is_instance_valid(tgt) and tgt.health > 0.0:
+		aim = tgt.global_position
+	elif aim == Vector3.ZERO:
+		var dir := Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y))
+		aim = hero.global_position + dir * 2.0
+	hero.move_target = Vector3.ZERO
+	hero._start_casting(1, hero.skills[1], aim)
+	return true
+
 func _try_travel_dash():
 	# 位移/加速：只要离目标点超过普攻距离就使用（不再限制 PUSH/FARM/9m/附近敌人）
 	if not is_instance_valid(hero) or hero.is_dead or hero.is_reviving:
@@ -606,6 +656,9 @@ func _try_travel_dash():
 	# 闪现只在追击/逃跑时使用，不用于赶路
 	# 蓝量低于 40%：不再用位移/加速技能赶路（追击/逃跑逻辑不受影响）
 	var low_mana: bool = hero.actual_mana_max > 0.0 and hero.mana / hero.actual_mana_max < 0.40
+	# 英睿2技能（W肘击）也可赶路：朝目标点连续肘击3段
+	if not low_mana and _try_yingrui_w_travel(dest, dist):
+		return
 	# 马超赶路：朝移动方向投枪（W优先/Q次之），沿路捡枪后用强化普攻提速
 	if not low_mana and _try_machao_travel_spear(dest, dist):
 		return
@@ -1113,6 +1166,9 @@ func _process(delta):
 			_recall_safe_behavior(delta)
 		return
 
+	# 英睿W窗口：3段必须连续打完
+	if _yingrui_chain_w():
+		return
 	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
 	_try_counter_attack()
 	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
@@ -3228,3 +3284,5 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
+
