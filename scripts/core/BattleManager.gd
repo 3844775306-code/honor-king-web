@@ -6663,15 +6663,17 @@ func _process(delta):
 		_refresh_mvp()
 	_update_shadow_paths(delta)
 	_update_shadow_path_fades(delta)
-	# 集中式团队分推协调（4分钟后，每60s分配一次）
-	if game_time >= 240 and team_tactics:
-		team_tactics_timer -= delta
-		var urgent := team_tactics.consume_replan_request()
-		if team_tactics_timer <= 0 or urgent:
-			team_tactics_timer = AiConfig.TEAM_ALLOCATION_INTERVAL
-			print("[BattleManager] t=%.0f 执行团队任务重规划（模式=%s，urgent=%s）" % [game_time, team_tactics.get_mode_name(), urgent])
-			var assignments := team_tactics.allocate_all()
-			_distribute_lane_assignments(assignments)
+	# 集中式团队分推协调（4分钟后每60s分配一次；4分钟前水晶受小兵威胁时立即应急回防）
+	if team_tactics:
+		var early_threat: bool = game_time < 240.0 and team_tactics.has_crystal_threat()
+		if game_time >= 240.0 or early_threat:
+			team_tactics_timer -= delta
+			var urgent := team_tactics.consume_replan_request()
+			if team_tactics_timer <= 0 or urgent:
+				team_tactics_timer = (AiConfig.TEAM_ALLOCATION_INTERVAL if game_time >= 240.0 else 2.0)
+				print("[BattleManager] t=%.0f 执行团队任务重规划（模式=%s，urgent=%s，早期回防=%s）" % [game_time, team_tactics.get_mode_name(), urgent, early_threat])
+				var assignments := team_tactics.allocate_all()
+				_distribute_lane_assignments(assignments)
 	# 小兵生成
 	if game_time >= 235:
 		_update_epic_monsters(delta)

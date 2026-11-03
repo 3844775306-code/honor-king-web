@@ -134,6 +134,11 @@ func _should_defend(team: int) -> bool:
 	return _enemy_minions_near_crystal(team, 30.0).size() > 0
 
 
+## 任一方水晶 30m 内出现敌方小兵（供对局主循环在 4 分钟前也触发应急回防）
+func has_crystal_threat() -> bool:
+	return _should_defend(Config.Team.PLAYER) or _should_defend(Config.Team.ENEMY)
+
+
 func _crystal_of(team: int) -> Turret:
 	for e in bm.get_tree().get_nodes_in_group("turrets"):
 		if e is Turret and int((e as Turret).team) == team and (e as Turret).health > 0 \
@@ -162,7 +167,8 @@ func _defend_assignees(team: int) -> Array:
 	for e in _get_enemy_heroes(team):
 		if e.global_position.distance_to(crystal.global_position) <= 20.0:
 			enemy_heroes += 1
-	var max_n := 1 + enemy_heroes
+	# 水晶被小兵压境时至少 2 人回防；敌方英雄越多，回防人数继续增加
+	var max_n := 2 + enemy_heroes
 	var candidates := []
 	for h in _get_ally_heroes(team):
 		if h.is_ai:
