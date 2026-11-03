@@ -655,9 +655,12 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 						hero.get_parent().add_child(bullet)
 				hero.stat = 1
 			3:
-				var preview = create_preview(3.0,pos,hero.team)
+				# 铠大招范围圈：挂到自身节点下，持续跟随铠移动
+				var preview = create_preview(3.0, hero.global_position, hero.team)
+				preview.name = "KaiUltRing"
 				preview.visible = true
-				hero.get_parent().add_child(preview)
+				preview.position = Vector3(0.0, 0.02, 0.0)
+				hero.add_child(preview)
 				await hero.get_tree().create_timer(1).timeout
 				var ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
 				var dir = Vector3(cos(ang),0,-sin(ang))

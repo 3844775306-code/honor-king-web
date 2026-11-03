@@ -275,17 +275,8 @@ func _physics_process(delta):
 		# 朝向（箭矢类同时俯仰贴弹道）
 		_aim_visual(dir)
 
-		# 沿途命中判定（path_hit：安琪拉1技能等"穿点"弹道；默认 goal 模式只飞不判伤）
-		if path_hit and source:
-			for entity in get_tree().get_nodes_in_group("entities"):
-				if entity == source or not is_instance_valid(entity): continue
-				if entity.team == team or entity.health <= 0: continue
-				if entity in attacked: continue
-				if global_position.distance_to(entity.global_position) - radius - entity.body_radius <= 0.4:
-					target = entity
-					on_hit()
-					queue_free()
-					return
+		# goal 型子弹：途中碰到目标只穿过，不结算伤害也不销毁；
+		# 伤害统一在到达 goal 后由 on_hit 的范围结算。
 
 		# 距离检测命中（到达落点：未命中沿途目标就在终点爆一点，on_hit 内按 damage_range 结算范围伤害）
 		# 只比水平距离：地面落点 goal.y 通常为 0，而弹体出生在 y=1，三维距离会让落点永远差 1 米而不爆炸
