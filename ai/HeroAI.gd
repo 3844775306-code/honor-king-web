@@ -1126,6 +1126,7 @@ func _process(delta):
 			return
 		_try_teleport()
 		brain.process_skill_windows()            # 多态: 李白/太乙等英雄特判
+		summoner_tactics.set_chase_target(_chase_target)
 		summoner_tactics.try_use(current_action.type, lane)
 		item_tactics.try_use(current_action.type)
 		brain.process_special_actions(current_action.type)     # 多态: 兰陵王隐身等

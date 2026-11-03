@@ -7,6 +7,7 @@ var state: int
 var lane: int
 var trade_planner: TradePlanner = null
 var last_action := ""
+var chase_target: Hero = null   # 当前 FINISH_CHASE 目标（HeroAI 注入）
 
 
 func _init(p_hero: Hero, p_perception: AiPerception, p_trade: TradePlanner = null) -> void:
@@ -62,10 +63,16 @@ func _try_teleport() -> bool:
 	return false
 
 
-## 追击残血：只允许 FINISH_CHASE 使用闪现
+## 追击残血：只允许 FINISH_CHASE 使用闪现（优先使用 HeroAI 当前追击目标，不再受 8m 交战半径限制）
+func set_chase_target(t: Hero) -> void:
+	chase_target = t
+
+
 func _in_chase() -> bool:
+	if chase_target != null and is_instance_valid(chase_target) and chase_target.health > 0.0:
+		return hero.global_position.distance_to(chase_target.global_position) <= AiConfig.CHASE_START_RANGE
 	return state == AIAction.Type.FINISH_CHASE \
-		and perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE) != null
+		and perception.find_nearest_enemy_hero(AiConfig.CHASE_START_RANGE) != null
 
 
 ## 闪现逃生：仅血量 <20% 且高威胁时使用
@@ -159,7 +166,7 @@ func _try_flash() -> bool:
 		return true
 	# 追击：向敌人闪（贴脸距离内不浪费）
 	if _in_chase():
-		var enemy2 = perception.find_nearest_enemy_hero(AiConfig.ENGAGE_RANGE)
+		var enemy2 = chase_target if (chase_target != null and is_instance_valid(chase_target) and chase_target.health > 0.0) else perception.find_nearest_enemy_hero(AiConfig.CHASE_START_RANGE)
 		if enemy2 == null:
 			return false
 		if hero.global_position.distance_to(enemy2.global_position) <= AiConfig.MELEE_RANGE:
@@ -182,3 +189,4 @@ func _try_smite() -> bool:
 		hero._use_summoner()
 		return true
 	return false
+
