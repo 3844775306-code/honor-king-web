@@ -243,8 +243,11 @@ func _safe_distance_to(enemy: Hero) -> float:
 	if enemy == null or not is_instance_valid(enemy):
 		return 0.0
 	var extra := 2.0 if str(enemy.role) in ["战士", "刺客"] else 1.0
-	return enemy.attack_range * 0.01 + extra
-
+	var safe: float = enemy.attack_range * 0.01 + extra
+	# 自己为战士/刺客时需要贴身输出，安全距离额外 -2m
+	if str(hero.role) in ["战士", "刺客"]:
+		safe -= 2.0
+	return maxf(0.0, safe)
 
 ## 是否有冷却好的攻击技能能打到目标
 func _has_ready_skill_in_range(target: Hero) -> bool:
@@ -3379,6 +3382,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
-
