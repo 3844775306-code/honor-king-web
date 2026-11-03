@@ -356,6 +356,18 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 				+ 0.20 * _safe_at(tree, team, h.global_position) + 0.20 * _travel(ai, camp_d)
 			if _enemy_near(tree, team, h.global_position, 6.0) > 0:
 				u *= 0.25   # 敌人在身边时不能无视敌人去推线/刷野
+		AIAction.Type.HEALTH_PACK:
+			var pack: Node3D = ctx.get("target")
+			var pd := h.global_position.distance_to(pack.global_position) if pack != null else 99.0
+			u = 0.45 * low_hp + 0.25 * (1.0 if pd <= 12.0 else 0.0) + 0.20 * _safe_at(tree, team, h.global_position) + 0.10 * _travel(ai, pd)
+		AIAction.Type.VISION_SPIRIT:
+			var vs: Node3D = ctx.get("target")
+			var vd := h.global_position.distance_to(vs.global_position) if vs != null else 99.0
+			u = 0.40 * (1.0 if vs != null else 0.0) + 0.30 * _safe_at(tree, team, h.global_position) + 0.20 * _travel(ai, vd) + 0.10 * 0.5
+		AIAction.Type.OBJECTIVE:
+			u = 0.30 * _adv(tree, team) + 0.30 * _safe_at(tree, team, h.global_position) + 0.20 * 0.5 + 0.20 * 0.5
+		AIAction.Type.ROTATE:
+			u = 0.40 * _safe_at(tree, team, h.global_position) + 0.30 * 0.5 + 0.30 * 0.5
 		AIAction.Type.PUSH_LANE:
 			var own_minions2 := 0
 			for e in tree.get_nodes_in_group("minions"):
@@ -374,6 +386,9 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			# 敌人在身边时，先处理战斗：团队任务让位于换血
 			if _enemy_near(tree, team, h.global_position, TRADE_NEAR_RADIUS) > 0:
 				tp = mini(tp, 350)
+			# 低血时团队任务让位于回城/撤退等生存动作
+			if _hp(h) < 0.35:
+				tp = mini(tp, 450)
 			return tp
 		AIAction.Type.DODGE, AIAction.Type.TOWER_ESCAPE:
 			return 1000
@@ -415,6 +430,9 @@ static func _under_enemy_tower(tree, team: int, pos: Vector3) -> bool:
 	if t == null:
 		return false
 	return pos.distance_to(t.global_position) <= t.attack_range * 0.01 + 2.0
+
+
+
 
 
 

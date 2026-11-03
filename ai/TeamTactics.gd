@@ -639,36 +639,44 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 	if defend_assignees.has(h):
 		var dl: int = int(defend_lane_by_team.get(h.team, lane))
 		var dp: Vector3 = defend_target_by_team.get(h.team, _own_tower_pos(h.team, dl))
-		t.setup(TeamTask.Type.DEFEND_LANE, dl, dp, null, 100, now, 18.0, "水晶守小兵", role)
+		var tp_def: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.DEFEND_LANE, dp, null) if AiConfig.USE_UTILITY_AI else 100
+		t.setup(TeamTask.Type.DEFEND_LANE, dl, dp, null, tp_def, now, 18.0, "水晶守小兵", role)
 		return t
 	if push_target_by_team.has(h.team):
 		var pl := int(push_lane_by_team.get(h.team, lane))
 		# 经济差触发的抱团推塔优先级高于其他临时任务（临时清兵/血包/反野/抓人）
-		var push_pri: int = 950 if bool(_force_push_by_team.get(h.team, false)) else 90
+		var push_pri: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.PUSH_TOWER, push_target_by_team[h.team], null) if AiConfig.USE_UTILITY_AI else (950 if bool(_force_push_by_team.get(h.team, false)) else 90)
+		if bool(_force_push_by_team.get(h.team, false)):
+			push_pri = maxi(push_pri, 700)
 		t.setup(TeamTask.Type.PUSH_TOWER, pl, push_target_by_team[h.team], null, push_pri, now, 40.0, "抱团推塔", role)
 		t.lane = pl
 		return t
 	if invade_target_by_hero.has(h):
-		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, 85, now, 20.0, "人数优势反野", role)
+		var tp_inv: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.INVADE_JUNGLE, invade_target_by_hero[h], null) if AiConfig.USE_UTILITY_AI else 85
+		t.setup(TeamTask.Type.INVADE_JUNGLE, lane, invade_target_by_hero[h], null, tp_inv, now, 20.0, "人数优势反野", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE and _is_dragon_alive():
 		var dp: Vector3 = dragon_pos_by_team.get(h.team, dragon_pos)
-		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, 80, now, 22.0, "集合争夺资源", role)
+		var tp_obj: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.OBJECTIVE, dp, null) if AiConfig.USE_UTILITY_AI else 80
+		t.setup(TeamTask.Type.OBJECTIVE, lane, dp, null, tp_obj, now, 22.0, "集合争夺资源", role)
 		return t
 	if gank_target_by_hero.has(h):
 		var gt: Hero = gank_target_by_hero[h]
-		var gank_pri: int = int(gank_priority_by_hero.get(h, 70))
+		var gank_pri: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.GANK, gt.global_position, gt) if AiConfig.USE_UTILITY_AI else int(gank_priority_by_hero.get(h, 70))
 		t.setup(TeamTask.Type.GANK, lane, gt.global_position, gt, gank_pri, now, 25.0, "组团抓落单", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE:
-		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
+		var tp_j: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.PUSH_LANE, Vector3.ZERO, null) if AiConfig.USE_UTILITY_AI else 50
+		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, tp_j, now, 18.0, "刷野/回线", role)
 		return t
 	if role == "辅助":
 		var carry := _find_carry(h.team)
 		if carry != null:
-			t.setup(TeamTask.Type.PEEL, lane, carry.global_position, carry, 50, now, 20.0, "保排", role)
+			var tp_peel: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.PEEL, carry.global_position, carry) if AiConfig.USE_UTILITY_AI else 50
+			t.setup(TeamTask.Type.PEEL, lane, carry.global_position, carry, tp_peel, now, 20.0, "保排", role)
 			return t
-	t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 25.0, "推线/LaneStrategy", role)
+	var tp_push: int = UtilityScorer.team_task_priority(self, h, TeamTask.Type.PUSH_LANE, Vector3.ZERO, null) if AiConfig.USE_UTILITY_AI else 50
+	t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, tp_push, now, 25.0, "推线/LaneStrategy", role)
 	t.initial_lane_tower_count = _enemy_tower_count_in_lane(h.team, lane)
 	return t
 

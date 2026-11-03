@@ -120,6 +120,8 @@ func _set_action(action_type: int, priority: int = 0, pause_class: int = AIActio
 		if current_action.type == action_type:
 			if not data.is_empty():
 				current_action.data = data.duplicate()
+			# 意愿评分下优先级会随战场变化，允许同类型动作刷新优先级
+			current_action.priority = priority
 			return
 		if priority < current_action.priority:
 			return
@@ -257,7 +259,7 @@ func _try_counter_attack() -> bool:
 	_ai_path.clear()
 	if trade_planner != null:
 		trade_planner.force_engage(chaser)
-	_set_action(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "反击对拼")
+	_set_action(AIAction.Type.TRADE, UtilityScorer.action_priority(self, AIAction.Type.TRADE, {"target": chaser}) if AiConfig.USE_UTILITY_AI else 945, AIAction.PauseClass.SURVIVAL, "反击对拼")
 	return true
 
 ## 被敌方英雄攻击的反应：返回 true 表示本帧已接管（撤退中，跳过其他决策）
@@ -275,7 +277,7 @@ func _react_to_hero_attack(delta: float) -> bool:
 		return false
 	# 已经在撤退：持续远离，直到对方不再攻击
 	if _attack_retreat_target == atk:
-		_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
+		_set_action(AIAction.Type.RETURN_TO_BASE, UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE) if AiConfig.USE_UTILITY_AI else 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
 		_retreat_from_hero(atk, delta)
 		return true
 	if hero.casting_skill:
@@ -284,7 +286,7 @@ func _react_to_hero_attack(delta: float) -> bool:
 	if trade_planner != null and trade_planner.should_trade_with(atk):
 		return false
 	_attack_retreat_target = atk
-	_set_action(AIAction.Type.RETURN_TO_BASE, 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
+	_set_action(AIAction.Type.RETURN_TO_BASE, UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE) if AiConfig.USE_UTILITY_AI else 950, AIAction.PauseClass.SURVIVAL, "被攻击撤退")
 	_retreat_from_hero(atk, delta)
 	return true
 
@@ -1100,7 +1102,7 @@ func _process(delta):
 	var spring := Vector3(-62, 0, 62) if hero.team == Config.Team.PLAYER else Vector3(62, 0, -62)
 	var spring_dist := hero.global_position.distance_to(spring)
 	if spring_dist <= 8.0 and not _fully_recovered():
-		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "泉水养伤")
+		_set_action(AIAction.Type.SAFE_RECALL, UtilityScorer.action_priority(self, AIAction.Type.SAFE_RECALL) if AiConfig.USE_UTILITY_AI else 960, AIAction.PauseClass.SURVIVAL, "泉水养伤")
 		hero.manual_target = null
 		if hero.is_recalling:
 			hero.cancel_recall()
@@ -1125,7 +1127,7 @@ func _process(delta):
 		var _recall_reason := "回城"
 		if current_action != null and str(current_action.reason).contains("蓝量"):
 			_recall_reason = "蓝量枯竭回城"
-		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, _recall_reason)
+		_set_action(AIAction.Type.SAFE_RECALL, UtilityScorer.action_priority(self, AIAction.Type.SAFE_RECALL) if AiConfig.USE_UTILITY_AI else 960, AIAction.PauseClass.SURVIVAL, _recall_reason)
 		_recall_safe_behavior(delta)
 		return
 	_sync_ai_movement()
@@ -1207,7 +1209,7 @@ func _process(delta):
 			and not _is_action(AIAction.Type.TEMP_CLEAR) and _can_run_environment_action():
 		var pack = _find_safe_health_pack()
 		if pack and is_instance_valid(pack):
-			_set_action(AIAction.Type.HEALTH_PACK, 860, AIAction.PauseClass.ENVIRONMENT, "血包")
+			_set_action(AIAction.Type.HEALTH_PACK, UtilityScorer.action_priority(self, AIAction.Type.HEALTH_PACK, {"target": pack}) if AiConfig.USE_UTILITY_AI else 860, AIAction.PauseClass.ENVIRONMENT, "血包")
 			hero.move_target = pack.global_position
 			return
 
@@ -1670,31 +1672,31 @@ func _build_action_candidates() -> Array[AIAction]:
 	# 本线塔防御
 	var turret := _get_lane_turret_under_attack(lane)
 	if turret != null and hero.global_position.distance_to(turret.global_position) <= AiConfig.DEFEND_LANE_TURRET_RANGE:
-		out.append(AIAction.new(AIAction.Type.DEFEND_TOWER, 940, AIAction.PauseClass.SURVIVAL, "守塔"))
+		out.append(AIAction.new(AIAction.Type.DEFEND_TOWER, UtilityScorer.action_priority(self, AIAction.Type.DEFEND_TOWER, {"turret": turret}) if AiConfig.USE_UTILITY_AI else 940, AIAction.PauseClass.SURVIVAL, "守塔"))
 
 	# 大禹鼎
 	var pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
 	if pot != null:
 		# 拆鼎任务不限制次数：即使团队任务环境暂停额度已用完也继续拆
-		var a := AIAction.new(AIAction.Type.TRIPOD, 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
+		var a := AIAction.new(AIAction.Type.TRIPOD, UtilityScorer.action_priority(self, AIAction.Type.TRIPOD, {"target": pot}) if AiConfig.USE_UTILITY_AI else 810, AIAction.PauseClass.ENVIRONMENT, "大禹鼎")
 		a.target = pot
 		out.append(a)
 
 	# 回城
 	if hero.is_in_own_fountain() and not _fully_recovered():
-		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, UtilityScorer.action_priority(self, AIAction.Type.SAFE_RECALL) if AiConfig.USE_UTILITY_AI else 960, AIAction.PauseClass.SURVIVAL, "回城"))
 	elif _is_mana_critical() and not _has_blue_buff_context():
-		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 958, AIAction.PauseClass.SURVIVAL, "蓝量枯竭回城"))
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, UtilityScorer.action_priority(self, AIAction.Type.SAFE_RECALL) if AiConfig.USE_UTILITY_AI else 958, AIAction.PauseClass.SURVIVAL, "蓝量枯竭回城"))
 		if "--ai-mana-probe" in OS.get_cmdline_user_args():
 			print("[AIMANA] critical recall %s mana=%.0f/%.0f" % [
 				hero.display_name, hero.mana, hero.actual_mana_max])
 	elif hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
-		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, UtilityScorer.action_priority(self, AIAction.Type.SAFE_RECALL) if AiConfig.USE_UTILITY_AI else 960, AIAction.PauseClass.SURVIVAL, "回城"))
 	# 低蓝且未到危急线：主动去击败附近蓝 buff（打蓝时允许用耗蓝技能）
 	if _is_low_mana() and not _is_mana_critical() and not bool(hero.blue_buff_active):
 		var bb := _find_nearby_blue_buff()
 		if bb != null:
-			var ba := AIAction.new(AIAction.Type.BLUE_BUFF, 870, AIAction.PauseClass.ENVIRONMENT, "蓝量不足·打蓝")
+			var ba := AIAction.new(AIAction.Type.BLUE_BUFF, UtilityScorer.action_priority(self, AIAction.Type.BLUE_BUFF, {"target": bb}) if AiConfig.USE_UTILITY_AI else 870, AIAction.PauseClass.ENVIRONMENT, "蓝量不足·打蓝")
 			ba.target = bb
 			out.append(ba)
 			if "--ai-mana-probe" in OS.get_cmdline_user_args():
@@ -1707,25 +1709,25 @@ func _build_action_candidates() -> Array[AIAction]:
 	if not trade_intent.is_empty():
 		var tact := str(trade_intent.get("action", ""))
 		if tact == "exit" and _is_threat_high() and trade_planner.cooldown > 0.0:
-			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "高威胁换血退出")
+			var a := AIAction.new(AIAction.Type.RETURN_TO_BASE, UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE) if AiConfig.USE_UTILITY_AI else 900, AIAction.PauseClass.SURVIVAL, "高威胁换血退出")
 			a.data = trade_intent
 			out.append(a)
 		elif tact == "enter" or tact == "hold":
 			var tt = trade_intent.get("target")
 			if tt != null and is_instance_valid(tt) and (tt as Hero).health > 0.0:
-				var a := AIAction.new(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "换血")
+				var a := AIAction.new(AIAction.Type.TRADE, UtilityScorer.action_priority(self, AIAction.Type.TRADE, {"target": tt}) if AiConfig.USE_UTILITY_AI else 945, AIAction.PauseClass.SURVIVAL, "换血")
 				a.target = tt
 				out.append(a)
 
 	# 撤退触发：高威胁 + 换血冷却中（不依赖换血是否刚好退出）
 	if _is_threat_high() and trade_planner.cooldown > 0.0:
-		out.append(AIAction.new(AIAction.Type.RETURN_TO_BASE, 880, AIAction.PauseClass.SURVIVAL, "高威胁撤退"))
+		out.append(AIAction.new(AIAction.Type.RETURN_TO_BASE, UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE) if AiConfig.USE_UTILITY_AI else 880, AIAction.PauseClass.SURVIVAL, "高威胁撤退"))
 
 	# 临时清兵
 	if _can_run_environment_action():
 		var m := _find_temp_clear_target()
 		if m != null:
-			var a := AIAction.new(AIAction.Type.TEMP_CLEAR, 850, AIAction.PauseClass.ENVIRONMENT, "临时清兵")
+			var a := AIAction.new(AIAction.Type.TEMP_CLEAR, UtilityScorer.action_priority(self, AIAction.Type.TEMP_CLEAR, {"target": m}) if AiConfig.USE_UTILITY_AI else 850, AIAction.PauseClass.ENVIRONMENT, "临时清兵")
 			a.target = m
 			out.append(a)
 
@@ -1738,9 +1740,9 @@ func _build_action_candidates() -> Array[AIAction]:
 
 	# 默认本地
 	if _is_natural_jungler:
-		out.append(AIAction.new(AIAction.Type.JUNGLE_FARM, 20, AIAction.PauseClass.NONE, "刷野"))
+		out.append(AIAction.new(AIAction.Type.JUNGLE_FARM, UtilityScorer.action_priority(self, AIAction.Type.JUNGLE_FARM) if AiConfig.USE_UTILITY_AI else 20, AIAction.PauseClass.NONE, "刷野"))
 	else:
-		out.append(AIAction.new(AIAction.Type.PUSH_LANE, 20, AIAction.PauseClass.NONE, "推线"))
+		out.append(AIAction.new(AIAction.Type.PUSH_LANE, UtilityScorer.action_priority(self, AIAction.Type.PUSH_LANE) if AiConfig.USE_UTILITY_AI else 20, AIAction.PauseClass.NONE, "推线"))
 
 	# 守塔 vs 回城：守塔点附近无敌人且自身 >15%，守塔优先；否则回城优先
 	var defend := _first_candidate(out, AIAction.Type.DEFEND_TOWER)
@@ -1750,8 +1752,42 @@ func _build_action_candidates() -> Array[AIAction]:
 			recall.priority = 0
 		else:
 			defend.priority = 0
+	if AiConfig.USE_UTILITY_AI:
+		_append_utility_combat_candidates(out)
 	return out
 
+
+## 敌人在身边时补「近身换血/贴脸撤退」候选；原有候选生成依赖固定触发条件，容易漏掉战斗
+func _append_utility_combat_candidates(out: Array[AIAction]) -> void:
+	var nearest: Hero = perception.find_nearest_enemy_hero(10.0)
+	if nearest == null or hero.is_dead:
+		return
+	var has_trade := false
+	var has_retreat := false
+	for a in out:
+		if int(a.type) == int(AIAction.Type.TRADE):
+			has_trade = true
+		elif int(a.type) == int(AIAction.Type.RETURN_TO_BASE):
+			has_retreat = true
+	if not has_trade:
+		var ta := AIAction.new(AIAction.Type.TRADE,
+			UtilityScorer.action_priority(self, AIAction.Type.TRADE, {"target": nearest}),
+			AIAction.PauseClass.SURVIVAL, "近身换血")
+		ta.target = nearest
+		out.append(ta)
+	if not has_retreat and not hero.is_recalling:
+		var pos: Vector3 = threat_model.safe_position() if threat_model != null else Vector3.ZERO
+		if pos == Vector3.ZERO:
+			var away: Vector3 = hero.global_position - nearest.global_position
+			away.y = 0.0
+			if away.length() < 0.1:
+				away = Vector3(0, 0, 1)
+			pos = hero.global_position + away.normalized() * 6.0
+		var ra := AIAction.new(AIAction.Type.RETURN_TO_BASE,
+			UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE),
+			AIAction.PauseClass.SURVIVAL, "贴脸撤退")
+		ra.data = {"pos": pos}
+		out.append(ra)
 
 func _first_candidate(items: Array[AIAction], t: int) -> AIAction:
 	for a in items:
@@ -1790,7 +1826,7 @@ func _execute_candidate(a: AIAction):
 			if a.data.has("pos"):
 				retreat_pos = a.data.get("pos", Vector3.ZERO)
 			hero.move_target = retreat_pos
-			_set_action(AIAction.Type.RETURN_TO_BASE, 900, a.pause_class, a.reason, a.data)
+			_set_action(AIAction.Type.RETURN_TO_BASE, a.priority, a.pause_class, a.reason, a.data)
 		AIAction.Type.TRADE:
 			hero.manual_target = a.target
 			hero.move_target = Vector3.ZERO
@@ -1816,9 +1852,13 @@ func _execute_candidate(a: AIAction):
 
 ## 团队任务的 Action 优先级：水晶守小兵要高于临时清兵/换血，否则 AI 会继续在兵线清兵不回防
 func _team_task_action_priority() -> int:
-	if team_task != null and int(team_task.type) == int(TeamTask.Type.DEFEND_LANE):
+	if team_task == null:
+		return 0
+	if AiConfig.USE_UTILITY_AI:
+		return UtilityScorer.action_priority(self, AIAction.Type.TEAM_TASK)
+	if int(team_task.type) == int(TeamTask.Type.DEFEND_LANE):
 		return maxi(int(team_task.priority), 950)
-	return int(team_task.priority) if team_task != null else 0
+	return int(team_task.priority)
 
 
 func _execute_team_task() -> void:
@@ -1837,7 +1877,7 @@ func _execute_team_task() -> void:
 	if tr.has("move_target"):
 		hero.move_target = tr.get("move_target")
 	if str(tr.get("state", "push")) == "retreat":
-		_set_action(AIAction.Type.RETURN_TO_BASE, 900, AIAction.PauseClass.SURVIVAL, "任务撤退")
+		_set_action(AIAction.Type.RETURN_TO_BASE, UtilityScorer.action_priority(self, AIAction.Type.RETURN_TO_BASE) if AiConfig.USE_UTILITY_AI else 900, AIAction.PauseClass.SURVIVAL, "任务撤退")
 	else:
 		var task_data := {
 			"task_type": int(team_task.type),
@@ -1865,7 +1905,7 @@ func _execute_local_task(jungle: bool) -> void:
 		else:
 			_dragon_rally_behavior()
 			if is_dragon_rally:
-				_set_action(AIAction.Type.OBJECTIVE, 80, AIAction.PauseClass.NONE, "打龙")
+				_set_action(AIAction.Type.OBJECTIVE, UtilityScorer.action_priority(self, AIAction.Type.OBJECTIVE) if AiConfig.USE_UTILITY_AI else 80, AIAction.PauseClass.NONE, "打龙")
 				_sync_ai_movement()
 			return
 	if lane_strategy:
@@ -2079,7 +2119,7 @@ func _try_vision_spirit_contact() -> bool:
 	hero.manual_target = null
 	# 0.8 米内站定，确保进入视野之灵的 1 米判定圈
 	hero.move_target = hero.global_position if best_d <= 0.8 else best.global_position
-	_set_action(AIAction.Type.VISION_SPIRIT, 820, AIAction.PauseClass.ENVIRONMENT, "视野之灵")
+	_set_action(AIAction.Type.VISION_SPIRIT, UtilityScorer.action_priority(self, AIAction.Type.VISION_SPIRIT) if AiConfig.USE_UTILITY_AI else 820, AIAction.PauseClass.ENVIRONMENT, "视野之灵")
 	return true
 
 # ==================== 六维指标计算 ====================
@@ -2414,7 +2454,7 @@ func _update_finish_chase(delta: float) -> bool:
 	_chase_time += delta
 	# Hero 自身带 AI 追击：manual_target 在射程外会自动朝目标移动（move_target 必须清空，否则优先于追击）
 	hero.manual_target = _chase_target
-	_set_action(AIAction.Type.FINISH_CHASE, 940, AIAction.PauseClass.SURVIVAL, "残血追击")
+	_set_action(AIAction.Type.FINISH_CHASE, UtilityScorer.action_priority(self, AIAction.Type.FINISH_CHASE, {"target": _chase_target}) if AiConfig.USE_UTILITY_AI else 940, AIAction.PauseClass.SURVIVAL, "残血追击")
 	# AI 自动追击已关闭；这里必须重新写 move_target，否则仅设 manual_target 会原地站住。
 	_sync_ai_movement()
 	# 够不到就先交位移技能贴脸（追击用），贴身后再交伤害技能
@@ -3204,7 +3244,7 @@ func _handle_lane_turret_defense() -> bool:
 			from_t = Vector3(0, 0, 1)
 		var stand := turret.global_position + from_t.normalized() * 2.7
 		hero.move_target = stand
-		_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
+		_set_action(AIAction.Type.DEFEND_TOWER, UtilityScorer.action_priority(self, AIAction.Type.DEFEND_TOWER, {"turret": turret}) if AiConfig.USE_UTILITY_AI else 930, AIAction.PauseClass.SURVIVAL, "守塔")
 		return true
 	var defender := _defense_target_for_turret(turret)
 	if defender != null and is_instance_valid(defender) and defender.health > 0:
@@ -3228,3 +3268,7 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
+
+
+
