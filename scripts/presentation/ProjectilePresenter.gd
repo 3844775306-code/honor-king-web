@@ -15,6 +15,7 @@ const MODEL_PATHS := {
 const HERO_VISUAL_SCALE := 3.0
 
 const BulletVisualScript = preload("res://scripts/core/BulletVisual.gd")
+const HeroProjectilesScript = preload("res://scripts/presentation/HeroProjectiles.gd")
 
 const COL_ALLY := Color(0.0, 0.886, 1.0, 1.0)
 const COL_ENEMY := Color(1.0, 0.33, 0.264, 1.0)
@@ -113,6 +114,15 @@ static func _apply_flags(node: Node3D, vkind: int, flags: int) -> void:
 		return
 	if (flags & 1) != 0:
 		node.scale *= 1.7
+	if HeroProjectilesScript.is_hero_vkind(vkind):
+		if (flags & 1) != 0:
+			node.scale *= 1.35
+		var c1: Color = node.get_meta("c1", COL_ALLY)
+		var c2: Color = node.get_meta("c2", c1.lightened(0.35))
+		Vfx.attach_trail(node, c1, 0.24, 0.32, 8, c2)
+		if bool(node.get_meta("pitch", false)):
+			node.set_meta("pitch", true)
+		return
 	if vkind >= BulletVisualScript.VKIND_BASE and vkind < 1000:
 		var d := BulletVisualScript.decode_vkind(vkind)
 		if (flags & 2) != 0:
@@ -127,6 +137,10 @@ static func _apply_flags(node: Node3D, vkind: int, flags: int) -> void:
 
 ## 定制档（小乔Q 扇盘等，与 host 视觉一致）
 static func make_bespoke(vkind: int) -> Node3D:
+	if HeroProjectilesScript.is_hero_vkind(vkind):
+		var hv := HeroProjectilesScript.build_from_vkind(vkind)
+		if hv != null:
+			return hv
 	if vkind >= BulletVisualScript.VKIND_BASE and vkind < 1000:
 		return BulletVisualScript.build_from_vkind(vkind)
 	if vkind == 1:

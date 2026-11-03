@@ -1,6 +1,7 @@
 class_name Bullet
 extends Area3D
 const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
+const HeroProjectilesScript = preload("res://scripts/presentation/HeroProjectiles.gd")
 var _skin_fx_accent := Color(0, 0, 0, 0)
 var attacked:Array=[]
 var speed: float = 20.0
@@ -79,6 +80,9 @@ func _ready():
 		_skin_fx_accent = source.skin_accent_color()
 	# 普攻/塔/兵弹道统一走程序化能量弹（双端同源）；技能弹保留原有定制视觉
 	var _vk := BulletVisual.vkind_for(self)
+	if HeroProjectilesScript.is_hero_vkind(_vk):
+		_build_hero_projectile_visual(_vk)
+		return
 	if _vk > 0:
 		_build_unified_visual()
 		return
@@ -131,6 +135,34 @@ func _ready():
 	if linear_dir != Vector3.ZERO and int(skill_id) != 0 and visual_mesh and is_instance_valid(visual_mesh):
 		visual_mesh.scale *= 1.5
 	# 不添加碰撞体，使用手动距离检测
+
+## 英雄专属弹体：高细节程序化武器/法球模型（三端同源 vkind）
+func _build_hero_projectile_visual(vk: int) -> void:
+	visual_mesh = HeroProjectilesScript.build_from_vkind(vk)
+	if visual_mesh == null:
+		visual_mesh = MeshFactory.create_sphere(0.25, Color(0.8, 0.9, 1.0), true, 0.9)
+	var base := 1.0
+	if linear_dir != Vector3.ZERO and int(skill_id) != 0:
+		base = 1.35
+	_pitch_visual = bool(visual_mesh.get_meta("pitch", false))
+	visual_mesh.scale = Vector3.ONE * base * 0.82
+	_recursive_set_shadow(visual_mesh, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+	add_child(visual_mesh)
+	var spn := visual_mesh.get_node_or_null("Spin")
+	if spn is Node3D:
+		_spin_node = spn
+		_spin_speed = float(visual_mesh.get_meta("spin", 1.2))
+	if source is Hero:
+		if _skin_fx_accent.a > 0.0:
+			HeroSkinTable.apply_fx_color(visual_mesh, _skin_fx_accent)
+		var c1: Color = visual_mesh.get_meta("c1", Vfx.color_for_hero(str(source.display_name)))
+		var c2: Color = visual_mesh.get_meta("c2", c1.lightened(0.35))
+		Vfx.attach_trail(self, c1, 0.24, 0.32, 8, c2)
+		Vfx.muzzle(global_position, _aim_dir(), c1, c2)
+	var tw := create_tween()
+	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base * 1.10, 0.06)
+	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base, 0.06)
+
 
 ## 统一程序化弹体：核心形态 + 双色光晕 + 元素拖尾 + 出手弹跳（判定/速度完全不变）
 func _build_unified_visual() -> void:

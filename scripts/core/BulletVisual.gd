@@ -24,6 +24,11 @@ const PALETTE_ALLY_SMALL := 12    # 远程小兵（0.8 尺寸）
 const PALETTE_ENEMY_SMALL := 13
 const PALETTE_ALLY_SIEGE := 14    # 攻城兵（0.95 尺寸）
 const PALETTE_ENEMY_SIEGE := 15
+# 狄仁杰令牌专用调色板：只在 SHAPE_CARD 上解释，不影响小兵/塔的阵营色。
+const PALETTE_CARD_RED := 10
+const PALETTE_CARD_BLUE := 11
+const PALETTE_CARD_GOLD := 12
+const PALETTE_CARD_WHITE := 13
 
 ## vkind = VKIND_BASE + raw*VKIND_SHAPE_MUL + palette，palette 恒在低 4 位（0-15）不冲突。
 ## raw 取值范围 1..55 → vkind ≤ 995（客户端 NetClientBattle 仅认 vkind < 1000 的定制档）。
@@ -66,6 +71,7 @@ const HERO_SHAPE := {
 	"鲁班七号": SHAPE_SHELL,
 }
 
+const HeroProjectilesScript = preload("res://scripts/presentation/HeroProjectiles.gd")
 static var _mat_cache: Dictionary = {}
 static var _mesh_cache: Dictionary = {}
 
@@ -84,6 +90,10 @@ static func vkind_for(bl) -> int:
 		return 0
 	if src is Hero and int(bl.skill_id) == 0 and float(src.attack_range) <= 400.0:
 		return 0                        # 近战英雄普攻不出弹
+	if src is Hero:
+		var hvk: int = HeroProjectilesScript.vkind_for(str(src.display_name), int(bl.team), int(bl.skill_id))
+		if hvk > 0:
+			return hvk
 	return int(spec_for(bl).get("vk", 0))
 
 
@@ -108,7 +118,21 @@ static func spec_for(bl) -> Dictionary:
 		var idx := ELEMENT_ORDER.find(str(Vfx.element_of(str(src.display_name))))
 		palette = idx if idx >= 0 else 0
 
-	var cols := colors_for(palette)
+	var diren: bool = src is Hero and str(src.display_name) == "狄仁杰"
+	var diren_enhanced: bool = diren and int(bl.skill_id) == 0 \
+		and (bl.linear_dir.length() > 0.01 or bool(bl.pierce))
+	# 狄仁杰：普攻/强化普攻/1/2技能都是令牌，大招是黄牌；颜色写进 palette，
+	# 客户端 decode_vkind 后由 SHAPE_CARD 专用色表还原同一套红蓝/黄牌。
+	if diren:
+		shape = SHAPE_CARD
+		if int(bl.skill_id) == 3:
+			palette = PALETTE_CARD_GOLD
+		elif int(bl.skill_id) in [1, 2] or diren_enhanced:
+			palette = PALETTE_CARD_RED if (int(src.stat2) + int(bl.skill_id)) % 2 == 0 else PALETTE_CARD_BLUE
+		else:
+			palette = PALETTE_CARD_WHITE
+
+	var cols := card_colors_for(palette) if diren else colors_for(palette)
 	var size_mult := _size_for_palette(palette)
 	var raw_shape := shape
 	var slot := -1
@@ -116,7 +140,9 @@ static func spec_for(bl) -> Dictionary:
 	if is_skill:
 		# skill_id 1/2/3 即 Q/W/R（SkillDataBase.create_bullet 传参 1-based），映射到 slot 0/1/2。
 		slot = clampi(int(bl.skill_id) - 1, 0, SKILL_SLOT_COUNT - 1)
-		shape = _skill_shape(shape, slot)
+		# 狄仁杰三技能都保持令牌形状；其余英雄仍按英雄形状族换 Q/W/R 造型。
+		if not diren:
+			shape = _skill_shape(shape, slot)
 		trail = _trail_params(shape)
 		size_mult *= SKILL_SIZE * (SKILL_ULT_SIZE if slot >= 2 else 1.0)
 		if slot >= 2:
@@ -154,6 +180,19 @@ static func colors_for(palette: int) -> Array:
 	return [d["c"], d["c2"]]
 
 
+## 令牌专用色：红/蓝/黄/白四档（只在 SHAPE_CARD 上使用，不污染小兵阵营色）。
+static func card_colors_for(palette: int) -> Array:
+	match palette:
+		PALETTE_CARD_RED:
+			return [Color(1.0, 0.22, 0.18), Color(0.24, 0.52, 1.0)]
+		PALETTE_CARD_BLUE:
+			return [Color(0.20, 0.52, 1.0), Color(1.0, 0.28, 0.22)]
+		PALETTE_CARD_GOLD:
+			return [Color(1.0, 0.78, 0.16), Color(1.0, 0.96, 0.62)]
+		_:
+			return [Color(0.72, 0.90, 1.0), Color(1.0, 0.98, 0.90)]
+
+
 ## 调色板自带尺寸档（小兵/攻城兵比英雄弹小，双端一致）。
 static func _size_for_palette(palette: int) -> float:
 	if palette == PALETTE_ALLY_SMALL or palette == PALETTE_ENEMY_SMALL:
@@ -188,8 +227,10 @@ static func decode_vkind(vk: int) -> Dictionary:
 ## 客户端：按 vkind 还原同一形状与尺寸（宿主/客户端同源构建器）。
 static func build_from_vkind(vk: int) -> Node3D:
 	var d := decode_vkind(vk)
-	var cols := colors_for(int(d["palette"]))
-	return build(int(d["shape"]), cols[0], cols[1], float(d["size"]))
+	var shape := int(d["shape"])
+	var palette := int(d["palette"])
+	var cols := card_colors_for(palette) if shape == SHAPE_CARD else colors_for(palette)
+	return build(shape, cols[0], cols[1], float(d["size"]))
 
 
 ## 构建弹体视觉根节点（所有形状沿 +Z 朝向，宿主/客户端都用 rotation.y 追向速度）。
@@ -208,8 +249,10 @@ static func build(shape: int, c1: Color, c2: Color, size_mult: float = 1.0) -> N
 			_add(root, _sphere(), _core(c2), Vector3(0.42, 0.42, 0.5))
 			_add(root, _torus(), _glow(c1, 0.55), Vector3(0.85, 0.85, 0.85), Vector3.ZERO, Vector3(PI * 0.5, 0.0, 0.0))
 		SHAPE_CARD:
-			_add(root, _quad(), _glow_billboard(c1, 0.85), Vector3(0.6, 0.8, 1.0))
-			_add(root, _sphere(), _core(c2), Vector3(0.22, 0.22, 0.22))
+			# 令牌：红/蓝（或金黄）两张并排薄牌 + 中央亮点，飞行时朝向速度方向。
+			_add(root, _quad(), _glow_billboard(c1, 0.9), Vector3(0.46, 0.72, 1.0), Vector3(-0.18, 0.0, 0.0))
+			_add(root, _quad(), _glow_billboard(c2, 0.82), Vector3(0.46, 0.72, 1.0), Vector3(0.18, 0.0, 0.0))
+			_add(root, _sphere(), _core(Color(1.0, 0.96, 0.82)), Vector3(0.1, 0.1, 0.1), Vector3(0.0, 0.0, 0.03))
 		SHAPE_WATER:
 			_add(root, _sphere(), _glow(c1, 0.32), Vector3(0.7, 0.8, 1.05))
 			_add(root, _sphere(), _core(c2), Vector3(0.3, 0.4, 0.6))
