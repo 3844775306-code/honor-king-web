@@ -22,6 +22,7 @@ var invade_target_by_hero: Dictionary = {} # {Hero: Vector3} 人数优势时反�
 var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
 var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
 var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
+var gank_priority_by_hero: Dictionary = {} # {Hero: int} 抓人任务优先级（按可抓指标）
 var _push_gold_cd_until: Dictionary = {}   # {int: float} 经济差推塔冷却结束时间
 var _push_active: Dictionary = {}          # {int: bool} 当前是否处于抱团推塔
 var _push_last_target: Dictionary = {}     # {int: Vector3} 最近一次推塔目标（无兵线时沿用）
@@ -505,6 +506,7 @@ func allocate_all() -> Dictionary:
 	defend_assignees.clear()
 	defend_target_by_team.clear()
 	gank_target_by_hero.clear()
+	gank_priority_by_hero.clear()
 
 	var result: Dictionary = {}
 	var dragon_alive := _is_dragon_alive()
@@ -655,7 +657,8 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 		return t
 	if gank_target_by_hero.has(h):
 		var gt: Hero = gank_target_by_hero[h]
-		t.setup(TeamTask.Type.GANK, lane, gt.global_position, gt, 70, now, 25.0, "组团抓落单", role)
+		var gank_pri: int = int(gank_priority_by_hero.get(h, 70))
+		t.setup(TeamTask.Type.GANK, lane, gt.global_position, gt, gank_pri, now, 25.0, "组团抓落单", role)
 		return t
 	if lane == AiConfig.Lane.JUNGLE:
 		t.setup(TeamTask.Type.PUSH_LANE, lane, Vector3.ZERO, null, 50, now, 18.0, "刷野/回线", role)
@@ -715,20 +718,37 @@ func _in_own_half(pos: Vector3, team: int) -> bool:
 	return pos.distance_to(own) < pos.distance_to(enemy)
 
 
+## 可抓指标 = Σ(附近每名我方英雄 × 距离系数) - 目标到最近防御塔距离系数 × 目标血量系数
+func _gank_score(team: int, target: Hero) -> float:
+	var ally_sum := 0.0
+	for h in _get_ally_heroes(team):
+		var d: float = h.global_position.distance_to(target.global_position)
+		if d >= AiConfig.GANK_ALLY_RADIUS:
+			continue
+		ally_sum += 1.0 - d / AiConfig.GANK_ALLY_RADIUS
+	# 到「目标方」最近防御塔的距离系数：越靠近塔越难抓，减得越多
+	var tower_d := INF
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0.0:
+			continue
+		if int((e as Turret).team) != int(target.team) or (e as Turret).display_name == "crystal":
+			continue
+		tower_d = minf(tower_d, target.global_position.distance_to((e as Turret).global_position))
+	var tower_coeff := 0.0
+	if tower_d < AiConfig.GANK_TOWER_RADIUS:
+		tower_coeff = 1.0 - tower_d / AiConfig.GANK_TOWER_RADIUS
+	var hp_coeff: float = target.health / maxf(target.actual_max_health, 1.0)
+	return ally_sum - tower_coeff * hp_coeff
+
+
 func _find_gank_target(team: int) -> Hero:
 	var best: Hero = null
-	var best_score := INF
+	var best_score := AiConfig.GANK_MIN_SCORE
 	for h in _get_enemy_heroes(team):
-		if h.is_untargetable_by_enemies() or not _in_own_half(h.global_position, team):
+		if h.is_untargetable_by_enemies():
 			continue
-		var escort := 0
-		for e in _get_enemy_heroes(team):
-			if e != h and e.global_position.distance_to(h.global_position) <= 10.0:
-				escort += 1
-		if escort > 0:
-			continue
-		var score := h.health / maxf(1.0, h.actual_max_health)
-		if score < best_score:
+		var score := _gank_score(team, h)
+		if score > best_score:
 			best_score = score
 			best = h
 	return best
@@ -738,9 +758,12 @@ func _build_gank(team: int) -> void:
 	if bm.game_time >= 360.0:
 		var gank_target := _find_gank_target(team)
 		if gank_target != null:
+			var score := _gank_score(team, gank_target)
+			var gank_pri: int = clampi(int(round(score * AiConfig.GANK_SCORE_SCALE)), 1, AiConfig.GANK_PRIORITY_MAX)
 			for h in _get_ally_heroes(team):
 				if h.is_ai and h.global_position.distance_to(gank_target.global_position) <= 40.0:
 					gank_target_by_hero[h] = gank_target
+					gank_priority_by_hero[h] = gank_pri
 
 
 func _find_natural_jungler(team: int) -> Hero:
@@ -863,4 +886,3 @@ func _own_tower_pos(team: int, lane: int) -> Vector3:
 		AiConfig.Lane.MID: return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
 	return Vector3.ZERO
-
