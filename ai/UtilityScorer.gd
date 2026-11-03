@@ -309,6 +309,8 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			# 超出自己能打到的距离，换血价值大幅下降（10m 外不应压过团队任务）
 			var reach: float = h.attack_range * 0.01 + 1.5
 			u *= 0.40 + 0.60 * _u(1.0 - h.global_position.distance_to(target.global_position) / reach)
+			# 敌人在身边时必须先处理战斗，给近身换血额外加成
+			u *= 1.0 + 0.60 * _u(1.0 - h.global_position.distance_to(target.global_position) / 6.0)
 		AIAction.Type.FINISH_CHASE:
 			var ct: Hero = ctx.get("target")
 			if ct == null or not is_instance_valid(ct) or ct.health <= 0.0:
@@ -348,8 +350,8 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 					camp_d = minf(camp_d, h.global_position.distance_to((e as Node3D).global_position))
 			u = 0.35 * (1.0 if camp_d <= 12.0 else 0.0) + 0.25 * (1.0 if _is_jungler(h) else 0.3) \
 				+ 0.20 * _safe_at(tree, team, h.global_position) + 0.20 * _travel(ai, camp_d)
-			if low_hp > 0.65 and _enemy_near(tree, team, h.global_position, 6.0) > 0:
-				u *= 0.2
+			if _enemy_near(tree, team, h.global_position, 6.0) > 0:
+				u *= 0.25   # 敌人在身边时不能无视敌人去推线/刷野
 		AIAction.Type.PUSH_LANE:
 			var own_minions2 := 0
 			for e in tree.get_nodes_in_group("minions"):
@@ -359,8 +361,8 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			var tw := _nearest_tower(tree, team, h.global_position)
 			u = 0.30 * _u(float(own_minions2) / 5.0) + 0.20 * _safe_at(tree, team, h.global_position) \
 				+ 0.10 * _tower_low(tw) + 0.10 * 0.7
-			if low_hp > 0.65 and _enemy_near(tree, team, h.global_position, 6.0) > 0:
-				u *= 0.2
+			if _enemy_near(tree, team, h.global_position, 6.0) > 0:
+				u *= 0.25   # 敌人在身边时不能无视敌人去推线/刷野
 		AIAction.Type.TEAM_TASK:
 			if ai.team_task != null:
 				return hero_team_task_priority(ai, ai.team_task)
@@ -372,11 +374,41 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 	return to_priority(u)
 
 
+## 原型用候选生成：原有候选 + 敌人贴脸时的撤退/换血候选
+static func synthetic_candidates(ai: HeroAI) -> Array:
+	var out: Array = ai._build_action_candidates()
+	var h: Hero = ai.hero
+	if h == null or not is_instance_valid(h):
+		return out
+	var tree = h.get_tree()
+	var team: int = int(h.team)
+	var near := _nearest_enemy(tree, team, h.global_position)
+	var has_trade := false
+	var has_retreat := false
+	for a in out:
+		if int(a.type) == int(AIAction.Type.TRADE):
+			has_trade = true
+		if int(a.type) == int(AIAction.Type.RETURN_TO_BASE):
+			has_retreat = true
+	if near != null and h.global_position.distance_to(near.global_position) <= 10.0:
+		if not has_trade:
+			var ta := AIAction.new(AIAction.Type.TRADE, action_priority(ai, AIAction.Type.TRADE, {"target": near}),
+				AIAction.PauseClass.SURVIVAL, "近身换血")
+			ta.target = near
+			out.append(ta)
+		if not has_retreat:
+			var ra := AIAction.new(AIAction.Type.RETURN_TO_BASE, action_priority(ai, AIAction.Type.RETURN_TO_BASE),
+				AIAction.PauseClass.SURVIVAL, "贴脸撤退")
+			out.append(ra)
+	return out
+
 static func _under_enemy_tower(tree, team: int, pos: Vector3) -> bool:
 	var t := _nearest_tower(tree, team, pos)
 	if t == null:
 		return false
 	return pos.distance_to(t.global_position) <= t.attack_range * 0.01 + 2.0
+
+
 
 
 
