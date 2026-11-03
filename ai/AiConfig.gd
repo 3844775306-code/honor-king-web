@@ -7,6 +7,9 @@ enum Lane { FARM, MID, CLASH, JUNGLE }
 # ==================== 血量阈值 ====================
 const HEALTH_CRITICAL: float = 0.2          # 极危 — 闪现逃离 / 金身触发
 const HEALTH_RECALL: float = 0.25           # 回城阈值
+const MANA_LOW: float = 0.30               # 低蓝：不再用耗蓝技能打小兵/野怪，主动找蓝 buff
+const MANA_CRITICAL: float = 0.10          # 蓝量危急：触发回城
+const BLUE_BUFF_SEARCH_RANGE: float = 60.0 # 低蓝找蓝 buff 的搜索半径
 const HEALTH_LOW: float = 0.4               # 低血量 — 找血包 / 治疗术
 const HEALTH_DEFEND: float = 0.5            # 防守倾向
 const HEALTH_SAFE: float = 0.7              # 安全线 — 可用恢复
@@ -193,4 +196,3 @@ static func skill_hits() -> bool:
 # 决策随机扰动幅度
 static func score_jitter() -> float:
 	return DIFF_TABLE[difficulty].get("score_random", 0.15)
-

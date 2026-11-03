@@ -177,6 +177,11 @@ func _action_is_complete(action: AIAction) -> bool:
 			return trade_planner.active_target == null or not is_instance_valid(trade_planner.active_target)
 		AIAction.Type.FINISH_CHASE:
 			return _chase_target == null or not is_instance_valid(_chase_target) or _chase_target.health <= 0.0
+		AIAction.Type.BLUE_BUFF:
+			if hero.mana >= hero.actual_mana_max * AiConfig.MANA_LOW:
+				return true
+			return hero.manual_target == null or not is_instance_valid(hero.manual_target) \
+				or hero.manual_target.health <= 0.0
 		AIAction.Type.TEMP_CLEAR:
 			return _temp_clear_retarget_or_done()
 		AIAction.Type.TEAM_TASK:
@@ -1022,10 +1027,16 @@ func _process(delta):
 	if hero.is_recalling:
 		hero.move_target = Vector3.ZERO
 		_ai_path.clear()
-		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城")
+		var _recall_reason := "回城"
+		if current_action != null and str(current_action.reason).contains("蓝量"):
+			_recall_reason = "蓝量枯竭回城"
+		_set_action(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, _recall_reason)
 		_recall_safe_behavior(delta)
 		return
 	_sync_ai_movement()
+	if _is_action(AIAction.Type.BLUE_BUFF):
+		_blue_buff_behavior()
+		return
 	# 目标死亡后的“附近是否还有其他小兵”交给 _action_is_complete 的 TEMP_CLEAR 分支处理
 	_debug_track()
 
@@ -1534,8 +1545,24 @@ func _build_action_candidates() -> Array[AIAction]:
 	# 回城
 	if hero.is_in_own_fountain() and not _fully_recovered():
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
+	elif _is_mana_critical():
+		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 958, AIAction.PauseClass.SURVIVAL, "蓝量枯竭回城"))
+		if "--ai-mana-probe" in OS.get_cmdline_user_args():
+			print("[AIMANA] critical recall %s mana=%.0f/%.0f" % [
+				hero.display_name, hero.mana, hero.actual_mana_max])
 	elif hero.health < hero.actual_max_health * AiConfig.HEALTH_RECALL:
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
+	# 低蓝且未到危急线：主动去击败附近蓝 buff（打蓝时允许用耗蓝技能）
+	if _is_low_mana() and not _is_mana_critical():
+		var bb := _find_nearby_blue_buff()
+		if bb != null:
+			var ba := AIAction.new(AIAction.Type.BLUE_BUFF, 870, AIAction.PauseClass.ENVIRONMENT, "蓝量不足·打蓝")
+			ba.target = bb
+			out.append(ba)
+			if "--ai-mana-probe" in OS.get_cmdline_user_args():
+				print("[AIMANA] blue seek %s mana=%.0f/%.0f dist=%.1f" % [
+					hero.display_name, hero.mana, hero.actual_mana_max,
+					hero.global_position.distance_to(bb.global_position)])
 
 	# 换血
 	var trade_intent := trade_planner.evaluate()
@@ -1569,7 +1596,7 @@ func _build_action_candidates() -> Array[AIAction]:
 		team_task = null
 		is_dragon_rally = false
 	if team_task != null:
-		out.append(AIAction.new(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label()))
+		out.append(AIAction.new(AIAction.Type.TEAM_TASK, _team_task_action_priority(), AIAction.PauseClass.NONE, team_task.label()))
 
 	# 默认本地
 	if _is_natural_jungler:
@@ -1635,12 +1662,25 @@ func _execute_candidate(a: AIAction):
 			hero.move_target = Vector3.ZERO
 			_temp_clearing = true
 			_set_action(AIAction.Type.TEMP_CLEAR, a.priority, a.pause_class, a.reason)
+		AIAction.Type.BLUE_BUFF:
+			hero.manual_target = a.target
+			hero.move_target = (a.target as Node3D).global_position if a.target != null else Vector3.ZERO
+			_set_action(AIAction.Type.BLUE_BUFF, a.priority, a.pause_class, a.reason, {"target": a.target})
+			if "--ai-mana-probe" in OS.get_cmdline_user_args():
+				print("[AIMANA] execute blue %s target=%s" % [hero.display_name, a.target.display_name if a.target else "null"])
 		AIAction.Type.TEAM_TASK:
 			_execute_team_task()
 		AIAction.Type.JUNGLE_FARM:
 			_execute_local_task(true)
 		AIAction.Type.PUSH_LANE:
 			_execute_local_task(false)
+
+
+## 团队任务的 Action 优先级：水晶守小兵要高于临时清兵/换血，否则 AI 会继续在兵线清兵不回防
+func _team_task_action_priority() -> int:
+	if team_task != null and int(team_task.type) == int(TeamTask.Type.DEFEND_LANE):
+		return maxi(int(team_task.priority), 950)
+	return int(team_task.priority) if team_task != null else 0
 
 
 func _execute_team_task() -> void:
@@ -1666,7 +1706,7 @@ func _execute_team_task() -> void:
 			"task_lane": int(team_task.lane),
 			"task_priority": int(team_task.priority),
 		}
-		_set_action(AIAction.Type.TEAM_TASK, int(team_task.priority), AIAction.PauseClass.NONE, team_task.label(), task_data)
+		_set_action(AIAction.Type.TEAM_TASK, _team_task_action_priority(), AIAction.PauseClass.NONE, team_task.label(), task_data)
 	if team_task.type != TeamTask.Type.PUSH_LANE and team_task.type != TeamTask.Type.PUSH_TOWER:
 		return
 	_execute_local_task(_is_natural_jungler)
@@ -2350,6 +2390,46 @@ static func clampf(val: float, lo: float, hi: float) -> float:
 	return lo if val < lo else (hi if val > hi else val)
 
 
+# ==================== 低蓝 / 蓝 buff ====================
+func _is_low_mana() -> bool:
+	if hero == null or not is_instance_valid(hero) or hero.display_name == "张飞":
+		return false
+	return hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.MANA_LOW
+
+
+func _is_mana_critical() -> bool:
+	if hero == null or not is_instance_valid(hero) or hero.display_name == "张飞":
+		return false
+	return hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.MANA_CRITICAL
+
+
+func _find_nearby_blue_buff() -> JungleMonster:
+	var best: JungleMonster = null
+	var best_d := AiConfig.BLUE_BUFF_SEARCH_RANGE
+	for e in hero.get_tree().get_nodes_in_group("jungle_monsters"):
+		if not is_instance_valid(e) or not (e is JungleMonster):
+			continue
+		var m := e as JungleMonster
+		if m.health <= 0.0 or str(m.buff_type) != "blue":
+			continue
+		var d: float = hero.global_position.distance_to(m.global_position)
+		if d < best_d:
+			best_d = d
+			best = m
+	return best
+
+
+func _blue_buff_behavior() -> void:
+	var t = hero.manual_target
+	if t == null or not is_instance_valid(t) or t.health <= 0.0 or hero.mana >= hero.actual_mana_max * AiConfig.MANA_LOW:
+		_finish_current_action()
+		hero.manual_target = null
+		hero.move_target = Vector3.ZERO
+		return
+	_sync_ai_movement()
+	_try_use_skills(t)
+
+
 # ==================== 恢复 ====================
 func _try_use_recover():
 	if hero.skills.size() < 4:
@@ -2366,7 +2446,8 @@ func _try_use_recover():
 func _recall_safe_behavior(delta):
 	# 回城中血量恢复到 30% 以上并持续 2.5 秒 → 主动退出回城
 	if hero.is_recalling:
-		if hero.health >= hero.actual_max_health * 0.30:
+		# 低蓝回城不在血量恢复到 30% 时提前取消，需回到泉水补蓝
+		if not _is_low_mana() and hero.health >= hero.actual_max_health * 0.30:
 			_recall_recover_t += delta
 			if _recall_recover_t >= 2.5:
 				_recall_recover_t = 0.0
@@ -2965,4 +3046,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-

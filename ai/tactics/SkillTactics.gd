@@ -75,6 +75,8 @@ func _can_execute_combo(combo: Dictionary, target: GameEntity) -> bool:
 			return false
 		if not _skill_in_range(idx, target):
 			return false
+		if _low_mana_skill_blocked(idx, target):
+			return false
 	return true
 
 
@@ -259,6 +261,8 @@ func _get_candidates(target: GameEntity = null) -> Array:
 			continue
 		if not _skill_in_range(i, target):
 			continue
+		if _low_mana_skill_blocked(i, target):
+			continue
 		var sk: Skill = hero.skills[i]
 		var score := _score_skill(sk, i, target)
 		result.append({"index": i, "skill": sk, "score": score})
@@ -340,7 +344,26 @@ func _ult_allowed(target: GameEntity) -> bool:
 	return _ult_minion_tower_bonus(sk, target) >= 0.0
 
 
-## 是否带控制效果（眩晕/击飞/减速）
+## 蓝量 <30% 时，不允许用耗蓝技能清理小兵/普通野怪；打蓝 buff 时放行。
+func _low_mana_skill_blocked(index: int, target: GameEntity) -> bool:
+	if hero == null or target == null or not is_instance_valid(target):
+		return false
+	if hero.display_name == "张飞":
+		return false
+	if index < 0 or index >= hero.skills.size() or hero.skills[index] == null:
+		return false
+	if hero.skills[index].mana_cost <= 0.0:
+		return false
+	if hero.actual_mana_max <= 0.0 or hero.mana >= hero.actual_mana_max * AiConfig.MANA_LOW:
+		return false
+	if target is Minion:
+		return true
+	if target is JungleMonster:
+		return str((target as JungleMonster).buff_type) != "blue" \
+			and str(target.display_name) != "blue_buff"
+	return false
+
+
 func _is_offensive_skill(sk: Skill) -> bool:
 	if sk == null:
 		return false
@@ -350,6 +373,7 @@ func _is_offensive_skill(sk: Skill) -> bool:
 	return sk.type in [0, 1, 3] and sk.cast_range > 0.0
 
 
+## 是否带控制效果（眩晕/击飞/减速）
 func _has_control(sk: Skill) -> bool:
 	if sk == null:
 		return false

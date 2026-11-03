@@ -20,6 +20,7 @@ enum Type {
 	ROTATE,
 	DODGE,
 	TOWER_ESCAPE,
+	BLUE_BUFF,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, INTERRUPTED }
@@ -72,4 +73,5 @@ func label() -> String:
 		Type.ROTATE: return "传送转线"
 		Type.DODGE: return "躲避"
 		Type.TOWER_ESCAPE: return "塔下逃生"
+		Type.BLUE_BUFF: return "打蓝 buff"
 	return "待命"
