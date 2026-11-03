@@ -369,7 +369,7 @@ func _draw():
 		if h.team != player_team and h.health <= 0.0: continue
 		var pos := _world_to_minimap(h.global_position)
 		var base_col := Color(0.0, 0.886, 1.0) if h.team == player_team else Color(1.0, 0.33, 0.264)
-		var hp_ratio := clampf(h.health / maxf(h.max_health, 1.0), 0.0, 1.0)
+		var hp_ratio := clampf(h.health / maxf(h.actual_max_health, 1.0), 0.0, 1.0)
 		var dir := Vector2(sin(h.rotation.y), cos(h.rotation.y))
 		if h.velocity.length() > 0.2:
 			dir = Vector2(h.velocity.x, h.velocity.z)
