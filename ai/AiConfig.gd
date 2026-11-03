@@ -141,6 +141,16 @@ const DODGE_MARGIN: float = 1.5              # 弹道碰撞安全边距
 const DODGE_CHANCE: float = 0.6              # 躲避概率（0-1）
 const DODGE_GROUND_MARGIN: float = 0.8       # 地面持续技能：离开危险圈的额外边距
 
+# ==================== 保持安全距离（迟滞） ====================
+const SAFE_DISTANCE_ENTER_HP: float = 0.40    # 低于该血量才进入保持安全距离
+const SAFE_DISTANCE_EXIT_HP: float = 0.45     # 高于该血量退出，避免40%附近反复触发
+const SAFE_DISTANCE_LEAVE_MARGIN: float = 1.5 # 退出安全距离时额外拉开的边距
+const SAFE_DISTANCE_GOAL_MARGIN: float = 2.2  # 后撤目标点比安全距离多出的距离
+const SAFE_DISTANCE_MIN_TIME: float = 0.5     # 进入后至少持续该时间才允许退出
+const SAFE_DISTANCE_COOLDOWN: float = 0.8     # 退出后的重触发冷却
+const SAFE_DISTANCE_RETARGET_RANGE: float = 15.0 # 超过该距离才更换锁定目标
+const SAFE_DISTANCE_GOAL_REFRESH: float = 2.5 # 目标移动超过该距离才刷新后撤点
+
 # ==================== 位移类技能（追击 / 逃跑） ====================
 # AI 以前只会直线走位，位移技能（type=4）几乎只靠连招顺带放。
 # 现在追击够不到时用位移贴脸、被贴身且血量偏低时用位移拉开。

@@ -30,6 +30,11 @@ var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时�
 var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
 var _minion_escape_started_at := -1.0      # 塔前脱战开始时间
 var _minion_escape_cooldown_until := -1.0  # 塔前脱战超时后的重触发冷却
+var _safe_target: Hero = null              # 保持安全距离锁定的敌人
+var _safe_target_pos := Vector3.ZERO       # 锁定时目标位置（用于判断是否刷新后撤点）
+var _safe_goal := Vector3.ZERO             # 缓存的后撤目标点
+var _safe_started_at := -1.0               # 保持安全距离开始时间
+var _safe_cooldown_until := -1.0           # 保持安全距离重触发冷却
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
@@ -384,38 +389,14 @@ func _try_tower_minion_escape() -> bool:
 
 
 ## 保持安全距离：目标进入安全距离内时先后撤，回到安全距离即停（优先级 910）
-func _try_keep_safe_distance() -> bool:
-	if hero.is_dead:
-		return false
-	if hero.health >= hero.actual_max_health * 0.40:
-		if _is_action(AIAction.Type.SAFE_DISTANCE):
-			_finish_current_action()
-		return false
-	var target: Hero = null
-	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
-		target = hero.manual_target
-	if target == null:
-		target = perception.find_nearest_enemy_hero(12.0)
-	if target == null or not is_instance_valid(target) or target.health <= 0.0:
-		if _is_action(AIAction.Type.SAFE_DISTANCE):
-			_finish_current_action()
-		return false
-	var safe := _safe_distance_to(target)
-	var dist := hero.global_position.distance_to(target.global_position)
-	if dist >= safe:
-		if _is_action(AIAction.Type.SAFE_DISTANCE):
-			_finish_current_action()
-		return false
+func _safe_distance_compute_goal(target: Hero, safe: float) -> Vector3:
 	var away: Vector3 = hero.global_position - target.global_position
 	away.y = 0.0
 	if away.length() < 0.05:
 		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
-	if hero.is_recalling:
-		hero.cancel_recall()
-	hero.manual_target = null
 	var dir := away.normalized()
 	var half := Config.MAP_SIZE * 0.5
-	var goal: Vector3 = target.global_position + dir * (safe + 0.8)
+	var goal: Vector3 = target.global_position + dir * (safe + AiConfig.SAFE_DISTANCE_GOAL_MARGIN)
 	goal.x = clampf(goal.x, -half, half)
 	goal.z = clampf(goal.z, -half, half)
 	# 落点不可走/被墙挡住时先找最近可站点，并尝试左右偏移绕开墙面
@@ -425,14 +406,83 @@ func _try_keep_safe_distance() -> bool:
 			goal = alt
 	if not PathFinder.is_walkable_world(goal):
 		for ang in [45.0, -45.0, 90.0, -90.0]:
-			var cand: Vector3 = target.global_position + dir.rotated(Vector3.UP, deg_to_rad(ang)) * (safe + 0.8)
+			var cand: Vector3 = target.global_position + dir.rotated(Vector3.UP, deg_to_rad(ang)) * (safe + AiConfig.SAFE_DISTANCE_GOAL_MARGIN)
 			cand.x = clampf(cand.x, -half, half)
 			cand.z = clampf(cand.z, -half, half)
 			if PathFinder.is_walkable_world(cand):
 				goal = cand
 				break
+	return goal
+
+
+func _end_safe_distance(now: float) -> void:
+	if _is_action(AIAction.Type.SAFE_DISTANCE):
+		_finish_current_action()
+	_safe_started_at = -1.0
+	_safe_cooldown_until = now + AiConfig.SAFE_DISTANCE_COOLDOWN
+	_safe_target = null
+	_safe_target_pos = Vector3.ZERO
+	_safe_goal = Vector3.ZERO
+
+
+func _try_keep_safe_distance() -> bool:
+	if hero == null or hero.is_dead:
+		return false
+	var now := Time.get_ticks_msec() * 0.001
+	var active := _is_action(AIAction.Type.SAFE_DISTANCE)
+	var hp_ratio: float = hero.health / maxf(hero.actual_max_health, 1.0)
+	# 血量迟滞：<40% 进入，>45% 退出；避免 40% 附近回血/掉血反复切换
+	if hp_ratio >= AiConfig.SAFE_DISTANCE_EXIT_HP:
+		if active:
+			_end_safe_distance(now)
+		return false
+	if not active and hp_ratio >= AiConfig.SAFE_DISTANCE_ENTER_HP:
+		return false
+	if not active and now < _safe_cooldown_until:
+		return false
+	# 锁定目标：只在目标死亡/失效/太远时重新选，避免最近目标频繁切换导致方向抖动
+	var target: Hero = _safe_target
+	if target == null or not is_instance_valid(target) or target.health <= 0.0 \
+			or hero.global_position.distance_to(target.global_position) > AiConfig.SAFE_DISTANCE_RETARGET_RANGE:
+		target = null
+		if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
+			target = hero.manual_target
+		if target == null:
+			target = perception.find_nearest_enemy_hero(12.0)
+		if target != null and is_instance_valid(target) and target.health > 0.0:
+			_safe_target = target
+			_safe_target_pos = target.global_position
+			_safe_goal = Vector3.ZERO
+			if active:
+				_safe_started_at = now
+		else:
+			if active:
+				_end_safe_distance(now)
+			return false
+	var safe := _safe_distance_to(target)
+	var dist := hero.global_position.distance_to(target.global_position)
+	if active:
+		var held: float = now - _safe_started_at if _safe_started_at >= 0.0 else 0.0
+		# 退出需要真正拉开距离并持续足够时间，避免贴边抖动
+		if dist >= safe + AiConfig.SAFE_DISTANCE_LEAVE_MARGIN and held >= AiConfig.SAFE_DISTANCE_MIN_TIME:
+			_end_safe_distance(now)
+			return false
+	else:
+		if dist >= safe:
+			return false
+		_safe_target = target
+		_safe_target_pos = target.global_position
+		_safe_started_at = now
+		_safe_goal = _safe_distance_compute_goal(target, safe)
+	if hero.is_recalling:
+		hero.cancel_recall()
+	hero.manual_target = null
+	# 目标移动较大才刷新后撤点，避免每帧重算导致路径抖动
+	if _safe_goal == Vector3.ZERO or _safe_target_pos.distance_to(target.global_position) > AiConfig.SAFE_DISTANCE_GOAL_REFRESH:
+		_safe_goal = _safe_distance_compute_goal(target, safe)
+		_safe_target_pos = target.global_position
 	# 走 A* 绕墙，避免直接朝墙后退把自己顶在墙上
-	_walk_to(goal)
+	_walk_to(_safe_goal)
 	if not _is_action(AIAction.Type.SAFE_DISTANCE):
 		if current_action != null:
 			current_action.mark(AIAction.Status.INTERRUPTED)
@@ -3640,4 +3690,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
