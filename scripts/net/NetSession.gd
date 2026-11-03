@@ -107,6 +107,10 @@ var _roster_payload := []   # client：收到的 _rpc_roster 载荷（属性 C /
 var _prev_alive := {}   # P3e host：pid→上次 alive，死亡跃迁 1→0 时对该 pid 推一次死亡回放
 var _result_sent := false   # P3f host：game_over 翻转时已广播结算（新一局重置）
 var _map_sent_to := {}      # host：已发过地图的 peer_id
+var _map_acked := {}        # host：客户端确认已应用地图的 peer_id
+var _takeover_acked := {}   # host：客户端确认已接管的 peer_id
+var _takeover_resend := 0.0
+var _map_send_at := 0.0
 
 # --- #43 FX（host only）：技能视觉事件环形缓冲 → 快照 fx 段 ---
 var _fx_seq := 0             # 每次快照 flush 递增（客户端据此去重）
@@ -367,6 +371,8 @@ func _on_peer_disconnected(id: int) -> void:
 		return
 	players.erase(id)
 	lobby_ready.erase(id)
+	_map_acked.erase(int(id))
+	_takeover_acked.erase(int(id))
 	if mode == Mode.CLIENT and id == 1:
 		print("[Net] 与主机断开连接")
 		_clear_overlay()
@@ -898,6 +904,8 @@ func disconnect_network() -> void:
 	_assign_peer.clear()
 	_map_payload = {}
 	_map_sent_to = {}
+	_map_acked = {}
+	_takeover_acked = {}
 	if multiplayer != null and multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer = null
 	_clear_overlay()
@@ -1103,6 +1111,30 @@ func _rpc_request_resync(need_map: bool = true) -> void:
 	if not multiplayer.is_server():
 		return
 	_resync_peer(multiplayer.get_remote_sender_id(), need_map)
+
+
+func ack_map_applied() -> void:
+	if mode == Mode.CLIENT:
+		_rpc_map_ack.rpc_id(1)
+
+
+func ack_takeover_applied() -> void:
+	if mode == Mode.CLIENT:
+		_rpc_takeover_ack.rpc_id(1)
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_map_ack() -> void:
+	if not multiplayer.is_server():
+		return
+	_map_acked[multiplayer.get_remote_sender_id()] = true
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_takeover_ack() -> void:
+	if not multiplayer.is_server():
+		return
+	_takeover_acked[multiplayer.get_remote_sender_id()] = true
 
 
 func send_command(cmd: Array) -> void:
@@ -1363,6 +1395,14 @@ func _process_host(delta: float) -> void:
 					var snap := _build_snapshot(bm, _peer_camp(int(pid)))
 					if not snap.is_empty():
 						rpc_id(int(pid), "_rpc_snapshot", snap)
+	# 接管清单重发：只到客户端 ACK 为止，避免转场期 reliable 包丢失导致永久等待。
+	_takeover_resend -= delta
+	if _takeover_resend <= 0.0:
+		_takeover_resend = 1.0
+		for pid in _assign_hero:
+			if not _takeover_acked.has(int(pid)) and is_instance_valid(_assign_hero[pid]):
+				var hh: Hero = _assign_hero[pid]
+				rpc_id(int(pid), "_rpc_takeover", _build_manifest(int(pid), hh, _net_id_for(hh)))
 	_prune_timer -= delta
 	if _prune_timer <= 0.0:
 		_prune_timer = 1.0
@@ -2406,14 +2446,21 @@ func _broadcast_map_if_needed() -> void:
 		return
 	if bm.get("hero_selected") == null or not bool(bm.get("hero_selected")):
 		return  # 还没进对局
+	var now := Time.get_ticks_msec() * 0.001
+	if now < _map_send_at:
+		return
 	var payload := _collect_map_payload(bm)
+	var sent := false
 	for pid in players:
 		var peer_id := int(pid)
-		if peer_id == 1 or _map_sent_to.has(peer_id):
+		if peer_id == 1 or _map_acked.has(peer_id):
 			continue
 		rpc_id(peer_id, "_rpc_map", payload)
 		_map_sent_to[peer_id] = true
-		print("[Net] 地图布局已发 peer=", peer_id)
+		sent = true
+		print("[Net] 地图布局已发 peer=", peer_id, " 等待ACK")
+	if sent:
+		_map_send_at = now + 1.5
 
 
 func _resync_peer(pid: int, need_map: bool = true) -> void:

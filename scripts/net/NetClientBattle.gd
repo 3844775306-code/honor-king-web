@@ -457,6 +457,7 @@ func _process(delta: float) -> void:
 	_hud.vg = _own.get("vg", [])
 	_hud.u = _hud_scale()
 	if _owned:
+		NetSession.ack_takeover_applied()
 		if _pending_skill >= 0:
 			_ret_point = _ground_hit(_mouse_screen)
 	# 实体平滑移动：_rtime 每帧按真实时间推进，封顶 = 最新快照时刻 - INTERP_DELAY（回看 80ms）。
@@ -2955,6 +2956,10 @@ func _on_enemy_picker_tapped(nid: int) -> void:
 
 
 func _on_takeover(manifest: Dictionary) -> void:
+	# 主机在 ACK 前会重发同一份清单：重复应用会把镜头/输入状态重置，直接确认即可。
+	if _owned and int(manifest.get("net_id", -1)) == _self_net:
+		NetSession.ack_takeover_applied()
+		return
 	_manifest = manifest
 	# 阵营：客户端可选择红/蓝方；接管后把本机 Config.player_team 切到该阵营，
 	# 所有共享 HUD/小地图/聊天/面板/结算都按本地阵营着色与判断（host 端仍按模拟阵营）
@@ -3839,6 +3844,7 @@ func _apply_map_if_ready() -> void:
 	if bushes.is_empty() and walls.is_empty() and camps.is_empty():
 		return
 	_map_applied = true
+	NetSession.ack_map_applied()
 	for b in bushes:
 		if b.size() < 2:
 			continue
