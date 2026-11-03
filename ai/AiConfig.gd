@@ -10,6 +10,9 @@ const HEALTH_RECALL: float = 0.25           # 回城阈值
 const MANA_LOW: float = 0.30               # 低蓝：不再用耗蓝技能打小兵/野怪，主动找蓝 buff
 const MANA_CRITICAL: float = 0.10          # 蓝量危急：触发回城
 const BLUE_BUFF_SEARCH_RANGE: float = 60.0 # 低蓝找蓝 buff 的搜索半径
+# 特殊资源英雄：不受普通蓝量阈值限制（马可/火舞等能量型；低蓝上限英雄自动豁免）
+const MANA_EXEMPT_HEROES := ["马可波罗", "不知火舞", "张飞", "马超", "沈梦溪"]
+const MANA_EXEMPT_MAX := 50.0
 const HEALTH_LOW: float = 0.4               # 低血量 — 找血包 / 治疗术
 const HEALTH_DEFEND: float = 0.5            # 防守倾向
 const HEALTH_SAFE: float = 0.7              # 安全线 — 可用恢复
@@ -199,3 +202,13 @@ static func skill_hits() -> bool:
 static func score_jitter() -> float:
 	return DIFF_TABLE[difficulty].get("score_random", 0.15)
 
+
+## 是否套用普通蓝量阈值（马可/火舞等能量型、蓝量上限极低的英雄不套用）
+static func mana_rules_apply(h) -> bool:
+	if h == null or not is_instance_valid(h):
+		return false
+	if str(h.display_name) in MANA_EXEMPT_HEROES:
+		return false
+	if float(h.actual_mana_max) <= MANA_EXEMPT_MAX:
+		return false
+	return true

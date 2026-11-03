@@ -355,7 +355,7 @@ func _ult_allowed(target: GameEntity) -> bool:
 func _low_mana_skill_blocked(index: int, target: GameEntity) -> bool:
 	if hero == null or target == null or not is_instance_valid(target):
 		return false
-	if hero.display_name == "张飞":
+	if not AiConfig.mana_rules_apply(hero):
 		return false
 	if index < 0 or index >= hero.skills.size() or hero.skills[index] == null:
 		return false

@@ -1599,7 +1599,7 @@ func _build_action_candidates() -> Array[AIAction]:
 	# 回城
 	if hero.is_in_own_fountain() and not _fully_recovered():
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 960, AIAction.PauseClass.SURVIVAL, "回城"))
-	elif _is_mana_critical():
+	elif _is_mana_critical() and not _has_blue_buff_context():
 		out.append(AIAction.new(AIAction.Type.SAFE_RECALL, 958, AIAction.PauseClass.SURVIVAL, "蓝量枯竭回城"))
 		if "--ai-mana-probe" in OS.get_cmdline_user_args():
 			print("[AIMANA] critical recall %s mana=%.0f/%.0f" % [
@@ -2448,15 +2448,28 @@ static func clampf(val: float, lo: float, hi: float) -> float:
 
 # ==================== 低蓝 / 蓝 buff ====================
 func _is_low_mana() -> bool:
-	if hero == null or not is_instance_valid(hero) or hero.display_name == "张飞":
+	if not AiConfig.mana_rules_apply(hero):
 		return false
 	return hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.MANA_LOW
 
 
 func _is_mana_critical() -> bool:
-	if hero == null or not is_instance_valid(hero) or hero.display_name == "张飞":
+	if not AiConfig.mana_rules_apply(hero):
 		return false
 	return hero.actual_mana_max > 0.0 and hero.mana < hero.actual_mana_max * AiConfig.MANA_CRITICAL
+
+
+## 正在打蓝 buff / 已有蓝 buff：蓝量危急时也不回城
+func _has_blue_buff_context() -> bool:
+	if hero == null or not is_instance_valid(hero):
+		return false
+	if bool(hero.blue_buff_active):
+		return true
+	if _is_action(AIAction.Type.BLUE_BUFF):
+		return true
+	var t = hero.manual_target
+	return t != null and is_instance_valid(t) and t is JungleMonster \
+		and str((t as JungleMonster).buff_type) == "blue"
 
 
 func _find_nearby_blue_buff() -> JungleMonster:
@@ -3122,8 +3135,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-
-
-
-
-
