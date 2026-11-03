@@ -1069,6 +1069,7 @@ func _start_net_lineup(picks: Dictionary) -> void:
 		gh.setup_skills_from_database(cfg.get("skills", []), summ)
 		gh.hero_skin_id = str(p.get("skin", ""))
 		add_child(gh)
+		NetSession.assign_guest_hero(pn, gh)
 		if gh.display_name == "元流之子":
 			gh.yuanliu_pick = ["生机", "穿心", "迅疾", "凝神"][randi() % 4]
 			gh._recalculate_attributes()

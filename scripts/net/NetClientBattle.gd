@@ -211,6 +211,7 @@ var _residual_vision: Array = []   # 死亡视野残留 [{pos,r,until}]：塔2s 
 var _vision_views := {}   # iid -> VisionSpirit（联机客户端表现副本）
 var _tower_locks := {}      # 防御塔锁定光束：key(塔位) -> {mesh, from, to, cur, t}
 var _map_applied := false
+var _resync_timer := 0.0
 var _static_root: Node3D = null
 var _camp_rings := []     # 野区营地范围圈 [[环MeshInstance3D, 亮起秒数]]：普通营地 30s 首刷、空间之灵 60s，未到点前隐藏
 
@@ -422,6 +423,12 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _hud == null:
 		return
+	# 地图/接管任一未到就可靠补发，直到服务端状态真正落地（Web 转场期丢包兜底）。
+	if not _map_applied or not _owned:
+		_resync_timer -= delta
+		if _resync_timer <= 0.0:
+			_resync_timer = 2.0
+			NetSession.request_battle_resync(not _map_applied)
 	_tick_intro_loading()
 	_atk_ring_flash = maxf(0.0, _atk_ring_flash - delta)
 	if not _map_applied:

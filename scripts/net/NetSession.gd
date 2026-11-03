@@ -802,6 +802,16 @@ func clear_pick(pid: int) -> void:
 		_broadcast_lobby_state()
 
 
+func assign_guest_hero(pid: int, h: Hero) -> void:
+	# 开局创建 guest 英雄时就绑定，避免之后按 display_name/阵营二次匹配失败导致永久等待。
+	if mode != Mode.HOST or int(pid) == 1 or h == null or not is_instance_valid(h):
+		return
+	if _assign_hero.has(int(pid)) or not _picks.has(int(pid)):
+		return
+	_assign_hero_to(int(pid), h)
+	print("[Net] 开局直绑 peer=", pid, " hero=", h.display_name)
+
+
 func assign_lineup() -> void:
 	# host：开局后把选人阶段已锁的 guest 英雄按 display_name 逐一分给对应 peer（复用接管流程）；
 	# host 自己(pid=1)的 bm.hero 在本地操控，不入此表。
@@ -829,6 +839,46 @@ func assign_lineup() -> void:
 			_assign_hero_to(pidn, h)
 			print("[Net] 开局分配 peer=", pidn, " hero=", want)
 			break
+		if not _assign_hero.has(pidn):
+			# 先跨阵营找 UI 上锁定的同名英雄：网页端阵营状态可能比主机的 ready 行晚一拍。
+			for e in get_tree().get_nodes_in_group("heroes"):
+				if not is_instance_valid(e) or e is not Hero:
+					continue
+				var hx: Hero = e
+				if hx.display_name != want or _assign_peer.has(hx.get_instance_id()):
+					continue
+				_assign_hero_to(pidn, hx)
+				break
+		if not _assign_hero.has(pidn):
+			# 指定英雄没匹配到（昵称/皮肤/生成顺序差异）时，兜底分配任意空闲英雄，
+			# 否则网页客户端会永远停在「等待接管 AI」。
+			_assign_any_free_hero(pidn)
+			if _assign_hero.has(pidn):
+				print("[Net] 开局兜底分配 peer=", pidn, " hero=", _assign_hero[pidn].display_name)
+
+
+func _assign_any_free_hero(pid: int) -> bool:
+	var camp := _peer_camp(int(pid))
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if not is_instance_valid(e) or e is not Hero:
+			continue
+		var h: Hero = e
+		if not h.is_ai or _assign_peer.has(h.get_instance_id()):
+			continue
+		if int(h.team) != camp:
+			continue
+		_assign_hero_to(int(pid), h)
+		return true
+	# 阵营行异常时仍保证客户端能接管，避免永久等待
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if not is_instance_valid(e) or e is not Hero:
+			continue
+		var h2: Hero = e
+		if not h2.is_ai or _assign_peer.has(h2.get_instance_id()):
+			continue
+		_assign_hero_to(int(pid), h2)
+		return true
+	return false
 
 
 func disconnect_network() -> void:
@@ -921,7 +971,7 @@ func _scan_assignments() -> void:
 		if not is_instance_valid(e) or e is not Hero:
 			continue
 		var h: Hero = e
-		if not h.is_ai or h.health <= 0 or taken.has(h) or not _has_ai_child(h):
+		if not h.is_ai or h.health <= 0 or taken.has(h):
 			continue
 		var tm := clampi(int(h.team), 0, 1)
 		free_by_team[tm].append(h)
@@ -932,6 +982,8 @@ func _scan_assignments() -> void:
 		var h2: Hero = (free_by_team[camp] as Array).pop_front()
 		if h2 != null:
 			_assign_hero_to(int(pid), h2)
+		else:
+			_assign_any_free_hero(int(pid))
 
 
 func _assign_hero_to(pid: int, h: Hero) -> void:
@@ -1040,9 +1092,17 @@ func _rpc_takeover(manifest: Dictionary) -> void:
 
 # ---------- RPC：意图指令（client→host） ----------
 
-func request_battle_resync() -> void:
+func request_battle_resync(need_map: bool = true) -> void:
 	if mode == Mode.CLIENT:
-		send_command([C_RESYNC])
+		# 用可靠 RPC 发送：场景切换/首包丢失时，unreliable 的补发请求可能直接丢掉。
+		_rpc_request_resync.rpc_id(1, need_map)
+
+
+@rpc("any_peer", "reliable", "call_remote")
+func _rpc_request_resync(need_map: bool = true) -> void:
+	if not multiplayer.is_server():
+		return
+	_resync_peer(multiplayer.get_remote_sender_id(), need_map)
 
 
 func send_command(cmd: Array) -> void:
@@ -2356,15 +2416,16 @@ func _broadcast_map_if_needed() -> void:
 		print("[Net] 地图布局已发 peer=", peer_id)
 
 
-func _resync_peer(pid: int) -> void:
+func _resync_peer(pid: int, need_map: bool = true) -> void:
 	if not multiplayer.is_server():
 		return
 	var bm := get_tree().get_first_node_in_group("battle_manager")
 	if bm == null:
 		return
-	# 地图重发
-	rpc_id(pid, "_rpc_map", _collect_map_payload(bm))
-	_map_sent_to[pid] = true
+	# 地图重发（客户端已收到地图时只补接管/快照，避免每 2s 重发 300KB 墙体）
+	if need_map:
+		rpc_id(pid, "_rpc_map", _collect_map_payload(bm))
+		_map_sent_to[pid] = true
 	# 当前接管清单
 	if _assign_hero.has(pid) and is_instance_valid(_assign_hero[pid]):
 		var h: Hero = _assign_hero[pid]
