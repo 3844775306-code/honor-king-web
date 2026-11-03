@@ -216,6 +216,14 @@ func _action_is_complete(action: AIAction) -> bool:
 			return hero.health > hero.actual_max_health * 0.60 or _find_safe_health_pack() == null
 		AIAction.Type.TRIPOD:
 			return hero.manual_target == null or not is_instance_valid(hero.manual_target)
+		AIAction.Type.HARASS:
+			var ht: GameEntity = action.target
+			if ht == null or not is_instance_valid(ht) or ht.health <= 0.0:
+				return true
+			var hd: float = hero.global_position.distance_to(ht.global_position)
+			return hd > hero.attack_range * 0.01 or (ht is Hero and hd <= _safe_distance_to(ht as Hero))
+		AIAction.Type.SAFE_DISTANCE:
+			return false
 		AIAction.Type.VISION_SPIRIT:
 			return hero.move_target == Vector3.ZERO
 	return false
@@ -227,6 +235,89 @@ func _finish_current_action() -> void:
 	current_action.mark(AIAction.Status.COMPLETED)
 	current_action = AIAction.new(AIAction.Type.IDLE)
 	_task_pause_active = false
+
+
+## 安全距离：敌方普攻范围 +1m；对战士/刺客 +2m
+func _safe_distance_to(enemy: Hero) -> float:
+	if enemy == null or not is_instance_valid(enemy):
+		return 0.0
+	var extra := 2.0 if str(enemy.role) in ["战士", "刺客"] else 1.0
+	return enemy.attack_range * 0.01 + extra
+
+
+## 是否有冷却好的攻击技能能打到目标
+func _has_ready_skill_in_range(target: Hero) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	var dist := hero.global_position.distance_to(target.global_position)
+	for i in range(mini(3, hero.skills.size())):
+		if i >= hero.skill_levels.size() or int(hero.skill_levels[i]) <= 0:
+			continue
+		if i >= hero.skill_cooldowns.size() or float(hero.skill_cooldowns[i]) > 0.0:
+			continue
+		var sk: Skill = hero.skills[i]
+		if sk == null or int(sk.type) not in [0, 1, 3, 5]:
+			continue
+		if hero.mana < sk.mana_cost:
+			continue
+		var reach: float = sk.cast_range if sk.cast_range > 0.0 else hero.attack_range * 0.01
+		if dist <= maxf(reach, hero.attack_range * 0.01):
+			return true
+	return false
+
+
+## 消耗目标：射手专属；目标在普攻距离内、冷却好的技能射程内、且距离大于安全距离
+func _harass_target() -> Hero:
+	if str(hero.role) != "射手" or hero.is_dead:
+		return null
+	var target: Hero = null
+	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
+		target = hero.manual_target
+	if target == null:
+		target = perception.find_nearest_enemy_hero(hero.attack_range * 0.01)
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return null
+	var dist := hero.global_position.distance_to(target.global_position)
+	if dist > hero.attack_range * 0.01 or dist <= _safe_distance_to(target):
+		return null
+	if not _has_ready_skill_in_range(target):
+		return null
+	return target
+
+
+## 保持安全距离：射手目标进入安全距离内时先后撤，回到安全距离即停（优先级 910）
+func _try_keep_safe_distance() -> bool:
+	if str(hero.role) != "射手" or hero.is_dead:
+		return false
+	var target: Hero = null
+	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
+		target = hero.manual_target
+	if target == null:
+		target = perception.find_nearest_enemy_hero(12.0)
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		if _is_action(AIAction.Type.SAFE_DISTANCE):
+			_finish_current_action()
+		return false
+	var safe := _safe_distance_to(target)
+	var dist := hero.global_position.distance_to(target.global_position)
+	if dist >= safe:
+		if _is_action(AIAction.Type.SAFE_DISTANCE):
+			_finish_current_action()
+		return false
+	var away: Vector3 = hero.global_position - target.global_position
+	away.y = 0.0
+	if away.length() < 0.05:
+		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+	if hero.is_recalling:
+		hero.cancel_recall()
+	hero.manual_target = null
+	hero.move_target = hero.global_position + away.normalized() * (safe - dist + 0.8)
+	_ai_path.clear()
+	if not _is_action(AIAction.Type.SAFE_DISTANCE):
+		if current_action != null:
+			current_action.mark(AIAction.Status.INTERRUPTED)
+		current_action = AIAction.new(AIAction.Type.SAFE_DISTANCE, 910, AIAction.PauseClass.SURVIVAL, "保持安全距离")
+	return true
 
 
 ## 反击：撤退超过 3 秒 + 血量低于追击敌人 + 敌人仍在追 → 无视所有限制直接换血
@@ -263,6 +354,7 @@ func _try_counter_attack() -> bool:
 
 ## 被敌方英雄攻击的反应：返回 true 表示本帧已接管（撤退中，跳过其他决策）
 func _react_to_hero_attack(delta: float) -> bool:
+	# 射手不再按“被攻击”被动撤退，统一由“保持安全距离”逻辑处理 	if str(hero.role) == "射手": 		return false 
 	var atk: Hero = hero.last_hero_attacker
 	var now: float = Time.get_ticks_msec() * 0.001
 	if atk == null or not is_instance_valid(atk) or atk.health <= 0.0 or now - hero.last_hero_attacker_at > 1.2:
@@ -1198,6 +1290,9 @@ func _process(delta):
 		return
 	if _yingrui_chain_w():
 		return
+	# 保持安全距离：目标进入敌方普攻范围+1/2m 内先拉开，优先级 910
+	if _try_keep_safe_distance():
+		return
 	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
 	_try_counter_attack()
 	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
@@ -1821,6 +1916,12 @@ func _build_action_candidates() -> Array[AIAction]:
 	if team_task != null:
 		out.append(AIAction.new(AIAction.Type.TEAM_TASK, _team_task_action_priority(), AIAction.PauseClass.NONE, team_task.label()))
 
+	# 消耗（射手）：普攻距离内、有冷却好的技能能打到、且距离大于安全距离
+	var harass_t := _harass_target()
+	if harass_t != null:
+		var ha := AIAction.new(AIAction.Type.HARASS, 920, AIAction.PauseClass.SURVIVAL, "消耗")
+		ha.target = harass_t
+		out.append(ha)
 	# 默认本地
 	if _is_natural_jungler:
 		out.append(AIAction.new(AIAction.Type.JUNGLE_FARM, 20, AIAction.PauseClass.NONE, "刷野"))
@@ -1880,6 +1981,10 @@ func _execute_candidate(a: AIAction):
 			hero.manual_target = a.target
 			hero.move_target = Vector3.ZERO
 			_set_action(AIAction.Type.TRADE, a.priority, a.pause_class, a.reason)
+		AIAction.Type.HARASS:
+			hero.manual_target = a.target
+			hero.move_target = Vector3.ZERO
+			_set_action(AIAction.Type.HARASS, a.priority, a.pause_class, a.reason)
 		AIAction.Type.TEMP_CLEAR:
 			hero.manual_target = a.target
 			hero.move_target = Vector3.ZERO

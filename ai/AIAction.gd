@@ -21,6 +21,8 @@ enum Type {
 	DODGE,
 	TOWER_ESCAPE,
 	BLUE_BUFF,
+	HARASS,
+	SAFE_DISTANCE,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, INTERRUPTED }
@@ -74,4 +76,7 @@ func label() -> String:
 		Type.DODGE: return "躲避"
 		Type.TOWER_ESCAPE: return "塔下逃生"
 		Type.BLUE_BUFF: return "打蓝 buff"
+		Type.HARASS: return "消耗"
+		Type.SAFE_DISTANCE: return "保持安全距离"
 	return "待命"
+
