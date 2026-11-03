@@ -6,8 +6,9 @@ func process_skill_windows() -> void:
 	for si in range(min(3, hero.skill_window_timers.size())):
 		if hero.skill_window_timers[si] <= 0 or hero.skill_window_timers[si] >= AiConfig.SKILL_WINDOW_THRESHOLD:
 			continue
-		# Q窗口: 接近敌人时触发二段
-		if si == 0 and perception.find_nearest_enemy_hero(AiConfig.MELEE_RANGE):
+		# Q窗口: 接近敌人时触发二段；第三段会回原点，不主动交
+		if si == 0 and (hero.skill_uses.size() == 0 or int(hero.skill_uses[0]) < 2) \
+				and perception.find_nearest_enemy_hero(AiConfig.MELEE_RANGE):
 			tactics.force_cast(si, hero.global_position)
 
 
