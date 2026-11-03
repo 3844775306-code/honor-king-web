@@ -72,6 +72,16 @@ func should_trade_with(target: Hero) -> bool:
 	return _pick_target() == target
 
 
+## 反击：无视换血冷却/血量/目标筛选等限制，直接强制与指定敌人对拼
+func force_engage(target: Hero) -> void:
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return
+	exit_timer = 0.0
+	cooldown = 0.0
+	active_target = target
+	_start_trade(target)
+
+
 func evaluate() -> Dictionary:
 	if active_target != null:
 		if not is_instance_valid(active_target) or active_target.health <= 0.0:
@@ -227,4 +237,5 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if cover < 500.0:
 			return true
 	return false
+
 

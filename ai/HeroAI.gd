@@ -27,6 +27,7 @@ var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _attack_retreat_target: Hero = null   # 被敌方英雄攻击且不换血 → 远离该英雄直到对方停手
+var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
@@ -125,6 +126,11 @@ func _set_action(action_type: int, priority: int = 0, pause_class: int = AIActio
 	current_action = AIAction.new(action_type, priority, pause_class, reason)
 	if not data.is_empty():
 		current_action.data = data.duplicate()
+	if action_type == AIAction.Type.RETURN_TO_BASE:
+		if _retreat_started_at < 0.0:
+			_retreat_started_at = Time.get_ticks_msec() * 0.001
+	else:
+		_retreat_started_at = -1.0
 
 	if pause_class == AIAction.PauseClass.NONE:
 		_task_pause_active = false
@@ -218,6 +224,38 @@ func _finish_current_action() -> void:
 	current_action = AIAction.new(AIAction.Type.IDLE)
 	_task_pause_active = false
 
+
+## 反击：撤退超过 3 秒 + 血量低于追击敌人 + 敌人仍在追 → 无视所有限制直接换血
+func _try_counter_attack() -> bool:
+	if _retreat_started_at < 0.0:
+		return false
+	if current_action == null or current_action.type != AIAction.Type.RETURN_TO_BASE:
+		return false
+	var now: float = Time.get_ticks_msec() * 0.001
+	if now - _retreat_started_at < 3.0:
+		return false
+	var chaser: Hero = perception.find_nearest_enemy_hero(15.0)
+	if chaser == null or not is_instance_valid(chaser) or chaser.health <= 0.0:
+		return false
+	# 血量必须低于追击自己的敌人
+	if hero.health >= chaser.health:
+		return false
+	# 敌人还在追击：最近攻击者 / 锁定自己 / 已经贴近
+	var chasing := (hero.last_hero_attacker == chaser and now - hero.last_hero_attacker_at < 2.0) \
+		or chaser.manual_target == hero or chaser.current_target == hero \
+		or chaser.global_position.distance_to(hero.global_position) <= 8.0
+	if not chasing:
+		return false
+	# 直接换血：取消回城/撤退移动，锁定追击者并强制开战
+	if hero.is_recalling:
+		hero.cancel_recall()
+	hero.manual_target = chaser
+	hero.move_target = Vector3.ZERO
+	_ai_path.clear()
+	if trade_planner != null:
+		trade_planner.force_engage(chaser)
+	_set_action(AIAction.Type.TRADE, 945, AIAction.PauseClass.SURVIVAL, "反击对拼")
+	return true
 
 ## 被敌方英雄攻击的反应：返回 true 表示本帧已接管（撤退中，跳过其他决策）
 func _react_to_hero_attack(delta: float) -> bool:
@@ -1026,6 +1064,8 @@ func _process(delta):
 			_recall_safe_behavior(delta)
 		return
 
+	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
+	_try_counter_attack()
 	# 被敌方英雄攻击：立即判断是否换血；不主动换血就远离攻击者，直到对方停手
 	if _react_to_hero_attack(delta):
 		return
@@ -3059,6 +3099,7 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+
 
 
 
