@@ -2748,18 +2748,52 @@ func _danger_ground_zone() -> Dictionary:
 	return {}
 
 
+## 安琪拉大招持续光束：站在光束宽度内时向垂直方向躲
+func _danger_angela_beam() -> Dictionary:
+	if hero == null or not is_instance_valid(hero):
+		return {}
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if not (e is Hero) or int((e as Hero).team) == int(hero.team) or (e as Hero).health <= 0.0:
+			continue
+		var src := e as Hero
+		if str(src.display_name) != "安琪拉" or not bool(src.angela_ult_active):
+			continue
+		var origin: Vector3 = src.global_position + Vector3.UP * 1.0
+		var dir := Vector3(sin(src.rotation.y), 0.0, cos(src.rotation.y))
+		if dir.length() < 0.01:
+			continue
+		dir = dir.normalized()
+		var to_hero: Vector3 = hero.global_position + Vector3.UP * 1.0 - origin
+		to_hero.y = 0.0
+		var proj: float = to_hero.dot(dir)
+		if proj <= 0.0 or proj >= 10.0:
+			continue
+		var perp_vec: Vector3 = to_hero - dir * proj
+		perp_vec.y = 0.0
+		if perp_vec.length() <= 1.2 + float(hero.body_radius) * 0.5 + 0.4:
+			var side: Vector3 = perp_vec.normalized() if perp_vec.length() > 0.05 else Vector3(-dir.z, 0.0, dir.x)
+			return {"side": side, "dir": dir}
+	return {}
+
+
 func _dodge_threats() -> bool:
-	# 检测弹道威胁 + 持续地面技能
+	# 检测弹道威胁 + 持续地面技能 + 安琪拉大招光束
 	var threats = perception.find_threatening_projectiles(AiConfig.DODGE_RANGE, AiConfig.DODGE_MARGIN)
 	var ground := _danger_ground_zone()
-	if threats.is_empty() and ground.is_empty():
+	var beam := _danger_angela_beam()
+	if threats.is_empty() and ground.is_empty() and beam.is_empty():
 		_is_dodging = false
 		return false
-	# 地面持续技能必躲；弹道按概率决定是否躲避
+	# 地面持续技能/大招光束必躲；普通弹道按概率决定是否躲避
 	if not _is_dodging:
-		if ground.is_empty() and randf() > AiConfig.DODGE_CHANCE:
+		if ground.is_empty() and beam.is_empty() and randf() > AiConfig.DODGE_CHANCE:
 			return false
 		_is_dodging = true
+	if not beam.is_empty():
+		var side: Vector3 = beam["side"]
+		hero.move_target = hero.global_position + side * 4.0
+		hero.manual_target = null
+		return true
 	if not ground.is_empty():
 		var c: Vector3 = ground["pos"]
 		var away: Vector3 = hero.global_position - c
