@@ -1121,6 +1121,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					var d2_dir = (d2_target.global_position - hero.global_position).normalized()
 					var d2_bullet = create_bullet(250, 0, 0.66, 35*level, true, hero, d2_dir, 2)
 					d2_bullet.target = d2_target
+					d2_bullet.lock_on = true
 					d2_bullet.speed = 8.0
 					d2_bullet.stun_dur = 1.5
 					d2_bullet.life_time = 5.0
@@ -1154,6 +1155,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					var d3_dir = (d3_t.global_position - hero.global_position).normalized()
 					var d3_bullet = create_bullet(245, 0, 0.75, 80*level, true, hero, d3_dir, 3)
 					d3_bullet.target = d3_t
+					d3_bullet.lock_on = true
 					d3_bullet.speed = 12.0
 					d3_bullet.life_time = 10.0
 					# 狐火视觉（紫色小球）
@@ -1244,6 +1246,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 						var x3_ground := Vector3(x3_t.global_position.x, 0.0, x3_t.global_position.z)
 						var x3_bullet = create_bullet(400, 0, 1.0, 100*level, true, hero, Vector3.DOWN, 3)
 						x3_bullet.target = x3_t
+						x3_bullet.lock_on = true
 						x3_bullet.set_goal(x3_ground)
 						x3_bullet.drop_mode = true
 						x3_bullet.speed = 22.0
@@ -3364,6 +3367,7 @@ func _yuanliu_r(hero, lv: int, pos: Vector3) -> void:
 			arrow.counts_as_aa = true    # 该箭命中视作一次普攻 → 触发普攻类装备特效（闪电匕首等）
 		arrow.linear_dir = Vector3.ZERO     # 关闭直线飞行 → 追踪目标垂直下落
 		arrow.target = pick
+		arrow.lock_on = true
 		arrow.speed = 30.0
 		arrow.radius = 0.28
 		arrow.skill_id = 3

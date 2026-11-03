@@ -25,6 +25,7 @@ var is_crit: bool = false
 # 线性模式
 var linear_dir: Vector3 = Vector3.ZERO
 var max_distance: float = 10.0
+var lock_on: bool = false   # 显式锁敌技能弹（妲己W/R、小乔R、元流R）；不能仅因命中后 target 被赋值就跳过寿命/距离
 var traveled: float = 0.0
 var pen_percent: float = 0.0
 var visual_mesh: Node3D
@@ -234,7 +235,7 @@ func _physics_process(delta):
 		return
 	# 锁敌类技能弹（妲己W/R、小乔R、元流之子R等，target + 正技能id）：
 	# 不再按 life_time / max_distance 销毁，必须追到并命中目标后由命中逻辑销毁。
-	var _lock_on_target: bool = target != null and is_instance_valid(target) 		and target.health > 0.0 and int(skill_id) > 0
+	var _lock_on_target: bool = lock_on and target != null and is_instance_valid(target) 		and target.health > 0.0
 	if not _lock_on_target:
 		life_time -= delta
 		if life_time <= 0 :
