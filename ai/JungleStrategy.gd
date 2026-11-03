@@ -129,7 +129,7 @@ func _find_lane_target() -> GameEntity:
 		var h := entity as Hero
 		if h.is_untargetable_by_enemies():
 			continue
-		if _is_under_own_tower(h):
+		if _is_under_own_tower(h) and not AiConfig.should_engage_tower_hero(hero, h):
 			continue
 		if h.health < best_hero_hp:
 			best_hero_hp = h.health
@@ -396,3 +396,4 @@ func decide() -> void:
 			elif _lane_default_bush != Vector3.ZERO:
 				hero.move_target = _lane_default_bush
 				hero.manual_target = null
+

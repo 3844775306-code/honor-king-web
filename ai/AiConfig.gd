@@ -218,3 +218,47 @@ static func mana_rules_apply(h) -> bool:
 		return false
 	return true
 
+# ==================== 敌方塔下英雄：统一决策 ====================
+# 不再因为目标在塔下就无脑跳过；同时看「目标血量」与「塔下己方小兵血量」。
+const TOWER_DIVE_HP_RATIO: float = 0.25      # 目标血量低于该比例可考虑越塔
+
+## 塔下己方小兵总血量（用于判断塔是否会先打小兵）
+static func tower_ally_minion_hp(hero: Hero, tower: Turret) -> float:
+	if hero == null or tower == null or not is_instance_valid(tower):
+		return 0.0
+	var total := 0.0
+	for e in hero.get_tree().get_nodes_in_group("minions"):
+		if e is Minion and int((e as Minion).team) == int(hero.team) and (e as Minion).health > 0.0:
+			var m := e as Minion
+			if tower.global_position.distance_to(m.global_position) <= TOWER_ATTACK_RANGE:
+				total += m.health
+	return total
+
+
+## 目标当前被哪座敌方塔保护（在塔的实际攻击范围内）
+static func tower_guarding_hero(hero: Hero, target: Hero) -> Turret:
+	if hero == null or target == null or not is_instance_valid(target):
+		return null
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0.0 or int((e as Turret).team) == int(hero.team):
+			continue
+		var t := e as Turret
+		if target.global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+			return t
+	return null
+
+
+## 是否值得打塔下英雄：有己方小兵掩护，或目标残血可越塔
+static func should_engage_tower_hero(hero: Hero, target: Hero) -> bool:
+	if hero == null or target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	var tower := tower_guarding_hero(hero, target)
+	if tower == null:
+		return true
+	# 有兵线掩护：塔会优先清兵，可以打
+	if tower_ally_minion_hp(hero, tower) >= UNSAFE_TOWER_MINION_HP:
+		return true
+	# 目标残血：值得越塔换
+	var t_ratio: float = target.health / maxf(target.actual_max_health, 1.0)
+	var my_ratio: float = hero.health / maxf(hero.actual_max_health, 1.0)
+	return t_ratio <= TOWER_DIVE_HP_RATIO and my_ratio >= 0.30

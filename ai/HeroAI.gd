@@ -661,6 +661,9 @@ func _try_libai_q_travel(dest: Vector3, dist: float) -> bool:
 		if hero.skill_uses.size() > 0 and int(hero.skill_uses[0]) >= 2:
 			return false   # 第3段会回原点，赶路不交
 	else:
+		# 窗口自然过期后可能残留第2段计数；重新开一段时复位，避免下一次Q直接回原点
+		if hero.skill_uses.size() > 0 and int(hero.skill_uses[0]) > 0:
+			hero.skill_uses[0] = 0
 		if hero.skill_cooldowns.size() <= 0 or float(hero.skill_cooldowns[0]) > 0.0:
 			return false
 		var sk: Skill = hero.skills[0]
@@ -1145,6 +1148,64 @@ func _find_enhanced_jump_target(dir: Vector3, reach: float) -> GameEntity:
 	return best
 
 
+## 李白将进酒：追击/逃跑只用前两段（第三段会回到起点）
+func _try_libai_q_dash(target: GameEntity, escaping: bool) -> bool:
+	if hero == null or not is_instance_valid(hero) or str(hero.display_name) != "李白":
+		return false
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		return false
+	if not (target is Hero) and not escaping:
+		return false
+	if hero.skill_levels.size() <= 0 or int(hero.skill_levels[0]) <= 0:
+		return false
+	if hero.skills.size() <= 0 or hero.skills[0] == null:
+		return false
+	var win_open: bool = hero.skill_window_timers.size() > 0 and float(hero.skill_window_timers[0]) > 0.0
+	if win_open:
+		if hero.skill_uses.size() <= 0 or int(hero.skill_uses[0]) >= 2:
+			return false   # 已经用了两段：第三段回原点，不用
+	else:
+		# 窗口过期后残留的段数复位，保证新一段Q从第1段开始
+		if hero.skill_uses.size() > 0 and int(hero.skill_uses[0]) > 0:
+			hero.skill_uses[0] = 0
+		if hero.skill_cooldowns.size() <= 0 or float(hero.skill_cooldowns[0]) > 0.0:
+			return false
+		var sk0: Skill = hero.skills[0]
+		if sk0 == null or hero.mana < sk0.mana_cost:
+			return false
+	var dist: float = hero.global_position.distance_to(target.global_position)
+	var aa: float = hero.attack_range * 0.01
+	if not escaping:
+		if dist <= aa + 0.6 or dist > AiConfig.DASH_CHASE_MAX_RANGE:
+			return false
+	var dir := Vector3.ZERO
+	if escaping:
+		dir = hero.global_position - target.global_position
+		dir.y = 0.0
+		var ft: Turret = perception.find_nearest_friendly_turret(30.0)
+		if ft != null and is_instance_valid(ft):
+			var to_t := ft.global_position - hero.global_position
+			to_t.y = 0.0
+			if to_t.length() > 1.0:
+				dir = to_t
+	else:
+		dir = target.global_position - hero.global_position
+		dir.y = 0.0
+	if dir.length() < 0.1:
+		return false
+	dir = dir.normalized()
+	var end := _resolve_dash_end(hero.global_position, dir, hero.skills[0].self_displacement if hero.skills[0].self_displacement > 0.0 else 2.5)
+	if end == Vector3.ZERO:
+		return false
+	hero.move_target = Vector3.ZERO
+	hero._start_casting(0, hero.skills[0], end)
+	if "--ai-skill-probe" in OS.get_cmdline_user_args():
+		print("[AISKILL] libai_q %s -> %s dist=%.1f stage=%d" % [
+			hero.display_name, target.display_name, dist,
+			int(hero.skill_uses[0]) + 1])
+	return true
+
+
 func _try_chase_dash(target: GameEntity) -> bool:
 	if target == null or not is_instance_valid(target) or target.health <= 0.0:
 		return false
@@ -1161,6 +1222,9 @@ func _try_chase_dash(target: GameEntity) -> bool:
 		return true
 	# 马超没有强化普攻时，先向前方投枪，捡枪后再接强化普攻追击
 	if str(hero.display_name) == "马超" and _try_machao_spear_toward(target.global_position, 4.2):
+		return true
+	# 李白：将进酒前两段用于追击贴脸（第三段会回原点，不在追击中使用）
+	if str(hero.display_name) == "李白" and _try_libai_q_dash(target, false):
 		return true
 	var d := _pick_dash_skill()
 	if d.is_empty():
@@ -1202,6 +1266,9 @@ func _try_escape_dash() -> bool:
 				edir = to_t
 		if edir.length() > 0.1 and _try_enhanced_aa_escape(edir.normalized()):
 			return true
+	# 李白：将进酒前两段用于逃跑拉开；第三段会回原点，绝不交
+	if str(hero.display_name) == "李白" and _try_libai_q_dash(threat, true):
+		return true
 	var d := _pick_dash_skill()
 	if d.is_empty():
 		return false
@@ -2523,6 +2590,8 @@ func _is_target_safe(target: Hero) -> bool:
 	var tower := _tower_guarding(target)
 	if tower == null:
 		return true
+	if AiConfig.tower_ally_minion_hp(hero, tower) >= AiConfig.UNSAFE_TOWER_MINION_HP:
+		return true
 	# 手长：站塔外能打到目标
 	var reach := hero.attack_range * 0.01
 	if hero.global_position.distance_to(tower.global_position) > tower.attack_range * 0.01 \
@@ -2582,7 +2651,7 @@ func _update_finish_chase(delta: float) -> bool:
 		var dist := hero.global_position.distance_to(_chase_target.global_position)
 		var t_ratio := _chase_target.health / maxf(_chase_target.actual_max_health, 1.0)
 		var give_up := dist > AiConfig.CHASE_ABORT_RANGE \
-			or _is_under_enemy_tower(_chase_target) \
+			or (_is_under_enemy_tower(_chase_target) and not AiConfig.should_engage_tower_hero(hero, _chase_target)) \
 			or _chase_time > AiConfig.CHASE_MAX_TIME \
 			or _chase_target.health >= hero.health \
 			or t_ratio > AiConfig.CHASE_HP_RATIO + 0.15 \
@@ -2628,7 +2697,7 @@ func _pick_finish_target() -> Hero:
 			continue
 		if hero.global_position.distance_to(eh.global_position) > AiConfig.CHASE_START_RANGE:
 			continue
-		if _is_under_enemy_tower(eh):
+		if _is_under_enemy_tower(eh) and not AiConfig.should_engage_tower_hero(hero, eh):
 			continue
 		if _enemy_reinforced(eh):
 			continue
@@ -3411,3 +3480,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+

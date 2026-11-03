@@ -136,7 +136,7 @@ func _should_exit() -> bool:
 	var dist := hero.global_position.distance_to(active_target.global_position)
 	if dist > MAX_TRADE_RANGE + 2.0:
 		return true
-	if _is_under_enemy_tower(active_target):
+	if _is_under_enemy_tower(active_target) and not AiConfig.should_engage_tower_hero(hero, active_target):
 		return true
 	# 对方恢复健康且我方没有血量优势：不继续纠缠
 	var my_ratio := hero.health / maxf(1.0, hero.actual_max_health)
@@ -177,7 +177,7 @@ func _pick_target() -> Hero:
 		var dist := hero.global_position.distance_to(target.global_position)
 		if dist > MAX_TRADE_RANGE:
 			continue
-		if _is_under_enemy_tower(target):
+		if _is_under_enemy_tower(target) and not AiConfig.should_engage_tower_hero(hero, target):
 			continue
 		var t_ratio := target.health / maxf(1.0, target.actual_max_health)
 		var score := 0.0
@@ -237,5 +237,6 @@ func _is_under_enemy_tower(target: Hero) -> bool:
 		if cover < 500.0:
 			return true
 	return false
+
 
 

@@ -159,7 +159,7 @@ func _find_target() -> GameEntity:
 	# 1. 敌方小兵 — 仅攻击不在敌方塔下的
 	if hero.last_attacker and hero.last_attacker is Hero and hero.last_attacker.health >0:
 		var entity = hero.last_attacker
-		if not(_is_under_own_tower(entity) and entity.health > 0.2 * entity.max_health) and not entity.is_untargetable_by_enemies():
+		if (not _is_under_own_tower(entity) or AiConfig.should_engage_tower_hero(hero, entity as Hero)) and not entity.is_untargetable_by_enemies():
 			var dist := hero.global_position.distance_to(entity.global_position)
 			if dist < 12:
 				return hero.last_attacker
@@ -189,7 +189,7 @@ func _find_target() -> GameEntity:
 		var dist := hero.global_position.distance_to(entity.global_position)
 		if dist > 12:
 			continue
-		if _is_under_own_tower(entity) and entity.health > 0.2 * entity.max_health:
+		if _is_under_own_tower(entity) and not AiConfig.should_engage_tower_hero(hero, entity as Hero):
 			continue
 		var h := entity as Hero
 		if h.is_untargetable_by_enemies():
@@ -454,5 +454,4 @@ func decide(force_push: bool = false) -> void:
 	elif default_bush_pos != Vector3.ZERO:
 		hero.move_target = default_bush_pos
 		hero.manual_target = null
-
 
