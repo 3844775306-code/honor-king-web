@@ -28,6 +28,8 @@ var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
 var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
+var _minion_escape_started_at := -1.0      # 塔前脱战开始时间
+var _minion_escape_cooldown_until := -1.0  # 塔前脱战超时后的重触发冷却
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _task_commit_until: float = -999.0
@@ -299,11 +301,29 @@ func _harass_target() -> Hero:
 func _try_tower_minion_escape() -> bool:
 	if hero == null or hero.is_dead:
 		return false
+	var now := Time.get_ticks_msec() * 0.001
+	# 脱战最多持续 2 秒，超时自动结束并短暂冷却，避免卡死在脱战动作里
+	if _is_action(AIAction.Type.MINION_ESCAPE):
+		if _minion_escape_started_at < 0.0:
+			_minion_escape_started_at = now
+		elif now - _minion_escape_started_at >= 2.0:
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
+			_minion_escape_cooldown_until = now + 2.0
+			return false
+	elif now < _minion_escape_cooldown_until:
+		return false
 	var attacker = hero.last_attacker
 	if attacker == null or not is_instance_valid(attacker) or not (attacker is Minion):
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	var m := attacker as Minion
 	if int(m.team) == int(hero.team) or m.health <= 0.0:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	var tower: Turret = null
 	for e in hero.get_tree().get_nodes_in_group("turrets"):
@@ -314,22 +334,35 @@ func _try_tower_minion_escape() -> bool:
 			tower = t
 			break
 	if tower == null:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	# 已经在塔攻击范围内：交给塔下逃生处理，不在这里重复
 	if hero.global_position.distance_to(tower.global_position) <= tower.attack_range * 0.01:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	var m_range: float = m.attack_range * 0.01
 	var m_dist: float = hero.global_position.distance_to(m.global_position)
 	if m_dist > m_range + 1.0:
 		if _is_action(AIAction.Type.MINION_ESCAPE):
 			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	# 有己方兵线掩护 / 能在塔外安全反击：不需要脱战
 	if AiConfig.tower_ally_minion_hp(hero, tower) >= AiConfig.UNSAFE_TOWER_MINION_HP:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	var safe_hit: bool = hero.global_position.distance_to(tower.global_position) > tower.attack_range * 0.01 \
 		and m_dist <= hero.attack_range * 0.01 + 0.5
 	if safe_hit:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+			_minion_escape_started_at = -1.0
 		return false
 	var away: Vector3 = hero.global_position - m.global_position
 	away.y = 0.0
@@ -345,6 +378,8 @@ func _try_tower_minion_escape() -> bool:
 		if current_action != null:
 			current_action.mark(AIAction.Status.INTERRUPTED)
 		current_action = AIAction.new(AIAction.Type.MINION_ESCAPE, 900, AIAction.PauseClass.SURVIVAL, "塔前脱战")
+		_minion_escape_started_at = now
+		_minion_escape_cooldown_until = -1.0
 	return true
 
 
