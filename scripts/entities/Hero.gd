@@ -4244,11 +4244,13 @@ func _handle_skill_input(delta):
 				aoe_fill.visible = false
 				cast_range_ring.visible = false
 			elif skill.type == 1:   # 范围技能：柔光落点 + 双层范围圈
+				# 元流之子/东皇太一 的一技能是「以自身为中心的AOE」：预览圈固定跟随自身
+				var self_centered_aoe: bool = held_index == 0 and (display_name == "元流之子" or display_name == "东皇太一")
 				aoe_fill.visible = true
 				MeshFactory.set_cast_area_mode(aoe_fill, 0)
-				aoe_fill.global_position = aim_pos
+				aoe_fill.global_position = Vector3(global_position.x, ground_y, global_position.z) if self_centered_aoe else aim_pos
 				aoe_fill.scale = Vector3(radius, 1, radius)
-				cast_range_ring.visible = skill.cast_range > 0.0
+				cast_range_ring.visible = skill.cast_range > 0.0 and not self_centered_aoe
 				cast_range_ring.global_position = Vector3(global_position.x, ground_y + 0.02, global_position.z)
 				cast_range_ring.scale = Vector3(skill.cast_range, skill.cast_range, skill.cast_range)
 				arrow_preview.visible = false

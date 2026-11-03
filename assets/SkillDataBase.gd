@@ -2507,7 +2507,7 @@ func get_skill_fx(hero: Hero, i: int) -> Dictionary:
 				texts.append("掷出巨型飞刃自英雄滑向释放方向，对滑行路径上所有敌人造成伤害+减速；到点后于落点形成风暴（5.4秒/每0.54秒一跳）；内圈伤害翻倍并可叠暗印")
 		"元流之子":
 			if i == 0:
-				texts.append("汇流为一：对范围内敌人造成物理伤害并将其击退（约1.5米/短击飞），回复自身生命；附近每名友方英雄/友方小兵使回复+25%且「流」额外+1（至多4名）；获得基础5层「流」（上限9），破釜/万箭剩余冷却时间减少50%。「流」不使用会流失：闲置5秒后先失1层，之后每秒1层，用流（普攻或技能）即重置5秒")
+				texts.append("汇流为一：以自身为中心，对周围敌人造成物理伤害并将其击退（约1.5米/短击飞），回复自身生命；附近每名友方英雄/友方小兵使回复+25%且「流」额外+1（至多4名）；获得基础5层「流」（上限9），破釜/万箭剩余冷却时间减少50%。「流」不使用会流失：闲置5秒后先失1层，之后每秒1层，用流（普攻或技能）即重置5秒")
 			elif i == 1:
 				texts.append("破釜之箭：锁敌型单体必中——施放时朝摇杆方向位移2.5米，巨型弩箭自动追踪锁定目标（无目标则空放短箭）；命中全额伤害，仅对非英雄单位击退约1.5米（短击飞）；拥有4层「流」可连续施放（参连/凌空）")
 			else:
@@ -3176,10 +3176,8 @@ func _yuanliu_flow_pool(parent: Node, pos: Vector3, radius: float) -> Node3D:
 func _yuanliu_q(hero, lv: int, pos: Vector3) -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
-	var c0 := Vector3(pos.x, 0.0, pos.z)
-	if c0.length() < 0.05:
-		var fwd_h: Vector3 = Vector3(-hero.global_transform.basis.z.x, 0.0, -hero.global_transform.basis.z.z).normalized()
-		c0 = Vector3(hero.global_position.x, 0.0, hero.global_position.z) + fwd_h * 5.0
+	# 汇流为一：AOE 中心永远是自身（不再以瞄准点为中心）
+	var c0 := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
 	# 范围内敌方物理伤害（100+20·(Lv-1)+25%额外AD）
 	var dmg := int(100.0 + 20.0 * (lv - 1) + float(hero.bonus_attack) * 0.25)
 	for e in hero.get_tree().get_nodes_in_group("entities"):
@@ -3900,4 +3898,3 @@ static func global_shot_profile(hero_name: String, slot: int) -> Dictionary:
 		return {"len": 160.0, "hit_r": 1.2, "only_hero": true, "speed": 20.0,
 			"color": Color(1.0, 0.62, 0.14)}
 	return {}
-
