@@ -318,6 +318,11 @@ func _mk_card(entry: Dictionary, ally: bool, idx: int) -> Control:
 	var rank_lab := _mk_label(_rank_for(entry, idx), int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_GOLD)
 	rank_lab.add_theme_color_override("font_color", UiKit.C_GOLD.darkened(0.05))
 	vb.add_child(rank_lab)
+	var nick := str(entry.get("nick", "")).strip_edges()
+	if nick != "":
+		var nick_lab := _mk_label(nick, int(round(UiKit.FS_XS * UiKit.scale())), UiKit.C_TEXT_DIM)
+		nick_lab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		vb.add_child(nick_lab)
 	var name_row := HBoxContainer.new()
 	name_row.add_theme_constant_override("separation", 10)
 	vb.add_child(name_row)

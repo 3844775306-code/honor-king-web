@@ -1073,6 +1073,7 @@ func _create_host() -> void:
 	var port := _read_port()
 	# 建房前把本机昵称交给 NetSession：房间名单里显示真实昵称而不是「房主/玩家N」
 	NetSession.set_self_name(_local_nickname())
+	NetSession.set_self_rank(_local_rank())
 	var ok := NetSession.host_game(port)
 	if not ok:
 		_status_text("建房失败：本机已在房间中，或端口被占用", COL_ERR)
@@ -1095,6 +1096,7 @@ func _join_room() -> void:
 	_status_text("正在连接 %s:%d …" % [addr, port], COL_SUB)
 	# 进房前把本机昵称交给 NetSession，连上后自动 RPC 注册到主机名单
 	NetSession.set_self_name(_local_nickname())
+	NetSession.set_self_rank(_local_rank())
 	NetSession.join_game(addr, port)
 
 
@@ -1860,27 +1862,49 @@ func _tick_route(delta: float) -> void:
 # 加载界面阵容：我方真人锁定 + 顺序选人的展示位（AI 补位/敌方），无数据时占位
 func _loading_heroes() -> Array:
 	var out: Array = []
-	var seats: Array = _seat_rows(_last_state)["seats"]
+	var rows := _seat_rows(_last_state)
+	var ally_seats: Array = rows.get("seats", [])
+	var foe_seats: Array = rows.get("enemy_seats", [])
 	var t_ally: int = Config.player_team
 	var t_foe: int = 1 - Config.player_team
 	for i in 5:
-		var hn := ""
-		if i < seats.size():
-			hn = str(seats[i].get("hero", ""))
+		var a: Dictionary = ally_seats[i] if i < ally_seats.size() and ally_seats[i] is Dictionary else {}
+		var hn := str(a.get("hero", ""))
 		if hn == "":
 			hn = str(_draft_picks.get("0-%d" % i, ""))
-		var role := str(HeroPickData.HERO_ROLE.get(hn, ""))
-		var ent := { "name": hn if hn != "" else "—",
-			"role": role if role != "" else "我方 %d 号位" % (i + 1), "team": t_ally }
-		if i == 0:
-			ent["is_player"] = true
-		out.append(ent)
+		var role := str(a.get("role", ""))
+		if role == "":
+			role = str(HeroPickData.HERO_ROLE.get(hn, ""))
+		out.append({ "name": hn if hn != "" else "—",
+			"role": role if role != "" else "我方 %d 号位" % (i + 1), "team": t_ally,
+			"nick": str(a.get("name", "")), "rank": str(a.get("rank", "")),
+			"is_player": bool(a.get("is_me", false)) })
 	for i in 5:
-		var hn2 := str(_draft_picks.get("1-%d" % i, ""))
-		var role2 := str(HeroPickData.HERO_ROLE.get(hn2, ""))
+		var f: Dictionary = foe_seats[i] if i < foe_seats.size() and foe_seats[i] is Dictionary else {}
+		var hn2 := str(f.get("hero", ""))
+		if hn2 == "":
+			hn2 = str(_draft_picks.get("1-%d" % i, ""))
+		var role2 := str(f.get("role", ""))
+		if role2 == "":
+			role2 = str(HeroPickData.HERO_ROLE.get(hn2, ""))
 		out.append({ "name": hn2 if hn2 != "" else "—",
-			"role": role2 if role2 != "" else "敌方 %d 号位" % (i + 1), "team": t_foe })
+			"role": role2 if role2 != "" else "敌方 %d 号位" % (i + 1), "team": t_foe,
+			"nick": str(f.get("name", "")), "rank": str(f.get("rank", "")),
+			"is_player": false })
 	return out
+
+
+func _local_rank() -> String:
+	return RankSystem.label(RankSystem.state())
+
+
+func _player_rank(pid: int, state: Dictionary) -> String:
+	var pl: Dictionary = state.get("players", {})
+	if pl.has(pid) and pl[pid] is Dictionary:
+		return str((pl[pid] as Dictionary).get("rank", ""))
+	if NetSession.players.has(pid) and NetSession.players[pid] is Dictionary:
+		return str((NetSession.players[pid] as Dictionary).get("rank", ""))
+	return ""
 
 
 func _draft_active() -> bool:
@@ -2212,6 +2236,7 @@ func _seat_rows(state: Dictionary) -> Dictionary:
 			side_seats.append({
 				"id": int(pid), "is_me": int(pid) == _self_peer(),
 				"name": _player_name(int(pid), state),
+				"rank": _player_rank(int(pid), state),
 				"hero": str(pk.get("hero", "")), "role": str(pk.get("role", "")),
 				"summoner": str(pk.get("summoner", "")), "team": int(side),
 			})

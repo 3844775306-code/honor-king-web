@@ -68,7 +68,8 @@ var net_test := false
 var cli_mode := false   # 命令行直连（--net-host/--net-join），跳过大厅场景
 var phase := Phase.LOBBY  # host=当前阶段；client=最近收到的主机阶段
 var players := {}   # peer_id(int) -> { "name": String }
-var self_name := ""   # 本机昵称（建房/进房前由大厅设置，房间名单显示用）
+var self_name := ""
+var self_rank := ""   # 本机昵称（建房/进房前由大厅设置，房间名单显示用）
 # 联机大厅准备状态：peer_id -> { "camp":int(0蓝/1红), "lane":String, "ready":bool }
 # 阵营确认 + 分路选择后 ready=true；房主必须等所有在线玩家 ready 才能开始选人/开局。
 var lobby_ready := {}
@@ -277,7 +278,7 @@ func _setup_peer() -> void:
 				mode = Mode.NONE
 				return
 			multiplayer.multiplayer_peer = peer
-			players[1] = { "name": _self_display_name() if _self_display_name() != "" else ("主机" if cli_mode else "房主") }
+			players[1] = { "name": _self_display_name() if _self_display_name() != "" else ("主机" if cli_mode else "房主"), "rank": self_rank }
 			lobby_ready[1] = { "camp": 0, "lane": "", "ready": false }
 			multiplayer.peer_connected.connect(_on_peer_connected)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -354,7 +355,7 @@ func _web_ws_url() -> String:
 
 
 func _on_peer_connected(id: int) -> void:
-	players[id] = { "name": "玩家%d" % id }
+	players[id] = { "name": "玩家%d" % id, "rank": "" }
 	lobby_ready[id] = { "camp": 0, "lane": "", "ready": false }
 	print("[Net] 玩家上线 peer=", id, " 在线=", players.size())
 	_broadcast_lobby_state()
@@ -382,13 +383,17 @@ func _on_connected_to_server() -> void:
 	print("[Net] 已连上主机")
 	var nm := _self_display_name()
 	if nm != "":
-		_rpc_register_name.rpc_id(1, nm)
+		_rpc_register_name.rpc_id(1, nm, self_rank)
 	_update_overlay()
 
 
 ## 本机昵称：大厅进入房间前设置；没设置时回退到全局昵称存储
 func set_self_name(nm: String) -> void:
 	self_name = nm.strip_edges()
+
+
+func set_self_rank(rank: String) -> void:
+	self_rank = rank.strip_edges()
 
 
 func _self_display_name() -> String:
@@ -398,7 +403,7 @@ func _self_display_name() -> String:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _rpc_register_name(nm: String) -> void:
+func _rpc_register_name(nm: String, rank: String = "") -> void:
 	if mode != Mode.HOST:
 		return
 	var pid := multiplayer.get_remote_sender_id()
@@ -408,7 +413,8 @@ func _rpc_register_name(nm: String) -> void:
 	if clean == "":
 		return
 	players[pid]["name"] = clean
-	print("[Net] 玩家昵称 peer=", pid, " → ", clean)
+	players[pid]["rank"] = rank.strip_edges().substr(0, 32)
+	print("[Net] 玩家昵称 peer=", pid, " → ", clean, " 段位=", players[pid]["rank"])
 	_broadcast_lobby_state()
 
 
@@ -1922,7 +1928,8 @@ func _pack_hero(e: Node) -> Array:
 		1 if bool(e.get("red_buff_active")) else 0,   # idx24：红 buff（客户端世界模型脚下红环）
 		1 if bool(e.get("blue_buff_active")) else 0,  # idx25：蓝 buff（脚下蓝环）
 		e.global_position.y,   # idx26：世界高度（孙悟空筋斗云/腾空表现）
-		float(e.armor)]        # idx27：护甲（补刀提示）
+		float(e.armor),        # idx27：护甲（补刀提示）
+		str(e.get("hero_skin_id"))]   # idx28：皮肤 id
 
 
 func _maxmana_of(e: Node) -> float:
