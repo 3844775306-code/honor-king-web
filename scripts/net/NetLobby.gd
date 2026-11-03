@@ -31,6 +31,7 @@ const LeaderboardPanelScript = preload("res://scripts/ui/LeaderboardPanel.gd")
 const BootIntroScript = preload("res://scripts/ui/GameBootIntro.gd")
 const BootIntro3DScript = preload("res://scripts/ui/GameBootIntro3D.gd")
 const LoginPanelScript = preload("res://scripts/ui/LoginPanel.gd")
+const WebTunnelScript = preload("res://scripts/core/WebTunnel.gd")
 const BTN_W := 640.0
 const BTN_H := 96.0
 const PAGE_PAD_X := 64          # 页面左右内边距
@@ -72,6 +73,7 @@ var COL_GOLD: Color = UiKit.C_GOLD
 
 var _stack: VBoxContainer    # 页面内容根（铺满安全区，各页重建）
 var _page: MarginContainer   # 安全内边距容器
+var _scroll: ScrollContainer = null   # 页面纵向滚动：手机/网页小屏时按钮不再超出屏幕
 var _backdrop: Control = null   # 程序化背景（随本机阵营改色）
 var _ui := UIState.MENU
 var _role := -1              # -1=无；0=房主；1=玩家（guest）
@@ -88,6 +90,10 @@ var _foot_lab: Label = null
 var _start_btn: Button = null
 var _leave_btn: Button = null
 var _guest_wait_lab: Label = null
+var _web_tunnel = null
+var _web_tunnel_lab: Label = null
+var _web_share_url := ""
+var _auto_join_from_query := false
 
 # --- 选人阶段（UIState.SELECT，王者式自选版式） ---
 var _sel_hero := ""          # 本机当前选中英雄
@@ -207,6 +213,8 @@ func _ready() -> void:
 	_connect_signals()
 	_show_menu()
 	SfxManager.start_menu_music()
+	if Config.on_web():
+		call_deferred("_auto_join_from_web_query")
 	# 主菜单前的电影感启动界面：首次进入大厅播放，之后回大厅直接进菜单
 	if not _boot_intro_played:
 		_boot_intro_played = true
@@ -339,11 +347,21 @@ func _build_base() -> void:
 	add_child(_page)
 	_set_page_pad(int(PAGE_PAD_X), int(PAGE_PAD_Y))
 
+	_scroll = ScrollContainer.new()
+	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_page.add_child(_scroll)
 	_stack = VBoxContainer.new()
 	_stack.add_theme_constant_override("separation", 18)
 	_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_page.add_child(_stack)
+	_scroll.add_child(_stack)
+	# 内容不足一屏时仍撑满（保持原版面），超出则纵向滚动
+	_scroll.resized.connect(func() -> void:
+		if _scroll != null and _stack != null:
+			_stack.custom_minimum_size.y = _scroll.size.y)
 
 
 # 页面内边距（虚拟像素）
@@ -363,7 +381,7 @@ func _clear_stack() -> void:
 	# 清理浮层（选人中央面板/悬停浮层等直接挂在 _page 上、不属于 _stack）
 	if _page != null:
 		for c2 in _page.get_children():
-			if c2 == _stack:
+			if c2 == _scroll:
 				continue
 			_page.remove_child(c2)
 			c2.queue_free()
@@ -986,6 +1004,69 @@ func _start_singleplayer() -> void:
 	_route_battle()
 
 
+func _auto_join_from_web_query() -> void:
+	if not Config.on_web():
+		return
+	var js = Engine.get_singleton("JavaScriptBridge")
+	if js == null:
+		return
+	var server := str(js.eval("new URLSearchParams(location.search).get('server') || ''")).strip_edges()
+	var host := str(js.eval("new URLSearchParams(location.search).get('host') || ''")).strip_edges()
+	if server == "" and host == "":
+		return
+	if server == "":
+		server = "wss://" + host
+	NetSession.set_web_server_url(server)
+	if _ip_edit != null:
+		_ip_edit.text = server
+	_status_text("网页邀请：正在连接主机…", COL_SUB)
+	_join_room()
+
+
+func _start_web_tunnel(port: int) -> void:
+	if Config.on_web():
+		return
+	if _web_tunnel != null and is_instance_valid(_web_tunnel):
+		return
+	_web_tunnel = WebTunnelScript.new()
+	add_child(_web_tunnel)
+	_web_tunnel.tunnel_ready.connect(_on_web_tunnel_ready)
+	_web_tunnel.tunnel_failed.connect(_on_web_tunnel_failed)
+	if _web_tunnel_lab != null:
+		_web_tunnel_lab.text = "正在生成网页邀请链接（Cloudflare Tunnel）…"
+	if not _web_tunnel.start(port):
+		if _web_tunnel_lab != null:
+			_web_tunnel_lab.text = "网页邀请不可用：" + str(_web_tunnel.last_error)
+		_status_text("网页邀请不可用；桌面局域网联机不受影响", COL_ERR)
+
+
+func _on_web_tunnel_ready(_wss_url: String, share_url: String) -> void:
+	_web_share_url = share_url
+	if _web_tunnel_lab != null:
+		_web_tunnel_lab.text = "网页邀请链接（点击复制）：\n" + share_url
+		_web_tunnel_lab.add_theme_color_override("font_color", UiKit.C_TEAM0)
+	DisplayServer.clipboard_set(share_url)
+	_status_text("网页邀请链接已复制，发给浏览器玩家即可加入", COL_OK)
+
+
+func _on_web_tunnel_failed(reason: String) -> void:
+	if _web_tunnel_lab != null:
+		_web_tunnel_lab.text = "网页邀请不可用：" + reason
+		_web_tunnel_lab.add_theme_color_override("font_color", COL_ERR)
+	_status_text("网页邀请不可用；桌面局域网联机不受影响", COL_ERR)
+
+
+func _stop_web_tunnel() -> void:
+	if _web_tunnel != null and is_instance_valid(_web_tunnel):
+		if _web_tunnel.has_method("stop"):
+			_web_tunnel.stop()
+		_web_tunnel.queue_free()
+	_web_tunnel = null
+	_web_share_url = ""
+	if _web_tunnel_lab != null:
+		_web_tunnel_lab.text = ""
+
+
 func _create_host() -> void:
 	if _connecting:
 		return
@@ -999,6 +1080,7 @@ func _create_host() -> void:
 	_role = 0
 	_show_room()
 	_refresh_room_local()
+	_start_web_tunnel(port)
 
 
 func _join_room() -> void:
@@ -1438,6 +1520,11 @@ func _show_room() -> void:
 	_addr_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_addr_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lcol.add_child(_addr_lab)
+	_web_tunnel_lab = _mk_label("", _fs(UiKit.FS_XS), COL_DIM)
+	_web_tunnel_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_web_tunnel_lab.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if NetSession.mode == NetSession.Mode.HOST:
+		lcol.add_child(_web_tunnel_lab)
 	var _conn_hint := _mk_label("连不上？确认两台设备在同一 Wi-Fi/热点；关闭手机 VPN；iOS 首次需在 设置→隐私→本地网络 允许本 App/浏览器；网页版可直接填这个地址加入（主机已开 WebSocket）。", _fs(UiKit.FS_XS), COL_DIM)
 	_conn_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lcol.add_child(_conn_hint)
@@ -2087,6 +2174,7 @@ func _draft_reset_local() -> void:
 
 
 func _leave_room() -> void:
+	_stop_web_tunnel()
 	_draft_reset_local()
 	_auto_start_done = false
 	_auto_start_wait = -1.0
@@ -3804,6 +3892,10 @@ func _on_connect_failed(msg: String) -> void:
 	_set_menu_enabled(true)
 	if _ui == UIState.MENU:
 		_status_text("连接失败：" + msg + "（检查：同一 Wi-Fi/热点、主机端口开放、关闭 VPN；iOS 需允许本地网络权限；网页版客户端需连 WS 主机）", COL_ERR)
+
+
+func _exit_tree() -> void:
+	_stop_web_tunnel()
 
 
 func _on_host_gone() -> void:
