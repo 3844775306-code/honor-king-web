@@ -261,18 +261,49 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				
 		"吕布":match  skill_id:
 			1:
-				var preview = create_preview(2.0,pos,hero.team)
+				# 方天画斩：以自身为中心，只命中面前120°扇形区域
+				var preview = create_preview(3.0, hero.global_position, hero.team)
 				preview.visible = true
 				hero.get_parent().add_child(preview)
 				await hero.get_tree().create_timer(0.5).timeout
-				var ang = atan2((-pos.z + hero.global_position.z),(pos.x - hero.global_position.x))
-				var dir = Vector3(cos(ang),0,-sin(ang))
+				var hero_flat := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
+				var aim_flat := Vector3(pos.x, 0.0, pos.z)
+				var to_aim := aim_flat - hero_flat
+				var fwd: Vector3
+				if to_aim.length() > 0.5:
+					fwd = to_aim.normalized()
+					hero.rotation.y = atan2(fwd.x, fwd.z)   # 面向瞄准方向再挥砍
+				else:
+					fwd = Vector3(sin(hero.rotation.y), 0.0, cos(hero.rotation.y)).normalized()
+				if fwd.length() < 0.01:
+					fwd = Vector3.FORWARD
 				var bonus_ad = hero.bonus_attack
-				var bullet = create_bullet(int(600 + 2.0*bonus_ad),0,0,120*level,false,hero,dir,1)
-				bullet.damage_range=2.0
-				bullet.set_goal(pos)
-				hero.get_parent().add_child(bullet)
-				await hero.get_tree().create_timer(0.5).timeout
+				var q_dmg := int(600 + 2.0 * bonus_ad)
+				var half_cos := cos(deg_to_rad(60.0))   # 120°扇形 = 左右各60°
+				var q_radius := 3.0
+				for ent in hero.get_tree().get_nodes_in_group("entities"):
+					if ent == hero or ent.health <= 0.0 or ent.team == hero.team:
+						continue
+					if ent is Turret:
+						continue
+					var to_ent := Vector3(ent.global_position.x - hero_flat.x, 0.0, ent.global_position.z - hero_flat.z)
+					var d := to_ent.length()
+					if d < 0.01 or d > q_radius + float(ent.body_radius):
+						continue
+					if fwd.dot(to_ent / d) < half_cos:
+						continue
+					var pen := 0.0
+					if hero.stat >= 1:
+						pen = 1.0
+						hero.stat = 1
+						hero.stat_timer = 8.0
+						var _bhp = hero.actual_max_health - hero.max_health
+						hero._apply_healing(int(104 + 26 * level + 0.025 * _bhp))
+					else:
+						pen = 0.35
+					ent.take_damage(float(q_dmg), hero, false, 1, pen)
+				# 刀光：从自身向面前扇形中心扫出
+				Vfx.slash_fx(hero.global_position, hero.global_position + fwd * q_radius, Color(0.85, 0.2, 0.22))
 				preview.queue_free()
 			2:
 				var preview = create_preview(3.0,pos,hero.team)
@@ -2277,7 +2308,9 @@ func get_skill_fx(hero: Hero, i: int) -> Dictionary:
 			else:
 				texts.append("向身边最近的枪冲刺，沿途贯穿伤害并回复少量生命")
 		"吕布":
-			if i == 1:
+			if i == 0:
+				texts.append("以自身为中心，对面前120°扇形区域内的敌人造成物理伤害")
+			elif i == 1:
 				fx.append({"t": "slow", "v": 12.0 + 3.0 * lv, "d": 3.0})
 			elif i == 2:
 				fx.append({"t": "knockup", "v": 1.0})
@@ -3280,10 +3313,19 @@ func _yuanliu_w(hero, lv: int, pos: Vector3) -> void:
 func _yuanliu_r(hero, lv: int, pos: Vector3) -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
+	var hero_flat := Vector3(hero.global_position.x, 0.0, hero.global_position.z)
 	var cpos := Vector3(pos.x, 0.0, pos.z)
+	var max_range := 7.0
+	if hero.skills.size() > 2 and hero.skills[2] != null:
+		max_range = maxf(1.0, float(hero.skills[2].cast_range))
 	if cpos.length() < 0.05:
 		var fwd3: Vector3 = Vector3(-hero.global_transform.basis.z.x, 0.0, -hero.global_transform.basis.z.z).normalized()
-		cpos = Vector3(hero.global_position.x, 0.0, hero.global_position.z) + fwd3 * 6.0
+		cpos = hero_flat + fwd3 * minf(6.0, max_range)
+	else:
+		# 防御：任何入口（含联机/回放/AI）传入的过远目标点都夹到技能施法距离内
+		var to_cpos := cpos - hero_flat
+		if to_cpos.length() > max_range:
+			cpos = hero_flat + to_cpos.normalized() * max_range
 	# 释放即刻移速 +20~40% ·2秒
 	hero.apply_move_pct_buff("ms_haste", 2.0, minf(0.2 + 0.1 * (lv - 1), 0.4))
 	# 7/10/13 支轻型弩箭
