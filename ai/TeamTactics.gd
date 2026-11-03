@@ -718,7 +718,7 @@ func _in_own_half(pos: Vector3, team: int) -> bool:
 	return pos.distance_to(own) < pos.distance_to(enemy)
 
 
-## 可抓指标 = Σ(附近每名我方英雄 × 距离系数) - 目标到最近防御塔距离系数 × 目标血量系数
+## 可抓指标 = Σ(附近每名我方英雄 × 距离系数) - Σ(附近每名敌方英雄 × 距离系数) - 目标到最近防御塔距离系数 × 目标血量系数
 func _gank_score(team: int, target: Hero) -> float:
 	var ally_sum := 0.0
 	for h in _get_ally_heroes(team):
@@ -727,6 +727,14 @@ func _gank_score(team: int, target: Hero) -> float:
 			continue
 		ally_sum += 1.0 - d / AiConfig.GANK_ALLY_RADIUS
 	# 到「目标方」最近防御塔的距离系数：越靠近塔越难抓，减得越多
+	var enemy_sum := 0.0
+	for e in _get_enemy_heroes(team):
+		if e == target:
+			continue
+		var ed: float = e.global_position.distance_to(target.global_position)
+		if ed >= AiConfig.GANK_ALLY_RADIUS:
+			continue
+		enemy_sum += 1.0 - ed / AiConfig.GANK_ALLY_RADIUS
 	var tower_d := INF
 	for e in bm.get_tree().get_nodes_in_group("turrets"):
 		if not (e is Turret) or (e as Turret).health <= 0.0:
@@ -738,7 +746,7 @@ func _gank_score(team: int, target: Hero) -> float:
 	if tower_d < AiConfig.GANK_TOWER_RADIUS:
 		tower_coeff = 1.0 - tower_d / AiConfig.GANK_TOWER_RADIUS
 	var hp_coeff: float = target.health / maxf(target.actual_max_health, 1.0)
-	return ally_sum - tower_coeff * hp_coeff
+	return ally_sum - enemy_sum - tower_coeff * hp_coeff
 
 
 func _find_gank_target(team: int) -> Hero:
@@ -886,3 +894,4 @@ func _own_tower_pos(team: int, lane: int) -> Vector3:
 		AiConfig.Lane.MID: return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
 	return Vector3.ZERO
+

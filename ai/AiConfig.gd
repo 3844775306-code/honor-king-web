@@ -65,7 +65,7 @@ const PUSH_TOWER_GOLD_LEAD: int = 5000       # 抱团推塔：经济差触发阈
 const GANK_ALLY_RADIUS: float = 40.0         # 可抓指标：我方英雄参与统计的半径
 const GANK_TOWER_RADIUS: float = 20.0        # 可抓指标：目标到其最近防御塔的距离系数半径
 const GANK_SCORE_SCALE: float = 240.0        # 可抓指标 → 任务优先级换算
-const GANK_MIN_SCORE: float = 0.30           # 低于该指标不抓
+const GANK_MIN_SCORE: float = 2.0            # 可抓指标大于该值才抓
 const GANK_PRIORITY_MAX: int = 900           # 抓人任务最高优先级
 const PUSH_TOWER_GOLD_COOLDOWN: float = 90.0 # 抱团推塔：经济差触发后的冷却（秒）
 const RESPAWN_COOLDOWN: float = 1.0          # 复活后重新分配路线延迟
@@ -217,3 +217,4 @@ static func mana_rules_apply(h) -> bool:
 	if float(h.actual_mana_max) <= MANA_EXEMPT_MAX:
 		return false
 	return true
+
