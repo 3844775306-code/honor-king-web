@@ -63,6 +63,7 @@ const FX_DEBUFF_COL := Color(0.55, 0.85, 1.0)
 var mode := Mode.NONE
 var host_port := 7000
 var join_address := "127.0.0.1"
+var web_server_url := ""   # ?server=wss://... 网页邀请链接直接指定的完整联机地址
 var net_test := false
 var cli_mode := false   # 命令行直连（--net-host/--net-join），跳过大厅场景
 var phase := Phase.LOBBY  # host=当前阶段；client=最近收到的主机阶段
@@ -300,7 +301,14 @@ func _setup_peer() -> void:
 			return
 
 # 联机地址：ws://host:port；Web 版可用页面 URL 参数 ?host=ip:port 覆盖
+func set_web_server_url(url: String) -> void:
+	web_server_url = url.strip_edges()
+
+
 func _web_ws_url() -> String:
+	# 邀请链接 ?server=wss://xxx.trycloudflare.com：直接使用完整地址，不再拼 host:port。
+	if web_server_url != "":
+		return web_server_url
 	var addr := join_address.strip_edges()
 	# 容错：用户可能把 ws:// / wss:// / http:// / https:// 一起粘进来
 	var explicit_scheme := ""
@@ -577,6 +585,7 @@ func _rpc_pick_rejected(msg: String) -> void:
 func host_game(port: int = 7000) -> bool:
 	if mode != Mode.NONE:
 		return false
+	web_server_url = ""
 	host_port = port
 	phase = Phase.LOBBY
 	seat_order.clear()
@@ -816,6 +825,7 @@ func assign_lineup() -> void:
 
 
 func disconnect_network() -> void:
+	web_server_url = ""
 	if mode == Mode.NONE:
 		return
 	mode = Mode.NONE
