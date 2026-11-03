@@ -91,7 +91,8 @@ static func build(hero_name: String, team: int, skill_id: int = 0) -> Node3D:
 		"cauldron": _cauldron(spin, a, b)
 		_: _orb(spin, a, b, 0.27)
 	_halo(root, b, accent)
-	_add_shards(spin, b, accent)
+	if style in ["orb", "water", "card", "flame", "heart", "ice", "gear", "bomb", "rocket", "claw"]:
+		_add_shards(spin, b, accent)
 	root.set_meta("c1", b)
 	root.set_meta("c2", accent)
 	root.set_meta("pitch", style in ["arrow", "dart", "spear", "water_arrow"])
@@ -185,10 +186,10 @@ static func _prism(size: Vector3) -> PrismMesh:
 
 
 static func _halo(root: Node3D, c: Color, accent: Color) -> void:
-	var ring := _mi(root, _torus(0.48, 0.62), _glow(c, 0.42), Vector3.ZERO, Vector3(90, 0, 0))
+	var ring := _mi(root, _torus(0.11, 0.15), _glow(c, 0.28), Vector3.ZERO, Vector3(90, 0, 0))
 	ring.name = "Halo"
-	_mi(root, _torus(0.66, 0.72), _glow(accent, 0.22), Vector3.ZERO, Vector3(90, 0, 0))
-	_mi(root, _sphere(0.12), _glow(accent, 0.8), Vector3(0, 0, 0.08))
+	_mi(root, _torus(0.17, 0.19), _glow(accent, 0.14), Vector3.ZERO, Vector3(90, 0, 0))
+	_mi(root, _sphere(0.025), _glow(accent, 0.7), Vector3(0, 0, 0.03))
 
 
 static func _add_shards(spin: Node3D, c: Color, accent: Color) -> void:
