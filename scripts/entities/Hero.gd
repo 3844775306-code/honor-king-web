@@ -3971,17 +3971,23 @@ func _compute_skill_aim(drag_in: Vector2, skill: Skill, source_mouse: bool) -> V
 		var direct := Vector3.ZERO
 		var has_direct := false
 		if not source_mouse:
-			if drag.length() > 12.0:
+			var is_tap := drag.length() <= 12.0
+			if not is_tap:
 				aim_screen = get_viewport().get_visible_rect().size * 0.5 + drag.normalized() * 500.0
-			elif manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
-				# 已锁定目标：直接取该单位世界坐标（不经过屏幕投影，屏幕外/背后目标同样有效）
-				direct = manual_target.global_position
-				has_direct = true
-			else:
-				# 未锁定目标且轻点（未拖动）：自动朝最近敌方/中立单位施放（英雄 > 小兵 > 野怪，忽略防御塔）
-				var auto_t = _nearest_skill_target(skill.cast_range) if (skill and skill.type in [0, 1, 3, 5]) else null
+			elif skill != null and int(skill.type) == 4:
+				# 位移类技能轻点：默认朝英雄朝向
+				aim_screen = cam.unproject_position(global_position + Vector3(sin(rotation.y), 0, cos(rotation.y)) * 5.0)
+			elif skill != null and int(skill.type) in [0, 1, 3, 5]:
+				# 线性/目标/AOE 轻点：默认朝最近敌人（英雄 > 小兵 > 野怪，忽略防御塔）
+				var auto_t = _nearest_skill_target(skill.cast_range)
 				if auto_t and is_instance_valid(auto_t):
 					direct = auto_t.global_position
+					has_direct = true
+				else:
+					aim_screen = cam.unproject_position(global_position + Vector3(sin(rotation.y), 0, cos(rotation.y)) * 5.0)
+			else:
+				if manual_target and is_instance_valid(manual_target) and manual_target.health > 0:
+					direct = manual_target.global_position
 					has_direct = true
 				else:
 					aim_screen = cam.unproject_position(global_position + Vector3(sin(rotation.y), 0, cos(rotation.y)) * 5.0)
@@ -4358,8 +4364,8 @@ func _handle_skill_input(delta):
 			if rel.drag.length() > 12.0:
 				pick = _pick_skill_target(cast_pos, skills[i].cast_range)
 			else:
-				# 技能智能施法兜底不应用推塔/小兵模式（避免技能被拉到塔/小兵上）
-				pick = _get_attack_target(skills[i].cast_range, false)
+				# 轻点：朝最近敌人（英雄 > 小兵 > 野怪，忽略防御塔）
+				pick = _nearest_skill_target(skills[i].cast_range)
 			if pick and not _skill_target_allowed(pick, i):
 				pick = null   # 拖拽/点按选到塔但该技能不可点塔 → 丢弃，走自动兜底
 			if pick:
@@ -4480,7 +4486,7 @@ func _handle_desktop_type0_aim():
 				cast_pos = lock_ent.global_position
 				pending_skill_target_entity = lock_ent   # 命中段优先吃该锁定（含防御塔）
 			elif is_tap or aim == Vector3.ZERO:
-				cast_pos = _compute_skill_aim(Vector2.ZERO, skills[i], true)   # 点按：鼠标地面智能施法（旧手感）
+				cast_pos = _compute_skill_aim(Vector2.ZERO, skills[i], false)   # 点按：自动索敌（英雄>小兵>野怪）
 			_start_casting(i, skills[i], cast_pos)
 	# 按住中：逐帧刷新瞄准落点 + 准星候选
 	if _dt0_hold >= 0 and _dt0_hold < skills.size() and skills[_dt0_hold] and skills[_dt0_hold].type == 0:
@@ -5978,6 +5984,3 @@ func _houyi_spike_attack(target: GameEntity,dmg:float) -> void:
 		get_parent().add_child(spike_bullet)
 		if _i < 2:
 			await get_tree().create_timer(0.15).timeout
-
-
-
