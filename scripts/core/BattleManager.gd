@@ -297,8 +297,16 @@ func _ready():
 	# 视野管理器
 
 	# 大厅选人开局（host 带全员锁定阵容进入）：跳过选人 UI，见 _ready 末尾的 _start_net_lineup
+	var _auto_boot := PlayerPrefs.opt_bool("ai_test_match", false) \
+		or PlayerPrefs.opt_bool("training_mode", false) \
+		or "--ai-test" in OS.get_cmdline_user_args() \
+		or "--training-camp" in OS.get_cmdline_user_args() \
+		or "--net-test" in OS.get_cmdline_user_args() \
+		or "--ai-bench" in OS.get_cmdline_user_args()
 	if NetSession.mode == NetSession.Mode.HOST and NetSession.has_picks():
 		pass
+	elif _auto_boot:
+		pass   # 测试/训练/无头模式直接进入加载，不显示选人界面
 	else:
 		_show_hero_select_ui()
 
@@ -371,11 +379,16 @@ func _start_ai_test_match() -> void:
 	for nm in hero_configs.keys():
 		if str(nm) != "元流之子":   # 避免测试局弹万物为流选择面板
 			pool.append(str(nm))
-	if pool.is_empty():
-		pool = ["亚瑟"]
+	if pool.size() < 10:
+		pool = ["亚瑟", "妲己", "狄仁杰", "李白", "铠", "安琪拉", "兰陵王", "孙尚香", "东皇太一", "太乙真人"]
 	pool.shuffle()
+	# 固定本局10人名单：加载界面与实际生成 AI 使用同一份 picks，避免显示与实战不一致
+	var picks: Array = pool.slice(0, 10)
+	sel_player_seat = 0
+	sel_ally_picks = picks.slice(0, 5)
+	sel_enemy_picks = picks.slice(5, 10)
 	print("[AI-TEST] start random 10 AI at 4x")
-	_start_game(str(pool[0]))
+	_start_game(str(picks[0]))
 
 
 ## 测试观战 HUD：倍速/暂停/切换主视角/结束，模仿回放控制条
@@ -1352,9 +1365,15 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 		_training_minions = false
 		_training_jungle = false
 	elif _ai_test_match:
-		# 测试局：双方都由 _create_team_ai 随机补全，不固定阵容
+		# 测试局：加载界面与本局实际生成共用 sel_*_picks 名单
 		sel_ally_ai_picks = []
-		sel_enemy_picks = []
+		if sel_ally_picks.size() == 5:
+			for i in 5:
+				if i != sel_player_seat and str(sel_ally_picks[i]) != "":
+					sel_ally_ai_picks.append(str(sel_ally_picks[i]))
+			# sel_enemy_picks 保持 5 个，传给 _create_team_ai 作为强制阵容
+		else:
+			sel_enemy_picks = []
 	elif _ai_benchmark:
 		# 固定双方阵容，避免每次随机 BP 改变对位，导致前后对比混入阵容噪声
 		sel_ally_ai_picks = ["妲己", "李白", "狄仁杰", "太乙真人"]
@@ -7870,4 +7889,3 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
-
