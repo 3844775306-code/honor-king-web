@@ -23,6 +23,7 @@ enum Type {
 	BLUE_BUFF,
 	HARASS,
 	SAFE_DISTANCE,
+	MINION_ESCAPE,
 }
 
 enum Status { ACTIVE, COMPLETED, FAILED, INTERRUPTED }
@@ -78,5 +79,6 @@ func label() -> String:
 		Type.BLUE_BUFF: return "打蓝 buff"
 		Type.HARASS: return "消耗"
 		Type.SAFE_DISTANCE: return "保持安全距离"
+		Type.MINION_ESCAPE: return "塔前脱战"
 	return "待命"
 

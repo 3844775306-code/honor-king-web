@@ -225,6 +225,8 @@ func _action_is_complete(action: AIAction) -> bool:
 			return not _has_ready_skill_in_range(ht as Hero)
 		AIAction.Type.SAFE_DISTANCE:
 			return false
+		AIAction.Type.MINION_ESCAPE:
+			return false   # 由 _try_tower_minion_escape 每帧判断何时脱战
 		AIAction.Type.VISION_SPIRIT:
 			return hero.move_target == Vector3.ZERO
 	return false
@@ -291,6 +293,59 @@ func _harass_target() -> Hero:
 	if str(hero.role) == "射手" and dist <= hero.attack_range * 0.01 and dist > _safe_distance_to(target):
 		return target
 	return null
+
+
+## 塔前被塔内小兵远程消耗：自己无法安全反击时后撤到小兵射程外（优先级 900）
+func _try_tower_minion_escape() -> bool:
+	if hero == null or hero.is_dead:
+		return false
+	var attacker = hero.last_attacker
+	if attacker == null or not is_instance_valid(attacker) or not (attacker is Minion):
+		return false
+	var m := attacker as Minion
+	if int(m.team) == int(hero.team) or m.health <= 0.0:
+		return false
+	var tower: Turret = null
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or int((e as Turret).team) == int(hero.team) or (e as Turret).health <= 0.0:
+			continue
+		var t := e as Turret
+		if m.global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+			tower = t
+			break
+	if tower == null:
+		return false
+	# 已经在塔攻击范围内：交给塔下逃生处理，不在这里重复
+	if hero.global_position.distance_to(tower.global_position) <= tower.attack_range * 0.01:
+		return false
+	var m_range: float = m.attack_range * 0.01
+	var m_dist: float = hero.global_position.distance_to(m.global_position)
+	if m_dist > m_range + 1.0:
+		if _is_action(AIAction.Type.MINION_ESCAPE):
+			_finish_current_action()
+		return false
+	# 有己方兵线掩护 / 能在塔外安全反击：不需要脱战
+	if AiConfig.tower_ally_minion_hp(hero, tower) >= AiConfig.UNSAFE_TOWER_MINION_HP:
+		return false
+	var safe_hit: bool = hero.global_position.distance_to(tower.global_position) > tower.attack_range * 0.01 \
+		and m_dist <= hero.attack_range * 0.01 + 0.5
+	if safe_hit:
+		return false
+	var away: Vector3 = hero.global_position - m.global_position
+	away.y = 0.0
+	if away.length() < 0.05:
+		away = hero.global_position - tower.global_position
+		away.y = 0.0
+	if away.length() < 0.05:
+		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+	hero.manual_target = null
+	hero.move_target = hero.global_position + away.normalized() * (m_range - m_dist + 1.2)
+	_ai_path.clear()
+	if not _is_action(AIAction.Type.MINION_ESCAPE):
+		if current_action != null:
+			current_action.mark(AIAction.Status.INTERRUPTED)
+		current_action = AIAction.new(AIAction.Type.MINION_ESCAPE, 900, AIAction.PauseClass.SURVIVAL, "塔前脱战")
+	return true
 
 
 ## 保持安全距离：目标进入安全距离内时先后撤，回到安全距离即停（优先级 910）
@@ -1355,6 +1410,9 @@ func _process(delta):
 		return
 	# 保持安全距离：目标进入敌方普攻范围+1/2m 内先拉开，优先级 910
 	if _try_keep_safe_distance():
+		return
+	# 塔前被塔内小兵远程消耗：无法安全反击则后撤，优先级 900
+	if _try_tower_minion_escape():
 		return
 	# 反击：撤退超过3秒、血量低于追击敌人且仍被追 → 无视限制直接对拼
 	_try_counter_attack()
@@ -3480,4 +3538,3 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
-

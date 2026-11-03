@@ -261,4 +261,4 @@ static func should_engage_tower_hero(hero: Hero, target: Hero) -> bool:
 	# 目标残血：值得越塔换
 	var t_ratio: float = target.health / maxf(target.actual_max_health, 1.0)
 	var my_ratio: float = hero.health / maxf(hero.actual_max_health, 1.0)
-	return t_ratio <= TOWER_DIVE_HP_RATIO and my_ratio >= 0.30
+	return t_ratio <= TOWER_DIVE_HP_RATIO and my_ratio >= 0.50
