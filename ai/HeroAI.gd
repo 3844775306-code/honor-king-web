@@ -297,6 +297,10 @@ func _harass_target() -> Hero:
 func _try_keep_safe_distance() -> bool:
 	if hero.is_dead:
 		return false
+	if hero.health >= hero.actual_max_health * 0.40:
+		if _is_action(AIAction.Type.SAFE_DISTANCE):
+			_finish_current_action()
+		return false
 	var target: Hero = null
 	if hero.manual_target is Hero and is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
 		target = hero.manual_target
