@@ -2881,10 +2881,12 @@ func _lyf_q(hero, lv: int, pos: Vector3) -> void:
 func _lyf_w(hero, lv: int, _pos: Vector3) -> void:
 	if hero == null or not is_instance_valid(hero):
 		return
-	# 位移轨迹 = 本次施放起点(已记录) → 当前落点
+	# 位移轨迹 = 本次施放起点 → 实际落点（dash_to 在 type4 位移启动时记录，不能读 tween 尚未推进的 global_position）
 	var start: Vector3 = hero.dash_from
 	start.y = 0.0
-	var end: Vector3 = hero.global_position
+	var end: Vector3 = hero.dash_to
+	if end == Vector3.ZERO or start.distance_to(end) < 0.1:
+		end = hero.global_position
 	end.y = 0.0
 	var seg: Vector3 = end - start
 	if seg.length() < 0.1:
@@ -2901,63 +2903,115 @@ func _lyf_w(hero, lv: int, _pos: Vector3) -> void:
 	wheel.pierce = true
 	wheel.global_position = start + Vector3.UP * 1.0   # 从位移起点飞出，覆盖翻滚经过与前方的全部敌人
 	hero.get_parent().add_child(wheel)
-	# 视觉（刃遁）：刀轮拖尾 + 位移烟尘/速度线 + 出土冲击（纯表现，不改结算）
+	# 视觉（刃遁）：起点→实际落点的分段光刃轨迹（不再是整块矩形/粗黑棒）
 	var vcol := Color(1.0, 0.52, 0.16)
 	var _lyf_bm = hero.get_tree().get_first_node_in_group("battle_manager")
 	var _lyf_local: bool = (_lyf_bm != null and _lyf_bm.hero == hero)
-	Vfx.attach_trail(wheel, vcol, 0.26, 0.26, 10, Color(1.0, 1.0, 1.0, 0.45))
-	Vfx.dash_fx(start, end, vcol, _lyf_local, maxf(start.distance_to(end), 0.6) + 0.8)
-	Vfx.cast_burst("李元芳", start, nd)
-	Vfx.shockwave(end, 1.35, vcol, 0.34)
-	Vfx.hit_spark(end + Vector3.UP * 0.5, vcol, Vector3.UP, 1.1)
+	var start_v: Vector3 = start
+	var end_v: Vector3 = hero.dash_to if hero.dash_to != Vector3.ZERO else end
+	if start_v.distance_to(end_v) < 0.1:
+		end_v = end
+	var nd_v: Vector3 = (end_v - start_v)
+	nd_v.y = 0.0
+	if nd_v.length() < 0.1:
+		nd_v = nd
+	nd_v = nd_v.normalized()
+	var trail_len_v: float = maxf(start_v.distance_to(end_v), 0.8)
+	var side_v := Vector3(-nd_v.z, 0.0, nd_v.x)
+	var trail_root := Node3D.new()
+	trail_root.name = "LyfBladeTrail"
+	hero.get_parent().add_child(trail_root)
+	var fade_mats: Array = []
+	# 分段地面光带：前宽后窄，逐段延迟淡出，方向严格 start -> end
+	var seg_n := 10
+	for i in range(seg_n):
+		var t0 := float(i) / float(seg_n)
+		var t1 := float(i + 1) / float(seg_n)
+		var a := start_v.lerp(end_v, t0)
+		var b := start_v.lerp(end_v, t1)
+		var mid := (a + b) * 0.5 + Vector3.UP * 0.075
+		var seg_len: float = maxf(a.distance_to(b) + 0.08, 0.12)
+		var seg_w: float = lerpf(0.62, 0.10, t0)
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(seg_w, seg_len)
+		var mi := MeshInstance3D.new()
+		mi.mesh = plane
+		mi.position = mid
+		mi.rotation.y = atan2(nd_v.x, nd_v.z)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		m.albedo_color = Color(1.0, 0.48, 0.14, 0.36)
+		m.emission_enabled = true
+		m.emission = Color(1.0, 0.40, 0.08)
+		m.emission_energy_multiplier = 1.4
+		mi.material_override = m
+		trail_root.add_child(mi)
+		fade_mats.append(m)
+		var tw: Tween = m.create_tween()
+		tw.tween_interval(t0 * 0.10)
+		tw.tween_property(m, "albedo_color:a", 0.0, 1.15)
+		# 内侧白芯：更细、更亮，强化“刃”的方向感
+		var core := PlaneMesh.new()
+		core.size = Vector2(maxf(seg_w * 0.22, 0.035), seg_len * 0.94)
+		var cmi := MeshInstance3D.new()
+		cmi.mesh = core
+		cmi.position = mid + Vector3.UP * 0.012
+		cmi.rotation.y = mi.rotation.y
+		cmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		var cm := StandardMaterial3D.new()
+		cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		cm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		cm.albedo_color = Color(1.0, 0.93, 0.72, 0.55)
+		cmi.material_override = cm
+		trail_root.add_child(cmi)
+		var tw2: Tween = cm.create_tween()
+		tw2.tween_interval(t0 * 0.10)
+		tw2.tween_property(cm, "albedo_color:a", 0.0, 0.82)
+	# 两侧速度线（记录进 Vfx，起点/落点同轨迹）
+	for k in range(4):
+		var off: Vector3 = side_v * (float(k) - 1.5) * 0.20
+		Vfx.beam(start_v + off + Vector3.UP * 0.22, end_v + off + Vector3.UP * 0.22,
+			Color(1.0, 0.58, 0.20, 0.85), 0.022, 0.34)
+	# 地面焦痕：比原来窄很多、偏暗，不再像粗黑棒
+	var char_len: float = trail_len_v + 0.2
+	var char_plane := PlaneMesh.new()
+	char_plane.size = Vector2(0.30, char_len)
+	var char_mi := MeshInstance3D.new()
+	char_mi.mesh = char_plane
+	char_mi.position = (start_v + end_v) * 0.5 + Vector3.UP * 0.045
+	char_mi.rotation.y = atan2(nd_v.x, nd_v.z)
+	char_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var char_m := StandardMaterial3D.new()
+	char_m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	char_m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	char_m.albedo_color = Color(0.12, 0.04, 0.02, 0.42)
+	char_mi.material_override = char_m
+	trail_root.add_child(char_mi)
+	var char_tw: Tween = char_m.create_tween()
+	char_tw.tween_property(char_m, "albedo_color:a", 0.06, 1.5)
+	# 起点残影 + 落点冲击
+	Vfx.dash_fx(start_v, end_v, vcol, _lyf_local, trail_len_v + 0.8)
+	Vfx.cast_burst("李元芳", start_v, nd_v)
+	Vfx.shockwave(end_v, 1.35, vcol, 0.34)
+	Vfx.hit_spark(end_v + Vector3.UP * 0.5, vcol, Vector3.UP, 1.1)
+	for i in range(4):
+		var ep: Vector3 = start_v.lerp(end_v, (float(i) + 1.0) / 5.0) + Vector3.UP * 0.35
+		Vfx.hit_spark(ep, Color(1.0, 0.62, 0.22), Vector3.UP, 0.45)
 	# 遁地：0.7秒无法选中/免伤免控（模型隐藏由 Hero 每帧处理）
 	hero.wd_timer = maxf(hero.wd_timer, 0.7)
 	hero._lyf_burrow = maxf(hero._lyf_burrow, 0.7)
-	# 燃痕：位移全程(起点→终点)灼烧2.9秒，每0.25秒一跳；长边沿轨迹方向，宽0.7
-	var trail_len := maxf(start.distance_to(end), 0.3)
+	# 燃痕伤害判定：位移全程(起点→终点)灼烧2.9秒，每0.25秒一跳
 	var tick := int(110.0 + 22.0 * (lv - 1) + float(hero.bonus_attack) * 0.3)
-	var box := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	# 长轴放在本地 Z（look_at 使 -Z 指向轨迹方向），避免横向摆错角度
-	bm.size = Vector3(0.7, 0.06, trail_len)
-	box.mesh = bm
-	box.position = (start + end) * 0.5 + Vector3(0.0, 0.08, 0.0)
-	box.look_at(end + Vector3(0.0, 0.08, 0.0), Vector3.UP)
-	var mb := StandardMaterial3D.new()
-	mb.albedo_color = Color(1.0, 0.32, 0.08, 0.55)
-	mb.emission_enabled = true
-	mb.emission = Color(1.0, 0.35, 0.05, 0.55)
-	mb.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mb.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	box.material_override = mb
-	hero.get_parent().add_child(box)
-	# 双层燃痕：贴地暗焦底 + 加色光带；光带随灼烧时长渐隐，避免"一条粗黑棒"
-	mb.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mb.albedo_color = Color(1.0, 0.45, 0.12, 0.62)
-	mb.emission = Color(1.0, 0.55, 0.18)
-	mb.emission_energy_multiplier = 1.6
-	var scorch := MeshInstance3D.new()
-	var sbox := BoxMesh.new()
-	sbox.size = Vector3(0.95, 0.04, trail_len)
-	scorch.mesh = sbox
-	scorch.position = box.position + Vector3(0.0, 0.01, 0.0)
-	scorch.look_at(end + Vector3(0.0, 0.09, 0.0), Vector3.UP)
-	var sm := StandardMaterial3D.new()
-	sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	sm.albedo_color = Color(0.16, 0.06, 0.02, 0.75)
-	scorch.material_override = sm
-	scorch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	hero.get_parent().add_child(scorch)
-	var fade := box.create_tween()
-	fade.tween_property(mb, "albedo_color:a", 0.04, 2.9)
-	var fade2 := scorch.create_tween()
-	fade2.tween_property(sm, "albedo_color:a", 0.18, 2.9)
 	var n_tick := int(2.9 / 0.25)
 	for i in n_tick:
 		if not is_instance_valid(hero) or hero.health <= 0.0:
-			box.queue_free()
-			scorch.queue_free()
+			trail_root.queue_free()
 			return
 		await hero.get_tree().create_timer(0.25).timeout
 		for e in hero.get_tree().get_nodes_in_group("entities"):
@@ -2970,8 +3024,7 @@ func _lyf_w(hero, lv: int, _pos: Vector3) -> void:
 		if i % 2 == 0:
 			var tp: Vector3 = start.lerp(end, float(i + 1) / float(n_tick)) + Vector3.UP * 0.25
 			Vfx.hit_spark(tp, vcol, Vector3.UP, 0.55)
-	box.queue_free()
-	scorch.queue_free()
+	trail_root.queue_free()
 
 
 func _lyf_r(hero, lv: int, pos: Vector3) -> void:

@@ -416,6 +416,7 @@ var wd_timer:float = 0.0
 var _lyf_burrow: float = 0.0            # W钻地剩余时长：>0时模型隐藏+wd免伤免控(不可选中)
 var lyf_reveal_cd: Dictionary = {}      # 被动·密探谛听: 敌方英雄 -> 下次可再次暴露的纪元秒
 var dash_from: Vector3 = Vector3.ZERO   # type4位移起点（供W燃痕/位移类技能回读）
+var dash_to: Vector3 = Vector3.ZERO     # type4位移实际落点（供W燃痕/位移类技能回读）
 # 元流之子·万物为流：流层 / 泉水四选一 / 破釜连发 / 浮空
 var yuanliu_flow: int = 0               # "流"层数 0~9
 var yuanliu_flow_idle: float = 5.0      # 距「流」首层流失的倒计时（获得/消耗即重置为5秒）
@@ -4995,6 +4996,7 @@ func _finish_casting():
 			# 不修正会直接穿墙/卡在墙里（AI 追击、逃跑尤其明显）
 			var dash_end: Vector3 = clamp_dash_landing(dir, disp_len)
 			dash_end.y = 0.5
+			dash_to = dash_end
 			dash_move_to(dash_end, 0.16, "sprint")
 		6:  # 护盾
 			shield_remaining = max(shield_remaining, skill.shield_amount)
