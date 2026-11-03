@@ -398,6 +398,28 @@ func _physics_process(delta):
 	
 
 
+## 拆塔中小兵被敌方小兵攻击：优先切最近的敌方小兵，附近没有小兵再走常规最近目标搜索
+func _retarget_on_minion_hit() -> void:
+	var best: GameEntity = null
+	var best_dist: float = vision_range
+	for entity in get_tree().get_nodes_in_group("entities"):
+		if not is_instance_valid(entity) or entity == self or entity.health <= 0.0:
+			continue
+		if not (entity is Minion) or int((entity as Minion).team) == int(team):
+			continue
+		if entity.collision_layer == 0:
+			continue
+		var d := global_position.distance_to(entity.global_position)
+		if d < best_dist:
+			best_dist = d
+			best = entity
+	if best != null:
+		current_target = best
+		attack_timer = 0.0
+	else:
+		_find_target()
+
+
 func _find_target():
 	var best: GameEntity = null
 	var best_dist = vision_range
@@ -453,6 +475,10 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 		return
 	if source:
 		if source is Minion:
+			# 正在拆塔的小兵被敌方小兵攻击：重新锁定最近的敌方小兵（主宰先锋除外）
+			if current_target is Turret and is_instance_valid(source) and source.team != team \
+					and source.health > 0.0 and display_name not in ["dragon", "storm", "shadow_dragon"]:
+				_retarget_on_minion_hit()
 			amount*= 1.25
 			if source.display_name == "super" or source.display_name == "siege":
 				amount *= 1.2
@@ -481,4 +507,3 @@ func _start_sink_away() -> void:
 	tw.tween_interval(fall)
 	tw.tween_property(self, "position:y", global_position.y - depth, sink) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-
