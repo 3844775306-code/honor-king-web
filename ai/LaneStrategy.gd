@@ -138,7 +138,7 @@ func _is_under_unsafe_tower(entity: GameEntity) -> bool:
 			if turret.global_position.distance_to(m.global_position) <= AiConfig.TOWER_ATTACK_RANGE:
 				friendly_hp += (m as Minion).health
 		if friendly_hp < AiConfig.UNSAFE_TOWER_MINION_HP:
-			return true
+			return not AiConfig.can_hit_from_outside_tower(hero, entity.global_position, float(entity.body_radius))
 	return false
 
 

@@ -2353,7 +2353,7 @@ func _minion_under_unsafe_tower(m: Minion) -> bool:
 				if t.global_position.distance_to((n as Node3D).global_position) <= AiConfig.TOWER_ATTACK_RANGE:
 					cover += (n as Minion).health
 		if cover < 500.0:
-			return true
+			return not AiConfig.can_hit_from_outside_tower(hero, m.global_position, float(m.body_radius))
 	return false
 
 
@@ -3610,3 +3610,4 @@ func _find_enemy_tripod(max_dist: float) -> Tripod:
 			best_d = d
 			best = t
 	return best
+

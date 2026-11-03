@@ -235,17 +235,52 @@ static func tower_ally_minion_hp(hero: Hero, tower: Turret) -> float:
 	return total
 
 
-## 目标当前被哪座敌方塔保护（在塔的实际攻击范围内）
-static func tower_guarding_hero(hero: Hero, target: Hero) -> Turret:
-	if hero == null or target == null or not is_instance_valid(target):
+## 某个位置当前被哪座敌方塔保护（在塔的实际攻击范围内）
+static func tower_guarding_pos(hero: Hero, pos: Vector3) -> Turret:
+	if hero == null or not is_instance_valid(hero):
 		return null
 	for e in hero.get_tree().get_nodes_in_group("turrets"):
 		if not (e is Turret) or (e as Turret).health <= 0.0 or int((e as Turret).team) == int(hero.team):
 			continue
 		var t := e as Turret
-		if target.global_position.distance_to(t.global_position) <= t.attack_range * 0.01:
+		if pos.distance_to(t.global_position) <= t.attack_range * 0.01:
 			return t
 	return null
+
+
+## 站在敌方塔外时能否安全打到该位置（远程清塔内小兵用）
+static func can_hit_from_outside_tower(hero: Hero, pos: Vector3, body_radius: float = 0.6) -> bool:
+	if hero == null or not is_instance_valid(hero):
+		return false
+	var tower := tower_guarding_pos(hero, pos)
+	if tower == null:
+		return true
+	# 自己已经在塔攻击范围内，不算塔外安全输出
+	if hero.global_position.distance_to(tower.global_position) <= tower.attack_range * 0.01:
+		return false
+	var dist: float = hero.global_position.distance_to(pos)
+	if dist <= hero.attack_range * 0.01 + body_radius + 0.3:
+		return true
+	for i in range(mini(3, hero.skills.size())):
+		if i >= hero.skill_levels.size() or int(hero.skill_levels[i]) <= 0:
+			continue
+		if i >= hero.skill_cooldowns.size() or float(hero.skill_cooldowns[i]) > 0.0:
+			continue
+		var sk: Skill = hero.skills[i]
+		if sk == null or int(sk.type) not in [0, 1, 3, 5] or sk.cast_range <= 0.0:
+			continue
+		if hero.mana < sk.mana_cost:
+			continue
+		if dist <= sk.cast_range + body_radius + 0.3:
+			return true
+	return false
+
+
+## 目标当前被哪座敌方塔保护（在塔的实际攻击范围内）
+static func tower_guarding_hero(hero: Hero, target: Hero) -> Turret:
+	if hero == null or target == null or not is_instance_valid(target):
+		return null
+	return tower_guarding_pos(hero, target.global_position)
 
 
 ## 越塔前确认自己当前能够攻击到目标（普攻或冷却好的攻击技能）
