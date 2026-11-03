@@ -303,7 +303,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 						pen = 0.35
 					ent.take_damage(float(q_dmg), hero, false, 1, pen)
 				# 刀光：从自身向面前扇形中心扫出
-				Vfx.slash_fx(hero.global_position, hero.global_position + fwd * q_radius, Color(0.85, 0.2, 0.22))
+				Vfx.sector_slash_fx(hero.global_position, fwd, q_radius, 120.0, Color(0.85, 0.2, 0.22))
 				preview.queue_free()
 			2:
 				# 贪狼之握：以自身为中心，只命中面前150°扇形区域
@@ -348,7 +348,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					var _bhp = hero.actual_max_health - hero.max_health
 					var _sh = int(280 + 70 * _lv1 + 0.07 * _bhp)
 					hero.shield_remaining = minf(hero.shield_remaining + _sh, 3.0 * _sh)
-				Vfx.slash_fx(hero.global_position, hero.global_position + fwd * w_radius, Color(0.58, 0.32, 0.92))
+				Vfx.sector_slash_fx(hero.global_position, fwd, w_radius, 150.0, Color(0.58, 0.32, 0.92))
 				preview.queue_free()
 			3:  # 魔神降世：落地斩击+法阵边缘伤害
 				# 大招范围预览圈
@@ -799,6 +799,9 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					if ent != hero and ent.health > 0 and ent.team != hero.team:
 						if hero.global_position.distance_to(ent.global_position) <= 3.5:
 							ent.take_damage(q_dmg, hero, true, 1, 0); hit_any = true
+				# 曜龙烛兆以自身为中心爆发（视觉与自中心AOE同步）
+				Vfx.shockwave(Vfx.ground_pos(Vector3(hero.global_position.x, 0.0, hero.global_position.z)),
+					3.5, Color(0.62, 0.30, 0.92), 0.38)
 				if hit_any: hero.mana = min(hero.mana + 20, hero.actual_mana_max); hero.skill_cooldowns[0] *= 0.5
 				if hero.donghuang_orbs >= 3: hero._apply_healing(120 + level * 30 + hero.actual_ability_power * 0.6)
 			2:
@@ -3299,8 +3302,10 @@ func _yuanliu_q(hero, lv: int, pos: Vector3) -> void:
 	if hero.skill_cooldowns.size() > 2:
 		hero.skill_cooldowns[1] *= 0.5
 		hero.skill_cooldowns[2] *= 0.5
-	# 视觉：水流漩涡扩散
+	# 视觉：水流漩涡扩散（以自身为圆心）
 	var zone = _yuanliu_flow_pool(hero.get_parent(), c0, 3.5)
+	Vfx.shockwave(Vfx.ground_pos(Vector3(hero.global_position.x, 0.0, hero.global_position.z)),
+		3.5, Color(0.30, 0.82, 1.0), 0.42)
 	var tw: Tween = hero.get_tree().create_tween()
 	tw.tween_property(zone, "scale", Vector3(1.6, 1.6, 1.6), 0.5)
 	tw.parallel().tween_property(zone, "position:y", 0.5, 0.5)

@@ -22,6 +22,8 @@ var base_health: float = 3000
 var base_mana: float = 0
 
 var preview_mesh: MeshInstance3D
+var _sector_preview: Node3D = null
+var _sector_preview_key := ""
 # 新增职业成长表
 const ROLE_GROWTH = {
 	"坦克":     {"health": 240, "attack": 8,  "armor": 18, "attack_speed": 0.005, "magic_resist": 8.5},
@@ -4116,6 +4118,25 @@ func _show_donghuang_w_preview(aim_pos: Vector3):
 		else:
 			donghuang_aim_rings[i].visible = false
 
+func _show_sector_preview(radius: float, span_deg: float, color: Color, angle_y: float) -> void:
+	var key := "%.2f|%.1f|%s" % [radius, span_deg, color.to_html()]
+	if _sector_preview == null or not is_instance_valid(_sector_preview) or _sector_preview_key != key:
+		if _sector_preview != null and is_instance_valid(_sector_preview):
+			_sector_preview.free()
+		_sector_preview = Vfx.sector_preview(radius, span_deg, color)
+		_sector_preview.name = "SectorPreview"
+		_sector_preview.position = Vector3(0.0, 0.03, 0.0)
+		add_child(_sector_preview)
+		_sector_preview_key = key
+	_sector_preview.visible = true
+	_sector_preview.rotation.y = angle_y - rotation.y
+
+
+func _hide_sector_preview() -> void:
+	if _sector_preview != null and is_instance_valid(_sector_preview):
+		_sector_preview.visible = false
+
+
 func _hide_donghuang_w_preview():
 	for ring in donghuang_aim_rings:
 		ring.visible = false
@@ -4207,6 +4228,7 @@ func _handle_skill_input(delta):
 	if Input.is_key_pressed(KEY_CTRL):
 		return
 	_summoner_preview_on = false
+	_hide_sector_preview()
 	# 召唤师技能施法预览：按住召唤师按钮/键（且没在按技能）时，复用技能同一套地面指示器
 	# 注意不能提前 return：召唤师技能的施放走本函数末尾（移动端松手/桌面 just_pressed）
 	if summoner_skill != null and summoner_cooldown <= 0.0 and not is_ai:
@@ -4267,7 +4289,19 @@ func _handle_skill_input(delta):
 			var aim_pos := Vector3(target_pos.x, ground_y, target_pos.z)
 			impact_ring.visible = false
 			
-			if display_name == "东皇太一" and held_index == 1:
+			var lu_bu_span := 0.0
+			if display_name == "吕布" and held_index == 0:
+				lu_bu_span = 120.0
+			elif display_name == "吕布" and held_index == 1:
+				lu_bu_span = 150.0
+			if lu_bu_span > 0.0:
+				var sec_col := Color(0.96, 0.24, 0.22) if held_index == 0 else Color(0.58, 0.32, 0.92)
+				_show_sector_preview(maxf(radius, 3.0), lu_bu_span, sec_col, angle_y)
+				arrow_preview.visible = false
+				aoe_fill.visible = false
+				impact_ring.visible = false
+				cast_range_ring.visible = false
+			elif display_name == "东皇太一" and held_index == 1:
 				_show_donghuang_w_preview(target_pos)
 				arrow_preview.visible = false
 				aoe_fill.visible = false

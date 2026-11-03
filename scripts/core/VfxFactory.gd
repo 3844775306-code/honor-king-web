@@ -1413,6 +1413,127 @@ func _prop_mat(color: Color, alpha: float = 0.9, emission: float = 1.2) -> Stand
 	m.disable_receive_shadows = true
 	return m
 
+## 地面扇形预览/挥砍特效：以原点为圆心、朝 +Z，span_deg 为总角度
+func sector_preview(radius: float, span_deg: float, color: Color) -> Node3D:
+	var root := Node3D.new()
+	root.name = "SectorPreview"
+	var fill := MeshInstance3D.new()
+	fill.mesh = _sector_ground_mesh(radius, span_deg, 36, false)
+	fill.material_override = _sector_ground_mat(color, 0.20, 0.25)
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(fill)
+	var rim := MeshInstance3D.new()
+	rim.mesh = _sector_ground_mesh(radius, span_deg, 48, true)
+	rim.material_override = _sector_ground_mat(color.lightened(0.22), 0.85, 1.1)
+	rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	rim.position.y = 0.012
+	root.add_child(rim)
+	return root
+
+
+## 扇形技能挥砍视觉：生成后快速外扩并淡出
+func sector_slash_fx(origin: Vector3, dir: Vector3, radius: float, span_deg: float, color: Color) -> void:
+	if quality <= 0 or get_tree() == null:
+		return
+	var d := dir
+	d.y = 0.0
+	if d.length() < 0.01:
+		d = Vector3.FORWARD
+	var root := Node3D.new()
+	root.name = "SectorSlash"
+	root.position = origin + Vector3(0.0, ground_pos(origin).y + 0.06, 0.0)
+	root.rotation.y = atan2(d.x, d.z)
+	var fill := MeshInstance3D.new()
+	fill.mesh = _sector_ground_mesh(radius, span_deg, 40, false)
+	var fm := _sector_ground_mat(color, 0.38, 0.5)
+	fill.material_override = fm
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(fill)
+	var rim := MeshInstance3D.new()
+	rim.mesh = _sector_ground_mesh(radius, span_deg, 52, true)
+	var rm := _sector_ground_mat(color.lightened(0.3), 0.95, 1.6)
+	rim.material_override = rm
+	rim.position.y = 0.02
+	rim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(rim)
+	add_child(root)
+	root.scale = Vector3(0.72, 1.0, 0.72)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(root, "scale", Vector3(1.10, 1.0, 1.10), 0.20).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(fm, "albedo_color:a", 0.0, 0.30)
+	tw.tween_property(rm, "albedo_color:a", 0.0, 0.30)
+	tw.chain().tween_callback(root.queue_free)
+	_burst(color, color.lightened(0.35), origin + d * radius * 0.65 + Vector3.UP * 0.8,
+		12, 0.45, 0.45, 6.0, d, 70.0, 8.0)
+
+
+func _sector_ground_mat(color: Color, alpha: float, emission: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(color.r, color.g, color.b, alpha)
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = emission
+	return m
+
+
+## XZ 平面扇形面片；rim=true 时生成圆弧+两条径向边
+func _sector_ground_mesh(radius: float, span_deg: float, segs: int, rim: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var span := deg_to_rad(span_deg)
+	var half := span * 0.5
+	if not rim:
+		for i in range(segs):
+			var a0 := -half + span * float(i) / float(segs)
+			var a1 := -half + span * float(i + 1) / float(segs)
+			var p0 := Vector3(sin(a0) * radius, 0.0, cos(a0) * radius)
+			var p1 := Vector3(sin(a1) * radius, 0.0, cos(a1) * radius)
+			st.set_normal(Vector3.UP)
+			st.set_uv(Vector2(0.5, 0.0))
+			st.add_vertex(Vector3.ZERO)
+			st.set_normal(Vector3.UP)
+			st.set_uv(Vector2(0.5 + sin(a0) * 0.5, 0.5 + cos(a0) * 0.5))
+			st.add_vertex(p0)
+			st.set_normal(Vector3.UP)
+			st.set_uv(Vector2(0.5 + sin(a1) * 0.5, 0.5 + cos(a1) * 0.5))
+			st.add_vertex(p1)
+	else:
+		var w := maxf(radius * 0.018, 0.025)
+		for i in range(segs):
+			var a0 := -half + span * float(i) / float(segs)
+			var a1 := -half + span * float(i + 1) / float(segs)
+			var n0 := Vector3(sin(a0), 0.0, cos(a0))
+			var n1 := Vector3(sin(a1), 0.0, cos(a1))
+			_sector_quad(st, n0 * (radius - w), n0 * (radius + w), n1 * (radius + w), n1 * (radius - w))
+		# 两条径向边
+		_sector_quad(st, Vector3.ZERO, Vector3.ZERO, Vector3(sin(-half) * radius, 0.0, cos(-half) * radius),
+			Vector3(sin(-half) * radius + cos(-half) * w, 0.0, cos(-half) * radius - sin(-half) * w))
+		_sector_quad(st, Vector3.ZERO, Vector3.ZERO, Vector3(sin(half) * radius, 0.0, cos(half) * radius),
+			Vector3(sin(half) * radius - cos(half) * w, 0.0, cos(half) * radius + sin(half) * w))
+	return st.commit()
+
+
+func _sector_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
+	st.set_normal(Vector3.UP)
+	st.set_uv(Vector2.ZERO)
+	st.add_vertex(a)
+	st.set_uv(Vector2.RIGHT)
+	st.add_vertex(b)
+	st.set_uv(Vector2.ONE)
+	st.add_vertex(c)
+	st.set_uv(Vector2.ZERO)
+	st.add_vertex(a)
+	st.set_uv(Vector2.ONE)
+	st.add_vertex(c)
+	st.set_uv(Vector2.DOWN)
+	st.add_vertex(d)
+
+
 ## 程序化扇形网格（扇面在 XY 平面、朝 +Z），带轻微弧度
 func _fan_mesh(radius: float, span_deg: float, segs: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
