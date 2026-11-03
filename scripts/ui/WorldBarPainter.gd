@@ -151,12 +151,30 @@ func _draw_unit(r: Dictionary) -> void:
 					Color(1, 1, 1, 0.14), 1.0)
 				tx += step
 
-	# 塔盾下一触发点：白色短线（仅前4分钟由 HUD 下发 shield_next）
+	# 塔盾下一触发点：白色钻石刻度 + 细线（仅前4分钟由 HUD 下发 shield_next）
 	var _shield_next: float = float(r.get("shield_next", -1.0))
 	if _shield_next > 0.0:
 		var _sx: float = p.x + w * clampf(_shield_next, 0.0, 1.0)
-		draw_line(Vector2(_sx, p.y - 2.0), Vector2(_sx, p.y + h + 2.0), Color(0.02, 0.03, 0.05, 0.70), 3.0)
-		draw_line(Vector2(_sx, p.y - 2.0), Vector2(_sx, p.y + h + 2.0), Color(1.0, 1.0, 1.0, 0.95), 1.5)
+		var _s_glow := Color(1.0, 1.0, 1.0, 0.14)
+		var _s_core := Color(1.0, 0.985, 0.92, 0.92)
+		var _s_edge := Color(0.02, 0.03, 0.05, 0.78)
+		# 横向柔和光晕 + 深色描边 + 细白芯，避免一条硬白线
+		draw_line(Vector2(_sx, p.y - 2.5), Vector2(_sx, p.y + h + 2.5), _s_glow, 4.0)
+		draw_line(Vector2(_sx, p.y - 1.0), Vector2(_sx, p.y + h + 1.0), _s_edge, 2.0)
+		draw_line(Vector2(_sx, p.y - 1.0), Vector2(_sx, p.y + h + 1.0), _s_core, 1.0)
+		# 顶部小菱形标记：比整条白线更精致、更像刻度
+		var _ds: float = clampf(h * 0.26, 2.2, 4.2)
+		var _cy: float = p.y - 2.0
+		var _dia := PackedVector2Array([
+			Vector2(_sx, _cy - _ds), Vector2(_sx + _ds, _cy),
+			Vector2(_sx, _cy + _ds), Vector2(_sx - _ds, _cy),
+		])
+		draw_colored_polygon(_dia, _s_edge)
+		var _dia_in := PackedVector2Array([
+			Vector2(_sx, _cy - _ds + 1.0), Vector2(_sx + _ds - 1.0, _cy),
+			Vector2(_sx, _cy + _ds - 1.0), Vector2(_sx - _ds + 1.0, _cy),
+		])
+		draw_colored_polygon(_dia_in, _s_core)
 
 	# 受伤闪橙（渐变段 + 亮边）
 	var ft: float = float(r.get("flash_t", 0.0))
