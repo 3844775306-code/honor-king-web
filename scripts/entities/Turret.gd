@@ -744,6 +744,11 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	if tower_shield > 0.0:
 		UnitVisuals.hit_flash(get_hit_flash_root())
 		play_hit_react()
+		var _shield_absorbed: float = minf(tower_shield, _shield_eff)
+		if _shield_absorbed > 0.0:
+			# 护盾承伤：白色飘字（与英雄护盾吸收同口径，回放/客户端同步）
+			NetSession.push_net_dmg(global_position, _shield_absorbed, false, is_magic, true, false)
+			UiManager.show_damage_number(global_position, _shield_absorbed, false, is_magic, true, false)
 		if tower_shield >= _shield_eff:
 			tower_shield -= _shield_eff
 			_check_tower_shield_triggers()
