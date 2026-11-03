@@ -1030,12 +1030,23 @@ func _auto_join_from_web_query() -> void:
 func _start_web_tunnel(port: int) -> void:
 	if Config.on_web():
 		return
-	if _web_tunnel != null and is_instance_valid(_web_tunnel):
-		return
-	_web_tunnel = WebTunnelScript.new()
-	add_child(_web_tunnel)
-	_web_tunnel.tunnel_ready.connect(_on_web_tunnel_ready)
-	_web_tunnel.tunnel_failed.connect(_on_web_tunnel_failed)
+	# 隧道必须挂在 root 而不是大厅节点：进入战斗时大厅被换掉，
+	# 如果隧道随大厅一起释放，cloudflared 被杀，网页客户端会在加载后 conn=0 掉线。
+	var existing := get_tree().root.get_node_or_null("WebTunnel")
+	if existing != null and is_instance_valid(existing):
+		_web_tunnel = existing
+		if not _web_tunnel.tunnel_ready.is_connected(_on_web_tunnel_ready):
+			_web_tunnel.tunnel_ready.connect(_on_web_tunnel_ready)
+		if not _web_tunnel.tunnel_failed.is_connected(_on_web_tunnel_failed):
+			_web_tunnel.tunnel_failed.connect(_on_web_tunnel_failed)
+		if _web_tunnel.running:
+			return
+	else:
+		_web_tunnel = WebTunnelScript.new()
+		_web_tunnel.name = "WebTunnel"
+		get_tree().root.add_child(_web_tunnel)
+		_web_tunnel.tunnel_ready.connect(_on_web_tunnel_ready)
+		_web_tunnel.tunnel_failed.connect(_on_web_tunnel_failed)
 	if _web_tunnel_lab != null:
 		_web_tunnel_lab.text = "正在生成网页邀请链接（Cloudflare Tunnel）…"
 	if not _web_tunnel.start(port):
@@ -3961,10 +3972,6 @@ func _on_connect_failed(msg: String) -> void:
 		_status_text("连接失败：" + msg + "（检查：同一 Wi-Fi/热点、主机端口开放、关闭 VPN；iOS 需允许本地网络权限；网页版客户端需连 WS 主机）", COL_ERR)
 
 
-func _exit_tree() -> void:
-	_stop_web_tunnel()
-
-
 func _on_host_gone() -> void:
 	if NetSession.cli_mode:
 		return
@@ -4015,4 +4022,3 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
-
