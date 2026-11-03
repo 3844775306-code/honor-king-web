@@ -375,19 +375,58 @@ func _ready():
 
 ## 主菜单测试模块：随机英雄开局，双方 10 个 AI，4 倍速；对局结束自动保存录像并回大厅
 func _start_ai_test_match() -> void:
-	var pool: Array = []
+	# 按职责各选1人，保证每队5条分路不重复；双方共10名不重复英雄
+	var role_order := ["战士", "法师", "刺客", "射手", "辅助"]
+	var by_role := {}
 	for nm in hero_configs.keys():
-		if str(nm) != "元流之子":   # 避免测试局弹万物为流选择面板
-			pool.append(str(nm))
-	if pool.size() < 10:
-		pool = ["亚瑟", "妲己", "狄仁杰", "李白", "铠", "安琪拉", "兰陵王", "孙尚香", "东皇太一", "太乙真人"]
-	pool.shuffle()
-	# 固定本局10人名单：加载界面与实际生成 AI 使用同一份 picks，避免显示与实战不一致
-	var picks: Array = pool.slice(0, 10)
+		if str(nm) == "元流之子":   # 避免测试局弹万物为流选择面板
+			continue
+		var r := str(hero_configs[nm].get("role", "战士"))
+		if not by_role.has(r):
+			by_role[r] = []
+		by_role[r].append(str(nm))
+	var used := {}
+	var picks: Array = []
+	for r in role_order:
+		var pool: Array = by_role.get(r, []).duplicate()
+		pool.shuffle()
+		var chosen := ""
+		for nm in pool:
+			if not used.has(nm):
+				chosen = str(nm)
+				break
+		if chosen == "":
+			# 极端兜底：从全部未使用英雄补位
+			var rest: Array = []
+			for nm in hero_configs.keys():
+				if str(nm) != "元流之子" and not used.has(nm):
+					rest.append(str(nm))
+			rest.shuffle()
+			chosen = str(rest[0]) if not rest.is_empty() else "亚瑟"
+		picks.append(chosen)
+		used[chosen] = true
+	# 第二队再按职责各选1人，且避开第一队
+	for r in role_order:
+		var pool: Array = by_role.get(r, []).duplicate()
+		pool.shuffle()
+		var chosen := ""
+		for nm in pool:
+			if not used.has(nm):
+				chosen = str(nm)
+				break
+		if chosen == "":
+			var rest: Array = []
+			for nm in hero_configs.keys():
+				if str(nm) != "元流之子" and not used.has(nm):
+					rest.append(str(nm))
+			rest.shuffle()
+			chosen = str(rest[0]) if not rest.is_empty() else "亚瑟"
+		picks.append(chosen)
+		used[chosen] = true
 	sel_player_seat = 0
 	sel_ally_picks = picks.slice(0, 5)
 	sel_enemy_picks = picks.slice(5, 10)
-	print("[AI-TEST] start random 10 AI at 4x")
+	print("[AI-TEST] start random 10 AI at 4x (roles: %s)" % str(role_order))
 	_start_game(str(picks[0]))
 
 
