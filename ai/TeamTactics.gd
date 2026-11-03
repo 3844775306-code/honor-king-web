@@ -23,6 +23,9 @@ var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
 var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
 var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
 var _push_gold_cd_until: Dictionary = {}   # {int: float} 经济差推塔冷却结束时间
+var _push_active: Dictionary = {}          # {int: bool} 当前是否处于抱团推塔
+var _push_last_target: Dictionary = {}     # {int: Vector3} 最近一次推塔目标（无兵线时沿用）
+var _push_force_active: Dictionary = {}    # {int: bool} 当前推塔是否高优先级触发
 var _push_dragon_cd_until: Dictionary = {} # {int: float} 打龙后推塔冷却结束时间
 var _force_push_by_team: Dictionary = {}   # {int: bool} 本次推塔是否经济差触发（高优先级）
 
@@ -524,6 +527,27 @@ func allocate_all() -> Dictionary:
 				result[h] = dl
 			print("[TeamTactics] t=%.0f %s 水晶受小兵威胁，%d 人接守塔" % [bm.game_time, team_label, defend_assignees.size()])
 			continue
+		# 抱团推塔持续/退出：只有「我方存活 - 敌方存活 < 2」才退出
+		var alive_diff := ally_alive - enemy_alive
+		if bool(_push_active.get(team, false)) and alive_diff < 2:
+			_push_active[team] = false
+		if bool(_push_active.get(team, false)):
+			var pt_keep: Vector3 = _push_last_target.get(team, Vector3.ZERO)
+			var pt_refresh := _push_tower_target(team)
+			if pt_refresh != Vector3.ZERO:
+				pt_keep = pt_refresh
+			if pt_keep != Vector3.ZERO:
+				_push_last_target[team] = pt_keep
+				current_mode = SplitMode.PUSH_TOWER
+				push_target_by_team[team] = pt_keep
+				_force_push_by_team[team] = bool(_push_force_active.get(team, false))
+				var keep_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
+				for h in _get_ally_heroes(team):
+					if h.is_ai:
+						result[h] = keep_lane
+				continue
+			else:
+				_push_active[team] = false
 		# 抱团推塔触发：人数碾压（敌方≤1 且我方≥3）或经济差 > 5000（90 秒冷却）
 		var team_gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
 		var gold_push_ready: bool = team_gold_diff > AiConfig.PUSH_TOWER_GOLD_LEAD \
@@ -536,6 +560,9 @@ func allocate_all() -> Dictionary:
 			if pt != Vector3.ZERO:
 				current_mode = SplitMode.PUSH_TOWER
 				push_target_by_team[team] = pt
+				_push_active[team] = true
+				_push_last_target[team] = pt
+				_push_force_active[team] = gold_push_ready or dragon_push_ready
 				_force_push_by_team[team] = gold_push_ready or dragon_push_ready
 				if gold_push_ready:
 					_push_gold_cd_until[team] = bm.game_time + AiConfig.PUSH_TOWER_GOLD_COOLDOWN
