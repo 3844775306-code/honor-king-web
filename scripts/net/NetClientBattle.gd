@@ -212,6 +212,8 @@ var _vision_views := {}   # iid -> VisionSpirit（联机客户端表现副本）
 var _tower_locks := {}      # 防御塔锁定光束：key(塔位) -> {mesh, from, to, cur, t}
 var _map_applied := false
 var _resync_timer := 0.0
+var _net_dbg: Label = null
+var _net_dbg_t := 0.0
 var _static_root: Node3D = null
 var _camp_rings := []     # 野区营地范围圈 [[环MeshInstance3D, 亮起秒数]]：普通营地 30s 首刷、空间之灵 60s，未到点前隐藏
 
@@ -429,6 +431,15 @@ func _process(delta: float) -> void:
 		if _resync_timer <= 0.0:
 			_resync_timer = 2.0
 			NetSession.request_battle_resync(not _map_applied)
+	if _net_dbg != null:
+		_net_dbg_t -= delta
+		if _net_dbg_t <= 0.0:
+			_net_dbg_t = 0.5
+			var d := NetSession.debug_net_status()
+			_net_dbg.text = "NET mode=%d phase=%d conn=%d players=%d map=%dB snaps=%d manifest=%d own=%s map_ok=%s" % [
+				int(d.get("mode", -1)), int(d.get("phase", -1)), int(d.get("conn", -1)),
+				int(d.get("players", 0)), int(d.get("map", 0)), int(d.get("snaps", 0)),
+				int(d.get("manifest", 0)), str(_owned), str(_map_applied)]
 	_tick_intro_loading()
 	_atk_ring_flash = maxf(0.0, _atk_ring_flash - delta)
 	if not _map_applied:
@@ -4090,6 +4101,20 @@ func _build_hud() -> void:
 	_hud.hero_hit_cb = _on_net_hero_hit
 	_hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if OS.has_feature("web"):
+		_net_dbg = Label.new()
+		_net_dbg.anchor_left = 0.0
+		_net_dbg.anchor_top = 1.0
+		_net_dbg.anchor_right = 1.0
+		_net_dbg.anchor_bottom = 1.0
+		_net_dbg.offset_top = -34.0
+		_net_dbg.offset_bottom = -8.0
+		_net_dbg.offset_left = 12.0
+		_net_dbg.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		_net_dbg.add_theme_font_size_override("font_size", 13)
+		_net_dbg.add_theme_color_override("font_color", Color(0.75, 0.9, 1.0, 0.85))
+		_net_dbg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cl.add_child(_net_dbg)
 
 # 英雄受击闪白：世界血条掉血 → 对应视图节点闪白（客户端无 Hero 实体，纯节点容错）
 func _on_net_hero_hit(nid: int) -> void:

@@ -912,6 +912,18 @@ func disconnect_network() -> void:
 	print("[Net] 已断开网络")
 
 
+func debug_net_status() -> Dictionary:
+	var conn := -1
+	if multiplayer != null and multiplayer.multiplayer_peer != null:
+		conn = int(multiplayer.multiplayer_peer.get_connection_status())
+	return {
+		"mode": int(mode), "phase": int(phase), "conn": conn,
+		"players": players.size(), "map": _map_payload.size(),
+		"snaps": _snap_count, "manifest": _manifest.size(),
+		"ack_map": _map_acked.size(), "ack_take": _takeover_acked.size(),
+	}
+
+
 func current_phase() -> int:
 	return phase
 
