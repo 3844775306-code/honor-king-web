@@ -3749,7 +3749,7 @@ var hero_configs = {
 		"name": "兰陵王", "role": "刺客",
 		"max_health": 3340, "attack": 173, "attack_range":325, 
 		"move_speed": 390,  "max_mana": 560,
-		"skills": ["lanling_q", "lanling_w", "lanling_r", "lanling_stealth"], "summoner": "flash",
+		"skills": ["lanling_q", "lanling_w", "lanling_r", "lanling_stealth"], "summoner": "smite",
 		"hp_reg": 52,"mana_reg": 14
 	},
 	"孙尚香": {
@@ -7781,3 +7781,4 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
+

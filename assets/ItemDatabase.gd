@@ -774,9 +774,9 @@ func get_recommended_variants(hero_name: String) -> Array:
 			["world_end", "resist_boots", "lightning_knife", "blade_of_sanction", "dawn", "revive"],
 		],
 		"李元芳": [
-			["greed_blade", "swift_boots", "shadow_blade", "infinity_edge", "dawn", "famous_blade"],
-			["greed_blade", "swift_boots", "world_end", "shadow_blade", "dawn", "revive"],
-			["greed_blade", "resist_boots", "world_end", "blade_of_sanction", "dawn", "revive"],
+			["lightning_knife", "swift_boots", "shadow_blade", "infinity_edge", "dawn", "famous_blade"],
+			["lightning_knife", "swift_boots", "world_end", "shadow_blade", "dawn", "revive"],
+			["lightning_knife", "resist_boots", "world_end", "blade_of_sanction", "dawn", "revive"],
 		],
 		"元流之子": [
 			["world_end", "swift_boots", "shadow_blade", "infinity_edge", "dawn", "bloodthirster"],
@@ -822,3 +822,4 @@ func get_recommended_variants(hero_name: String) -> Array:
 func get_recommended_items(hero_name: String) -> Array:
 	var vs := get_recommended_variants(hero_name)
 	return (vs[0] as Array).duplicate() if not vs.is_empty() else []
+
