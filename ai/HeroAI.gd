@@ -2040,7 +2040,8 @@ func _build_action_candidates() -> Array[AIAction]:
 	# 本线塔防御
 	var turret := _get_lane_turret_under_attack(lane)
 	if turret != null and hero.global_position.distance_to(turret.global_position) <= AiConfig.DEFEND_LANE_TURRET_RANGE:
-		out.append(AIAction.new(AIAction.Type.DEFEND_TOWER, 940, AIAction.PauseClass.SURVIVAL, "守塔"))
+		var def_pri: int = 950 if str(turret.display_name) in ["high", "crystal"] else 940
+		out.append(AIAction.new(AIAction.Type.DEFEND_TOWER, def_pri, AIAction.PauseClass.SURVIVAL, "守塔"))
 
 	# 大禹鼎
 	var pot := _find_enemy_tripod(AiConfig.ENGAGE_RANGE + 2.0)
@@ -3573,6 +3574,7 @@ func _handle_lane_turret_defense() -> bool:
 	if not turret or not is_instance_valid(turret):
 		return false
 	var dist := hero.global_position.distance_to(turret.global_position)
+	var def_pri: int = 950 if str(turret.display_name) in ["high", "crystal"] else 930
 	# 距离太远不响应（避免全场 AI 都跑过来）
 	if dist > AiConfig.DEFEND_LANE_TURRET_RANGE:
 		return false
@@ -3586,7 +3588,7 @@ func _handle_lane_turret_defense() -> bool:
 			from_t = Vector3(0, 0, 1)
 		var stand := turret.global_position + from_t.normalized() * 2.7
 		hero.move_target = stand
-		_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
+		_set_action(AIAction.Type.DEFEND_TOWER, def_pri, AIAction.PauseClass.SURVIVAL, "守塔")
 		return true
 	var defender := _defense_target_for_turret(turret)
 	if defender != null and is_instance_valid(defender) and defender.health > 0:
@@ -3594,7 +3596,7 @@ func _handle_lane_turret_defense() -> bool:
 		hero.move_target = Vector3.ZERO   # 清掉“跑到塔中心”的旧移动指令，否则会压着目标不走、也不普攻
 	else:
 		hero.manual_target = null
-	_set_action(AIAction.Type.DEFEND_TOWER, 930, AIAction.PauseClass.SURVIVAL, "守塔")
+	_set_action(AIAction.Type.DEFEND_TOWER, def_pri, AIAction.PauseClass.SURVIVAL, "守塔")
 	return true
 
 
