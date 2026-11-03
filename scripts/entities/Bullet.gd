@@ -232,10 +232,14 @@ func _physics_process(delta):
 	if source and not is_instance_valid(source):
 		queue_free()
 		return
-	life_time -= delta
-	if life_time <= 0 :
-		queue_free()
-		return
+	# 锁敌类技能弹（妲己W/R、小乔R、元流之子R等，target + 正技能id）：
+	# 不再按 life_time / max_distance 销毁，必须追到并命中目标后由命中逻辑销毁。
+	var _lock_on_target: bool = target != null and is_instance_valid(target) 		and target.health > 0.0 and int(skill_id) > 0
+	if not _lock_on_target:
+		life_time -= delta
+		if life_time <= 0 :
+			queue_free()
+			return
 	# 扇面等视觉件自转（只转 Spin 子节点，不影响弹道朝向与判定）
 	if _spin_node != null and is_instance_valid(_spin_node):
 		_spin_node.rotate_y(_spin_speed * delta)
@@ -371,7 +375,7 @@ func _physics_process(delta):
 					return
 				
 
-		if traveled >= max_distance :
+		if traveled >= max_distance and not _lock_on_target:
 			if source.display_name == "马超" and skill_id == 1 :
 				
 				source.skillapply.bpos = global_position
