@@ -91,6 +91,7 @@ var _death_vis_node: Node3D = null
 var _death_vis_rot := Vector3.ZERO
 var _death_vis_pos := Vector3.ZERO
 var manual_target: GameEntity = null
+var manual_target_explicit: bool = false   # 玩家精准普攻/点击选中的锁定：超出普攻范围也不自动改打最近目标
 # 锁敌头像锁定的目标（移动端点头像确定；与普攻/世界点击的 manual_target 分开存，互不覆盖）
 var locked_target: Hero = null
 # 最近一次普攻的命中目标（补刀提示用：血量低于一次普攻伤害 → 血条变灰白）
@@ -2156,15 +2157,17 @@ func _physics_process(delta):
 	if (not is_ai or net_taken) and manual_target and is_instance_valid(manual_target):
 		if manual_target.health <= 0:
 			manual_target = null   # 锁定目标已阵亡：脱锁（锁敌条不保留尸体）
+			manual_target_explicit = false
 			locked_target = null
 		elif global_position.distance_to(manual_target.global_position) \
 				> _aa_engage_reach() + float(manual_target.body_radius) + 0.15:
-			# 锁敌头像的目标只在「自己的攻击范围」内保持锁定；一旦超出就脱锁，
-			# 不再借用自动追击的 3 米余量把锁定拖得很远。
-			manual_target = null
+			# 自动普攻锁定的目标超出范围→脱锁；玩家精准选中的目标保持锁定，等玩家走近
+			if not manual_target_explicit:
+				manual_target = null
 	# 锁定目标进入隐身（兰陵王·影袭 / 幽影袖箭）：立即脱锁 —— 隐身期间不可被锁定攻击，仅受AoE波及
 	if manual_target and is_instance_valid(manual_target) and manual_target is Hero and (manual_target as Hero).is_invisible_to_enemy():
 		manual_target = null
+		manual_target_explicit = false
 	# 通用普攻按下沿（空放普攻：无目标点按普攻 → 动画+朝向子弹+范围圈）
 	if not is_ai or net_taken:
 		var _aa_now := Input.is_action_pressed("ui_accept") or TouchController.get_attack_held() or net_attack_hold
@@ -2853,6 +2856,7 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 		# 目标进入隐身（兰陵王·影袭 / 幽影袖箭）或不可选中（李白W剑阵/金身、李元芳W钻地）：立即脱锁
 		if manual_target is Hero and ((manual_target as Hero).is_invisible_to_enemy() or (manual_target as Hero).is_untargetable_by_enemies()):
 			manual_target = null
+			manual_target_explicit = false
 		elif manual_target.health > 0:
 			var dist = global_position.distance_to(manual_target.global_position)
 			# 锁敌头像用的是「距离 - 目标体积」判定，这里同步把目标体积计入射程，
@@ -2860,6 +2864,11 @@ func _get_attack_target(range: float = -1.0, respect_mode: bool = true) -> GameE
 			var body_pad: float = float(manual_target.body_radius) + 0.15 if manual_target is GameEntity else 0.0
 			if dist <= range + body_pad:
 				return manual_target
+			if manual_target_explicit:
+				return null   # 精准目标暂不在普攻范围：不自动改打最近目标
+		else:
+			manual_target = null
+			manual_target_explicit = false
 	# 玩家：自动选敌 —— 范围内优先英雄（剩余血量最低优先），其次非英雄（小兵/塔/野怪，剩余血量最低优先）
 	# 远程接管英雄：net_attack_hold（按住普攻）或已启用具体优先级模式（推塔/小兵，站定自动持续攻击）时生效。
 	if not is_ai:
@@ -3215,7 +3224,10 @@ func _perform_attack(target: GameEntity):
 	var _tbm2 = get_tree().get_first_node_in_group("battle_manager")
 	if _tbm2 != null and _tbm2.has_method("test_hero_action"):
 		_tbm2.call("test_hero_action", self, "attack", 0)
-	manual_target = target
+	# 自动普攻只在自己没有锁定目标时建立锁定；不能覆盖玩家精准选择的目标
+	if manual_target == null or not is_instance_valid(manual_target):
+		manual_target = target
+		manual_target_explicit = false
 	# 补刀提示：记录本次普攻目标并给一个略长于攻击间隔的有效期
 	aa_target = target
 	aa_target_t = clampf(1.6 / maxf(attack_speed, 0.1), 0.5, 1.8)
@@ -3974,17 +3986,21 @@ func set_manual_target(target: GameEntity):
 		var dist = global_position.distance_to(target.global_position) 
 		if dist <= attack_range:
 			manual_target = target
+			manual_target_explicit = true
 			#move_towards(target.global_position)
 			return
 	manual_target = null
+	manual_target_explicit = false
 
 # 锁敌头像：记录/解除独立锁定目标（同时同步 manual_target 让普攻/技能直接吃这个目标）
 func set_locked_target(t: Hero) -> void:
 	if locked_target != null and manual_target == locked_target:
 		manual_target = null
+		manual_target_explicit = false
 	locked_target = t
 	if t != null and is_instance_valid(t) and t.health > 0:
 		manual_target = t
+		manual_target_explicit = true
 
 func move_towards(pos: Vector3):
 	if is_ai:
@@ -4656,6 +4672,7 @@ func _handle_attack_wheel_input():
 	var picked := _pick_attack_target(drag, _aa_engage_reach() + ATTACK_PICK_RANGE_BONUS)
 	if picked:
 		manual_target = picked
+		manual_target_explicit = true
 	attack_aim_marker.visible = false
 
 # 推塔/小兵优先级按键（王者荣耀式进阶攻击）：
@@ -4669,12 +4686,15 @@ func _handle_attack_priority_input():
 	if pressed == cur:
 		TouchController.set_attack_priority(TouchController.ATTACK_PRIORITY_AUTO)
 		manual_target = null
+		manual_target_explicit = false
 		return
 	TouchController.set_attack_priority(pressed)
 	manual_target = null
+	manual_target_explicit = false
 	var t := _pick_priority_target(pressed, _aa_engage_reach() + ATTACK_PICK_RANGE_BONUS)
 	if t:
 		manual_target = t
+		manual_target_explicit = true
 
 # ---- P0 施法动作映射：复用 GLB 自带 clip，不新增美术资源 ----
 const CAST_ANIM_MELEE := ["吕布", "铠", "亚瑟", "夏侯惇", "孙悟空", "英睿", "李白", "马超", "兰陵王", "不知火舞", "刘禅", "大禹"]
