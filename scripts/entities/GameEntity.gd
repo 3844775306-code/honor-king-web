@@ -54,6 +54,7 @@ var _net_prev: Vector3 = Vector3.ZERO
 # A*路径调试显示（F4切换）
 static var debug_show_path: bool = true   # 默认显示AI移动路径（F4可关）
 static var debug_show_ai_chip: bool = true  # 显示AI决策胶囊（F5可关）
+static var damage_audit_enabled: bool = false  # --damage-audit：单机/训练营伤害审计日志
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
 const DEBUG_PATH_Y := 0.22          # 抬到兵线面(0.14)/高地砖(0.177)之上，否则路径被地面盖住看不见
 var _astar_log_cd: float = 0.0
@@ -762,6 +763,21 @@ func take_true_damage(amount: float, source: GameEntity = null, is_magic: bool =
 	take_damage(amount, source, is_magic, skill_id, pen_percent)
 	_next_damage_is_true = false
 
+## --damage-audit：单机/训练营结构化伤害审计（供日志/测试比对）
+func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_pct: float,
+		expected: float, after_mit: float, final_actual: float, shield_absorbed: float,
+		skill_id: int, is_magic: bool, is_crit: bool, src: GameEntity) -> void:
+	if not damage_audit_enabled:
+		return
+	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
+	var gt: float = bm.game_time if bm != null else 0.0
+	var sn: String = str(src.display_name) if src != null and is_instance_valid(src) else "null"
+	print("[DMG_AUDIT] t=%.1f src=%s tgt=%s skill=%d magic=%d crit=%d raw=%.1f pre=%.1f res=%.1f flat_pen=%.1f pen_pct=%.2f expected=%.1f after_mit=%.1f actual=%.1f shield=%.1f post_delta=%.1f" % [
+		gt, sn, str(display_name), skill_id, 1 if is_magic else 0, 1 if is_crit else 0,
+		raw, pre, res, flat_pen, pen_pct, expected, after_mit, final_actual, shield_absorbed,
+		after_mit - expected])
+
+
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id:int=0, pen_percent: float = 0.0, is_crit_forced: int = -1):
 	if health <= 0:
 		return
@@ -771,6 +787,16 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var _raw_amount := amount   # 调试：保存原始伤害
 	var _is_magic_debug := is_magic   # 调试：保存伤害类型
+	# --damage-audit：记录减伤公式输入/期望值，便于核对
+	var _audit := damage_audit_enabled
+	var _audit_raw := amount
+	var _audit_pre := 0.0
+	var _audit_res := 0.0
+	var _audit_flat := 0.0
+	var _audit_pct := 0.0
+	var _audit_expected := 0.0
+	var _audit_after_mit := 0.0
+	var _audit_shield := 0.0
 	
 	# 暗影之径：整条分路上的友方单位10%免伤（固定60秒，与先锋存活无关）
 	if bm and not (self is Turret) and bm.is_on_shadow_path(team, global_position):
@@ -916,14 +942,24 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	if self is Turret:
 		is_crit = false
 	
-	# 伤害计算
-	var resistance = magic_resist if is_magic else armor
-	if source is Hero:
-		resistance -= source.flat_magic_pen if is_magic else source.flat_phys_pen
-		resistance = max(resistance, 0)
-	resistance = resistance * (1.0 - pen_percent)
-	var reduction = resistance / (resistance + 602.0)
-	var actual = amount * (1.0 - reduction)
+	# 伤害计算（真伤无视护甲/魔抗与穿透）
+	var resistance := 0.0
+	var reduction := 0.0
+	var actual := amount
+	if not is_true_damage:
+		resistance = magic_resist if is_magic else armor
+		if source is Hero:
+			resistance -= source.flat_magic_pen if is_magic else source.flat_phys_pen
+			resistance = max(resistance, 0)
+		resistance = resistance * (1.0 - pen_percent)
+		reduction = resistance / (resistance + 602.0)
+		actual = amount * (1.0 - reduction)
+	if _audit:
+		_audit_pre = amount
+		_audit_res = resistance
+		_audit_flat = (source.flat_magic_pen if is_magic else source.flat_phys_pen) if source is Hero else 0.0
+		_audit_pct = pen_percent
+		_audit_expected = actual
 	if source is Hero and source.equipment_slots.has("sky_book"):
 		var sr = actual_ability_power / 100.0 * 0.005
 		actual *= (1.0 + sr)
@@ -980,22 +1016,30 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 			SfxManager.try_skill_hit_sfx(source.display_name, is_magic)
 		
 	# 护盾吸收（真伤无视护盾，跳过此块；被护盾吃掉的伤害弹白字）
+	if _audit:
+		_audit_after_mit = actual
 	if shield_remaining > 0 and not is_true_damage:
 		if shield_remaining >= actual:
+			_audit_shield = actual
 			shield_remaining -= actual
 			_damage_feedback(actual, is_magic)
 			NetSession.push_net_dmg(global_position, actual, is_crit, is_magic, true, false)
 			var _ui = get_tree().get_first_node_in_group("ui") as UI_Manager
 			if _ui:
 				_ui.show_damage_number(global_position, actual, is_crit, is_magic, true, false)
+			_damage_audit_log(_audit_raw, _audit_pre, _audit_res, _audit_flat, _audit_pct, _audit_expected, _audit_after_mit, 0.0, _audit_shield, skill_id, is_magic, is_crit, source)
 			return
 		else:
+			_audit_shield = shield_remaining
 			actual = 0
 			shield_remaining = 0.0
-	if actual <= 0: return
+	if actual <= 0:
+		_damage_audit_log(_audit_raw, _audit_pre, _audit_res, _audit_flat, _audit_pct, _audit_expected, _audit_after_mit, 0.0, _audit_shield, skill_id, is_magic, is_crit, source)
+		return
 	
 	# === 赛后统计结束 ===
 	health -= actual
+	_damage_audit_log(_audit_raw, _audit_pre, _audit_res, _audit_flat, _audit_pct, _audit_expected, _audit_after_mit, actual, _audit_shield, skill_id, is_magic, is_crit, source)
 	_damage_feedback(actual, is_magic)
 	# 受击闪白（仅对有 rim overlay 的英雄生效；其它实体空操作）
 	UnitVisuals.flash(self)
