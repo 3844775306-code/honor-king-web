@@ -2588,15 +2588,44 @@ func _tower_standoff(p: Vector3) -> Vector3:
 	for e in hero.get_tree().get_nodes_in_group("turrets"):
 		if not (e is Turret) or (e as Turret).health <= 0.0:
 			continue
+		if int((e as Turret).team) != int(hero.team):
+			continue
 		var tp: Vector3 = (e as Turret).global_position
 		if p.distance_to(tp) > 0.8:
 			continue
-		var dir: Vector3 = hero.global_position - tp
+		# 统一站到塔的“后面”（朝己方水晶一侧），不再站到塔与敌人之间的正面
+		var dir: Vector3 = _own_crystal_pos() - tp
 		dir.y = 0.0
+		if dir.length() < 0.1:
+			var fountain := Vector3(-62.0, 0.0, 62.0) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62.0, 0.0, -62.0)
+			dir = fountain - tp
+			dir.y = 0.0
 		if dir.length() < 0.1:
 			dir = Vector3(0, 0, 1)
 		return tp + dir.normalized() * 2.7
 	return p
+
+
+## 撤退点若落在己方塔的正面（靠敌人一侧），统一改到塔后方
+func _snap_behind_friendly_tower(p: Vector3) -> Vector3:
+	if p == Vector3.ZERO:
+		return p
+	for e in hero.get_tree().get_nodes_in_group("turrets"):
+		if not (e is Turret) or (e as Turret).health <= 0.0 or int((e as Turret).team) != int(hero.team):
+			continue
+		var tp: Vector3 = (e as Turret).global_position
+		if p.distance_to(tp) > 8.0:
+			continue
+		var back: Vector3 = _own_crystal_pos() - tp
+		back.y = 0.0
+		if back.length() < 0.1:
+			continue
+		back = back.normalized()
+		# 点在塔的正面（背离己方水晶）时，换到塔后侧 2.7m
+		if (p - tp).dot(back) < 0.0:
+			return tp + back * 2.7
+	return p
+
 
 func _move_to_friendly_turret() -> void:
 	var goal := _choose_safe_retreat_goal()
@@ -2639,6 +2668,7 @@ func _retreat_behavior(delta: float = 0.0) -> void:
 			goal = safe_goal
 	# 友方塔方向会把点带到塔心，统一转成塔外可站立点
 	goal = _tower_standoff(goal)
+	goal = _snap_behind_friendly_tower(goal)
 	# 只走安全点。
 	_follow_safe_route(goal)
 
