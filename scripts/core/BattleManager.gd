@@ -2268,8 +2268,12 @@ func _create_team_ai(team: int, count: int, exclude_roles: Array = [], forced_he
 			ai_hero.position = Vector3(-60 + randf_range(-0.4,0.4), 0, 60 + randf_range(-0.4,0.4))
 		else:
 			ai_hero.position = Vector3(60 + randf_range(-0.4,0.4), 0, -60 + randf_range(-0.4,0.4))
-		var ai_summ = "smite" if config.get("role", "") == "刺客" else ["flash","sprint","teleport","heal","execute","frenzy","stun","cleanse_summoner","weaken"][randi() % 9]
-		if config.get("role", "") in ["坦克", "辅助"]: ai_summ = "heal" if randf() < 0.5 else "弱化"
+		# AI 使用英雄推荐召唤师技能，不再随机
+		var ai_summ := _hero_summ_id(str(ai_hero.display_name))
+		if ai_summ == "" or ai_summ == "flash":
+			var rec := HeroPickData.recommended_summoner(str(ai_hero.display_name))
+			if rec != "":
+				ai_summ = rec
 		ai_hero.setup_skills_from_database(config.get("skills", []), ai_summ)
 		var ai = HeroAI.new()
 		ai_hero.add_child(ai)

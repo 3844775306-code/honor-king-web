@@ -2168,7 +2168,7 @@ func _host_auto_pick(pid: int) -> void:
 		hero = _draft_pick_hero(NetSession._peer_camp(pid))
 	if hero == "":
 		return
-	var summ := _sel_sid if (mine and _sel_sid != "") else "flash"
+	var summ := _sel_sid if (mine and _sel_sid != "") else HeroPickData.recommended_summoner(hero)
 	if NetSession.host_force_pick(pid, hero, summ):
 		_host_draft_advance()
 
@@ -4015,3 +4015,4 @@ func _route_battle() -> void:
 func _route_client() -> void:
 	_show_loading_then("res://scenes/net_client.tscn")
 	_route_hold = ROUTE_CLIENT_HOLD   # 加载界面结束后再等 2s 进战场（与主机进场节奏一致）
+
