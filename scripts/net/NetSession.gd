@@ -15,6 +15,8 @@ extends Node
 const DeathRecapView = preload("res://scripts/ui/DeathRecapView.gd")
 const SNAPSHOT_HZ := 30.0
 const SNAPSHOT_INTERVAL := 1.0 / SNAPSHOT_HZ
+const WEB_SNAPSHOT_INTERVAL := 1.0 / 15.0   # 浏览器经 Cloudflare 隧道：降到15Hz，减轻TCP抖动/解析压力
+var _web_snap_timer := 0.0
 
 const TEAM_PLAYER := 0   # 与 Config.Team.PLAYER 一致，避免跨 autoload 解析
 
@@ -282,7 +284,7 @@ func _setup_peer() -> void:
 				mode = Mode.NONE
 				return
 			multiplayer.multiplayer_peer = peer
-			players[1] = { "name": _self_display_name() if _self_display_name() != "" else ("主机" if cli_mode else "房主"), "rank": self_rank }
+			players[1] = { "name": _self_display_name() if _self_display_name() != "" else ("主机" if cli_mode else "房主"), "rank": self_rank, "web": false }
 			lobby_ready[1] = { "camp": 0, "lane": "", "ready": false }
 			multiplayer.peer_connected.connect(_on_peer_connected)
 			multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -359,7 +361,7 @@ func _web_ws_url() -> String:
 
 
 func _on_peer_connected(id: int) -> void:
-	players[id] = { "name": "玩家%d" % id, "rank": "" }
+	players[id] = { "name": "玩家%d" % id, "rank": "", "web": false }
 	lobby_ready[id] = { "camp": 0, "lane": "", "ready": false }
 	print("[Net] 玩家上线 peer=", id, " 在线=", players.size())
 	_broadcast_lobby_state()
@@ -389,7 +391,7 @@ func _on_connected_to_server() -> void:
 	print("[Net] 已连上主机")
 	var nm := _self_display_name()
 	if nm != "":
-		_rpc_register_name.rpc_id(1, nm, self_rank)
+		_rpc_register_name.rpc_id(1, nm, self_rank, OS.has_feature("web"))
 	_update_overlay()
 
 
@@ -409,7 +411,7 @@ func _self_display_name() -> String:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _rpc_register_name(nm: String, rank: String = "") -> void:
+func _rpc_register_name(nm: String, rank: String = "", is_web: bool = false) -> void:
 	if mode != Mode.HOST:
 		return
 	var pid := multiplayer.get_remote_sender_id()
@@ -420,7 +422,8 @@ func _rpc_register_name(nm: String, rank: String = "") -> void:
 		return
 	players[pid]["name"] = clean
 	players[pid]["rank"] = rank.strip_edges().substr(0, 32)
-	print("[Net] 玩家昵称 peer=", pid, " → ", clean, " 段位=", players[pid]["rank"])
+	players[pid]["web"] = bool(is_web)
+	print("[Net] 玩家昵称 peer=", pid, " → ", clean, " 段位=", players[pid]["rank"], " web=", players[pid]["web"])
 	_broadcast_lobby_state()
 
 
@@ -1393,9 +1396,13 @@ func _process_host(delta: float) -> void:
 			elif not bool(_bm.get("game_over")) and _result_sent:
 				_result_sent = false
 	_snap_timer -= delta
+	_web_snap_timer -= delta
 	if _snap_timer <= 0.0:
 		# 累加而非重设：低帧主机也能逼近配置的 30Hz（重设会被帧率量化成 2 帧一次）
 		_snap_timer = maxf(_snap_timer + SNAPSHOT_INTERVAL, 0.0)
+		var send_web := _web_snap_timer <= 0.0
+		if send_web:
+			_web_snap_timer = maxf(_web_snap_timer + WEB_SNAPSHOT_INTERVAL, 0.0)
 		if players.size() > 1:
 			var bm := get_tree().get_first_node_in_group("battle_manager")
 			if bm != null:
@@ -1403,6 +1410,9 @@ func _process_host(delta: float) -> void:
 				# host 自己(peer 1)直接操控战场，不需要收 RPC 快照。
 				for pid in players:
 					if int(pid) == 1:
+						continue
+					var pdata = players[pid]
+					if pdata is Dictionary and bool((pdata as Dictionary).get("web", false)) and not send_web:
 						continue
 					var snap := _build_snapshot(bm, _peer_camp(int(pid)))
 					if not snap.is_empty():

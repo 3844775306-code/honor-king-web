@@ -201,6 +201,7 @@ var _score := {}          # 顶部实时战况（host SNAP_SCORE：pk/ek/pg/eg�
 var _respawn_rows: Array = []   # SNAP_RESPAWN：小地图右侧英雄环形头像带行（host _build_respawn_rows）
 var _last_snap_time := 0.0
 var _rtime := -1.0        # 渲染插值时钟（游戏秒：领先最新快照 INTERP_DELAY，用于其它单位平滑插值）
+var _interp_delay := INTERP_DELAY
 var _rtime_self := -1.0   # 本机英雄插值时钟（不延迟：点地移动等未预测时保持即时响应，手感不拖）
                           # 相邻两个快照样本之间逐帧匀速扫过，杜绝 15Hz 离散目标"追赶→被拽走"的一顿一顿
 
@@ -369,6 +370,9 @@ func _ready() -> void:
 	if DisplayServer.get_name() == "headless":
 		set_process(false)
 		return
+	if OS.has_feature("web"):
+		_interp_delay = 0.14   # 浏览器经隧道 15Hz 快照：加大回看窗口，避免排队抖动造成一卡一卡
+		Vfx.quality = 1
 	var world := Node3D.new()
 	world.name = "World"
 	add_child(world)
@@ -380,6 +384,8 @@ func _ready() -> void:
 	add_child(_vis_root)
 	_build_world()
 	_build_camera()
+	if OS.has_feature("web"):
+		_apply_web_perf()
 	_build_hud()
 	_build_pad()
 	_build_minimap()
@@ -436,9 +442,9 @@ func _process(delta: float) -> void:
 		if _net_dbg_t <= 0.0:
 			_net_dbg_t = 0.5
 			var d := NetSession.debug_net_status()
-			_net_dbg.text = "NET mode=%d phase=%d conn=%d players=%d map=%dB snaps=%d manifest=%d own=%s map_ok=%s" % [
+			_net_dbg.text = "NET mode=%d phase=%d conn=%d fps=%d players=%d map=%dB snaps=%d manifest=%d own=%s map_ok=%s" % [
 				int(d.get("mode", -1)), int(d.get("phase", -1)), int(d.get("conn", -1)),
-				int(d.get("players", 0)), int(d.get("map", 0)), int(d.get("snaps", 0)),
+				Engine.get_frames_per_second(), int(d.get("players", 0)), int(d.get("map", 0)), int(d.get("snaps", 0)),
 				int(d.get("manifest", 0)), str(_owned), str(_map_applied)]
 	_tick_intro_loading()
 	_atk_ring_flash = maxf(0.0, _atk_ring_flash - delta)
@@ -476,10 +482,10 @@ func _process(delta: float) -> void:
 	# 回看一个窗口后始终有「下一个样本」，逐帧匀速插值。本机英雄未预测时用 _rtime_self（不延迟）保手感。
 	# 单样本位移 > MOVE_JUMP_UNITS 判瞬移/回城/复活直接贴最新不过场。
 	if _rtime < 0.0:
-		_rtime = maxf(0.0, _last_snap_time - INTERP_DELAY)   # 起步：落后最新样本一个插值窗口
+		_rtime = maxf(0.0, _last_snap_time - _interp_delay)   # 起步：落后最新样本一个插值窗口
 	else:
 		_rtime += delta
-		var _rt_cap := maxf(0.0, _last_snap_time - INTERP_DELAY)
+		var _rt_cap := maxf(0.0, _last_snap_time - _interp_delay)
 		if _rtime > _rt_cap:
 			_rtime = _rt_cap
 	if _rtime_self < 0.0:
@@ -728,7 +734,7 @@ func _on_snapshot(snap: Array) -> void:
 	_last_snap_time = float(snap[SNAP_TIME])
 	# 渲染时钟起步/卡顿恢复/中途入场：落后最新样本超 0.25s 直接对齐（不逐帧补播历史轨迹，防实体滞留 0.53s 滞后窗口）
 	if _rtime < _last_snap_time - 0.25:
-		_rtime = maxf(0.0, _last_snap_time - INTERP_DELAY)
+		_rtime = maxf(0.0, _last_snap_time - _interp_delay)
 	if _rtime_self < _last_snap_time - 0.25:
 		_rtime_self = _last_snap_time
 	var own_dict: Dictionary = snap[SNAP_OWN]
@@ -3921,6 +3927,13 @@ func _tick_intro_loading() -> void:
 		_intro_loading.manual_progress = false
 		_intro_loading.set("_t", 99.0)
 		_intro_loading = null
+
+func _apply_web_perf() -> void:
+	# WebGL 单线程 + 网络快照：关闭实时阴影/降低特效档，优先保帧率与操作跟手。
+	for n in find_children("*", "DirectionalLight3D", true):
+		if n is DirectionalLight3D:
+			(n as DirectionalLight3D).shadow_enabled = false
+
 
 func _build_camera() -> void:
 	# 环境/灯光与 host 完全同源：天空盒 + 天空环境光 + ACES + 深度雾 + 暖阳光/冷补光
