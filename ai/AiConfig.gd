@@ -53,7 +53,7 @@ const ICE_SHOCK_ENEMY_COUNT: int = 2         # 冰霜冲击触发
 const THINK_INTERVAL: float = 0.5            # AI决策间隔
 const BUY_INTERVAL: float = 5.0              # 购买检查间隔
 const RECALL_TIME: float = 4.0               # 回城读条时间
-const SKILL_FEED_COOLDOWN: float = 2.0       # 技能播报冷却
+const SKILL_FEED_COOLDOWN: float = 0.5       # 单个技能/连招起手后的全局施法间隔（原 2.0s）
 const COMBO_STEP_GAP: float = 0.35           # 连招链两段之间的最小间隔（秒）
 const RESPAWN_COOLDOWN: float = 1.0          # 复活后重新分配路线延迟
 const SKILL_WINDOW_THRESHOLD: float = 4.5    # 技能窗口期上限
@@ -193,3 +193,4 @@ static func skill_hits() -> bool:
 # 决策随机扰动幅度
 static func score_jitter() -> float:
 	return DIFF_TABLE[difficulty].get("score_random", 0.15)
+

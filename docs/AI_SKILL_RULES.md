@@ -48,7 +48,7 @@
 普通目标：
 - 目标有效且未死亡；
 - 与目标距离 `< SKILL_USE_RANGE = 10m`；
-- `skill_feed_timer <= 0`（每次起新技能/连招后 2 秒内不再起新技能）。
+- `skill_feed_timer <= 0`（每次起新技能/连招后 0.5 秒内不再起新技能）。
 
 防御塔：
 - 默认所有英雄**禁止对防御塔释放技能**；
@@ -108,7 +108,7 @@
 难度随机幅度：
 - 青铜 0.30、白银 0.20、黄金 0.12、铂金 0.08、钻石 0.05、王者 0.02。
 
-单技能释放后同样设置 `skill_feed_timer = 2.0s`。
+单技能释放后同样设置 `skill_feed_timer = 0.5s`。
 
 ### 2.4 瞄准与难度
 
@@ -226,7 +226,7 @@
 | 交战距离 ENGAGE_RANGE | 8m |
 | 近身距离 MELEE_RANGE | 5m |
 | 撤退距离 RETREAT_RANGE | 6m |
-| 技能间隔 SKILL_FEED_COOLDOWN | 2.0s |
+| 技能间隔 SKILL_FEED_COOLDOWN | 0.5s |
 | 连招段间隔 COMBO_STEP_GAP | 0.35s |
 | 线上决策间隔 LANE_THINK_INTERVAL | 1.0s |
 | 打野决策间隔 JUNGLE_THINK_INTERVAL | 0.5s |
@@ -248,3 +248,4 @@
 2. 告诉我「按文档同步技能规则」；
 3. 我按本文件修改 `HeroAI/SkillTactics/SummonerTactics/ItemActiveTactics/hero_brains/AiConfig`；
 4. 提交时必须同时包含代码与本文件，保证代码和文档一致。
+
