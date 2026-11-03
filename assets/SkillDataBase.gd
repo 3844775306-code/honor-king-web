@@ -1086,7 +1086,7 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 				var a2_dir = Vector3(cos(a2_ang), 0, -sin(a2_ang))
 				var a2_bullet = create_bullet(100, 0, 0.2, 25*level, true, hero, a2_dir, 2)
 				a2_bullet.set_linear(a2_dir, 6)
-				a2_bullet.speed = 10.0
+				a2_bullet.speed = 40.0
 				a2_bullet.angela_w = true
 				a2_bullet.angela_w_level = level
 				a2_bullet.angela_w_timer = 3.0
