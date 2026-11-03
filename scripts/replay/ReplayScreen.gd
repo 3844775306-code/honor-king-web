@@ -17,6 +17,7 @@ const NetTouchPadScript = preload("res://scripts/net/NetTouchPad.gd")
 const NetRecommendBarScript = preload("res://scripts/net/NetRecommendBar.gd")
 const NetTargetPanelScript = preload("res://scripts/net/NetTargetPanel.gd")
 const RosterViewScript = preload("res://scripts/ui/RosterView.gd")
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 const AIDebugPanelScript = preload("res://scripts/ui/AIDebugPanel.gd")
 const AIDebugFormatScript = preload("res://scripts/debug/AIDebugFormat.gd")
 const NetKillFeedScript = preload("res://scripts/net/NetKillFeed.gd")
@@ -352,6 +353,9 @@ func _build_actors() -> void:
 		var body: MeshInstance3D = null
 		if model != null:
 			root.add_child(model)
+			var _skin := str(h.get("skin", ""))
+			if _skin != "":
+				HeroSkinTable.apply_to(model, str(h.get("name", "")), _skin)
 		else:
 			# 兜底：没有同源模型的英雄用胶囊占位
 			body = MeshInstance3D.new()

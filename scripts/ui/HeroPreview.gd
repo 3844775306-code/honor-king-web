@@ -7,6 +7,7 @@ extends SubViewportContainer
 
 const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 
 var accent := Color(0.32, 0.62, 1.0)
 ## 渲染分辨率 / 轻量模式（加载界面 10 张缩略立绘用：关 MSAA/辉光/阴影，省 GPU）
@@ -15,6 +16,8 @@ var lightweight := false
 var _viewport: SubViewport
 var _ready_done := false
 var _pending_hero := ""
+var _pending_skin := ""
+var current_skin_id := ""
 var _model: Node3D
 var _ring: MeshInstance3D
 var _ring_mat: StandardMaterial3D
@@ -115,8 +118,10 @@ func _ready() -> void:
 	_ready_done = true
 	if _pending_hero != "":
 		var p := _pending_hero
+		var sk := _pending_skin
 		_pending_hero = ""
-		_apply_hero(p)
+		_pending_skin = ""
+		_apply_hero(p, sk)
 
 
 func _make_env() -> Environment:
@@ -201,14 +206,15 @@ func _apply_orbit() -> void:
 
 
 ## 切换展示英雄；缺模型时用角色色胶囊体兜底。未进树时先记下，进树后自动应用。
-func set_hero(hero_name: String) -> void:
+func set_hero(hero_name: String, skin_id: String = "") -> void:
 	if not _ready_done:
 		_pending_hero = hero_name
+		_pending_skin = skin_id
 		return
-	_apply_hero(hero_name)
+	_apply_hero(hero_name, skin_id)
 
 
-func _apply_hero(hero_name: String) -> void:
+func _apply_hero(hero_name: String, skin_id: String = "") -> void:
 	if _model != null and is_instance_valid(_model):
 		_model.queue_free()
 		_model = null
@@ -242,6 +248,11 @@ func _apply_hero(hero_name: String) -> void:
 		cap.material_override = mat
 		cap.position.y = 1.3
 		root.add_child(cap)
+	var sid := skin_id
+	if sid == "":
+		sid = HeroSkinTable.selected_id(hero_name)
+	current_skin_id = sid
+	HeroSkinTable.apply_to(root, hero_name, sid)
 	_model = root
 	_viewport.add_child(root)
 	_frame_model()

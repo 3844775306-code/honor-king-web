@@ -25,6 +25,7 @@ const WukongCloudScript = preload("res://scripts/fx/WukongCloud.gd")
 const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const PostMatchStageScript = preload("res://scripts/ui/PostMatchStage.gd")
 const SharedHeroBarScript = preload("res://scripts/ui/shared/SharedHeroBar.gd")   # 三端共享英雄血条
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 const TeamDecisionViewScript = preload("res://scripts/ui/shared/TeamDecisionView.gd")   # 三端共享团队决策面板
 const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")   # 三端共享角色表现参数
 const AnimMap = preload("res://scripts/presentation/AnimMap.gd")                   # 三端共享动画 clip 映射
@@ -769,6 +770,13 @@ func _on_snapshot(snap: Array) -> void:
 				v.lane_assigned = int(ent[23]) if ent.size() > 23 else -1  # 战术分路
 				if ent.size() > 27:
 					v.armor = float(ent[27])   # 护甲（补刀提示）
+				if ent.size() > 28:
+					var _skin := str(ent[28])
+					if _skin != "" and str(v.get("skin", "")) != _skin:
+						v["skin"] = _skin
+						var _mdl = v.get("model")
+						if _mdl != null and is_instance_valid(_mdl):
+							HeroSkinTable.apply_to(_mdl, name, _skin)
 			if typ != NET_HERO and typ != NET_TURRET and ent.size() > 14:
 				v.armor = float(ent[14])   # 小兵/野怪护甲（补刀提示）
 			# 受击模型反馈（同 host GameEntity._damage_feedback：闪白+脉冲；英雄加后仰；70ms 节流）

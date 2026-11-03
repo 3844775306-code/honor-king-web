@@ -4,6 +4,7 @@ const ActorPresenter = preload("res://scripts/presentation/ActorPresenter.gd")
 const WukongCloud = preload("res://scripts/fx/WukongCloud.gd")
 const HeroWeapons = preload("res://scripts/core/HeroWeapons.gd")
 const HeroYingrui = preload("res://scripts/core/HeroYingrui.gd")
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 # 泉水回复节拍（秒/跳）；每跳回 10% 最大生命与法力，等于原来的 20%/秒
 const FOUNTAIN_TICK := 0.5
 # 线性技能预览线
@@ -61,6 +62,7 @@ const MAX_EQUIPMENT_SLOTS = 6
 # ==================== 经验与等级 ====================
 var exp: int = 0
 var is_ai: bool = false   # 是否由AI控制
+var hero_skin_id: String = ""   # 英雄皮肤 id（HeroSkins 表；空=按玩家/AI规则选）
 var ai_path_controlled: bool = false   # AI自行给 move_target 时关闭 Hero 自动追击
 var ai_enhanced_attack_ok: bool = false   # AI 是否允许把强普位移用于普攻（默认攒着赶路/追击/逃跑）
 # 已被联机真人接管（NetSession._assign_hero_to 置 true；is_ai 仍保持 true 以走同一批原语）。
@@ -1282,6 +1284,12 @@ func _create_visual():
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		fallback.material_override = mat
 		visual_mesh = fallback
+
+	# 皮肤：玩家用已选皮肤；AI 用自动分配的定制皮肤；经典皮肤保留原模型
+	if hero_skin_id == "":
+		hero_skin_id = HeroSkinTable.auto_id(display_name, int(get_instance_id())) if is_ai else HeroSkinTable.selected_id(display_name)
+	if hero_skin_id != "":
+		HeroSkinTable.apply_to(visual_mesh, display_name, hero_skin_id)
 
 	# 英睿：大招「变身LabiB」等身毛绒形态（同一 visual_mesh 下的兄弟节点，默认隐藏，变身时切换）
 	if display_name == "英睿" and visual_mesh:

@@ -188,6 +188,7 @@ func _try_start() -> void:
 			"summoner_cdmax": float(h.summoner_skill.cooldown) if h.summoner_skill != null else 1.0,
 			"has4": 1 if (h.skills.size() > 3 and h.skills[3] != null) else 0,
 			"ar": float(h.attack_range) * 0.01,
+			"skin": str(h.hero_skin_id),
 		})
 		_last_kills.append(int(h.kills))
 		_last_levels.append(int(h.level))

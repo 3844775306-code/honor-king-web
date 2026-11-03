@@ -9,6 +9,7 @@ const MatchResultScript = preload("res://scripts/core/MatchResult.gd")
 const CloudSyncScript = preload("res://scripts/core/CloudSync.gd")
 const AIDebugPanelScript = preload("res://scripts/ui/AIDebugPanel.gd")
 const PauseOverlayScript = preload("res://scripts/ui/PauseOverlay.gd")
+const HeroSkinTable = preload("res://scripts/core/HeroSkins.gd")
 const AIDebugFormatScript = preload("res://scripts/debug/AIDebugFormat.gd")
 const SelectArt = preload("res://scripts/ui/SelectArt.gd")
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
@@ -25,6 +26,7 @@ const INTRO_DURATION: float = 2.8
 const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 6.93)
 const HERO_BAR_CENTER_UP := 4.2   # 主英雄血条锚点：body_radius1.5*2+1.2；相机目标上移使血条位于屏幕正中
 var selected_summoner: String = "flash"
+var selected_skin_id: String = ""
 var selected_hero_type: String = ""
 var select_ui: CanvasLayer = null
 # 英雄选择UI状态
@@ -2147,6 +2149,11 @@ func _create_player_hero(type: String, summoner_id: String = "flash"):
 	hero.position = Vector3(-60, 0, 60) if Config.player_team == Config.Team.PLAYER else Vector3(60, 0, -60)
 	hero.setup_skills_from_database(config.get("skills", []), summoner_id)
 	hero.gold = 500
+	# 本局所选皮肤：优先用选人界面当前选择，其次读每个英雄的持久化选择
+	var _skin_pick := selected_skin_id if selected_hero_type == type else ""
+	if _skin_pick == "":
+		_skin_pick = HeroSkinTable.selected_id(type)
+	hero.hero_skin_id = _skin_pick
 	add_child(hero)
 	TouchController.set_hero(hero)
 	LingbaoScript.ensure(self)
@@ -3900,6 +3907,7 @@ var sel_prev_info_label: Label = null
 var sel_prev_skill_box: HBoxContainer = null
 var sel_prev_stats: HBoxContainer = null
 var sel_preview_3d: HeroPreview = null
+var sel_skin_btn: Button = null
 var sel_hero_strip: HBoxContainer = null
 var sel_tab_buttons: Dictionary = {}
 var sel_active_role: String = "全部"
@@ -4082,9 +4090,13 @@ func _refresh_sel_preview(hero_name: String) -> void:
 	if cfg.is_empty(): return
 	var role: String = str(cfg.get("role", ""))
 	var role_color: Color = ROLE_COLORS.get(role, UiKit.C_TEAM0)
+	if HeroSkinTable.get_skin(hero_name, selected_skin_id).is_empty():
+		selected_skin_id = HeroSkinTable.selected_id(hero_name)
 	if sel_preview_3d:
-		sel_preview_3d.set_hero(hero_name)
+		sel_preview_3d.set_hero(hero_name, selected_skin_id)
 		sel_preview_3d.set_accent(role_color)
+	if sel_skin_btn:
+		sel_skin_btn.text = "皮肤 · " + HeroSkinTable.skin_name(hero_name, selected_skin_id)
 	sel_prev_name.text = hero_name
 	sel_prev_name.add_theme_color_override("font_color", SEL_GOLD)
 	if sel_prev_role_label:
@@ -4183,6 +4195,7 @@ func _show_hero_select_ui():
 	selected_hero_card = null
 	selected_summ_card = null
 	selected_summoner = "flash"
+	selected_skin_id = ""
 	select_ui = CanvasLayer.new()
 	select_ui.layer = UiKit.LAYER_PICK
 	var root := Control.new()
@@ -4217,6 +4230,7 @@ func _show_hero_select_ui():
 		if first_hero == "":
 			first_hero = str(hero_configs.keys()[0])
 	selected_hero_type = first_hero
+	selected_skin_id = HeroSkinTable.selected_id(first_hero)
 	# —— 顶部阶段条 h=92：我方 mini 席 / 阶段块 / 敌方 mini 席 ——
 	var top := PanelContainer.new()
 	top.name = "SelectTop"
@@ -4332,6 +4346,17 @@ func _show_hero_select_ui():
 	info_row.add_child(sel_prev_info_label)
 	sel_prev_info_chip.add_child(info_row)
 	chip_row.add_child(sel_prev_info_chip)
+	sel_skin_btn = Button.new()
+	sel_skin_btn.text = "皮肤 · 经典"
+	sel_skin_btn.custom_minimum_size = Vector2(210, 40)
+	sel_skin_btn.add_theme_font_size_override("font_size", _sel_fs(UiKit.FS_SM))
+	sel_skin_btn.add_theme_color_override("font_color", SEL_TEXT)
+	sel_skin_btn.add_theme_stylebox_override("normal", UiKit.skin_chip(UiKit.C_GOLD, 0.9, 12))
+	sel_skin_btn.add_theme_stylebox_override("hover", UiKit.skin_chip(UiKit.C_GOLD, 1.0, 12))
+	sel_skin_btn.add_theme_stylebox_override("pressed", UiKit.skin_chip(UiKit.C_GOLD, 0.7, 12))
+	sel_skin_btn.focus_mode = Control.FOCUS_NONE
+	sel_skin_btn.pressed.connect(_cycle_selected_skin)
+	chip_row.add_child(sel_skin_btn)
 	sel_prev_skill_box = HBoxContainer.new()
 	sel_prev_skill_box.add_theme_constant_override("separation", 10)
 	ov_v.add_child(sel_prev_skill_box)
@@ -5892,6 +5917,7 @@ func _on_hero_selected(type: String, card: Panel = null, role_color: Color = Col
 		_style_card(selected_hero_card, ROLE_COLORS.get(prev_role, Color.GRAY), false)
 	selected_hero_type = type
 	selected_hero_card = card
+	selected_skin_id = HeroSkinTable.selected_id(type)
 	if card:
 		_style_card(card, role_color, true)
 	# 未手动改过召唤师时，换英雄自动跟随该英雄的推荐召唤师
@@ -5904,6 +5930,15 @@ func _on_hero_selected(type: String, card: Panel = null, role_color: Color = Col
 	_set_sel_stage(false)
 	_update_selection_summary()
 	_update_confirm_button_style()
+
+## 选人界面：切换当前英雄皮肤（写入 PlayerPrefs，进对局由 Hero 读取）
+func _cycle_selected_skin() -> void:
+	if selected_hero_type == "":
+		return
+	selected_skin_id = HeroSkinTable.cycle(selected_hero_type, selected_skin_id)
+	HeroSkinTable.set_selected(selected_hero_type, selected_skin_id)
+	_refresh_sel_preview(selected_hero_type)
+
 
 func _on_summoner_selected(id: String, sname: String = "", card: Panel = null):
 	selected_summoner = id
@@ -7781,4 +7816,3 @@ func _refresh_ai_debug() -> void:
 				snaps.append(snap)
 	var txt: String = AIDebugFormatScript.all(snaps, "AI 思考过程（F3 关闭）", "对局时间 %.1fs" % float(game_time))
 	_ai_dbg.set_text(txt)
-
