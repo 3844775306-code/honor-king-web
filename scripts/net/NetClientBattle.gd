@@ -400,6 +400,8 @@ func _ready() -> void:
 	NetSession.net_tower_laser.connect(_on_tower_laser)
 	NetSession.net_tower_lock.connect(_on_tower_lock)
 	NetSession.net_game_over.connect(_on_net_game_over)
+	# 场景就绪后主动请求补发地图/接管/首帧快照：Web 端首包或转场期 RPC 可能丢失。
+	NetSession.request_battle_resync()
 	_mouse_screen = get_viewport().get_mouse_position()
 	_status = "已连接，等待接管同队 AI…（由主机分配）"
 	# 大厅选人开局：host 的接管 rpc 可能在换场景瞬间先于本场景就绪（信号无人听），

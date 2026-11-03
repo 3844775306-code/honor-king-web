@@ -217,6 +217,7 @@ const C_ROSTER := 15       # [15] 打开属性(C)/队伍(T)面板时请求队伍
 const C_YUANLIU_PICK := 16 # [16, pick名] 元流之子·万物为流切流派（host 校验身处自家泉水后 apply；仅限 元流之子）
 const C_SURRENDER := 17     # [17] 发起投降（host 调 UiManager._start_surrender_vote，同单机流程）
 const C_RECAP := 18         # [18] 客户端死亡后主动请求死亡回放（host 立即回 _rpc_death_recap）
+const C_RESYNC := 19        # [19] 客户端进入战场后请求补发地图/接管/首帧快照（防 Web 端首包丢失黑屏）
 
 
 func _ready() -> void:
@@ -1033,6 +1034,11 @@ func _rpc_takeover(manifest: Dictionary) -> void:
 
 # ---------- RPC：意图指令（client→host） ----------
 
+func request_battle_resync() -> void:
+	if mode == Mode.CLIENT:
+		send_command([C_RESYNC])
+
+
 func send_command(cmd: Array) -> void:
 	if mode == Mode.CLIENT:
 		rpc("_rpc_command", cmd)
@@ -1043,6 +1049,9 @@ func _rpc_command(cmd: Array) -> void:
 	if not multiplayer.is_server():
 		return
 	var pid := multiplayer.get_remote_sender_id()
+	if not cmd.is_empty() and int(cmd[0]) == C_RESYNC:
+		_resync_peer(pid)
+		return
 	if not _assign_hero.has(pid):
 		printerr("[Net] 拒绝未分配玩家指令 from peer=", pid)
 		return
@@ -2329,6 +2338,26 @@ func _broadcast_map_if_needed() -> void:
 		rpc_id(peer_id, "_rpc_map", payload)
 		_map_sent_to[peer_id] = true
 		print("[Net] 地图布局已发 peer=", peer_id)
+
+
+func _resync_peer(pid: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return
+	# 地图重发
+	rpc_id(pid, "_rpc_map", _collect_map_payload(bm))
+	_map_sent_to[pid] = true
+	# 当前接管清单
+	if _assign_hero.has(pid) and is_instance_valid(_assign_hero[pid]):
+		var h: Hero = _assign_hero[pid]
+		rpc_id(pid, "_rpc_takeover", _build_manifest(pid, h, _net_id_for(h)))
+	# 队伍面板 + 立即首帧快照
+	rpc_id(pid, "_rpc_roster", _build_roster_payload(_peer_camp(pid)))
+	if bool(bm.get("hero_selected")):
+		rpc_id(pid, "_rpc_snapshot", _build_snapshot(bm, _peer_camp(pid)))
+	print("[Net] 已补发初始状态 peer=", pid)
 
 
 func _collect_map_payload(bm: Node) -> Dictionary:
