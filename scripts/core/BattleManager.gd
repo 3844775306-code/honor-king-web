@@ -1922,6 +1922,13 @@ func _is_on_lane(pos: Vector3, lane: int) -> bool:
 		return lane == 1   # 中路（河道对角线带）
 	return (s > 0 and lane == 0) or (s < 0 and lane == 2)
 
+## 任意位置所属分路（0发育路 / 1中路 / 2对抗路），与 _is_on_lane 同口径
+func _lane_of_position(pos: Vector3) -> int:
+	var s := pos.x + pos.z
+	if absf(s) <= 15.0:
+		return 1
+	return 0 if s > 0.0 else 2
+
 
 # 指定队伍在当前位置的暗影之径是否激活
 func is_on_shadow_path(team: int, pos: Vector3) -> bool:
@@ -2967,22 +2974,44 @@ func _spawn_shadow_dragon_vanguard(killer: Hero):
 	if killer == null:
 		return
 	var team := killer.team
-	# 选择（敌方防御塔数量 - 己方防御塔数量）最大的一路（平局中路优先）
+	# 暗影之径：优先选择「敌方英雄距离己方水晶最近」的那一路；
+	# 没有存活敌方英雄时回退到原塔数差逻辑（平局中路优先）。
 	var best_lane := 1
-	var best_diff := -999
-	for ln in [1, 0, 2]:
-		var enemy_towers := 0
-		var ally_towers := 0
-		for t in turrets:
-			if not is_instance_valid(t) or t.health <= 0: continue
-			if t.display_name == "crystal": continue   # 水晶不计入分路塔数
-			if not _is_on_lane(t.global_position, ln): continue
-			if t.team == team: ally_towers += 1
-			else: enemy_towers += 1
-		var diff = enemy_towers - ally_towers
-		if diff > best_diff:
-			best_diff = diff
-			best_lane = ln
+	var own_crystal: Turret = null
+	for _ct in turrets:
+		if not is_instance_valid(_ct):
+			continue
+		if _ct is Turret and _ct.team == team and str(_ct.display_name) == "crystal" and _ct.health > 0.0:
+			own_crystal = _ct
+			break
+	var _nearest_enemy_dist := INF
+	var _nearest_lane := -1
+	if own_crystal != null:
+		for _eh in get_tree().get_nodes_in_group("heroes"):
+			if not is_instance_valid(_eh) or not (_eh is Hero) or _eh.team == team or _eh.health <= 0.0:
+				continue
+			var _d: float = _eh.global_position.distance_to(own_crystal.global_position)
+			if _d < _nearest_enemy_dist:
+				_nearest_enemy_dist = _d
+				_nearest_lane = _lane_of_position(_eh.global_position)
+	if _nearest_lane >= 0:
+		best_lane = _nearest_lane
+	else:
+		# 没有敌方英雄：沿用（敌方防御塔数量 - 己方防御塔数量）最大的一路
+		var best_diff := -999
+		for ln in [1, 0, 2]:
+			var enemy_towers := 0
+			var ally_towers := 0
+			for t in turrets:
+				if not is_instance_valid(t) or t.health <= 0: continue
+				if t.display_name == "crystal": continue   # 水晶不计入分路塔数
+				if not _is_on_lane(t.global_position, ln): continue
+				if t.team == team: ally_towers += 1
+				else: enemy_towers += 1
+			var diff = enemy_towers - ally_towers
+			if diff > best_diff:
+				best_diff = diff
+				best_lane = ln
 	# 清空该路敌方兵线（走标准死亡流程正常发金币经验）
 	var enemy_team = Config.Team.ENEMY if team == Config.Team.PLAYER else Config.Team.PLAYER
 	var cleared_count := 0
