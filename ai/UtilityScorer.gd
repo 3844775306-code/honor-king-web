@@ -204,9 +204,25 @@ static func team_task_priority(tt: TeamTactics, h: Hero, task_type: int, target_
 			u = 0.35 * _u(float(own_minions) / 5.0) + 0.25 * _safe_at(tree, team, h.global_position) \
 				+ 0.20 * _tower_low(t2) + 0.10 * (1.0 if _is_jungler(h) else 0.5) \
 				+ 0.10 * _u(1.0 - h.global_position.distance_to(target_pos) / 40.0)
-	# 团队任务个人适配
+	# 团队任务个人适配 + 任务类型价值（统一量纲用）
 	var fit := 0.75 + 0.25 * _role_fit(h, task_type)
-	return to_priority(u * fit)
+	var task_value := 1.0
+	match task_type:
+		TeamTask.Type.DEFEND_LANE:
+			task_value = 1.8
+		TeamTask.Type.PUSH_TOWER:
+			task_value = 2.5
+		TeamTask.Type.INVADE_JUNGLE:
+			task_value = 1.7
+		TeamTask.Type.OBJECTIVE:
+			task_value = 1.8
+		TeamTask.Type.GANK:
+			task_value = 1.8
+		TeamTask.Type.PEEL:
+			task_value = 1.5
+		TeamTask.Type.PUSH_LANE:
+			task_value = 1.3
+	return to_priority(u * fit * task_value)
 
 
 static func _is_jungler(h: Hero) -> bool:
@@ -260,11 +276,14 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			if h.actual_mana_max > 0.0 and not bool(h.blue_buff_active) and mp < 0.5:
 				no_blue = 1.0
 			u = 0.40 * low_hp + 0.30 * low_mp + 0.20 * _threat(ai) + 0.10 * no_blue
+			# 硬性：身边 6m 内有敌方英雄时，回城价值压到极低，避免贴脸读条
+			if _enemy_near(tree, team, h.global_position, 6.0) > 0:
+				u = minf(u, 0.12)
 		AIAction.Type.RETURN_TO_BASE:
 			var cd := 0.0
 			if ai.trade_planner != null:
 				cd = _u(ai.trade_planner.cooldown / 8.0)
-			u = 0.40 * _threat(ai) + 0.25 * low_hp + 0.20 * cd + 0.15 * _safe_at(tree, team, h.global_position)
+			u = 0.35 * _threat(ai) + 0.25 * low_hp + 0.15 * cd + 0.15 * _safe_at(tree, team, h.global_position) + 0.10 * _u(float(_enemy_near(tree, team, h.global_position, 6.0)) / 2.0)
 		AIAction.Type.DEFEND_TOWER:
 			var tur: Turret = ctx.get("turret")
 			var tp: Vector3 = tur.global_position if tur != null else h.global_position
@@ -286,6 +305,10 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			var no_tower := 1.0 - _u(float(_enemy_near(tree, team, h.global_position, 8.0)) / 3.0)
 			u = 0.30 * adv_hp + 0.20 * target_low + 0.15 * ally_adv + 0.15 * no_tower \
 				+ 0.10 * _skill_ready(h) + 0.10 * _u(1.0 - h.global_position.distance_to(target.global_position) / 8.0)
+			u *= 0.55 + 0.45 * maxf(adv_hp, target_low)
+			# 超出自己能打到的距离，换血价值大幅下降（10m 外不应压过团队任务）
+			var reach: float = h.attack_range * 0.01 + 1.5
+			u *= 0.40 + 0.60 * _u(1.0 - h.global_position.distance_to(target.global_position) / reach)
 		AIAction.Type.FINISH_CHASE:
 			var ct: Hero = ctx.get("target")
 			if ct == null or not is_instance_valid(ct) or ct.health <= 0.0:
@@ -325,6 +348,8 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 					camp_d = minf(camp_d, h.global_position.distance_to((e as Node3D).global_position))
 			u = 0.35 * (1.0 if camp_d <= 12.0 else 0.0) + 0.25 * (1.0 if _is_jungler(h) else 0.3) \
 				+ 0.20 * _safe_at(tree, team, h.global_position) + 0.20 * _travel(ai, camp_d)
+			if low_hp > 0.65 and _enemy_near(tree, team, h.global_position, 6.0) > 0:
+				u *= 0.2
 		AIAction.Type.PUSH_LANE:
 			var own_minions2 := 0
 			for e in tree.get_nodes_in_group("minions"):
@@ -332,8 +357,10 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 						and (e as Node3D).global_position.distance_to(h.global_position) <= 15.0:
 					own_minions2 += 1
 			var tw := _nearest_tower(tree, team, h.global_position)
-			u = 0.40 * _u(float(own_minions2) / 5.0) + 0.25 * _safe_at(tree, team, h.global_position) \
-				+ 0.15 * _tower_low(tw) + 0.20 * 0.7
+			u = 0.30 * _u(float(own_minions2) / 5.0) + 0.20 * _safe_at(tree, team, h.global_position) \
+				+ 0.10 * _tower_low(tw) + 0.10 * 0.7
+			if low_hp > 0.65 and _enemy_near(tree, team, h.global_position, 6.0) > 0:
+				u *= 0.2
 		AIAction.Type.TEAM_TASK:
 			if ai.team_task != null:
 				return hero_team_task_priority(ai, ai.team_task)
@@ -350,6 +377,9 @@ static func _under_enemy_tower(tree, team: int, pos: Vector3) -> bool:
 	if t == null:
 		return false
 	return pos.distance_to(t.global_position) <= t.attack_range * 0.01 + 2.0
+
+
+
 
 
 
