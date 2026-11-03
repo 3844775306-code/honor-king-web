@@ -813,12 +813,11 @@ func _push_tower_target(team: int) -> Vector3:
 	if best_tower != null:
 		push_lane_by_team[team] = best_lane
 		return best_tower.global_position
-	# 所有普通塔都推完：目标转为敌方水晶
-	if _count_turrets_total(_enemy_team(team)) == 0:
-		for e in bm.get_tree().get_nodes_in_group("turrets"):
-			if e is Turret and (e as Turret).health > 0 and int((e as Turret).team) == int(_enemy_team(team)) and (e as Turret).display_name == "crystal":
-				push_lane_by_team[team] = best_lane
-				return (e as Turret).global_position
+	# 本路普通塔推完后，目标转为敌方水晶
+	for e in bm.get_tree().get_nodes_in_group("turrets"):
+		if e is Turret and (e as Turret).health > 0 and int((e as Turret).team) == int(_enemy_team(team)) and (e as Turret).display_name == "crystal":
+			push_lane_by_team[team] = best_lane
+			return (e as Turret).global_position
 	return Vector3.ZERO
 
 

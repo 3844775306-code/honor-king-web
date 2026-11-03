@@ -78,16 +78,10 @@ func _get_enemy_outermost_tower() -> Turret:
 			best_dist = dist
 			best = turret
 	if best == null:
-		# 本路外塔/高地塔全清：仅当敌方所有普通塔都推完，推进目标才改为水晶
-		var towers_left := false
+		# 本路敌方外塔/高地塔全清后，下一目标直接是水晶
 		for entity in hero.get_tree().get_nodes_in_group("turrets"):
-			if entity is Turret and (entity as Turret).health > 0 and (entity as Turret).team == enemy_team and (entity as Turret).display_name != "crystal":
-				towers_left = true
-				break
-		if not towers_left:
-			for entity in hero.get_tree().get_nodes_in_group("turrets"):
-				if entity is Turret and (entity as Turret).health > 0 and (entity as Turret).team == enemy_team and (entity as Turret).display_name == "crystal":
-					return entity as Turret
+			if entity is Turret and (entity as Turret).health > 0 and (entity as Turret).team == enemy_team and (entity as Turret).display_name == "crystal":
+				return entity as Turret
 	return best
 
 
