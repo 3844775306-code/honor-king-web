@@ -22,6 +22,8 @@ var invade_target_by_hero: Dictionary = {} # {Hero: Vector3} 人数优势时反�
 var defend_assignees: Dictionary = {} # {Hero: bool} 守塔任务实际接取者
 var defend_target_by_team: Dictionary = {} # {int: Vector3} 水晶位置
 var gank_target_by_hero: Dictionary = {} # {Hero: Hero} 抓人接取者 -> 目标
+var _push_gold_cd_until: Dictionary = {}   # {int: float} 经济差推塔冷却结束时间
+var _force_push_by_team: Dictionary = {}   # {int: bool} 本次推塔是否经济差触发（高优先级）
 
 func _init(p_bm: BattleManager) -> void:
 	bm = p_bm
@@ -521,17 +523,26 @@ func allocate_all() -> Dictionary:
 				result[h] = dl
 			print("[TeamTactics] t=%.0f %s 水晶受小兵威胁，%d 人接守塔" % [bm.game_time, team_label, defend_assignees.size()])
 			continue
-		# 人数碾压：敌方≤1 且我方≥3，全队放弃分推/打龙，直接抱团推塔。
-		if enemy_alive <= 1 and ally_alive >= 3:
+		# 抱团推塔触发：人数碾压（敌方≤1 且我方≥3）或经济差 > 5000（90 秒冷却）
+		var team_gold_diff := _get_total_team_gold(team) - _get_total_team_gold(_enemy_team(team))
+		var gold_push_ready: bool = team_gold_diff > AiConfig.PUSH_TOWER_GOLD_LEAD \
+			and bm.game_time >= float(_push_gold_cd_until.get(team, 0.0))
+		if (enemy_alive <= 1 and ally_alive >= 3) or gold_push_ready:
 			var pt := _push_tower_target(team)
 			if pt != Vector3.ZERO:
 				current_mode = SplitMode.PUSH_TOWER
 				push_target_by_team[team] = pt
+				_force_push_by_team[team] = gold_push_ready
+				if gold_push_ready:
+					_push_gold_cd_until[team] = bm.game_time + AiConfig.PUSH_TOWER_GOLD_COOLDOWN
 				var push_lane := int(push_lane_by_team.get(team, AiConfig.Lane.MID))
 				for h in _get_ally_heroes(team):
 					if h.is_ai:
 						result[h] = push_lane
-				print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
+				if gold_push_ready:
+					print("[TeamTactics] t=%.0f %s 经济差=%d>%d，抱团推塔（90s冷却）" % [bm.game_time, team_label, team_gold_diff, AiConfig.PUSH_TOWER_GOLD_LEAD])
+				else:
+					print("[TeamTactics] t=%.0f %s 人数碾压 %d:%d，抱团推塔" % [bm.game_time, team_label, ally_alive, enemy_alive])
 				continue
 		# 4分钟后只要人数有优势，就让打野尝试反野（其余人继续分推）。
 		if ally_alive > enemy_alive:
@@ -595,7 +606,9 @@ func _make_task_for(h: Hero, lane: int) -> TeamTask:
 		return t
 	if push_target_by_team.has(h.team):
 		var pl := int(push_lane_by_team.get(h.team, lane))
-		t.setup(TeamTask.Type.PUSH_TOWER, pl, push_target_by_team[h.team], null, 90, now, 40.0, "抱团推塔", role)
+		# 经济差触发的抱团推塔优先级高于其他临时任务（临时清兵/血包/反野/抓人）
+		var push_pri: int = 950 if bool(_force_push_by_team.get(h.team, false)) else 90
+		t.setup(TeamTask.Type.PUSH_TOWER, pl, push_target_by_team[h.team], null, push_pri, now, 40.0, "抱团推塔", role)
 		t.lane = pl
 		return t
 	if invade_target_by_hero.has(h):
@@ -815,3 +828,5 @@ func _own_tower_pos(team: int, lane: int) -> Vector3:
 		AiConfig.Lane.MID: return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
 	return Vector3.ZERO
+
+
