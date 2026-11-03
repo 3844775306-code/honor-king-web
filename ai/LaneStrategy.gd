@@ -214,7 +214,7 @@ func _find_target() -> GameEntity:
 		var dist := hero.global_position.distance_to(entity.global_position)
 		if dist > 15:
 			continue
-		# 塔下无兵=不安全
+		# 塔下无兵=不安全；例外：塔血低于自己3发普攻且自身血量>2500，可无兵线强拆
 		var friendly_hp := 0.0
 		for m in hero.get_tree().get_nodes_in_group("minions"):
 			if not (m is Minion) or m.health <= 0 or m.team != hero.team:
@@ -222,7 +222,9 @@ func _find_target() -> GameEntity:
 			if entity.global_position.distance_to(m.global_position) <= AiConfig.TOWER_ATTACK_RANGE:
 				friendly_hp += (m as Minion).health
 		if friendly_hp < 500:
-			continue
+			var can_burst: bool = entity.health < hero.actual_attack_damage * 3.0
+			if not (can_burst and hero.health > 2500.0):
+				continue
 		if dist < best_tower_dist:
 			best_tower_dist = dist
 			best_tower = entity as Turret
@@ -454,4 +456,3 @@ func decide(force_push: bool = false) -> void:
 	elif default_bush_pos != Vector3.ZERO:
 		hero.move_target = default_bush_pos
 		hero.manual_target = null
-
