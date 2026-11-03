@@ -4,6 +4,7 @@ extends RefCounted
 ## 生存类硬约束仍由 HeroAI 前置分支处理，不进入本评分池。
 
 const MAX_PRIORITY := 900
+const TRADE_NEAR_RADIUS := 6.0   # 敌人在该半径内：换血必须压过团队任务
 
 
 static func _u(v: float) -> float:
@@ -311,6 +312,9 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			u *= 0.40 + 0.60 * _u(1.0 - h.global_position.distance_to(target.global_position) / reach)
 			# 敌人在身边时必须先处理战斗，给近身换血额外加成
 			u *= 1.0 + 0.60 * _u(1.0 - h.global_position.distance_to(target.global_position) / 6.0)
+			# 敌人贴身时给换血分数下限，确保压过团队任务
+			if h.global_position.distance_to(target.global_position) <= TRADE_NEAR_RADIUS:
+				u = maxf(u, 0.20 + 0.55 * (1.0 - h.global_position.distance_to(target.global_position) / TRADE_NEAR_RADIUS))
 		AIAction.Type.FINISH_CHASE:
 			var ct: Hero = ctx.get("target")
 			if ct == null or not is_instance_valid(ct) or ct.health <= 0.0:
@@ -364,9 +368,13 @@ static func action_priority(ai: HeroAI, type: int, ctx: Dictionary = {}) -> int:
 			if _enemy_near(tree, team, h.global_position, 6.0) > 0:
 				u *= 0.25   # 敌人在身边时不能无视敌人去推线/刷野
 		AIAction.Type.TEAM_TASK:
-			if ai.team_task != null:
-				return hero_team_task_priority(ai, ai.team_task)
-			return 0
+			if ai.team_task == null:
+				return 0
+			var tp := hero_team_task_priority(ai, ai.team_task)
+			# 敌人在身边时，先处理战斗：团队任务让位于换血
+			if _enemy_near(tree, team, h.global_position, TRADE_NEAR_RADIUS) > 0:
+				tp = mini(tp, 350)
+			return tp
 		AIAction.Type.DODGE, AIAction.Type.TOWER_ESCAPE:
 			return 1000
 		_:
@@ -407,6 +415,7 @@ static func _under_enemy_tower(tree, team: int, pos: Vector3) -> bool:
 	if t == null:
 		return false
 	return pos.distance_to(t.global_position) <= t.attack_range * 0.01 + 2.0
+
 
 
 
