@@ -23,6 +23,12 @@ static var _ground_shader: Shader
 static var _brick_shader: Shader
 static var _water_shader: Shader
 static var _water_normal_tex: NoiseTexture2D
+static var _lair_disc_mesh_cache: ArrayMesh
+static var _lair_prop_mesh_cache: Dictionary = {}
+static var _lair_theme_mat_cache: Dictionary = {}
+static var _lair_prop_mat_cache: Dictionary = {}
+static var _lair_bone_mat: StandardMaterial3D
+static var _lair_crack_mat: StandardMaterial3D
 static var _sun_light: DirectionalLight3D
 static var _fill_light: DirectionalLight3D
 
@@ -942,7 +948,7 @@ static func scatter_decorations(parent: Node3D) -> void:
 		attempts += 1
 		var gx: float = rng.randf_range(-56.0, 56.0)
 		var gz: float = rng.randf_range(-56.0, 56.0)
-		if not _open_ground(gx, gz):
+		if not _open_ground(gx, gz) or _near_jungle_lair(gx, gz, 0.9):
 			continue
 		var rot: float = rng.randf_range(0.0, TAU)
 		var basis := Basis(Vector3.UP, rot)
@@ -959,7 +965,7 @@ static func scatter_decorations(parent: Node3D) -> void:
 		near_attempts += 1
 		var nx: float = rng.randf_range(-56.0, 56.0)
 		var nz: float = rng.randf_range(-56.0, 56.0)
-		if not _open_ground(nx, nz, 0.4):
+		if not _open_ground(nx, nz, 0.4) or _near_jungle_lair(nx, nz, 0.9):
 			continue
 		var ns: float = rng.randf_range(0.62, 1.12)
 		var nb := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(ns, ns, ns))
@@ -1080,3 +1086,327 @@ static func _find_mesh(node: Node) -> Mesh:
 		if m != null:
 			return m
 	return null
+
+# ================= 野怪巢穴地貌 =================
+## 与 BattleManager._create_jungle 的营地坐标保持一致；只做纯视觉，不改活动半径/碰撞。
+static func jungle_lairs() -> Array:
+	return [
+		{"p": Vector3(3, 0, 38), "t": "red", "r": 4.2},
+		{"p": Vector3(-28, 0, -5), "t": "blue", "r": 4.2},
+		{"p": Vector3(-3, 0, -38), "t": "red", "r": 4.2},
+		{"p": Vector3(28, 0, 5), "t": "blue", "r": 4.2},
+		{"p": Vector3(-6, 0, 26), "t": "pig", "r": 4.2},
+		{"p": Vector3(6, 0, -26), "t": "pig", "r": 4.2},
+		{"p": Vector3(25, 0, 40), "t": "bird", "r": 4.2},
+		{"p": Vector3(-25, 0, -40), "t": "bird", "r": 4.2},
+		{"p": Vector3(-40, 0, -25), "t": "worm", "r": 4.2},
+		{"p": Vector3(40, 0, 25), "t": "worm", "r": 4.2},
+		{"p": Vector3(-35, 0, 15), "t": "wolf", "r": 4.2},
+		{"p": Vector3(35, 0, -15), "t": "wolf", "r": 4.2},
+		{"p": Vector3(-41, 0, 5), "t": "lizard", "r": 4.2},
+		{"p": Vector3(41, 0, -5), "t": "lizard", "r": 4.2},
+		{"p": Vector3(-16, 0, 38), "t": "monkey", "r": 4.2},
+		{"p": Vector3(16, 0, -38), "t": "monkey", "r": 4.2},
+		{"p": Vector3(-58, 0, -58), "t": "spirit", "r": 4.2},
+		{"p": Vector3(58, 0, 58), "t": "spirit", "r": 4.2},
+		{"p": Vector3(24, 0, 26), "t": "epic", "r": 8.6},
+		{"p": Vector3(-24, 0, -26), "t": "epic", "r": 8.6},
+	]
+
+static func _near_jungle_lair(x: float, z: float, extra: float = 0.0) -> bool:
+	for l in jungle_lairs():
+		var p: Vector3 = l["p"]
+		if Vector2(x - p.x, z - p.z).length() < float(l["r"]) + extra:
+			return true
+	return false
+
+static func _lair_theme_material(theme: String) -> StandardMaterial3D:
+	if _lair_theme_mat_cache.has(theme):
+		return _lair_theme_mat_cache[theme]
+	var col := Color(0.20, 0.22, 0.14)
+	var emiss := Color(0, 0, 0)
+	var rough := 0.96
+	match theme:
+		"red":
+			col = Color(0.22, 0.105, 0.075); emiss = Color(0.16, 0.035, 0.01); rough = 0.92
+		"blue":
+			col = Color(0.10, 0.18, 0.21); emiss = Color(0.015, 0.07, 0.09); rough = 0.82
+		"pig":
+			col = Color(0.20, 0.145, 0.085); rough = 0.78
+		"bird":
+			col = Color(0.32, 0.265, 0.15); rough = 0.98
+		"worm", "lizard":
+			col = Color(0.18, 0.165, 0.115); rough = 0.98
+		"wolf":
+			col = Color(0.12, 0.125, 0.095); rough = 0.96
+		"monkey":
+			col = Color(0.16, 0.20, 0.095); rough = 0.98
+		"spirit":
+			col = Color(0.10, 0.22, 0.22); emiss = Color(0.02, 0.08, 0.08); rough = 0.72
+		"epic":
+			col = Color(0.10, 0.075, 0.06); emiss = Color(0.12, 0.035, 0.008); rough = 0.90
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.roughness = rough
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if emiss.r + emiss.g + emiss.b > 0.001:
+		m.emission_enabled = true
+		m.emission = emiss
+		m.emission_energy_multiplier = 0.9
+	_lair_theme_mat_cache[theme] = m
+	return m
+
+static func _lair_disc_mesh() -> ArrayMesh:
+	if _lair_disc_mesh_cache != null:
+		return _lair_disc_mesh_cache
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var seg := 28
+	var r1: Array[Vector3] = []
+	var r2: Array[Vector3] = []
+	for i in seg:
+		var a := TAU * float(i) / float(seg)
+		var n := 1.0 + sin(a * 3.0 + 0.7) * 0.055 + sin(a * 8.1) * 0.025
+		var n2 := 1.0 + sin(a * 4.0 + 1.3) * 0.09 + sin(a * 9.7) * 0.035
+		r1.append(Vector3(cos(a) * 0.58 * n, 0.034, sin(a) * 0.58 * n))
+		r2.append(Vector3(cos(a) * n2, 0.012, sin(a) * n2))
+	var c := Vector3(0.0, 0.052, 0.0)
+	for i in seg:
+		var j := (i + 1) % seg
+		st.add_vertex(c); st.add_vertex(r1[i]); st.add_vertex(r1[j])
+		st.add_vertex(r1[i]); st.add_vertex(r2[i]); st.add_vertex(r2[j])
+		st.add_vertex(r1[i]); st.add_vertex(r2[j]); st.add_vertex(r1[j])
+	st.generate_normals()
+	_lair_disc_mesh_cache = st.commit()
+	return _lair_disc_mesh_cache
+
+static func _lair_prop_mesh(kind: String) -> Mesh:
+	if _lair_prop_mesh_cache.has(kind):
+		return _lair_prop_mesh_cache[kind]
+	var mesh: Mesh
+	match kind:
+		"rock":
+			var sm := SphereMesh.new()
+			sm.radius = 0.28; sm.height = 0.36; sm.radial_segments = 8; sm.rings = 4
+			mesh = sm
+		"crystal":
+			var cm := CylinderMesh.new()
+			cm.top_radius = 0.0; cm.bottom_radius = 0.17; cm.height = 0.52
+			cm.radial_segments = 6; cm.rings = 1
+			mesh = cm
+		"bone":
+			var bm := CylinderMesh.new()
+			bm.top_radius = 0.045; bm.bottom_radius = 0.05; bm.height = 0.44
+			bm.radial_segments = 6; bm.rings = 1
+			mesh = bm
+		"feather":
+			var fq := QuadMesh.new(); fq.size = Vector2(0.13, 0.36); mesh = fq
+		"leaf":
+			var lq := QuadMesh.new(); lq.size = Vector2(0.28, 0.13); mesh = lq
+		"root":
+			var rm := CylinderMesh.new()
+			rm.top_radius = 0.06; rm.bottom_radius = 0.10; rm.height = 0.78
+			rm.radial_segments = 5; rm.rings = 1
+			mesh = rm
+		"crack":
+			var pm := PlaneMesh.new(); pm.size = Vector2(0.035, 1.0); mesh = pm
+		_:
+			var box := BoxMesh.new(); box.size = Vector3(0.2, 0.2, 0.2); mesh = box
+	_lair_prop_mesh_cache[kind] = mesh
+	return mesh
+
+static func _lair_prop_material(theme: String, kind: String) -> Material:
+	var key := theme + "|" + kind
+	if _lair_prop_mat_cache.has(key):
+		return _lair_prop_mat_cache[key]
+	var mat: Material
+	match kind:
+		"rock":
+			mat = DecorMesh.rock_material()
+		"leaf":
+			mat = DecorMesh.leaf_material()
+		"crack":
+			if _lair_crack_mat == null:
+				_lair_crack_mat = StandardMaterial3D.new()
+				_lair_crack_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				_lair_crack_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				_lair_crack_mat.albedo_color = Color(0.045, 0.03, 0.02, 0.62)
+				_lair_crack_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+				_lair_crack_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat = _lair_crack_mat
+		"bone":
+			if _lair_bone_mat == null:
+				_lair_bone_mat = StandardMaterial3D.new()
+				_lair_bone_mat.albedo_color = Color(0.72, 0.68, 0.52)
+				_lair_bone_mat.roughness = 0.9
+			mat = _lair_bone_mat
+		"crystal":
+			var cm := StandardMaterial3D.new()
+			var col := Color(0.8, 0.3, 0.12)
+			match theme:
+				"blue", "spirit": col = Color(0.25, 0.65, 0.95)
+				"epic": col = Color(1.0, 0.40, 0.10)
+				"pig", "bird": col = Color(0.75, 0.48, 0.18)
+				"monkey": col = Color(0.55, 0.82, 0.28)
+				"wolf": col = Color(0.55, 0.42, 0.75)
+				"lizard", "worm": col = Color(0.55, 0.72, 0.35)
+			cm.albedo_color = col
+			cm.roughness = 0.32
+			cm.metallic = 0.15
+			cm.emission_enabled = true
+			cm.emission = col
+			cm.emission_energy_multiplier = 0.55
+			mat = cm
+		_:
+			var dm := StandardMaterial3D.new()
+			dm.albedo_color = Color(0.26, 0.18, 0.10)
+			dm.roughness = 0.95
+			mat = dm
+	_lair_prop_mat_cache[key] = mat
+	return mat
+
+static func _spawn_lair_props(parent: Node3D) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 410921
+	var specs := {
+		"red": [["crystal", 4], ["bone", 2], ["rock", 1], ["crack", 4]],
+		"blue": [["crystal", 4], ["rock", 2], ["bone", 1], ["crack", 3]],
+		"pig": [["root", 2], ["rock", 3], ["leaf", 2], ["crack", 4]],
+		"bird": [["feather", 5], ["leaf", 3], ["rock", 1], ["crack", 3]],
+		"worm": [["rock", 3], ["root", 1], ["leaf", 2], ["crack", 4]],
+		"wolf": [["bone", 3], ["rock", 2], ["leaf", 2], ["crack", 4]],
+		"lizard": [["rock", 3], ["leaf", 2], ["crystal", 1], ["crack", 4]],
+		"monkey": [["leaf", 5], ["root", 2], ["rock", 1], ["crack", 3]],
+		"spirit": [["crystal", 3], ["rock", 1], ["leaf", 2], ["crack", 3]],
+		"epic": [["crystal", 5], ["rock", 4], ["bone", 2], ["crack", 6]],
+	}
+	var xforms_by_key := {}
+	for l in jungle_lairs():
+		var pos: Vector3 = l["p"]
+		var theme := str(l["t"])
+		var rad: float = float(l["r"])
+		var list: Array = specs.get(theme, [])
+		for item in list:
+			var kind := str(item[0])
+			var count := int(item[1])
+			var key := theme + "|" + kind
+			if not xforms_by_key.has(key):
+				xforms_by_key[key] = []
+			var arr: Array = xforms_by_key[key]
+			for i in count:
+				var ang := rng.randf_range(0.0, TAU)
+				var dist := rad * rng.randf_range(0.46, 0.90)
+				var py := 0.06
+				match kind:
+					"crystal": py = 0.26
+					"bone", "feather": py = 0.08
+					"root": py = 0.32
+					"leaf": py = 0.035
+					"crack": py = 0.028
+				var origin := pos + Vector3(cos(ang) * dist, py, sin(ang) * dist)
+				var scale_f := rng.randf_range(0.65, 1.25)
+				var b := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
+				if kind == "feather" or kind == "leaf":
+					b = b * Basis(Vector3.RIGHT, -PI * 0.5)
+				elif kind == "bone":
+					b = b * Basis(Vector3.RIGHT, PI * 0.5)
+				if kind == "crack":
+					b = b.scaled(Vector3(1.0, 1.0, rng.randf_range(0.55, 1.45)))
+				else:
+					b = b.scaled(Vector3(scale_f, scale_f, scale_f))
+				arr.append(Transform3D(b, origin))
+			xforms_by_key[key] = arr
+	for key in xforms_by_key:
+		var parts: PackedStringArray = String(key).split("|")
+		var theme := str(parts[0])
+		var kind := str(parts[1])
+		var arr: Array = xforms_by_key[key]
+		if arr.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = _lair_prop_mesh(kind)
+		mm.instance_count = arr.size()
+		for i in arr.size():
+			mm.set_instance_transform(i, arr[i])
+		var node := MultiMeshInstance3D.new()
+		node.name = "LairProp_" + theme + "_" + kind
+		node.multimesh = mm
+		node.material_override = _lair_prop_material(theme, kind)
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(node)
+
+static func _spawn_lair_particles(parent: Node3D) -> void:
+	for l in jungle_lairs():
+		var theme := str(l["t"])
+		if theme != "red" and theme != "blue" and theme != "epic":
+			continue
+		var pos: Vector3 = l["p"]
+		var p := CPUParticles3D.new()
+		p.amount = 10 if theme != "epic" else 14
+		p.lifetime = 3.0
+		p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+		p.emission_sphere_radius = 2.0 if theme != "epic" else 4.0
+		p.direction = Vector3.UP
+		p.spread = 28.0
+		p.gravity = Vector3(0.0, 0.075, 0.0) if theme != "blue" else Vector3(0.0, -0.025, 0.0)
+		p.initial_velocity_min = 0.12
+		p.initial_velocity_max = 0.34
+		p.scale_amount_min = 0.06
+		p.scale_amount_max = 0.15
+		if theme == "red":
+			p.color = Color(1.0, 0.36, 0.08, 0.85)
+		elif theme == "blue":
+			p.color = Color(0.35, 0.75, 1.0, 0.70)
+		else:
+			p.color = Color(1.0, 0.28, 0.04, 0.88)
+		var q := QuadMesh.new()
+		q.size = Vector2(0.12, 0.12)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		mat.albedo_color = Color.WHITE
+		mat.vertex_color_use_as_albedo = true
+		q.material = mat
+		p.mesh = q
+		p.position = pos + Vector3.UP * 1.2
+		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(p)
+
+static func spawn_jungle_lairs(parent: Node3D) -> void:
+	if parent == null:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 88231
+	for l in jungle_lairs():
+		var pos: Vector3 = l["p"]
+		var theme := str(l["t"])
+		var rad: float = float(l["r"])
+		var mi := MeshInstance3D.new()
+		mi.name = "JungleLair_" + theme
+		mi.mesh = _lair_disc_mesh()
+		mi.material_override = _lair_theme_material(theme)
+		mi.position = Vector3(pos.x, 0.008, pos.z)
+		mi.scale = Vector3(rad, 1.0, rad)
+		mi.rotation.y = rng.randf_range(0.0, TAU)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mi)
+	# 营地外圈短草：把高草带压成踩踏边，避免巢穴像突兀的圆饼
+	var edge_xf: Array[Transform3D] = []
+	for l in jungle_lairs():
+		var pos: Vector3 = l["p"]
+		var rad: float = float(l["r"])
+		for i in 14:
+			var a := rng.randf_range(0.0, TAU)
+			var d := rad * rng.randf_range(1.02, 1.18)
+			var s := rng.randf_range(0.34, 0.62)
+			var b := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(s, s, s))
+			edge_xf.append(Transform3D(b, pos + Vector3(cos(a) * d, 0.0, sin(a) * d)))
+	var edge := _make_cluster("", edge_xf, 0.42, false, DecorMesh.grass_mesh(), DecorMesh.leaf_material())
+	if edge != null:
+		edge.name = "JungleLairGrassFringe"
+		parent.add_child(edge)
+	_spawn_lair_props(parent)
+	_spawn_lair_particles(parent)

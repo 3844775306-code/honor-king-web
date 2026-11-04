@@ -1806,6 +1806,8 @@ func _create_map():
 
 	# 装饰物（草丛 / 河岸石墙 / 陶罐，MultiMesh 批量，移动端友好）
 	MapVisuals.scatter_decorations(self)
+	# 野怪巢穴地貌：只做视觉，不改活动半径/碰撞/导航
+	MapVisuals.spawn_jungle_lairs(self)
 	# 浮空岛：岛缘岩壁、岛底倒锥、墙外树林/草坡/碎石与远处浮岩
 	MapVisuals.spawn_floating_island(self)
 
