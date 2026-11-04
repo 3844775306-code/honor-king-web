@@ -769,6 +769,16 @@ func take_true_damage(amount: float, source: GameEntity = null, is_magic: bool =
 	_next_damage_is_true = false
 
 ## --damage-audit：单机/训练营结构化伤害审计（供日志/测试比对）
+func _audit_skill_name(skill_id: int, src: GameEntity) -> String:
+	if skill_id == 0:
+		return "普攻"
+	if skill_id >= 1 and skill_id <= 3 and src is Hero:
+		var h := src as Hero
+		if skill_id - 1 < h.skills.size() and h.skills[skill_id - 1] != null:
+			return str(h.skills[skill_id - 1].skill_name)
+	return _skill_source_label(skill_id, src)
+
+
 func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_pct: float,
 		expected: float, after_mit: float, final_actual: float, shield_absorbed: float,
 		skill_id: int, is_magic: bool, is_crit: bool, src: GameEntity) -> void:
@@ -777,6 +787,7 @@ func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_
 	var bm = get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var gt: float = bm.game_time if bm != null else 0.0
 	var sn: String = str(src.display_name) if src != null and is_instance_valid(src) else "null"
+	var skill_name := _audit_skill_name(skill_id, src)
 	var line := "[DMG_AUDIT] t=%.1f src=%s tgt=%s skill=%d magic=%d crit=%d raw=%.1f pre=%.1f res=%.1f flat_pen=%.1f pen_pct=%.2f expected=%.1f after_mit=%.1f actual=%.1f shield=%.1f post_delta=%.1f" % [
 		gt, sn, str(display_name), skill_id, 1 if is_magic else 0, 1 if is_crit else 0,
 		raw, pre, res, flat_pen, pen_pct, expected, after_mit, final_actual, shield_absorbed,
@@ -793,14 +804,14 @@ func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_
 			_damage_audit_file = FileAccess.open(damage_audit_path, FileAccess.WRITE)
 			if _damage_audit_file != null:
 				_damage_audit_file.store_string("\uFEFF")
-				_damage_audit_file.store_line("match,mode,time,src,src_team,tgt,tgt_team,skill,magic,crit,raw,pre,res,flat_pen,pen_pct,expected,after_mit,actual,shield,post_delta")
+				_damage_audit_file.store_line("match,mode,time,src,src_team,tgt,tgt_team,skill,skill_name,magic,crit,raw,pre,res,flat_pen,pen_pct,expected,after_mit,actual,shield,post_delta")
 		if _damage_audit_file != null:
 			var src_team: int = int(src.team) if src != null and is_instance_valid(src) else -1
-			var row := "%s,%s,%.1f,%s,%d,%s,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f" % [
+			var row := "%s,%s,%.1f,%s,%d,%s,%d,%d,%s,%d,%d,%.2f,%.2f,%.2f,%.2f,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f" % [
 				damage_audit_match_time, damage_audit_mode, gt, _csv_cell(sn), src_team,
-				_csv_cell(str(display_name)), int(team), skill_id, 1 if is_magic else 0,
-				1 if is_crit else 0, raw, pre, res, flat_pen, pen_pct, expected, after_mit,
-				final_actual, shield_absorbed, after_mit - expected]
+				_csv_cell(str(display_name)), int(team), skill_id, _csv_cell(skill_name),
+				1 if is_magic else 0, 1 if is_crit else 0, raw, pre, res, flat_pen, pen_pct,
+				expected, after_mit, final_actual, shield_absorbed, after_mit - expected]
 			_damage_audit_file.store_line(row)
 			_damage_audit_file.flush()
 

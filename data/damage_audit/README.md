@@ -6,6 +6,14 @@
 - 不勾选：本局不记录
 - 启动参数加 `--damage-audit` 可跳过弹窗、强制生成（联机/录像不生成）
 
-字段：
+Excel 报告（按伤害源分 Sheet，每个 Sheet 内按技能分组、组内按游戏时间）：
 
-`match, mode, time, src, src_team, tgt, tgt_team, skill, magic, crit, raw, pre, res, flat_pen, pen_pct, expected, after_mit, actual, shield, post_delta`
+```powershell
+python scripts\debug\damage_audit_report.py
+```
+
+输出：`data/damage_audit/damage_audit_report.xlsx`
+
+CSV 字段：
+
+`match, mode, time, src, src_team, tgt, tgt_team, skill, skill_name, magic, crit, raw, pre, res, flat_pen, pen_pct, expected, after_mit, actual, shield, post_delta`
