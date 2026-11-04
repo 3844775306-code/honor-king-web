@@ -6378,6 +6378,27 @@ func _export_hero_match_stats() -> void:
 	f.close()
 	print("[HERO-STATS] 已记录 %d 名英雄 → %s" % [hs.size(), ProjectSettings.globalize_path(path)])
 
+	# 每分钟时间线（金币/经验/等级），供职业平均曲线使用
+	var tpath := dir.path_join("hero_timeline_stats.csv")
+	var thas := FileAccess.file_exists(tpath) and FileAccess.get_file_as_string(tpath).length() > 0
+	var tf: FileAccess = FileAccess.open(tpath, FileAccess.READ_WRITE) if thas else FileAccess.open(tpath, FileAccess.WRITE)
+	if tf == null:
+		print("[HERO-STATS] 无法写入时间线 ", tpath, " err=", FileAccess.get_open_error())
+		return
+	tf.seek_end()
+	if not thas:
+		tf.store_string("\uFEFF")
+		tf.store_line("match_id,time_min,hero,role,team,level,exp,gold")
+	for h in hs:
+		var hh := h as Hero
+		var role := str(hero_configs.get(hh.display_name, {}).get("role", ""))
+		var n := mini(hh.gold_history.size(), mini(hh.exp_history.size(), hh.level_history.size()))
+		for i in range(n):
+			tf.store_line("%s,%d,%s,%s,%d,%d,%d,%.0f" % [
+				mid, i + 1, _csvq(str(hh.display_name)), _csvq(role), int(hh.team),
+				int(hh.level_history[i]), int(hh.exp_history[i]), float(hh.gold_history[i])])
+	tf.close()
+
 
 func _csvq(s: String) -> String:
 	if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r"):
@@ -6937,6 +6958,8 @@ func _process(delta):
 			for entity in get_tree().get_nodes_in_group("heroes"):
 				if entity is Hero:
 					entity.gold_history.append(entity.total_gold_earned)
+					entity.exp_history.append(entity.exp)
+					entity.level_history.append(entity.level)
 			team_gold_diff_history.append(team_player_gold - team_enemy_gold)
 	game_time += delta
 	# 延时野怪出生（普通营地30s / 空间之灵60s）；每帧只物化一组，避免同帧建整片野区
@@ -7828,6 +7851,8 @@ func crystal_destroyed(team: int):
 	for entity in get_tree().get_nodes_in_group("heroes"):
 		if entity is Hero:
 			entity.gold_history.append(entity.total_gold_earned)
+			entity.exp_history.append(entity.exp)
+			entity.level_history.append(entity.level)
 	team_gold_diff_history.append(team_player_gold - team_enemy_gold)
 	if team == Config.Team.PLAYER:
 		winner = Config.Team.ENEMY

@@ -179,6 +179,8 @@ var turret_damage: float = 0.0
 var jungle_gold: int = 0
 var last_hits: int = 0
 var gold_history: Array = []  # 每分钟金币快照
+var exp_history: Array = []   # 每分钟经验快照
+var level_history: Array = [] # 每分钟等级快照
 var respawn_time_total: float = 0.0
 # 装备加成
 var bonus_crit_chance: float = 0.0
