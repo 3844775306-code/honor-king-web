@@ -670,7 +670,7 @@ func _update_world_hud(t: float) -> void:
 			info.visible = false
 			continue
 		info.visible = true
-		info.position = sp - info.custom_minimum_size * 0.5
+		info.position = sp - info.custom_minimum_size * info.scale * 0.5
 		info.queue_redraw()
 	# —— 塔 / 小兵 / 野怪：真实 WorldBarPainter ——
 	var rows: Array = []

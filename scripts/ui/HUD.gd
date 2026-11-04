@@ -79,7 +79,8 @@ func _update_health_bars():
 			add_child(fp_player_bar)
 		fp_player_bar.size = Vector2(200, 90)
 		var vw := get_viewport().get_visible_rect().size
-		fp_player_bar.position = Vector2(vw.x / 2.0 - 100.0, vw.y - 446.0)
+		var fsc := fp_player_bar.scale
+		fp_player_bar.position = Vector2(vw.x / 2.0 - 100.0 * fsc.x, vw.y - 446.0)
 		fp_player_bar.visible = true
 	elif fp_player_bar and is_instance_valid(fp_player_bar):
 		fp_player_bar.visible = false
@@ -105,7 +106,7 @@ func _update_hero_bar(entity, cam, cam_forward: Vector3) -> void:
 		return
 	info.visible = true
 	var screen_pos = cam.unproject_position(world_pos)
-	info.position = screen_pos - info.custom_minimum_size / 2
+	info.position = screen_pos - info.custom_minimum_size * info.scale / 2.0
 	info.queue_redraw()
 
 # 非英雄单位：屏幕剔除 + 距离 LOD，然后填一行交给 WorldBarPainter

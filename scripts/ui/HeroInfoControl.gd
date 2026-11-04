@@ -11,6 +11,7 @@ var external_statuses: Array = []
 ## 回放用：外部注入的 AI 决策胶囊 {line1,line2,r,g,b}；非空时优先于 hero 的 HeroAI
 var ai_chip_override: Dictionary = {}
 
+const UI_SCALE := 1.5   # 英雄世界血条整体放大1.5倍
 var bar_width: float = 280.0
 var bar_height: float = 28.0
 var ring_radius: float = 24.0   # 经验等级圈半径（已放大并画在血条左端）
@@ -621,6 +622,7 @@ func _ready():
 	# 上方文字×2 后内容明显变高，加大高度让世界锚点仍落在血条附近（MVP 角标仍左侧留白）
 	custom_minimum_size = Vector2(bar_width + 240.0, 320)
 	size = custom_minimum_size  # 显式定尺寸：绘制以 size/2 为中心，与 HUD 的居中定位保持一致
+	scale = Vector2(UI_SCALE, UI_SCALE)
 	set_process(true)
 	if hero: previous_health = hero.health
 
@@ -647,4 +649,3 @@ func _process(delta):
 
 
 	
-

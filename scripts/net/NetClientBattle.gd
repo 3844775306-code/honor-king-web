@@ -5769,7 +5769,12 @@ class Hud:
 		r["lag"] = _lag_value(nid_h, hp_now)
 		r["flash_ratio"] = _flash_ratio_of(nid_h) if nid_h >= 0 else 0.0
 		r["flash_amt"] = float(_flash_amt.get(nid_h, 0.0)) if nid_h >= 0 else 0.0
+		# 英雄世界血条整体放大1.5倍，以锚点为中心缩放，保持头顶位置
+		var hs := 1.5
+		var anchor := Vector2(float(r.cx), float(r.cy))
+		draw_set_transform(anchor * (1.0 - hs), 0.0, Vector2(hs, hs))
 		SharedHeroBarScript.draw(self, _font, r)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 	func _to_world_bar_row(r: Dictionary) -> Dictionary:
 		var w := float(r.get("w", 110.0))
