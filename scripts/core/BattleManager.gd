@@ -25,6 +25,8 @@ const INTRO_DURATION: float = 2.8
 # 固定俯角 -60° 的跟随机位：12/tan60°≈6.93，让镜头正对英雄脚下的地面点（英雄居中）
 const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 6.93)
 const HERO_BAR_CENTER_UP := 4.2   # 主英雄血条锚点：body_radius1.5*2+1.2；相机目标上移使血条位于屏幕正中
+const CAMERA_TARGET_WIDTH := 20.0   # 屏幕中心水平线对应的战场宽度（米）
+const CAMERA_PITCH_DEG := 60.0      # 跟随机位俯角
 var selected_summoner: String = "flash"
 var selected_skin_id: String = ""
 var selected_hero_type: String = ""
@@ -6556,13 +6558,30 @@ func set_spectate_target(target: Hero) -> void:
 	cam_pan_offset = Vector3.ZERO
 	_cam_snap = true
 
+# 按当前视口宽高比缩放跟随机位，使屏幕中心水平线的实际战场宽度为 CAMERA_TARGET_WIDTH 米。
+# 同时缩放相机目标上移量，保持英雄/血条在屏幕上的相对位置不变。
+func _camera_width_scale() -> float:
+	var vp := get_viewport().get_visible_rect().size
+	if vp.x <= 0.0 or vp.y <= 0.0:
+		return 1.0
+	var aspect := vp.x / vp.y
+	var height := CAMERA_FOLLOW_OFFSET.y + HERO_BAR_CENTER_UP
+	var view_dist := height / sin(deg_to_rad(CAMERA_PITCH_DEG))
+	var tan_half_h := tan(deg_to_rad(70.0 * 0.5)) * aspect
+	var current_width := 2.0 * view_dist * tan_half_h
+	if current_width <= 0.001:
+		return 1.0
+	return CAMERA_TARGET_WIDTH / current_width
+
+
 func _follow_camera_unit(unit: Hero, delta: float) -> void:
 	if not is_instance_valid(unit):
 		return
-	var follow_offset := CAMERA_FOLLOW_OFFSET.rotated(Vector3.UP, cam_yaw)
+	var cam_scale := _camera_width_scale()
+	var follow_offset := (CAMERA_FOLLOW_OFFSET * cam_scale).rotated(Vector3.UP, cam_yaw)
 	if unit.display_name == "兰陵王" and unit.lanling_stealth_active:
 		follow_offset *= 1.25
-	var target: Vector3 = unit.global_position + follow_offset + cam_pan_offset + Vector3.UP * HERO_BAR_CENTER_UP
+	var target: Vector3 = unit.global_position + follow_offset + cam_pan_offset + Vector3.UP * (HERO_BAR_CENTER_UP * cam_scale)
 	if _cam_snap or cam.global_position.distance_to(target) > 25.0:
 		cam.global_position = target
 		_cam_snap = false
@@ -6576,8 +6595,9 @@ func _begin_intro() -> void:
 	intro_active = true
 	_intro_waiting = true
 	_intro_time = 0.0
-	var follow := CAMERA_FOLLOW_OFFSET.rotated(Vector3.UP, cam_yaw)
-	_intro_end = hero.global_position + follow + Vector3.UP * HERO_BAR_CENTER_UP
+	var cam_scale := _camera_width_scale()
+	var follow := (CAMERA_FOLLOW_OFFSET * cam_scale).rotated(Vector3.UP, cam_yaw)
+	_intro_end = hero.global_position + follow + Vector3.UP * (HERO_BAR_CENTER_UP * cam_scale)
 	# 起始机位沿同一俯视方向拉远、抬高；随后插值回正常跟随位
 	_intro_start = _intro_end + Vector3(0, 70, 130).rotated(Vector3.UP, cam_yaw)
 	cam.global_position = _intro_start
