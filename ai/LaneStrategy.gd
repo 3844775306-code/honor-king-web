@@ -13,6 +13,7 @@ var mid_switch_timer: float = 0.0
 var mid_quiet_timer: float = 0.0
 var _bush_resolved: bool = false     # 开局时 AI 先于防御塔创建，草丛默认位需等塔生成后重算一次
 var pending_lane: int = -1          # 4分钟后团队分推预分配分路
+var waiting_for_push := false        # 本次 decide 是否处于「推线但无兵线可推」的原地等待
 
 
 func _init(p_hero: Hero, p_perception: AiPerception, p_lane: int) -> void:
@@ -424,6 +425,7 @@ func _pick_nearer_goal(a: Vector3, b: Vector3) -> Vector3:
 
 
 func decide(force_push: bool = false) -> void:
+	waiting_for_push = false
 	# 开局 AI 先于防御塔创建，默认草丛位当时算不准：塔生成后补算一次
 	if not _bush_resolved:
 		var turrets := hero.get_tree().get_nodes_in_group("turrets")
@@ -470,6 +472,7 @@ func decide(force_push: bool = false) -> void:
 			hero.move_target = lane_goal
 		else:
 			hero.move_target = hero.global_position
+			waiting_for_push = true   # 无兵线、无目标、已在本路：原地等下一波
 		hero.manual_target = null
 	elif default_bush_pos != Vector3.ZERO:
 		hero.move_target = default_bush_pos

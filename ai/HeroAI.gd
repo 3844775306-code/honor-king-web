@@ -30,6 +30,9 @@ var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时�
 var _hit_evade_timer := 0.0                # 受击脱战：远离攻击者的剩余时长
 var _hit_evade_cd_until := -1.0            # 受击脱战冷却（避免连续触发）
 var _hit_evade_goal := Vector3.ZERO        # 受击脱战目标点
+var _push_wait_since := -1.0               # 推线原地等待开始时间
+var _push_wait_elapsed := 0.0              # 已等待时长
+var _push_reject_until := -1.0             # 等待超时退出后，暂不接受推线任务的截止时间
 var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
 var _minion_escape_started_at := -1.0      # 塔前脱战开始时间
 var _minion_escape_cooldown_until := -1.0  # 塔前脱战超时后的重触发冷却
@@ -1563,6 +1566,7 @@ func _committed_to_tower_attack() -> bool:
 # ==================== 主循环 ====================
 func _process(delta):
 	_frame_delta = delta
+	_update_push_wait(delta)
 	# --- 塔攻击检测 ---
 	# 推线/抱团推塔时，如果当前目标就是允许攻击的敌方防御塔，则说明AI已选择强拆：
 	# 不再因为塔打自己而触发 TOWER_ESCAPE 后撤。
@@ -2500,12 +2504,47 @@ func _minion_under_unsafe_tower(m: Minion) -> bool:
 	return false
 
 
+# 推线原地等待计时：只统计「PUSH_LANE 且 LaneStrategy 明确在等下一波兵」的状态。
+func _update_push_wait(_delta: float) -> void:
+	var now := _game_time()
+	var waiting: bool = _is_action(AIAction.Type.PUSH_LANE) and lane_strategy != null and lane_strategy.waiting_for_push
+	if waiting:
+		if _push_wait_since < 0.0:
+			_push_wait_since = now
+		_push_wait_elapsed = maxf(0.0, now - _push_wait_since)
+		if _push_wait_elapsed >= 3.0:
+			_abort_push_task(now)
+	else:
+		_push_wait_since = -1.0
+		_push_wait_elapsed = 0.0
+
+
+func _abort_push_task(now: float) -> void:
+	# 超时退出推线/推塔任务：清任务、结束当前推线动作，并短暂拒绝重新接同类任务
+	if team_task != null and team_task.type in [TeamTask.Type.PUSH_LANE, TeamTask.Type.PUSH_TOWER]:
+		team_task.mark(TeamTask.Status.FAILED)
+		team_task = null
+	if _is_action(AIAction.Type.PUSH_LANE) or _is_action(AIAction.Type.TEAM_TASK):
+		_finish_current_action()
+	hero.move_target = hero.global_position
+	hero.manual_target = null
+	_push_wait_since = -1.0
+	_push_wait_elapsed = 0.0
+	_push_reject_until = now + 3.0
+	if "--ai-skill-probe" in OS.get_cmdline_user_args():
+		print("[AISKILL] push_wait_abort %s" % hero.display_name)
+
+
 # 由团队指挥官下发的结构化主线任务
 func assign_team_task(task: TeamTask) -> void:
 	if task == null:
 		return
 	var bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
 	var now := bm.game_time if bm else 0.0
+	# 接受推线/推塔任务前检查：当前推线等待已超过3秒，或刚因超时退出，则不接
+	if task.type in [TeamTask.Type.PUSH_LANE, TeamTask.Type.PUSH_TOWER]:
+		if _push_wait_elapsed >= 3.0 or now < _push_reject_until:
+			return
 	if team_task != null and team_task.is_active():
 		# 高优先级立即抢占；低优先级保留当前任务；同优先级在承诺窗口内不换。
 		if task.priority < team_task.priority:
