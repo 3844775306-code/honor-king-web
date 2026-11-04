@@ -1,8 +1,10 @@
 # 伤害审计数据
 
-启动参数加 `--damage-audit` 后，每局生成一个 CSV 表格：
+单机 / 训练营 / 测试对局开始前会弹窗询问是否生成本局审计表格。
 
-- `damage_audit_<battle/training>_<时间戳>.csv`
+- 选择“生成”：本局生成 `damage_audit_<battle/training/test>_<时间戳>.csv`
+- 选择“不生成”：本局不记录
+- 启动参数加 `--damage-audit` 可跳过询问、强制生成（联机/录像不生成）
 
 字段：
 

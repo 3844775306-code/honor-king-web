@@ -260,23 +260,9 @@ func _ready():
 		_generate_jungle_arc_walls()
 		return
 	add_to_group("battle_manager")
-	# 伤害审计：单机/训练营默认每局自动生成；联机/回放/批量统计默认不生成
-	var _audit_args := OS.get_cmdline_user_args()
-	var _audit_automated := "--hero-stats-batch" in _audit_args \
-		or "--ai-test" in _audit_args \
-		or "--ai-bench" in _audit_args \
-		or PlayerPrefs.opt_bool("ai_test_match", false)
-	GameEntity.damage_audit_enabled = ("--damage-audit" in _audit_args) \
-		or (NetSession.mode == NetSession.Mode.NONE and not _audit_automated)
-	if GameEntity.damage_audit_enabled:
-		var _stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_").replace(" ", "_")
-		var _mode := "training" if "--training-camp" in _audit_args else "battle"
-		GameEntity.damage_audit_mode = _mode
-		GameEntity.damage_audit_match_time = Time.get_datetime_string_from_system()
-		var _audit_dir := ProjectSettings.globalize_path("res://data/damage_audit")
-		DirAccess.make_dir_recursive_absolute(_audit_dir)
-		GameEntity.damage_audit_path = _audit_dir.path_join("damage_audit_%s_%s.csv" % [_mode, _stamp])
-		print("[DMG_AUDIT] 本局表格: ", GameEntity.damage_audit_path)
+	# 伤害审计改为开局前询问玩家，_start_game 中再决定是否开启
+	GameEntity.damage_audit_enabled = false
+	GameEntity.damage_audit_path = ""
 	# AI 思考过程覆盖层（F3 开关；懒创建面板）
 	var _dbg_cl := CanvasLayer.new()
 	_dbg_cl.name = "AIDebugLayer"
@@ -1276,10 +1262,60 @@ func _play_pick_countdown() -> void:
 	if is_instance_valid(layer):
 		layer.queue_free()
 
+func _should_prompt_damage_audit() -> bool:
+	if NetSession.mode != NetSession.Mode.NONE:
+		return false
+	if DisplayServer.get_name() == "headless":
+		return false   # 无头测试没有玩家可询问
+	var args := OS.get_cmdline_user_args()
+	# 无头自动模式不弹窗
+	if "--hero-stats-batch" in args or "--ai-test" in args or "--ai-bench" in args or "--net-test" in args:
+		return false
+	return true
+
+
+func _setup_damage_audit() -> void:
+	var stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_").replace(" ", "_")
+	var mode := "training" if _training_mode else ("test" if _ai_test_match else "battle")
+	var audit_dir := ProjectSettings.globalize_path("res://data/damage_audit")
+	DirAccess.make_dir_recursive_absolute(audit_dir)
+	GameEntity.damage_audit_enabled = true
+	GameEntity.damage_audit_mode = mode
+	GameEntity.damage_audit_match_time = Time.get_datetime_string_from_system()
+	GameEntity.damage_audit_path = audit_dir.path_join("damage_audit_%s_%s.csv" % [mode, stamp])
+	print("[DMG_AUDIT] 本局表格: ", GameEntity.damage_audit_path)
+
+
+func _ask_damage_audit() -> bool:
+	var dlg := ConfirmationDialog.new()
+	dlg.title = "伤害审计"
+	dlg.dialog_text = "是否生成本局伤害审计表格？\n输出目录：data/damage_audit/"
+	dlg.ok_button_text = "生成"
+	dlg.cancel_button_text = "不生成"
+	dlg.exclusive = true
+	dlg.process_mode = Node.PROCESS_MODE_ALWAYS
+	var result := false
+	dlg.confirmed.connect(func(): result = true)
+	dlg.canceled.connect(func(): result = false)
+	add_child(dlg)
+	dlg.popup_centered(Vector2i(560, 220))
+	while dlg.visible:
+		await dlg.visibility_changed
+	dlg.queue_free()
+	return result
+
+
 func _start_game(hero_type: String, summoner_id: String = "flash"):
 	# 先显示王者式加载界面：BP 用双方 picks，网络 host / --net-test 无 BP 数据时占位
 	if _loading_shown: return
 	_loading_shown = true
+	GameEntity.damage_audit_enabled = false
+	GameEntity.damage_audit_path = ""
+	if "--damage-audit" in OS.get_cmdline_user_args():
+		_setup_damage_audit()
+	elif _should_prompt_damage_audit():
+		if await _ask_damage_audit():
+			_setup_damage_audit()
 	spectate_hero = null
 	rank_result = {}
 	# 选人页当前展示的出装顺序（含自动套用的已保存方案）就是本局推荐出装
