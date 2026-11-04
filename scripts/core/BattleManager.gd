@@ -260,11 +260,17 @@ func _ready():
 		_generate_jungle_arc_walls()
 		return
 	add_to_group("battle_manager")
-	# --damage-audit：单机/训练营统一开启伤害审计日志
-	GameEntity.damage_audit_enabled = "--damage-audit" in OS.get_cmdline_user_args()
+	# 伤害审计：单机/训练营默认每局自动生成；联机/回放/批量统计默认不生成
+	var _audit_args := OS.get_cmdline_user_args()
+	var _audit_automated := "--hero-stats-batch" in _audit_args \
+		or "--ai-test" in _audit_args \
+		or "--ai-bench" in _audit_args \
+		or PlayerPrefs.opt_bool("ai_test_match", false)
+	GameEntity.damage_audit_enabled = ("--damage-audit" in _audit_args) \
+		or (NetSession.mode == NetSession.Mode.NONE and not _audit_automated)
 	if GameEntity.damage_audit_enabled:
 		var _stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_").replace(" ", "_")
-		var _mode := "training" if "--training-camp" in OS.get_cmdline_user_args() else "battle"
+		var _mode := "training" if "--training-camp" in _audit_args else "battle"
 		GameEntity.damage_audit_mode = _mode
 		GameEntity.damage_audit_match_time = Time.get_datetime_string_from_system()
 		var _audit_dir := ProjectSettings.globalize_path("res://data/damage_audit")
