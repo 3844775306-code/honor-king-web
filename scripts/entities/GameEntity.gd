@@ -56,6 +56,8 @@ static var debug_show_path: bool = true   # 默认显示AI移动路径（F4可�
 static var debug_show_ai_chip: bool = true  # 显示AI决策胶囊（F5可关）
 static var damage_audit_enabled: bool = false  # --damage-audit：单机/训练营伤害审计日志
 static var damage_audit_path: String = ""      # 本局审计文件（user://）
+static var damage_audit_mode: String = ""      # battle / training
+static var damage_audit_match_time: String = "" # 本局开始时间
 static var _damage_audit_file: FileAccess = null
 static var _damage_audit_open_path: String = ""
 var _debug_path_nodes: Array = []   # A*路径调试可视化节点（折线+终点球+失败红球）
@@ -786,9 +788,24 @@ func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_
 				_damage_audit_file.close()
 			_damage_audit_open_path = damage_audit_path
 			_damage_audit_file = FileAccess.open(damage_audit_path, FileAccess.WRITE)
+			if _damage_audit_file != null:
+				_damage_audit_file.store_string("\uFEFF")
+				_damage_audit_file.store_line("match,mode,time,src,src_team,tgt,tgt_team,skill,magic,crit,raw,pre,res,flat_pen,pen_pct,expected,after_mit,actual,shield,post_delta")
 		if _damage_audit_file != null:
-			_damage_audit_file.store_line(line)
+			var src_team: int = int(src.team) if src != null and is_instance_valid(src) else -1
+			var row := "%s,%s,%.1f,%s,%d,%s,%d,%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.4f,%.2f,%.2f,%.2f,%.2f,%.2f" % [
+				damage_audit_match_time, damage_audit_mode, gt, _csv_cell(sn), src_team,
+				_csv_cell(str(display_name)), int(team), skill_id, 1 if is_magic else 0,
+				1 if is_crit else 0, raw, pre, res, flat_pen, pen_pct, expected, after_mit,
+				final_actual, shield_absorbed, after_mit - expected]
+			_damage_audit_file.store_line(row)
 			_damage_audit_file.flush()
+
+
+func _csv_cell(s: String) -> String:
+	if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r"):
+		return "\"" + s.replace("\"", "\"\"") + "\""
+	return s
 
 
 func take_damage(amount: float, source: GameEntity = null, is_magic: bool = false, skill_id:int=0, pen_percent: float = 0.0, is_crit_forced: int = -1):
