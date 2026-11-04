@@ -260,6 +260,9 @@ func _ready():
 		_generate_jungle_arc_walls()
 		return
 	add_to_group("battle_manager")
+	# 单机录像偏好由主菜单“对局数据”弹窗决定；训练/测试分支稍后再覆盖
+	if NetSession.mode == NetSession.Mode.NONE:
+		_record_replay = PlayerPrefs.opt_bool("battle_record", true)
 	# 伤害审计改为开局前询问玩家，_start_game 中再决定是否开启
 	GameEntity.damage_audit_enabled = false
 	GameEntity.damage_audit_path = ""
@@ -1311,11 +1314,12 @@ func _start_game(hero_type: String, summoner_id: String = "flash"):
 	_loading_shown = true
 	GameEntity.damage_audit_enabled = false
 	GameEntity.damage_audit_path = ""
-	if "--damage-audit" in OS.get_cmdline_user_args():
+	var _audit_args := OS.get_cmdline_user_args()
+	var _audit_automated := "--hero-stats-batch" in _audit_args \
+		or "--ai-test" in _audit_args or "--ai-bench" in _audit_args or "--net-test" in _audit_args
+	if ("--damage-audit" in _audit_args) \
+			or (not _audit_automated and PlayerPrefs.opt_bool("damage_audit", false)):
 		_setup_damage_audit()
-	elif _should_prompt_damage_audit():
-		if await _ask_damage_audit():
-			_setup_damage_audit()
 	spectate_hero = null
 	rank_result = {}
 	# 选人页当前展示的出装顺序（含自动套用的已保存方案）就是本局推荐出装

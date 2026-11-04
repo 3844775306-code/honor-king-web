@@ -772,7 +772,7 @@ func _ask_record_replay(on_done: Callable) -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(center)
 	var card := Panel.new()
-	card.custom_minimum_size = Vector2(UiKit.scale() * 720.0, UiKit.scale() * 320.0)
+	card.custom_minimum_size = Vector2(UiKit.scale() * 720.0, UiKit.scale() * 420.0)
 	card.add_theme_stylebox_override("panel",
 		UiKit.flat(0.97, 18, 1, Color(0.98, 0.82, 0.32, 0.55), Color(0.035, 0.045, 0.07, 0.98), 0.0, 18.0))
 	center.add_child(card)
@@ -784,13 +784,33 @@ func _ask_record_replay(on_done: Callable) -> void:
 	col.offset_bottom = -24.0
 	col.add_theme_constant_override("separation", 16)
 	card.add_child(col)
-	var ttl := _mk_label("对局录像", int(_fs(UiKit.FS_HUGE) * 1.3), UiKit.C_GOLD)
+	var ttl := _mk_label("对局数据", int(_fs(UiKit.FS_HUGE) * 1.3), UiKit.C_GOLD)
 	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(ttl)
-	var desc := _mk_label("是否将本局保存到「录像回放」？\n保存后可在大厅「录像回放」里播放、导出或上传云端。", _fs(UiKit.FS_SM), COL_SUB)
+	var desc := _mk_label("开始前选择本局要保存的内容：", _fs(UiKit.FS_SM), COL_SUB)
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	col.add_child(desc)
+	var toggles := HBoxContainer.new()
+	toggles.alignment = BoxContainer.ALIGNMENT_CENTER
+	toggles.add_theme_constant_override("separation", 26)
+	col.add_child(toggles)
+	var opts := {"record": true, "audit": false}
+	var b_rec := _mk_btn("☑ 保存录像", UiKit.C_GOLD, false, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 54.0)))
+	b_rec.toggle_mode = true
+	b_rec.button_pressed = true
+	b_rec.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	b_rec.toggled.connect(func(on: bool) -> void:
+		opts["record"] = on
+		b_rec.text = ("☑ 保存录像" if on else "☐ 保存录像"))
+	toggles.add_child(b_rec)
+	var b_audit := _mk_btn("☐ 伤害审计", UiKit.C_TEAM0, false, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 54.0)))
+	b_audit.toggle_mode = true
+	b_audit.add_theme_font_size_override("font_size", _fs(UiKit.FS_SM))
+	b_audit.toggled.connect(func(on: bool) -> void:
+		opts["audit"] = on
+		b_audit.text = ("☑ 伤害审计" if on else "☐ 伤害审计"))
+	toggles.add_child(b_audit)
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(spacer)
@@ -798,20 +818,23 @@ func _ask_record_replay(on_done: Callable) -> void:
 	act.alignment = BoxContainer.ALIGNMENT_CENTER
 	act.add_theme_constant_override("separation", 28)
 	col.add_child(act)
-	var _close := func(record: bool) -> void:
+	var _close := func(start: bool) -> void:
 		if is_instance_valid(layer):
 			layer.queue_free()
 		_record_dialog = null
-		on_done.call(record)
-	var b_save := _mk_btn("保存录像", UiKit.C_GOLD, true, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
-	b_save.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	b_save.pressed.connect(func() -> void: _close.call(true))
-	act.add_child(b_save)
-	var b_skip := _mk_btn("不保存", UiKit.C_TEAM0, false, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
-	b_skip.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
-	b_skip.pressed.connect(func() -> void: _close.call(false))
-	act.add_child(b_skip)
-	var hint := _mk_label("Esc 关闭 = 不保存", _fs(UiKit.FS_XS), COL_DIM)
+		if start:
+			on_done.call(bool(opts["record"]), bool(opts["audit"]))
+		else:
+			_set_menu_enabled(true)
+	var b_start := _mk_btn("开始对局", UiKit.C_GOLD, true, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
+	b_start.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_start.pressed.connect(func() -> void: _close.call(true))
+	act.add_child(b_start)
+	var b_cancel := _mk_btn("取消", UiKit.C_TEAM0, false, Vector2(int(UiKit.scale() * 260.0), int(UiKit.scale() * 64.0)))
+	b_cancel.add_theme_font_size_override("font_size", _fs(UiKit.FS_MD))
+	b_cancel.pressed.connect(func() -> void: _close.call(false))
+	act.add_child(b_cancel)
+	var hint := _mk_label("Esc 关闭 = 取消", _fs(UiKit.FS_XS), COL_DIM)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(hint)
 	root.gui_input.connect(func(ev: InputEvent) -> void:
@@ -983,9 +1006,10 @@ func _start_training_camp() -> void:
 	_ask_record_replay(_begin_training_camp)
 
 
-func _begin_training_camp(record: bool) -> void:
+func _begin_training_camp(record: bool, audit: bool) -> void:
 	PlayerPrefs.set_opt("training_mode", true)
 	PlayerPrefs.set_opt("training_record", record)
+	PlayerPrefs.set_opt("damage_audit", audit)
 	_status_text("训练营：自由测试技能与伤害…", COL_SUB)
 	_show_loading_then("res://scenes/battle.tscn")
 
@@ -997,14 +1021,23 @@ func _start_ai_test_match() -> void:
 	_ask_record_replay(_begin_ai_test_match)
 
 
-func _begin_ai_test_match(record: bool) -> void:
+func _begin_ai_test_match(record: bool, audit: bool) -> void:
 	PlayerPrefs.set_opt("ai_test_match", true)
 	PlayerPrefs.set_opt("ai_test_record", record)
+	PlayerPrefs.set_opt("damage_audit", audit)
 	_status_text("测试模块：随机 10 AI · 4 倍速开局…", COL_SUB)
 	_show_loading_then("res://scenes/battle.tscn")
 
 
 func _start_singleplayer() -> void:
+	if _connecting or _route_pending != "":
+		return
+	_ask_record_replay(_begin_singleplayer)
+
+
+func _begin_singleplayer(record: bool, audit: bool) -> void:
+	PlayerPrefs.set_opt("battle_record", record)
+	PlayerPrefs.set_opt("damage_audit", audit)
 	_route_battle()
 
 
