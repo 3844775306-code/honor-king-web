@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://creplayscene1"]
-
-[ext_resource type="Script" path="res://scripts/replay/ReplayScreen.gd" id="1_rs"]
-
-[node name="ReplayScreen" type="Node3D"]
-script = ExtResource("1_rs")
