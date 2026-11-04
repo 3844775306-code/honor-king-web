@@ -44,6 +44,8 @@ var _safe_cooldown_until := -1.0           # 保持安全距离重触发冷却
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
 var _recall_start_block_t := 0.0            # 回城取消后的短暂重启保护，防止每帧取消/重启把读条重置为0
+var _recall_stall_t := 0.0                  # 回城动作既未读条也未移动的持续时间（看门狗）
+var _recall_watch_pos := Vector3.ZERO       # 看门狗上次采样位置
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -3284,6 +3286,13 @@ func _try_use_recover():
 
 # ==================== 安全回城 ====================
 func _recall_safe_behavior(delta):
+	# 看门狗：SAFE_RECALL 动作长时间既不读条也不移动 → 结束动作并直接走回泉水，避免原地站桩
+	if _recall_stall_watch(delta):
+		return
+	# 孙悟空：筋斗云回城不需要先走到安全点，原地直接起云
+	if hero.display_name == "孙悟空" and not hero.wukong_cloud_flying 			and not hero.is_recalling and not hero.is_in_own_fountain() and not _fully_recovered():
+		hero.start_recall()
+		return
 	if _recall_start_block_t > 0.0:
 		_recall_start_block_t = maxf(0.0, _recall_start_block_t - delta)
 	# 回城中血量恢复到 30% 以上并持续 2.5 秒 → 主动退出回城
@@ -3350,7 +3359,7 @@ func _recall_safe_behavior(delta):
 		var spd: float = maxf(hero.actual_move_speed * 0.01, 0.1)
 		if _walk_home:
 			hero.manual_target = null
-			hero.move_target = fountain
+			_walk_to(fountain)   # 用 A* 绕墙，避免直线撞墙后既不回城也不移动
 			return
 		var walk_time: float = hero.global_position.distance_to(fountain) / spd
 		var spot := _find_safe_recall_spot()
@@ -3398,6 +3407,29 @@ func _recall_safe_behavior(delta):
 			_follow_safe_route(safe_pos)
 	elif not hero.is_recalling and not _fully_recovered() and _recall_start_block_t <= 0.0:
 		hero.start_recall()
+
+
+# SAFE_RECALL 看门狗：没有读条、没有筋斗云、不在泉水，且连续 1.5 秒没有实际位移，直接改走泉水
+func _recall_stall_watch(delta: float) -> bool:
+	if hero.is_recalling or hero.wukong_cloud_flying or hero.is_in_own_fountain() or _fully_recovered():
+		_recall_stall_t = 0.0
+		_recall_watch_pos = hero.global_position
+		return false
+	if _recall_watch_pos == Vector3.ZERO:
+		_recall_watch_pos = hero.global_position
+	if hero.global_position.distance_to(_recall_watch_pos) > 0.12:
+		_recall_watch_pos = hero.global_position
+		_recall_stall_t = 0.0
+		return false
+	_recall_stall_t += delta
+	if _recall_stall_t < 1.5:
+		return false
+	_recall_stall_t = 0.0
+	_finish_current_action()
+	hero.manual_target = null
+	var fountain: Vector3 = Vector3(-62, 0, 62) if int(hero.team) == int(Config.Team.PLAYER) else Vector3(62, 0, -62)
+	_walk_to(fountain)
+	return true
 
 
 # 泉水养伤是否完成：血量（有蓝英雄再加蓝量）都回到 HEALTH_RECOVERED 才算满
