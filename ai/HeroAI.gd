@@ -1541,6 +1541,9 @@ func _committed_to_tower_attack() -> bool:
 		return false
 	if target.team == hero.team or target.health <= 0.0:
 		return false
+	# 只对「无兵线强拆塔」例外：有兵线掩护时仍按正常塔下撤退处理
+	if lane_strategy == null or not lane_strategy.can_no_minion_tower_dive(target as Turret):
+		return false
 	if _is_action(AIAction.Type.PUSH_LANE):
 		return true
 	if team_task != null and team_task.is_active() and team_task.type in [TeamTask.Type.PUSH_LANE, TeamTask.Type.PUSH_TOWER]:

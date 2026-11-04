@@ -152,6 +152,24 @@ func _is_under_own_tower(entity: GameEntity) -> bool:
 	return false
 
 
+## 无兵线强拆塔条件（与 _find_target 中塔目标过滤保持一致）：
+## 塔攻击范围内己方小兵总血量 <500，且塔血 < 自己3发普攻，且自身血量 >2500。
+func can_no_minion_tower_dive(tower: Turret) -> bool:
+	if tower == null or not is_instance_valid(tower) or tower.health <= 0.0:
+		return false
+	if tower.team == hero.team:
+		return false
+	var friendly_hp := 0.0
+	for m in hero.get_tree().get_nodes_in_group("minions"):
+		if not (m is Minion) or m.health <= 0 or m.team != hero.team:
+			continue
+		if tower.global_position.distance_to(m.global_position) <= AiConfig.TOWER_ATTACK_RANGE:
+			friendly_hp += (m as Minion).health
+	if friendly_hp >= 500.0:
+		return false
+	return tower.health < hero.actual_attack_damage * 3.0 and hero.health > 2500.0
+
+
 # ==================== 目标搜索（25m内优先级） ====================
 
 # 优先级: 敌方小兵(安全) > 敌方英雄(不在塔下) > 附近野怪(中路跳过) > 敌方防御塔(4分钟后+安全)
