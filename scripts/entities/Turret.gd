@@ -668,6 +668,11 @@ func _find_target():
 		return
 
 	current_target = null
+# 血条锚点：水晶/塔模型缩放后需抬到模型头顶（普通塔与水晶现在高度接近）
+func bar_anchor_height() -> float:
+	return 6.0
+
+
 func get_hit_flash_root() -> Node3D:
 	return _body_vis if _body_vis != null and is_instance_valid(_body_vis) else self
 

@@ -690,15 +690,19 @@ func _update_world_hud(t: float) -> void:
 		var step := 1000.0
 		var is_turret := false
 		if kind == "turret":
-			# 与单机 HUD._update_unit_row 同锚点：Turret body_radius=1.5 → 1.5*2+1 = 4.0
-			anchor = 4.0
-			w = 300.0
-			hh = 22.0
+			# 与单机 HUD 同源：普通塔/水晶血条尺寸跟随模型体型
+			anchor = 6.0
+			var tsz: Vector2 = WorldBarPainterScript.turret_bar_size(sub)
+			w = tsz.x
+			hh = tsz.y
 			ticks = true
 			step = 2000.0
 			is_turret = true
 		elif kind == "minion":
-			anchor = 2.0 if sub in ["super", "dragon", "storm", "shadow_dragon"] else 1.45
+			var mscale: float = WorldBarPainterScript.minion_bar_scale(sub)
+			anchor = 3.4 if sub in ["super", "dragon", "storm", "shadow_dragon"] else 2.35
+			w = 110.0 * mscale
+			hh = 15.0 * mscale
 			ticks = sub in ["dragon", "storm", "shadow_dragon"]
 		else:
 			var is_epic: bool = sub in ["tyrant", "dragon", "shadow_tyrant", "shadow_dragon", "storm_dragon"]

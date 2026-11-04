@@ -165,19 +165,25 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 		lag = hp
 	row["lag"] = lag
 
-	# 尺寸（与原控件一致）
+	# 尺寸：跟随模型实际体型（小兵已放大1.5倍；水晶已缩半但仍比普通塔宽）
 	var w: float = 110.0
 	var h: float = 15.0
 	if is_turret:
-		w = 300.0
-		h = 22.0
+		var tsz: Vector2 = BarPainterScript.turret_bar_size(str(entity.get("display_name")))
+		w = tsz.x
+		h = tsz.y
 	elif is_epic:
 		var segs: int = maxi(1, int(ceil(mx / 1000.0)))
 		w = clampf(float(segs) * 22.0, 380.0, 880.0)
 		h = 30.0
+	elif entity is Minion:
+		var ms: float = BarPainterScript.minion_bar_scale(str((entity as Minion).display_name))
+		w *= ms
+		h *= ms
 	if small_bar:
-		w = 72.0
-		h = 8.0
+		var ss: float = BarPainterScript.minion_bar_scale(str((entity as Minion).display_name)) if entity is Minion else 1.0
+		w = 72.0 * ss
+		h = 8.0 * ss
 	row["w"] = w
 	row["h"] = h
 	row["pos"] = sp - Vector2(w, h) * 0.5

@@ -17,6 +17,21 @@ const SHADOW := Color(0, 0, 0, 0.55)
 const BAR_BG_TOP := Color(0.11, 0.12, 0.16, 0.96)
 const BAR_BG_BOT := Color(0.06, 0.07, 0.10, 0.96)
 
+## 单位血条尺寸必须跟随模型实际体型：小兵按兵种高度、水晶按加宽体型
+static func minion_bar_scale(sub_type: String) -> float:
+	match sub_type:
+		"super":
+			return 2.25
+		"dragon", "storm", "shadow_dragon":
+			return 2.475
+		_:
+			return 1.5
+
+
+static func turret_bar_size(sub_type: String) -> Vector2:
+	return Vector2(380.0, 24.0) if sub_type == "crystal" else Vector2(300.0, 22.0)
+
+
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

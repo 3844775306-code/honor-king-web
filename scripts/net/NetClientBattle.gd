@@ -2482,10 +2482,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				model_ref = tm
 			else:
 				_add_fallback_visual(node, typ, team_col)
-			# 血条锚点：外/二/高地同尺寸 → 同一锚点；水晶更大
-			head_off = 4.6
-			if name == "crystal":
-				head_off = 5.8
+			# 血条锚点：普通塔与水晶模型现在高度接近，统一抬到模型头顶
+			head_off = 6.0
 			# 塔攻击范围圈（同主机 Turret._create_range_preview：贴地柔化环带，radius = 8.9 + 0.5）
 			tower_ring = MeshFactory.create_ground_ring(8.9 + 0.5, Color(1.0, 0.9, 0.35, 0.45))
 			tower_ring.name = "TowerRangeRing"
@@ -2498,8 +2496,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				var mstr := float(mm.get_meta("tint_strength", 0.5))
 				UnitVisuals.tint_team(mm, team, mstr)
 				model_ref = mm
-				# 血条锚点随放大后的兵种高度（模型2倍；超级兵/先锋 = 1.5× 普通兵）
-				head_off = 4.6 if name in NetModels.MINION_BIG else 2.9
+				# 血条锚点随放大后的兵种高度（模型1.5倍；超级兵/先锋更高）
+				head_off = 3.6 if name in NetModels.MINION_BIG else 2.35
 			else:
 				_add_fallback_visual(node, typ, team_col)
 				head_off = 0.9
@@ -3321,18 +3319,20 @@ func _collect_world_bars() -> Array:
 			NET_TURRET:
 				# 塔盾：host 血条读 tower.tower_shield（不是 entity.shield_remaining），同款接入
 				var _tsh: float = float(v.get("tower_shield", 0.0)) if bool(v.get("tower_shield_active", false)) else 0.0
-				var _trow := _unit_bar_row(nid, v, sp, 300.0, 22.0, 92.0, false, true, true, 2000.0)
+				var _tsz := BarPainterScript.turret_bar_size(str(v.get("name", "")))
+				var _trow := _unit_bar_row(nid, v, sp, _tsz.x, _tsz.y, 92.0, false, true, true, 2000.0)
 				_trow["shield"] = _tsh
 				rows.append(_trow)
 			NET_MINION:
 				var mn := str(v.get("name", ""))
 				var vanguard := mn.find("先锋") >= 0 or mn in ["dragon", "storm", "shadow_dragon"]
-				# 满血小兵且中远距离：缩小细条（72×8），同 host HUD
+				var mscale := BarPainterScript.minion_bar_scale(mn)
+				# 满血小兵且中远距离：缩小细条，但同样按模型体型缩放
 				var small: bool = float(v.hp) >= float(v.maxhp) and dist > 20.0
 				if small:
-					rows.append(_unit_bar_row(nid, v, sp, 72.0, 8.0, 84.0, false, false, false, 1000.0, false, true))
+					rows.append(_unit_bar_row(nid, v, sp, 72.0 * mscale, 8.0 * mscale, 84.0, false, false, false, 1000.0, false, true))
 				else:
-					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, vanguard, 1000.0))
+					rows.append(_unit_bar_row(nid, v, sp, 110.0 * mscale, 15.0 * mscale, 84.0, false, false, vanguard, 1000.0))
 			NET_JUNGLE:
 				if NetModels.is_epic_jungle(str(v.get("name", ""))):
 					# 史诗怪大号分格紫条：宽随血量每格 1000 自适应（同主机 HUD）
