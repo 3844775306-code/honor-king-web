@@ -1303,7 +1303,7 @@ static func _spawn_lair_props(parent: Node3D) -> void:
 					"root": py = 0.32
 					"leaf": py = 0.035
 					"crack": py = 0.028
-				var origin := pos + Vector3(cos(ang) * dist, py, sin(ang) * dist)
+				var origin := pos + Vector3(cos(ang) * dist, py + 0.050, sin(ang) * dist)
 				var scale_f := rng.randf_range(0.65, 1.25)
 				var b := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
 				if kind == "feather" or kind == "leaf":
@@ -1388,7 +1388,8 @@ static func spawn_jungle_lairs(parent: Node3D) -> void:
 		mi.name = "JungleLair_" + theme
 		mi.mesh = _lair_disc_mesh()
 		mi.material_override = _lair_theme_material(theme)
-		mi.position = Vector3(pos.x, 0.008, pos.z)
+		# 巢穴贴片抬到水面之上：河道水面最高约 y=0.06，避免水面盖住贴片边缘
+		mi.position = Vector3(pos.x, 0.060, pos.z)
 		mi.scale = Vector3(rad, 1.0, rad)
 		mi.rotation.y = rng.randf_range(0.0, TAU)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
