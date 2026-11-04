@@ -293,7 +293,8 @@ func _draw_epic(r: Dictionary) -> void:
 	var hp: float = float(r["hp"])
 	var mx: float = maxf(1.0, float(r["max_hp"]))
 	var shield: float = float(r.get("shield", 0.0))
-	var cell := 1000.0
+	# 每位 7000 血一格；boss 血条做黑紫玻璃底 + 亮紫渐变 + 内高光/导光边
+	var cell := 7000.0
 	var seg_count := maxi(1, int(ceil(mx / cell)))
 	var seg_total := float(seg_count) * cell
 	var seg_w := w / float(seg_count)
@@ -301,17 +302,19 @@ func _draw_epic(r: Dictionary) -> void:
 	var fill_w: float = clampf(hp, 0.0, mx) * to_w
 	var sh_w: float = clampf(shield, 0.0, seg_total - hp) * to_w
 
-	var margin := 1.5
-	var inset_y := 2.5
+	var margin := 1.2
+	var inset_y := 2.0
 	var avail_h: float = h - inset_y * 2.0
-	var cell_top := Color(0.16, 0.07, 0.28, 0.96)
-	var cell_bot := Color(0.10, 0.04, 0.18, 0.96)
-	var top_col := Color(0.86, 0.52, 1.0)
-	var bot_col := Color(0.44, 0.14, 0.80)
+	var cell_top := Color(0.14, 0.06, 0.24, 0.98)
+	var cell_bot := Color(0.075, 0.028, 0.135, 0.98)
+	var top_col := Color(0.94, 0.54, 1.0)
+	var mid_col := Color(0.68, 0.29, 0.96)
+	var bot_col := Color(0.34, 0.08, 0.56)
 
-	# 投影 + 外框发光
-	draw_rect(Rect2(p + Vector2(2, 3), Vector2(w, h)), Color(0, 0, 0, 0.22))
-	draw_rect(Rect2(p - Vector2(1.5, 1.5), Vector2(w + 3, h + 3)), Color(0.06, 0.02, 0.10, 0.95), false, 2.0)
+	# 外发光 + 投影 + 深色底框
+	draw_rect(Rect2(p + Vector2(2, 3), Vector2(w, h)), Color(0, 0, 0, 0.28))
+	draw_rect(Rect2(p - Vector2(3, 3), Vector2(w + 6, h + 6)), Color(0.55, 0.20, 0.95, 0.10))
+	draw_rect(Rect2(p - Vector2(1.5, 1.5), Vector2(w + 3, h + 3)), Color(0.045, 0.015, 0.075, 0.98))
 
 	for i in seg_count:
 		var x0: float = float(i) * seg_w
@@ -319,28 +322,34 @@ func _draw_epic(r: Dictionary) -> void:
 		if x1 - x0 <= margin * 2.0:
 			continue
 		var rc := Rect2(p + Vector2(x0 + margin, inset_y), Vector2(x1 - x0 - margin * 2.0, avail_h))
+		# 空槽：上亮下暗，格内再压一层暗芯
 		draw_rect(rc, cell_top)
 		draw_rect(Rect2(rc.position + Vector2(0, rc.size.y * 0.55), Vector2(rc.size.x, rc.size.y * 0.45)), cell_bot)
+		draw_rect(Rect2(rc.position + Vector2(0, 1.0), Vector2(rc.size.x, maxf(1.0, rc.size.y * 0.22))), Color(1.0, 0.55, 1.0, 0.035))
 		var filled: float = clampf(fill_w - rc.position.x + p.x, 0.0, rc.size.x)
 		if filled > 0.0:
-			draw_rect(Rect2(rc.position, Vector2(filled, avail_h * 0.5)), top_col)
-			draw_rect(Rect2(rc.position + Vector2(0, avail_h * 0.5), Vector2(filled, avail_h * 0.5)), bot_col)
-			draw_rect(Rect2(rc.position, Vector2(filled, 2.0)), Color(1, 1, 1, 0.35))
-		# 每格高光竖边
-		draw_line(rc.position + Vector2(0.5, 0), rc.position + Vector2(0.5, rc.size.y), Color(0, 0, 0, 0.45), 1.0)
+			# 三段填充：顶部亮紫、中央高饱和、底部深紫，拉开玻璃感
+			draw_rect(Rect2(rc.position, Vector2(filled, avail_h * 0.34)), top_col)
+			draw_rect(Rect2(rc.position + Vector2(0, avail_h * 0.34), Vector2(filled, avail_h * 0.34)), mid_col)
+			draw_rect(Rect2(rc.position + Vector2(0, avail_h * 0.68), Vector2(filled, avail_h * 0.32)), bot_col)
+			draw_rect(Rect2(rc.position, Vector2(filled, 1.5)), Color(1, 1, 1, 0.42))
+			draw_rect(Rect2(rc.position + Vector2(0, avail_h - 1.0), Vector2(filled, 1.0)), Color(0.2, 0.03, 0.35, 0.65))
+		# 每格分隔：暗槽 + 紫色导光线，比纯黑竖线更像分格刻度
+		draw_line(rc.position + Vector2(rc.size.x, 0), rc.position + Vector2(rc.size.x, rc.size.y), Color(0, 0, 0, 0.55), 1.6)
+		draw_line(rc.position + Vector2(rc.size.x - 1.0, 1.0), rc.position + Vector2(rc.size.x - 1.0, rc.size.y - 1.0), Color(0.72, 0.38, 1.0, 0.22), 1.0)
 
 	# 残血拖尾
 	var lag: float = clampf(float(r.get("lag", hp)), 0.0, mx) * to_w
 	if lag > fill_w + 0.5:
-		draw_rect(Rect2(p + Vector2(fill_w, inset_y), Vector2(lag - fill_w, avail_h)), Color(1.0, 0.94, 0.86, 0.38))
-		draw_rect(Rect2(p + Vector2(lag - 1.5, inset_y), Vector2(1.5, avail_h)), Color(1, 0.92, 1.0, 0.8))
+		draw_rect(Rect2(p + Vector2(fill_w, inset_y), Vector2(lag - fill_w, avail_h)), Color(1.0, 0.94, 0.86, 0.34))
+		draw_rect(Rect2(p + Vector2(lag - 1.5, inset_y), Vector2(1.5, avail_h)), Color(1, 0.92, 1.0, 0.82))
 
 	if sh_w > 0.0:
 		var sh_x: float = clampf(fill_w, 0.0, w)
 		var sh_use: float = clampf(sh_w, 0.0, w - sh_x)
 		if sh_use > 0.0:
 			draw_rect(Rect2(p + Vector2(sh_x, inset_y), Vector2(sh_use, avail_h)), Color(0.88, 0.90, 0.98, 0.94))
-			draw_rect(Rect2(p + Vector2(sh_x, inset_y), Vector2(sh_use, 2.0)), Color(1, 1, 1, 0.6))
+			draw_rect(Rect2(p + Vector2(sh_x, inset_y), Vector2(sh_use, 2.0)), Color(1, 1, 1, 0.65))
 
 	var ft: float = float(r.get("flash_t", 0.0))
 	if ft > 0.0:
@@ -363,9 +372,21 @@ func _draw_epic(r: Dictionary) -> void:
 			draw_rect(Rect2(p + Vector2(maxf(fill_w - dw, 0.0), inset_y), Vector2(dw, avail_h)),
 				Color(1.0, 0.86, 0.18, 0.72))
 
-	# 亮紫外框 + 顶部高光
-	draw_rect(Rect2(p, Vector2(w, h)), Color(1.0, 0.90, 1.0, 0.55), false, 1.5)
-	draw_line(Vector2(p.x, p.y), Vector2(p.x + w, p.y), Color(1, 1, 1, 0.16), 1.0)
+	# 当前血量刀口：亮白导光边，读完条时整条 boss 血条更有存在感
+	if fill_w > 0.5 and hp > 0.0:
+		draw_rect(Rect2(p + Vector2(fill_w - 1.5, inset_y), Vector2(2.0, avail_h)), Color(1, 0.95, 1, 0.78))
+		draw_rect(Rect2(p + Vector2(fill_w - 3.5, inset_y), Vector2(5.0, avail_h)), Color(0.72, 0.34, 1.0, 0.16))
+
+	# 外框：紫色亮边 + 顶部高光 + 底部暗边
+	draw_rect(Rect2(p, Vector2(w, h)), Color(0.82, 0.56, 1.0, 0.58), false, 1.5)
+	draw_line(Vector2(p.x, p.y), Vector2(p.x + w, p.y), Color(1, 1, 1, 0.26), 1.0)
+	draw_line(Vector2(p.x, p.y + h), Vector2(p.x + w, p.y + h), Color(0.04, 0.01, 0.08, 0.85), 1.0)
+	# 顶部格刻度：7000 一格的小菱形/短线，强化分格读法
+	if seg_count > 1:
+		for i in range(1, seg_count):
+			var tx: float = p.x + float(i) * seg_w
+			draw_line(Vector2(tx, p.y - 2.0), Vector2(tx, p.y + 1.0), Color(0.90, 0.62, 1.0, 0.55), 1.0)
+			draw_line(Vector2(tx, p.y + h - 1.0), Vector2(tx, p.y + h + 2.0), Color(0.90, 0.62, 1.0, 0.30), 1.0)
 
 	if bool(r.get("show_name", false)):
 		var nm: String = str(r.get("name_text", ""))
@@ -379,6 +400,7 @@ func _draw_epic(r: Dictionary) -> void:
 	if not emlist.is_empty():
 		var emr := 16.0
 		MarkerIconScript.draw_row(self, p.x + w * 0.5, p.y - emr * 2.0 - 36.0, emlist, emr)
+
 
 # ============================ 盾形图标 ============================
 func _draw_shield_icon(c: Vector2, s: float, col: Color) -> void:

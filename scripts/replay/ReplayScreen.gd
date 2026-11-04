@@ -707,9 +707,9 @@ func _update_world_hud(t: float) -> void:
 		else:
 			var is_epic: bool = sub in ["tyrant", "dragon", "shadow_tyrant", "shadow_dragon", "storm_dragon"]
 			if is_epic:
-				var segs: int = maxi(1, int(ceil(mx / 1000.0)))
-				w = clampf(float(segs) * 22.0, 380.0, 880.0)
-				hh = 30.0
+				var segs: int = maxi(1, int(ceil(mx / 7000.0)))
+				w = clampf(float(segs) * 46.0, 420.0, 900.0)
+				hh = 24.0
 				epic = true
 				anchor = 4.8
 			else:

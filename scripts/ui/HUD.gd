@@ -174,9 +174,10 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 		w = tsz.x
 		h = tsz.y
 	elif is_epic:
-		var segs: int = maxi(1, int(ceil(mx / 1000.0)))
-		w = clampf(float(segs) * 22.0, 380.0, 880.0)
-		h = 30.0
+		# 史诗怪每 7000 血一格；高度比普通血条更克制，避免压住模型/技能预警
+		var segs: int = maxi(1, int(ceil(mx / 7000.0)))
+		w = clampf(float(segs) * 46.0, 420.0, 900.0)
+		h = 24.0
 	elif entity is Minion:
 		var ms: float = BarPainterScript.minion_bar_scale(str((entity as Minion).display_name))
 		w *= ms
@@ -198,7 +199,7 @@ func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_re
 		var mtype := str((entity as Minion).display_name)
 		is_vanguard = mtype in ["dragon", "storm", "shadow_dragon"]
 	row["ticks"] = is_turret or is_monster or is_vanguard
-	row["tick_step"] = 2000.0 if is_turret else 1000.0
+	row["tick_step"] = 2000.0 if is_turret else (7000.0 if is_epic else 1000.0)
 
 	row["team"] = int(entity.team)
 	# 玩家自己的血条恒为绿色（与阵营无关）

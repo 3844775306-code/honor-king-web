@@ -10,9 +10,9 @@ var always_show: bool = false
 var shield_value: float = 0.0
 var interfere_value: float = 0.0   # 干扰条剩余比例(0-1)，防御塔被干扰时显示在血条上方
 
-# 史诗怪物（暴君/主宰/风暴龙王）：大号紫色分格血条，每格 1000 点生命
+# 史诗怪物（暴君/主宰/风暴龙王）：大号紫色分格血条，每格 7000 点生命
 var epic_mode: bool = false
-const EPIC_HP_PER_CELL: float = 1000.0
+const EPIC_HP_PER_CELL: float = 7000.0
 
 # 血条前/旁的金色护盾图标（原初羁绊减伤、防御塔无兵线保护时点亮）
 var show_shield_icon: bool = false
@@ -138,19 +138,22 @@ func _draw():
 # ---------- 史诗怪物大号紫色分格血条（每格 = 1000 点生命） ----------
 func _draw_epic_bar(w: float, h: float) -> void:
 	var seg_count := maxi(1, int(ceil(max_value / EPIC_HP_PER_CELL)))
-	# 满量程取整到 1000 的整数倍，使格线正好落在每个 1000 血上
 	var seg_total := float(seg_count) * EPIC_HP_PER_CELL
 	var seg_w := w / float(seg_count)
 	var to_w := w / seg_total
 	var fill_w := clampf(current_value, 0.0, max_value) * to_w
 	var sh_w := clampf(shield_value, 0.0, seg_total - current_value) * to_w
 
-	var margin := 1.5
-	var inset_y := 2.5
+	var margin := 1.2
+	var inset_y := 2.0
 	var avail_h := h - inset_y * 2.0
-	var cell_color := Color(0.13, 0.05, 0.24, 0.95)   # 空槽深紫
-	var top_col := Color(0.8, 0.45, 1.0)               # 填充上段亮紫
-	var bot_col := Color(0.46, 0.16, 0.82)             # 填充下段暗紫
+	var cell_top := Color(0.14, 0.06, 0.24, 0.98)
+	var cell_bot := Color(0.075, 0.028, 0.135, 0.98)
+	var top_col := Color(0.94, 0.54, 1.0)
+	var mid_col := Color(0.68, 0.29, 0.96)
+	var bot_col := Color(0.34, 0.08, 0.56)
+	draw_rect(Rect2(1, 2, w, h), Color(0, 0, 0, 0.26))
+	draw_rect(Rect2(-2, -2, w + 4, h + 4), Color(0.045, 0.015, 0.075, 0.98))
 
 	for i in seg_count:
 		var x0: float = i * seg_w
@@ -158,27 +161,31 @@ func _draw_epic_bar(w: float, h: float) -> void:
 		if x1 - x0 <= margin * 2.0:
 			continue
 		var cell := Rect2(x0 + margin, inset_y, x1 - x0 - margin * 2.0, avail_h)
-		draw_rect(cell, cell_color)
+		draw_rect(cell, cell_top)
+		draw_rect(Rect2(cell.position + Vector2(0, cell.size.y * 0.55), Vector2(cell.size.x, cell.size.y * 0.45)), cell_bot)
+		draw_rect(Rect2(cell.position + Vector2(0, 1.0), Vector2(cell.size.x, maxf(1.0, cell.size.y * 0.22))), Color(1.0, 0.55, 1.0, 0.035))
 		var filled := clampf(fill_w - cell.position.x, 0.0, cell.size.x)
 		if filled > 0.0:
-			draw_rect(Rect2(cell.position.x, cell.position.y, filled, avail_h * 0.5), top_col)
-			draw_rect(Rect2(cell.position.x, cell.position.y + avail_h * 0.5, filled, avail_h * 0.5), bot_col)
+			draw_rect(Rect2(cell.position, Vector2(filled, avail_h * 0.34)), top_col)
+			draw_rect(Rect2(cell.position + Vector2(0, avail_h * 0.34), Vector2(filled, avail_h * 0.34)), mid_col)
+			draw_rect(Rect2(cell.position + Vector2(0, avail_h * 0.68), Vector2(filled, avail_h * 0.32)), bot_col)
+			draw_rect(Rect2(cell.position, Vector2(filled, 1.5)), Color(1, 1, 1, 0.42))
+		draw_line(cell.position + Vector2(cell.size.x, 0), cell.position + Vector2(cell.size.x, cell.size.y), Color(0, 0, 0, 0.55), 1.6)
+		draw_line(cell.position + Vector2(cell.size.x - 1.0, 1.0), cell.position + Vector2(cell.size.x - 1.0, cell.size.y - 1.0), Color(0.72, 0.38, 1.0, 0.22), 1.0)
 
-	# 护盾白段（右侧叠置，罕见）
 	if sh_w > 0.0:
 		var sh_x := clampf(fill_w, 0.0, w)
 		var sh_use := clampf(sh_w, 0.0, w - sh_x)
 		if sh_use > 0.0:
 			draw_rect(Rect2(sh_x, inset_y, sh_use, avail_h), Color(0.9, 0.9, 0.95, 0.95))
+			draw_rect(Rect2(sh_x, inset_y, sh_use, 2.0), Color(1, 1, 1, 0.6))
 
-	# 受伤闪橙（贴血量右边界）
 	if damage_flash_timer > 0.0:
 		var ratio := damage_flash_timer / 0.5
 		var fw := damage_flash_amount * to_w * ratio
 		if fw > 0.0:
 			draw_rect(Rect2(fill_w, inset_y, minf(fw, w - fill_w), avail_h), Color(1.0, 0.55, 0.1, 0.9))
 
-	# 回血深色叠加（贴血量左边界）
 	if heal_timer > 0.0:
 		var ratio := heal_timer / 0.5
 		var hw2 := heal_amount * to_w
@@ -186,15 +193,18 @@ func _draw_epic_bar(w: float, h: float) -> void:
 			var col := Color(top_col.r * 0.55, top_col.g * 0.55, top_col.b * 0.55, ratio * 0.6)
 			draw_rect(Rect2(maxf(fill_w - hw2, 0.0), inset_y, hw2, avail_h), col)
 
-	# 暗印预判黄段（贴当前血量右尾，跨分格透明覆盖）
 	var doom := _lyf_doom_amount()
 	if doom > 0.0:
 		var dw := doom * to_w
 		if dw > 0.5:
 			draw_rect(Rect2(maxf(fill_w - dw, 0.0), inset_y, dw, avail_h), Color(1.0, 0.88, 0.18, 0.7))
 
-	# 亮紫外框
-	draw_rect(Rect2(0, 0, w, h), Color(1.0, 0.9, 1.0, 0.5), false, 1.5)
+	if fill_w > 0.5 and current_value > 0.0:
+		draw_rect(Rect2(fill_w - 1.5, inset_y, 2.0, avail_h), Color(1, 0.95, 1, 0.78))
+		draw_rect(Rect2(fill_w - 3.5, inset_y, 5.0, avail_h), Color(0.72, 0.34, 1.0, 0.16))
+	draw_rect(Rect2(0, 0, w, h), Color(0.82, 0.56, 1.0, 0.58), false, 1.5)
+	draw_line(Vector2(0, 0), Vector2(w, 0), Color(1, 1, 1, 0.26), 1.0)
+	draw_line(Vector2(0, h), Vector2(w, h), Color(0.04, 0.01, 0.08, 0.85), 1.0)
 
 # ---------- 李元芳暗印预判：黄色段（当前血条右尾被引爆的部分） ----------
 func _lyf_doom_amount() -> float:

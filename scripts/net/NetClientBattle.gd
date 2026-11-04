@@ -3335,9 +3335,9 @@ func _collect_world_bars() -> Array:
 					rows.append(_unit_bar_row(nid, v, sp, 110.0 * mscale, 15.0 * mscale, 84.0, false, false, vanguard, 1000.0))
 			NET_JUNGLE:
 				if NetModels.is_epic_jungle(str(v.get("name", ""))):
-					# 史诗怪大号分格紫条：宽随血量每格 1000 自适应（同主机 HUD）
-					var segs := maxi(1, int(ceil(float(v.maxhp) / 1000.0)))
-					rows.append(_unit_bar_row(nid, v, sp, clampf(segs * 22.0, 380.0, 880.0), 30.0, 84.0, true, false, true, 1000.0, true))
+					# 史诗怪大号分格紫条：每格 7000 血，宽/高与主机 HUD 同口径
+					var segs := maxi(1, int(ceil(float(v.maxhp) / 7000.0)))
+					rows.append(_unit_bar_row(nid, v, sp, clampf(segs * 46.0, 420.0, 900.0), 24.0, 84.0, true, false, true, 7000.0, true))
 				else:
 					rows.append(_unit_bar_row(nid, v, sp, 110.0, 15.0, 84.0, false, false, true, 1000.0, true))
 	return rows
@@ -5934,41 +5934,55 @@ class Hud:
 			MarkerIconScript.draw_row(self, left + bw * 0.5, my, _mk_rows, mr)
 
 	# 史诗怪大号分格紫条（复刻 HealthBarControl._draw_epic_bar，静态分格填充）
-	func _draw_epic_bar(left: float, top2: float, bw: float, bh: float, hp_now: float, mhp: float, lyf_pred2: float = 0.0, shield: float = 0.0, flash_hp: float = 0.0, flash_ratio: float = 0.0) -> void:
-		var seg_count := maxi(1, int(ceil(mhp / 1000.0)))
-		var seg_total := float(seg_count) * 1000.0
+	func _draw_epic_bar(left: float, top2: float, bw: float, bh: float, hp_now: float, mhp: float, lyf_pred2: float = 0.0, shield: float = 0.0, flash_hp: float = 0.0, flash_ratio: float = 0.0):
+		var seg_count := maxi(1, int(ceil(mhp / 7000.0)))
+		var seg_total := float(seg_count) * 7000.0
 		var seg_w := bw / float(seg_count)
 		var to_w := bw / seg_total
 		var fill_w := hp_now * to_w
-		var margin := 1.5
-		var inset_y := 2.5
+		var margin := 1.2
+		var inset_y := 2.0
 		var avail_h := bh - inset_y * 2.0
-		var cell_color := Color(0.13, 0.05, 0.24, 0.95)
-		var top_col := Color(0.8, 0.45, 1.0)
-		var bot_col := Color(0.46, 0.16, 0.82)
+		var cell_top := Color(0.14, 0.06, 0.24, 0.98)
+		var cell_bot := Color(0.075, 0.028, 0.135, 0.98)
+		var top_col := Color(0.94, 0.54, 1.0)
+		var mid_col := Color(0.68, 0.29, 0.96)
+		var bot_col := Color(0.34, 0.08, 0.56)
+		draw_rect(Rect2(left + 2.0, top2 + 3.0, bw, bh), Color(0, 0, 0, 0.28))
+		draw_rect(Rect2(left - 3.0, top2 - 3.0, bw + 6.0, bh + 6.0), Color(0.55, 0.20, 0.95, 0.10))
+		draw_rect(Rect2(left - 1.5, top2 - 1.5, bw + 3.0, bh + 3.0), Color(0.045, 0.015, 0.075, 0.98))
 		for i in seg_count:
 			var x0 := float(i) * seg_w
 			var x1 := minf((float(i) + 1.0) * seg_w, bw)
 			if x1 - x0 <= margin * 2.0:
 				continue
 			var cell_w := x1 - x0 - margin * 2.0
-			draw_rect(Rect2(left + x0 + margin, top2 + inset_y, cell_w, avail_h), cell_color)
+			var cx := left + x0 + margin
+			draw_rect(Rect2(cx, top2 + inset_y, cell_w, avail_h), cell_top)
+			draw_rect(Rect2(cx, top2 + inset_y + avail_h * 0.55, cell_w, avail_h * 0.45), cell_bot)
 			var filled := clampf(fill_w - (x0 + margin), 0.0, cell_w)
 			if filled > 0.0:
-				draw_rect(Rect2(left + x0 + margin, top2 + inset_y, filled, avail_h * 0.5), top_col)
-				draw_rect(Rect2(left + x0 + margin, top2 + inset_y + avail_h * 0.5, filled, avail_h * 0.5), bot_col)
-		# 暗印预判黄段（当前血量右尾，跨分格透明覆盖）
+				draw_rect(Rect2(cx, top2 + inset_y, filled, avail_h * 0.34), top_col)
+				draw_rect(Rect2(cx, top2 + inset_y + avail_h * 0.34, filled, avail_h * 0.34), mid_col)
+				draw_rect(Rect2(cx, top2 + inset_y + avail_h * 0.68, filled, avail_h * 0.32), bot_col)
+				draw_rect(Rect2(cx, top2 + inset_y, filled, 1.5), Color(1, 1, 1, 0.42))
+			draw_line(Vector2(cx + cell_w, top2 + inset_y), Vector2(cx + cell_w, top2 + inset_y + avail_h), Color(0, 0, 0, 0.55), 1.6)
+			draw_line(Vector2(cx + cell_w - 1.0, top2 + inset_y + 1.0), Vector2(cx + cell_w - 1.0, top2 + inset_y + avail_h - 1.0), Color(0.72, 0.38, 1.0, 0.22), 1.0)
 		if lyf_pred2 > 0.0:
 			var doom := clampf(lyf_pred2 - shield, 0.0, hp_now)
 			var dw := doom * to_w
 			if dw > 0.5:
 				draw_rect(Rect2(left + maxf(fill_w - dw, 0.0), top2 + inset_y, dw, avail_h), Color(1.0, 0.88, 0.18, 0.7))
-		# 受伤闪橙：贴血量右边界 0.5s 衰减（复刻主机 HealthBarControl._draw_epic_bar L175-180）
 		if flash_ratio > 0.0 and flash_hp > 0.0:
 			var _few := flash_hp * to_w * flash_ratio
 			if _few > 0.5:
 				draw_rect(Rect2(left + fill_w, top2 + inset_y, minf(_few, bw - fill_w), avail_h), Color(1.0, 0.55, 0.1, 0.9))
-		draw_rect(Rect2(left, top2, bw, bh), Color(1.0, 0.9, 1.0, 0.5), false, 1.5)
+		if fill_w > 0.5 and hp_now > 0.0:
+			draw_rect(Rect2(left + fill_w - 1.5, top2 + inset_y, 2.0, avail_h), Color(1, 0.95, 1, 0.78))
+			draw_rect(Rect2(left + fill_w - 3.5, top2 + inset_y, 5.0, avail_h), Color(0.72, 0.34, 1.0, 0.16))
+		draw_rect(Rect2(left, top2, bw, bh), Color(0.82, 0.56, 1.0, 0.58), false, 1.5)
+		draw_line(Vector2(left, top2), Vector2(left + bw, top2), Color(1, 1, 1, 0.26), 1.0)
+		draw_line(Vector2(left, top2 + bh), Vector2(left + bw, top2 + bh), Color(0.04, 0.01, 0.08, 0.85), 1.0)
 
 	func _sync_flash() -> void:
 		var now := Time.get_ticks_msec()
