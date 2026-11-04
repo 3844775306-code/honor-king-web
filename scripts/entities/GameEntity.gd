@@ -787,6 +787,9 @@ func _damage_audit_log(raw: float, pre: float, res: float, flat_pen: float, pen_
 			if _damage_audit_file != null:
 				_damage_audit_file.close()
 			_damage_audit_open_path = damage_audit_path
+			var _audit_dir := damage_audit_path.get_base_dir()
+			if _audit_dir != "":
+				DirAccess.make_dir_recursive_absolute(_audit_dir)
 			_damage_audit_file = FileAccess.open(damage_audit_path, FileAccess.WRITE)
 			if _damage_audit_file != null:
 				_damage_audit_file.store_string("\uFEFF")

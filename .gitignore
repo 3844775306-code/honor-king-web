@@ -50,3 +50,7 @@ tools/bin/
 # 英雄统计采样数据（本地生成）
 data/hero_stats/*.csv
 data/hero_stats/*.xlsx
+
+# 伤害审计表格（本地生成）
+data/damage_audit/*.csv
+data/damage_audit/*.log

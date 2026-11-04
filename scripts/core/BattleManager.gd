@@ -267,8 +267,10 @@ func _ready():
 		var _mode := "training" if "--training-camp" in OS.get_cmdline_user_args() else "battle"
 		GameEntity.damage_audit_mode = _mode
 		GameEntity.damage_audit_match_time = Time.get_datetime_string_from_system()
-		GameEntity.damage_audit_path = "user://damage_audit_%s_%s.csv" % [_mode, _stamp]
-		print("[DMG_AUDIT] 本局表格: ", ProjectSettings.globalize_path(GameEntity.damage_audit_path))
+		var _audit_dir := ProjectSettings.globalize_path("res://data/damage_audit")
+		DirAccess.make_dir_recursive_absolute(_audit_dir)
+		GameEntity.damage_audit_path = _audit_dir.path_join("damage_audit_%s_%s.csv" % [_mode, _stamp])
+		print("[DMG_AUDIT] 本局表格: ", GameEntity.damage_audit_path)
 	# AI 思考过程覆盖层（F3 开关；懒创建面板）
 	var _dbg_cl := CanvasLayer.new()
 	_dbg_cl.name = "AIDebugLayer"
