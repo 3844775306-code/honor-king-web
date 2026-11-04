@@ -224,7 +224,9 @@ func _find_target() -> GameEntity:
 
 
 	# 4. 敌方防御塔（4分钟以后 + 有兵线掩护）
-	
+	# 前4分钟防御塔有护盾保护，AI 不把塔作为推线目标；否则会走到塔前却没有可攻击目标，原地发呆。
+	if game_time < AiConfig.EARLY_GAME_END:
+		return null
 	var best_tower: Turret = null
 	var best_tower_dist := 9999.0
 	for entity in hero.get_tree().get_nodes_in_group("turrets"):
@@ -459,7 +461,8 @@ func decide(force_push: bool = false) -> void:
 	# 默认位置：己方兵线 / 敌方塔外兵线，选距离自己更近的一个
 	var forward_minion := _get_forward_minion_pos()
 	var enemy_line := Vector3.ZERO
-	if force_push or game_time >= AiConfig.EARLY_GAME_END:
+	# 前4分钟不要用「敌方塔外」当默认推进点：塔不可选时会变成无目标站桩
+	if game_time >= AiConfig.EARLY_GAME_END:
 		enemy_line = _get_enemy_tower_outside_pos()
 	var push_goal := _pick_nearer_goal(forward_minion, enemy_line)
 	if push_goal != Vector3.ZERO:
