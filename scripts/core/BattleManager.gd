@@ -7411,7 +7411,7 @@ var enemy_waypoints_farm = [
 # 小兵基础属性表 (0分钟)
 const MINION_BASE_TABLE = {
 	"melee":    {"lane": {"health": 1860, "attack": 60, "armor": 180, "mr": 60},   "mid": {"health": 1488, "attack": 60, "armor": 180, "mr": 60}},
-	"ranged":   {"lane": {"health": 1530, "attack": 90, "armor": 180, "mr": 60},   "mid": {"health": 1224, "attack": 120, "armor": 180, "mr": 60}},
+	"ranged":   {"lane": {"health": 1530, "attack": 90, "armor": 180, "mr": 60},   "mid": {"health": 1224, "attack": 90, "armor": 180, "mr": 60}},
 	"siege":    {"health": 3355, "attack": 210, "armor": 180, "mr": 60},
 	"super":    {"health": 5239, "attack": 631, "armor": 200, "mr": 200},
 	"dragon":   {"health": 4878, "attack": 186, "armor": 300, "mr": 300},
