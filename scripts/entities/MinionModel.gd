@@ -8,7 +8,7 @@ const APPLIED := ["melee", "ranged", "siege", "super", "dragon", "storm", "shado
 const TEAM_CLOTH := [Color(0.16, 0.62, 0.74), Color(0.76, 0.20, 0.16)]
 const TARGET_H := {"melee": 1.30, "ranged": 1.30, "siege": 1.30, "super": 1.95,
 	"dragon": 2.15, "storm": 2.15, "shadow_dragon": 2.15}
-const VISUAL_SCALE := 1.0   # 兵线体型基准：普通兵约1.3m，特殊兵种由TARGET_H决定（碰撞/判定不变）
+const VISUAL_SCALE := 1.5   # 兵线体型：普通兵约1.95m，特殊兵种继续按TARGET_H放大（碰撞/判定不变）
 
 # 模板缓存：同兵种同阵营只构建一次，之后 duplicate() 共享 Mesh/材质。
 # 构建模型在真实渲染下约 60~170ms（headless 仅 2ms），每次出兵重建是每波兵线卡顿的根源。

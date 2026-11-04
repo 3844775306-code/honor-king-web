@@ -136,7 +136,7 @@ const MINION_RAW_H := {
 const MINION_TARGET_H := 1.30
 const MINION_BIG := ["super", "dragon", "storm", "shadow_dragon"]
 const MINION_BIG_MUL := 1.5
-const MINION_VISUAL_SCALE := 1.0   # 与 MinionModel.VISUAL_SCALE 同步：普通兵约1.3m
+const MINION_VISUAL_SCALE := 1.5   # 与 MinionModel.VISUAL_SCALE 同步：普通兵约1.95m
 
 # 按「目标高度 / 模型原始高度」反算缩放，保证各兵种视觉高度一致
 static func minion_scale(sub_type: String) -> float:
