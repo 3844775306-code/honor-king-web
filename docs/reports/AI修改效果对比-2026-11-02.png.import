@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://88wumi7ob5s3"
-path="res://.godot/imported/UI截图.jpg-e9c4a6fd4477ffa0f9b5580cb62123af.ctex"
+uid="uid://cknhkqyiac7tn"
+path="res://.godot/imported/AI修改效果对比-2026-11-02.png-b878177ba053c331c0c3dde1d6485925.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://我的截图/UI截图.jpg"
-dest_files=["res://.godot/imported/UI截图.jpg-e9c4a6fd4477ffa0f9b5580cb62123af.ctex"]
+source_file="res://docs/reports/AI修改效果对比-2026-11-02.png"
+dest_files=["res://.godot/imported/AI修改效果对比-2026-11-02.png-b878177ba053c331c0c3dde1d6485925.ctex"]
 
 [params]
 

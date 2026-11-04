@@ -382,4 +382,3 @@ func _clear_attackers() -> void:
 				h.manual_target = null
 			if h.current_target == self:
 				h.current_target = null
-

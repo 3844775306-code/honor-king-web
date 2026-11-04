@@ -23,7 +23,9 @@ var _title: Label = null           # 阶段 A 大标题
 var _hint: Label = null            # 底部点击提示（两阶段共用，文案切换）
 var _plate_nodes: Array[Panel] = []
 var _plate_world: Array[Vector3] = []
+var _plate_ref = []                # 对应英雄节点（每帧取实时位置，避免 AI 漂移导致铭牌错位）
 var _detail: Panel = null          # 阶段 B 右侧面板
+var _last_click_ms := -10000       # 上次推进时间（去重：鼠标+合成触摸/连发只算一次）
 
 
 func _ready() -> void:
@@ -44,13 +46,16 @@ func _on_viewport_resized() -> void:
 	if not is_inside_tree():
 		return
 	_layout_detail()
+	if _detail != null and is_instance_valid(_detail):
+		_fit_detail_height(_detail)
 
 
 func _process(delta: float) -> void:
 	_t += delta
+	# 两个阶段都要跟随镜头更新铭牌：阶段 B 其余英雄仍留在台上，铭牌不能停在旧屏幕位置
+	_update_plates()
 	if _phase != 0:
 		return
-	_update_plates()
 	# 底部提示轻微呼吸：直接算 sin，不额外开 tween
 	if _hint != null and _hint.visible:
 		_hint.modulate.a = 0.55 + 0.45 * (0.5 + 0.5 * sin(_t * 3.0))
@@ -88,6 +93,13 @@ func _gui_input(event: InputEvent) -> void:
 		hit = st.pressed
 	if not hit:
 		return
+	# 去重：桌面端 emulate_touch_from_mouse 会让一次鼠标点击同时产生鼠标事件+合成触摸，
+	# 两者相隔几毫秒；若都推进就会「一次点击直接跳到结算」。同一时间窗只算一次。
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - _last_click_ms < 300:
+		accept_event()
+		return
+	_last_click_ms = now_ms
 	accept_event()
 	_advance_click()
 
@@ -186,6 +198,7 @@ func _build_plates(entries: Array) -> void:
 			p.queue_free()
 	_plate_nodes.clear()
 	_plate_world.clear()
+	_plate_ref.clear()
 	for entry in entries:
 		if not (entry is Dictionary):
 			continue
@@ -195,6 +208,7 @@ func _build_plates(entries: Array) -> void:
 		add_child(plate)
 		_plate_nodes.append(plate)
 		_plate_world.append(world)
+		_plate_ref.append(d.get("node", null))
 
 
 ## 单个英雄铭牌：英雄名 / 昵称 / MVP + 奖牌 chip。
@@ -243,24 +257,35 @@ func _plate_style() -> StyleBoxFlat:
 			Color(0.045, 0.055, 0.08, 0.88), 0.0, 10.0)
 
 
-## 铭牌底边中点对齐英雄脚下屏幕点，并做屏幕边界夹取。
+## 铭牌挂在英雄头顶上方（不遮人）；阶段 B 只显示其余 4 人铭牌，并避让右侧个人面板
 func _update_plates() -> void:
 	if _cam == null or not is_instance_valid(_cam):
 		return
 	var vp := size
+	# 阶段 B：右侧被个人面板占用，铭牌最多摆到面板左缘之前
+	var max_right: float = vp.x - 8.0
+	if _phase != 0 and _detail != null and is_instance_valid(_detail):
+		max_right = minf(max_right, _detail.position.x - 12.0)
 	for i in range(_plate_nodes.size()):
 		var plate := _plate_nodes[i]
 		if not is_instance_valid(plate):
 			continue
-		var world := _plate_world[i] + Vector3(0.0, 0.06, 0.0)
+		# 阶段 B：玩家自己的铭牌让位给右侧面板（其余英雄的铭牌继续显示）
+		if _phase != 0 and i == 0:
+			plate.visible = false
+			continue
+		var world := _plate_world[i] + Vector3(0.0, 2.55, 0.0)
+		if i < _plate_ref.size() and is_instance_valid(_plate_ref[i]) and (_plate_ref[i] as Node3D).is_inside_tree():
+			world = (_plate_ref[i] as Node3D).global_position + Vector3(0.0, 2.55, 0.0)
 		if _cam.is_position_behind(world):
 			plate.visible = false
 			continue
 		plate.visible = true
 		var screen_pt := _cam.unproject_position(world)
-		var pos := screen_pt - Vector2(plate.size.x * 0.5, plate.size.y)
-		pos.x = clampf(pos.x, 8.0, maxf(8.0, vp.x - plate.size.x - 8.0))
-		pos.y = clampf(pos.y, TITLE_Y + 140.0, maxf(TITLE_Y + 140.0, vp.y - plate.size.y - 96.0))
+		# 铭牌挂在头顶上方（底边贴头顶留 6px），不遮挡人物模型
+		var pos := screen_pt - Vector2(plate.size.x * 0.5, plate.size.y + 6.0)
+		pos.x = clampf(pos.x, 8.0, maxf(8.0, max_right - plate.size.x))
+		pos.y = clampf(pos.y, TITLE_Y + 130.0, maxf(TITLE_Y + 130.0, vp.y - plate.size.y - 96.0))
 		plate.position = pos
 
 
@@ -273,9 +298,9 @@ func _build_detail(d: Dictionary) -> void:
 		_detail = null
 	var panel := Panel.new()
 	panel.clip_contents = true
-	var sb := UiKit.flat(0.93, 18, 2, Color(0.60, 0.76, 1.0, 0.55),
-			Color(0.045, 0.055, 0.08, 0.93), 0.0, 22.0)
-	sb.shadow_color = Color(0.02, 0.04, 0.08, 0.55)
+	var sb := UiKit.flat(0.94, 20, 2, Color(0.60, 0.76, 1.0, 0.55),
+			Color(0.035, 0.045, 0.07, 0.94), 0.0, 24.0)
+	sb.shadow_color = Color(0.02, 0.04, 0.08, 0.60)
 	panel.add_theme_stylebox_override("panel", sb)
 	add_child(panel)
 	_detail = panel
@@ -283,37 +308,71 @@ func _build_detail(d: Dictionary) -> void:
 
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	box.offset_left = 30.0
-	box.offset_right = -30.0
-	box.offset_top = 28.0
-	box.offset_bottom = -26.0
-	box.add_theme_constant_override("separation", 0)
+	box.offset_left = 26.0
+	box.offset_right = -26.0
+	box.offset_top = 24.0
+	box.offset_bottom = -22.0
+	box.add_theme_constant_override("separation", 10)
 	panel.add_child(box)
-	# —— 头部：英雄名 34px 金 + 右侧 MVP chip ——
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
-	var hero_lbl := _mk_label(str(d.get("hero", "")), 34, UiKit.C_GOLD)
-	hero_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	# ---- 头部卡：英雄头像 + 名字 / 昵称·分路 / 评分·奖牌 ----
+	var head_card := Panel.new()
+	head_card.custom_minimum_size = Vector2(0.0, 132.0)
+	var hsb := UiKit.flat(0.5, 16, 1, Color(1.0, 0.85, 0.35, 0.22), Color(1.0, 1.0, 1.0, 0.05), 0.0, 16.0)
+	head_card.add_theme_stylebox_override("panel", hsb)
+	box.add_child(head_card)
+	var head_row := HBoxContainer.new()
+	head_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	head_row.offset_left = 18.0
+	head_row.offset_right = -18.0
+	head_row.offset_top = 14.0
+	head_row.offset_bottom = -14.0
+	head_row.add_theme_constant_override("separation", 18)
+	head_card.add_child(head_row)
+	var face := _Portrait.new()
+	face.hero_name = str(d.get("hero", ""))
+	face.accent = UiKit.C_GOLD if bool(d.get("mvp", false)) else Color(0.55, 0.78, 1.0)
+	face.custom_minimum_size = Vector2(96.0, 96.0)
+	face.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head_row.add_child(face)
+	var hcol := VBoxContainer.new()
+	hcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hcol.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hcol.add_theme_constant_override("separation", 4)
+	head_row.add_child(hcol)
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 10)
+	var hero_lbl := _mk_label(str(d.get("hero", "")), 38, Color(1.0, 0.95, 0.86))
 	hero_lbl.clip_text = true
-	head.add_child(hero_lbl)
+	name_row.add_child(hero_lbl)
 	if bool(d.get("mvp", false)):
 		var mvp_chip := _mk_chip("MVP", UiKit.C_GOLD)
-		mvp_chip.size_flags_horizontal = Control.SIZE_SHRINK_END
 		mvp_chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		head.add_child(mvp_chip)
-	box.add_child(head)
-	# —— 副行：昵称 18px 灰 + 分路 18px 蓝 ——
+		name_row.add_child(mvp_chip)
+	var medal := int(d.get("medal", -1))
+	if medal >= 0 and medal <= 2:
+		var mchip := _mk_chip(_medal_name(medal), _medal_color(medal))
+		mchip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		name_row.add_child(mchip)
+	hcol.add_child(name_row)
 	var sub := HBoxContainer.new()
-	sub.add_theme_constant_override("separation", 14)
-	sub.add_child(_mk_label(str(d.get("nick", "")), 18, UiKit.C_TEXT_DIM))
+	sub.add_theme_constant_override("separation", 12)
+	sub.add_child(_mk_label(str(d.get("nick", "")), 19, UiKit.C_TEXT_DIM))
 	var lane_txt := str(d.get("lane", ""))
 	if lane_txt != "":
-		sub.add_child(_mk_label(lane_txt, 18, UiKit.C_TEAM0))
-	box.add_child(sub)
-	box.add_child(_spacer(12.0))
-	box.add_child(_line(0.12))
-	box.add_child(_spacer(6.0))
-	# —— 属性行：左标签 20px 灰 / 右数值 22px 白，行高 40 ——
+		sub.add_child(_mk_label("·  " + lane_txt, 19, UiKit.C_TEAM0))
+	hcol.add_child(sub)
+	var rate_lbl := _mk_label("对战评分  %.1f" % float(d.get("rating", 0.0)), 20, _rating_color(float(d.get("rating", 0.0))))
+	hcol.add_child(rate_lbl)
+
+	# ---- 本局数据 ----
+	_spacer_into(box, 4.0)
+	box.add_child(_section_title("本局数据"))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 10)
+	box.add_child(grid)
 	var rows: Array = d.get("rows", [])
 	for i in range(rows.size()):
 		var pair: Variant = rows[i]
@@ -322,23 +381,139 @@ func _build_detail(d: Dictionary) -> void:
 		var kv: Array = pair
 		if kv.size() < 2:
 			continue
-		box.add_child(_detail_row(str(kv[0]), str(kv[1])))
-		if i < rows.size() - 1:
-			box.add_child(_line(0.06))
-	# —— 段位区：间隔 12px 后逐行展示 rank_lines ——
-	box.add_child(_spacer(12.0))
+		grid.add_child(_stat_cell(str(kv[0]), str(kv[1])))
+
+	# ---- 段位结算 ----
+	_spacer_into(box, 6.0)
+	box.add_child(_section_title("段位结算"))
+	var rank_box := VBoxContainer.new()
+	rank_box.add_theme_constant_override("separation", 6)
+	box.add_child(rank_box)
 	var rank_lines: Array = d.get("rank_lines", [])
 	for line_item in rank_lines:
 		var txt := str(line_item)
 		if txt == "":
 			continue
-		var col := UiKit.C_TEXT
-		if txt.contains("+"):
-			col = UiKit.C_GOLD
-		elif txt.contains("-"):
-			col = UiKit.C_DANGER
-		box.add_child(_mk_label(txt, 22, col))
+		rank_box.add_child(_rank_line(txt))
 	_pass_through(panel)
+	_fit_detail_height(panel)
+
+
+## 面板高度按内容自适应并垂直居中：避免底部大片空白
+func _fit_detail_height(panel: Panel) -> void:
+	await get_tree().process_frame
+	if not is_instance_valid(panel):
+		return
+	var need := 0.0
+	for ch in panel.get_children():
+		need = maxf(need, (ch as Control).get_combined_minimum_size().y)
+	need = clampf(need + 46.0, 420.0, size.y * 0.86)
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_top = -need * 0.5
+	panel.offset_bottom = need * 0.5
+	print("[PM] detail height=", need)
+
+
+## 段位行：积分/星数强调，升降级用彩色标签，时长弱化
+func _rank_line(txt: String) -> Control:
+	var big := txt.contains("积分") and not txt.contains("时长")
+	var col := UiKit.C_TEXT
+	var fs := 21
+	if txt.contains("时长"):
+		col = UiKit.C_TEXT_DIM
+		fs = 16
+	elif txt.contains("↑") or txt.contains("晋升"):
+		col = Color(0.55, 1.0, 0.62)
+		fs = 20
+	elif txt.contains("↓") or txt.contains("降级"):
+		col = UiKit.C_DANGER
+		fs = 20
+	elif txt.contains("+"):
+		col = UiKit.C_GOLD
+		fs = 24 if big else 20
+	elif txt.contains("-"):
+		col = Color(1.0, 0.55, 0.5)
+	if not big and txt.contains("时长"):
+		return _mk_label(txt, fs, col)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	if big:
+		var bar := ColorRect.new()
+		bar.color = Color(1.0, 0.85, 0.32, 0.9)
+		bar.custom_minimum_size = Vector2(4.0, 26.0)
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(bar)
+	row.add_child(_mk_label(txt, fs, col))
+	return row
+
+
+## 小统计卡：上=项目名（小字灰）下=数值（大字白），半透明底
+func _stat_cell(key_txt: String, val_txt: String) -> Control:
+	var card := Panel.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.custom_minimum_size = Vector2(0.0, 66.0)
+	var sb := UiKit.flat(0.45, 12, 1, Color(1.0, 1.0, 1.0, 0.10), Color(1.0, 1.0, 1.0, 0.05), 0.0, 12.0)
+	card.add_theme_stylebox_override("panel", sb)
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 14.0
+	vb.offset_right = -14.0
+	vb.offset_top = 8.0
+	vb.offset_bottom = -8.0
+	vb.add_theme_constant_override("separation", 0)
+	card.add_child(vb)
+	var k := _mk_label(key_txt, 15, Color(0.62, 0.68, 0.78))
+	vb.add_child(k)
+	var v := _mk_label(val_txt, 25, Color(1.0, 1.0, 1.0))
+	vb.add_child(v)
+	_pass_through(card)
+	return card
+
+
+## 分区标题：金色小标题 + 渐隐分隔线
+func _section_title(txt: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(_mk_label(txt, 19, Color(1.0, 0.86, 0.45)))
+	var line := ColorRect.new()
+	line.color = Color(1.0, 0.86, 0.45, 0.22)
+	line.custom_minimum_size = Vector2(0.0, 1.0)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(line)
+	return row
+
+
+func _spacer_into(parent: Node, h: float) -> void:
+	parent.add_child(_spacer(h))
+
+
+func _rating_color(r: float) -> Color:
+	if r >= 80.0:
+		return Color(1.0, 0.55, 0.42)
+	if r >= 68.0:
+		return UiKit.C_GOLD
+	if r >= 56.0:
+		return Color(0.62, 0.92, 0.55)
+	return Color(0.66, 0.71, 0.82)
+
+
+## 头像（程序化立绘）：与结算页同源
+class _Portrait extends Control:
+	var hero_name: String = ""
+	var accent: Color = Color.WHITE
+
+	func _draw() -> void:
+		var r: float = minf(size.x, size.y) * 0.5
+		if r <= 2.0:
+			return
+		var c := size * 0.5
+		var art = preload("res://scripts/ui/HeroArt.gd")
+		art.draw_portrait(self, c, maxf(1.0, r - 3.0), hero_name, accent, false)
+		draw_arc(c, r - 3.0, 0.0, TAU, 48, accent, 3.0, true)
+
 
 
 func _layout_detail() -> void:
@@ -414,15 +589,15 @@ func _line(alpha: float) -> ColorRect:
 	return line
 
 
-## 点击推进：阶段 A → 隐藏标题与铭牌、切阶段并发 advance；阶段 B → 发 finished。
+## 点击推进：阶段 A → 隐藏标题（铭牌保留给仍在台上的队友）、切阶段并发 advance；阶段 B → 发 finished。
 func _advance_click() -> void:
 	if _phase == 0:
 		_phase = 1
 		if _title != null:
 			_title.visible = false
-		for p in _plate_nodes:
-			if is_instance_valid(p):
-				p.visible = false
+		# 只隐藏玩家自己的铭牌（其余英雄留在台上，铭牌继续跟随）
+		if not _plate_nodes.is_empty() and is_instance_valid(_plate_nodes[0]):
+			_plate_nodes[0].visible = false
 		_set_hint_text("点击进入结算")
 		if _hint != null:
 			_hint.modulate.a = 1.0
@@ -464,3 +639,6 @@ func _pass_through(node: Node) -> void:
 		(node as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
 	for ch in node.get_children():
 		_pass_through(ch)
+
+
+

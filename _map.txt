@@ -1,0 +1,605 @@
+==== 36 170
+36 	var sky_mat := ProceduralSkyMaterial.new()
+37 	sky_mat.sky_top_color = Color(0.16, 0.33, 0.63)
+38 	sky_mat.sky_horizon_color = Color(0.80, 0.78, 0.70)
+39 	sky_mat.sky_curve = 0.13
+40 	# 浮空岛：地平线以下不再是草地，而是远天/云海，让岛外一眼看到天空
+41 	sky_mat.ground_bottom_color = Color(0.10, 0.22, 0.42)
+42 	sky_mat.ground_horizon_color = Color(0.52, 0.68, 0.86)
+43 	sky_mat.sun_angle_max = 16.0
+44 	var sky := Sky.new()
+45 	sky.sky_material = sky_mat
+46 
+47 	var env := Environment.new()
+48 	env.background_mode = Environment.BG_SKY
+49 	env.sky = sky
+50 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+51 	env.ambient_light_sky_contribution = 0.75
+52 	env.ambient_light_energy = 1.15
+53 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+54 	env.tonemap_exposure = 1.05
+55 	env.tonemap_white = 6.0
+56 	env.glow_enabled = true
+57 	env.glow_intensity = 0.46
+58 	env.glow_strength = 1.0
+59 	env.glow_bloom = 0.05
+60 	env.glow_hdr_threshold = 1.05
+61 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+62 	# 只保留中高频光晕，避免整个画面发灰（层级 1..7）
+63 	env.set_glow_level(0, 0.0)
+64 	env.set_glow_level(1, 0.0)
+65 	env.set_glow_level(2, 0.55)
+66 	env.set_glow_level(3, 0.85)
+67 	env.set_glow_level(4, 0.6)
+68 	env.set_glow_level(5, 0.3)
+69 	env.set_glow_level(6, 0.0)
+70 	env.fog_enabled = true
+71 	env.fog_light_color = Color(0.66, 0.73, 0.76)
+72 	env.fog_light_energy = 1.0
+73 	env.fog_density = 0.0085
+74 	env.fog_sun_scatter = 0.20
+75 	env.fog_sky_affect = 0.45
+76 	env.fog_depth_begin = 6.0
+77 	env.fog_depth_end = 130.0
+78 	env.fog_depth_curve = 1.35
+79 	var we := WorldEnvironment.new()
+80 	we.environment = env
+81 	parent.add_child(we)
+82 
+83 	# 暖色主光（软阴影）：默认相机朝 -Z，太阳放正前方（+180°），开局即逆光
+84 	var sun := DirectionalLight3D.new()
+85 	sun.name = "SunBacklight"
+86 	sun.rotation_degrees = Vector3(-SUN_ELEVATION_DEG, 180.0, 0.0)
+87 	sun.light_color = Color(1.0, 0.93, 0.80)
+88 	sun.light_energy = 2.35
+89 	sun.light_angular_distance = 1.0
+90 	sun.shadow_enabled = true
+91 	sun.shadow_bias = 0.03
+92 	sun.shadow_normal_bias = 1.2
+93 	sun.shadow_blur = 1.0
+94 	# 2 级级联 + 60m 视距：同性能下阴影更锐利（4 级级联在 90m 上摊薄了纹素）
+95 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+96 	sun.directional_shadow_max_distance = 60.0
+97 	sun.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_AND_SKY
+98 	parent.add_child(sun)
+99 
+100 	# 冷色补光（无阴影）：从相机后上方补正面，压住逆光造成的死黑
+101 	var fill := DirectionalLight3D.new()
+102 	fill.name = "CameraFill"
+103 	fill.rotation_degrees = Vector3(-FILL_ELEVATION_DEG, 0.0, 0.0)
+104 	fill.light_color = Color(0.58, 0.68, 0.95)
+105 	fill.light_energy = 0.58
+106 	fill.shadow_enabled = false
+107 	fill.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
+108 	parent.add_child(fill)
+109 
+110 	_sun_light = sun
+111 	_fill_light = fill
+112 
+113 # 每帧把主光锁在相机正前方（水平方向），形成真正的相机逆光；补光锁在相机后方。
+114 static func update_backlight_for_camera(cam: Camera3D) -> void:
+115 	if cam == null or _sun_light == null or not is_instance_valid(_sun_light):
+116 		return
+117 	var fwd := -cam.global_transform.basis.z
+118 	fwd.y = 0.0
+119 	if fwd.length_squared() < 0.000001:
+120 		return
+121 	fwd = fwd.normalized()
+122 	# 相机水平朝向：Godot 里 yaw 旋转的 forward = (-sin yaw, 0, -cos yaw)
+123 	var yaw := rad_to_deg(atan2(-fwd.x, -fwd.z))
+124 	_sun_light.rotation_degrees = Vector3(-SUN_ELEVATION_DEG, yaw + 180.0, 0.0)
+125 	if _fill_light != null and is_instance_valid(_fill_light):
+126 		_fill_light.rotation_degrees = Vector3(-FILL_ELEVATION_DEG, yaw, 0.0)
+127 
+128 # ================= 地面材质 =================
+129 
+130 static func ground_material(bump: float = 0.0) -> ShaderMaterial:
+131 	if _ground_shader == null:
+132 		_ground_shader = _build_ground_shader()
+133 	if _layout_tex == null:
+134 		_layout_tex = ImageTexture.create_from_image(_paint_layout())
+135 	if _detail_tex == null:
+136 		var dn := FastNoiseLite.new()
+137 		dn.seed = 11
+138 		dn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+139 		dn.frequency = 0.055
+140 		var dt := NoiseTexture2D.new()
+141 		dt.noise = dn
+142 		dt.width = 256
+143 		dt.height = 256
+144 		dt.seamless = true
+145 		_detail_tex = dt
+146 	if _normal_tex == null:
+147 		var nn := FastNoiseLite.new()
+148 		nn.seed = 23
+149 		nn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+150 		nn.frequency = 0.09
+151 		var nt := NoiseTexture2D.new()
+152 		nt.noise = nn
+153 		nt.width = 256
+154 		nt.height = 256
+155 		nt.seamless = true
+156 		nt.as_normal_map = true
+157 		nt.bump_strength = 6.0
+158 		_normal_tex = nt
+159 	var mat := ShaderMaterial.new()
+160 	mat.shader = _ground_shader
+161 	mat.set_shader_parameter("layout_tex", _layout_tex)
+162 	mat.set_shader_parameter("detail_tex", _detail_tex)
+163 	mat.set_shader_parameter("normal_tex", _normal_tex)
+164 	mat.set_shader_parameter("tint", Color(1, 1, 1, 1))
+165 	mat.set_shader_parameter("map_half", MAP_HALF)
+166 	mat.set_shader_parameter("bump_amount", bump)
+167 	return mat
+168 
+169 
+170 ## 浮空岛顶面：沿用同一张地面布局图，只额外把圆岛外的片元丢弃，露出天空。
+==== 397 455
+397 	wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+398 	// 只向上起伏：水面不会被地面吞掉（水面本身只比地面高 0.02）
+399 	VERTEX.y += (waves(wp.xz, TIME) * 0.5 + 0.5) * wave_strength;
+400 }
+401 
+402 void fragment() {
+403 	vec2 p = wp.xz;
+404 	float t = TIME;
+405 	// 河道沿 (-60,-60)→(60,60) 对角线：d=垂直河心距离(0..10)，along=顺流坐标
+406 	float d = abs(p.x - p.y) * 0.70710678;
+407 	float along = (p.x + p.y) * 0.70710678;
+408 
+409 	// 法线：波高场解析梯度（世界空间 → 视图空间），让高光/天空反射随波起伏
+410 	float h0 = waves(p, t);
+411 	vec2 grad = waves_grad(p, t);
+412 	vec3 n = normalize(vec3(-grad.x * 0.45, 1.0, -grad.y * 0.45));
+413 	vec3 n_view = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
+414 	NORMAL = n_view;
+415 
+416 	// 顺流闪点：高频细纹被慢波调制，形成水光粼粼
+417 	float sparkle = sin(along * 6.0 - t * 2.1 + sin(d * 5.0 + t * 0.8) * 2.0) * 0.5 + 0.5;
+418 	sparkle = smoothstep(0.80, 1.0, sparkle);
+419 
+420 	// 深浅：河心深、近岸浅，叠顺流明暗带
+421 	float center = 1.0 - smoothstep(3.0, 9.2, d);
+422 	float streak = sin(along * 3.4 - t * 1.5 + sin(d * 2.3) * 1.4) * 0.5 + 0.5;
+423 	vec3 col = mix(shallow_color, deep_color, center * 0.95);
+424 	col *= 0.86 + 0.20 * streak;
+425 
+426 	// 岸边过渡：先往湿沙色过渡（避免水面边缘与河滩形成一条硬线），再叠泡沫与水线
+427 	float shore_col = smoothstep(7.6, 9.9, d);
+428 	col = mix(col, vec3(0.30, 0.31, 0.26), shore_col * 0.42);
+429 	// 岸边泡沫：贴岸窄带上随波推进的泡沫 + 湿沙高光（只占岸边一条，别糊满水面）
+430 	float foam_wave = sin(d * 5.4 - t * 2.4 + sin(along * 1.1 + t * 0.6) * 1.6) * 0.5 + 0.5;
+431 	float shore = smoothstep(7.2, 8.8, d) * (1.0 - smoothstep(9.55, 10.1, d));
+432 	float foam = smoothstep(0.48, 0.92, foam_wave) * shore;
+433 	float wet_line = smoothstep(8.7, 9.45, d) * (1.0 - smoothstep(9.6, 10.15, d));
+434 	col = mix(col, foam_color, clamp(foam * 0.62, 0.0, 1.0));
+435 	col = mix(col, foam_color, wet_line * 0.34);
+436 	// 最贴岸的一线湿光：稍稍提亮，让水/沙/石交界有一道自然的水线
+437 	float lip = smoothstep(9.55, 9.95, d) * (1.0 - smoothstep(9.95, 10.1, d));
+438 	col += vec3(0.10, 0.12, 0.11) * lip * (0.6 + 0.4 * sin(along * 2.2 + t * 1.8));
+439 	col += vec3(0.09, 0.13, 0.14) * sparkle;
+440 
+441 	// 菲涅尔：掠射角染天空色，像真实水面反射天光（强度收敛，别把水面洗成天空色）
+442 	float fres = pow(1.0 - clamp(dot(n_view, VIEW), 0.0, 1.0), 5.0);
+443 	col = mix(col, sky_color, clamp(fres * 0.42, 0.0, 0.42));
+444 
+445 	ALBEDO = col;
+446 	ROUGHNESS = mix(0.035, 0.20, smoothstep(0.15, 1.0, h0 * 0.5 + 0.5));
+447 	SPECULAR = 0.78;
+448 	METALLIC = 0.0;
+449 	EMISSION = vec3(0.02, 0.09, 0.10) * (0.35 + 0.45 * center);
+450 }
+451 """
+452 
+453 
+454 # ================= 河道两岸装饰 =================
+455 ## 湿沙河滩 + 半浸礁石 + 芦苇 + 睡莲（纯视觉，无碰撞；MultiMesh 批量，移动端友好）
+==== 455 590
+455 ## 湿沙河滩 + 半浸礁石 + 芦苇 + 睡莲（纯视觉，无碰撞；MultiMesh 批量，移动端友好）
+456 static func spawn_river_banks(parent: Node3D) -> void:
+457 	if parent == null:
+458 		return
+459 	var rng := RandomNumberGenerator.new()
+460 	rng.seed = 20251030
+461 	# 垂直河心方向（世界）= (1,0,-1)/√2；顺流方向 = (1,0,1)/√2
+462 	var perp := Vector3(0.70710678, 0.0, -0.70710678)
+463 
+464 	# 1) 河滩：干沙（外） + 湿沙（内，压到水面边缘下方），两层叠出潮湿过渡带
+465 	var sand_mat := StandardMaterial3D.new()
+466 	sand_mat.albedo_color = Color(0.30, 0.27, 0.215)
+467 	sand_mat.roughness = 0.97
+468 	# 湿沙：更深、更亮（潮湿反光），内沿压到 d≈9.4，与水面泡沫线交叠，消除岸边硬切
+469 	var wet_sand_mat := StandardMaterial3D.new()
+470 	wet_sand_mat.albedo_color = Color(0.215, 0.205, 0.165)
+471 	wet_sand_mat.roughness = 0.55
+472 	wet_sand_mat.metallic = 0.05
+473 	for side in [-1.0, 1.0]:
+474 		var bank := MeshInstance3D.new()
+475 		var pm := PlaneMesh.new()
+476 		pm.size = Vector2(3.4, 132.0)
+477 		bank.mesh = pm
+478 		bank.material_override = sand_mat
+479 		bank.rotation_degrees = Vector3(0, 45, 0)
+480 		bank.position = Vector3(0.0, 0.0125, 0.0) + perp * (side * 12.15)
+481 		parent.add_child(bank)
+482 		# 湿沙内层：宽 1.6，内沿到 d≈9.4（水面到 d=10，重叠 0.6m，被水面盖住一部分）
+483 		var wet := MeshInstance3D.new()
+484 		var wpm := PlaneMesh.new()
+485 		wpm.size = Vector2(1.6, 132.0)
+486 		wet.mesh = wpm
+487 		wet.material_override = wet_sand_mat
+488 		wet.rotation_degrees = Vector3(0, 45, 0)
+489 		wet.position = Vector3(0.0, 0.010, 0.0) + perp * (side * 10.2)   # 低于水面最低点(0.02)，避免 z-fighting
+490 		parent.add_child(wet)
+491 
+492 	# 2) 半浸礁石：扁球体，靠岸散落，部分压在水线下
+493 	var rock_mesh := SphereMesh.new()
+494 	rock_mesh.radius = 0.5
+495 	rock_mesh.height = 0.62
+496 	rock_mesh.radial_segments = 10
+497 	rock_mesh.rings = 5
+498 	var rock_mat := StandardMaterial3D.new()
+499 	rock_mat.albedo_color = Color(0.19, 0.21, 0.215)
+500 	rock_mat.roughness = 0.55
+501 	rock_mat.metallic = 0.18
+502 	var rocks := MultiMesh.new()
+503 	rocks.transform_format = MultiMesh.TRANSFORM_3D
+504 	rocks.mesh = rock_mesh
+505 	rocks.instance_count = 96
+506 	for i in rocks.instance_count:
+507 		var side := -1.0 if (i % 2 == 0) else 1.0
+508 		var off := side * rng.randf_range(9.2, 14.6)
+509 		var along := rng.randf_range(-62.0, 62.0)
+510 		if absf(along) < 7.0:
+511 			along += (14.0 if along >= 0.0 else -14.0)
+512 		var b := Basis().scaled(Vector3(rng.randf_range(0.5, 1.5), rng.randf_range(0.35, 0.95), rng.randf_range(0.5, 1.5)))
+513 		var pos := perp * off + Vector3(0.70710678, 0.0, 0.70710678) * along
+514 		pos.y = rng.randf_range(-0.08, 0.16)
+515 		rocks.set_instance_transform(i, Transform3D(b, pos))
+516 	var rock_node := MultiMeshInstance3D.new()
+517 	rock_node.multimesh = rocks
+518 	rock_node.material_override = rock_mat
+519 	parent.add_child(rock_node)
+520 
+521 	# 3) 芦苇：细柱，岸边成片，略倾斜
+522 	var reed_mesh := CylinderMesh.new()
+523 	reed_mesh.top_radius = 0.012
+524 	reed_mesh.bottom_radius = 0.03
+525 	reed_mesh.height = 1.05
+526 	reed_mesh.radial_segments = 5
+527 	var reed_mat := StandardMaterial3D.new()
+528 	reed_mat.albedo_color = Color(0.27, 0.34, 0.17)
+529 	reed_mat.roughness = 0.9
+530 	var reeds := MultiMesh.new()
+531 	reeds.transform_format = MultiMesh.TRANSFORM_3D
+532 	reeds.mesh = reed_mesh
+533 	reeds.instance_count = 180
+534 	for i in reeds.instance_count:
+535 		var side := -1.0 if (i % 2 == 0) else 1.0
+536 		var off := side * rng.randf_range(10.4, 13.2)
+537 		var along := rng.randf_range(-60.0, 60.0)
+538 		if absf(along) < 7.0:
+539 			along += (14.0 if along >= 0.0 else -14.0)
+540 		var tilt := Basis(Vector3(rng.randf_range(-1.0, 1.0), 0.0, rng.randf_range(-1.0, 1.0)).normalized(), rng.randf_range(0.04, 0.20))
+541 		var b := tilt * Basis().scaled(Vector3(rng.randf_range(0.7, 1.4), rng.randf_range(0.8, 1.5), rng.randf_range(0.7, 1.4)))
+542 		var pos := perp * off + Vector3(0.70710678, 0.0, 0.70710678) * along
+543 		pos.y = 0.5
+544 		reeds.set_instance_transform(i, Transform3D(b, pos))
+545 	var reed_node := MultiMeshInstance3D.new()
+546 	reed_node.multimesh = reeds
+547 	reed_node.material_override = reed_mat
+548 	parent.add_child(reed_node)
+549 
+550 	# 4) 睡莲：贴水面的扁圆盘，靠岸浅水处
+551 	var lily_mesh := CylinderMesh.new()
+552 	lily_mesh.top_radius = 0.46
+553 	lily_mesh.bottom_radius = 0.46
+554 	lily_mesh.height = 0.03
+555 	lily_mesh.radial_segments = 12
+556 	var lily_mat := StandardMaterial3D.new()
+557 	lily_mat.albedo_color = Color(0.20, 0.36, 0.21)
+558 	lily_mat.roughness = 0.62
+559 	var lilies := MultiMesh.new()
+560 	lilies.transform_format = MultiMesh.TRANSFORM_3D
+561 	lilies.mesh = lily_mesh
+562 	lilies.instance_count = 34
+563 	for i in lilies.instance_count:
+564 		var side := -1.0 if (i % 2 == 0) else 1.0
+565 		var off := side * rng.randf_range(6.8, 9.4)
+566 		var along := rng.randf_range(-56.0, 56.0)
+567 		if absf(along) < 7.0:
+568 			along += (14.0 if along >= 0.0 else -14.0)
+569 		var b := Basis().scaled(Vector3(rng.randf_range(0.7, 1.25), 1.0, rng.randf_range(0.7, 1.25)))
+570 		var pos := perp * off + Vector3(0.70710678, 0.0, 0.70710678) * along
+571 		pos.y = 0.055
+572 		lilies.set_instance_transform(i, Transform3D(b, pos))
+573 	var lily_node := MultiMeshInstance3D.new()
+574 	lily_node.multimesh = lilies
+575 	lily_node.material_override = lily_mat
+576 	parent.add_child(lily_node)
+577 
+578 
+579 # ================= 浮空岛背景 =================
+580 ## 整张地图是一块悬在天空中的圆岛：岛缘岩壁 + 下方倒锥岩体 + 墙外树林/草坡/碎石/浮岩。
+581 ## 纯视觉、无碰撞；host 与 LAN 客户端共用，随机种子固定，两端一致。
+582 static func spawn_floating_island(parent: Node3D) -> void:
+583 	if parent == null:
+584 		return
+585 	var rng := RandomNumberGenerator.new()
+586 	rng.seed = 20261031
+587 	_build_island_rim(parent, rng)
+588 	_build_island_underside(parent, rng)
+589 	_spawn_island_grass(parent, rng)
+590 	_spawn_island_trees(parent, rng)
+==== 591 700
+591 	_spawn_island_rocks(parent, rng)
+592 	_spawn_sky_chunks(parent, rng)
+593 
+594 
+595 static func _island_rock_material() -> ShaderMaterial:
+596 	# 岛缘是程序化环带，顶点绕序在移动端不同驱动下容易翻面；直接做双面岩石材质
+597 	var base := DecorMesh.rock_material()
+598 	var sh := (base.shader as Shader).duplicate() as Shader
+599 	sh.code = sh.code.replace(
+600 		"render_mode diffuse_burley, specular_schlick_ggx;",
+601 		"render_mode diffuse_burley, specular_schlick_ggx, cull_disabled;")
+602 	var mat := ShaderMaterial.new()
+603 	mat.shader = sh
+604 	return mat
+605 
+606 
+607 static func _build_island_rim(parent: Node3D, rng: RandomNumberGenerator) -> void:
+608 	var seg := 128
+609 	var levels := [
+610 		{"r": 104.6, "y": -0.04},
+611 		{"r": 107.0, "y": -1.4},
+612 		{"r": 104.0, "y": -4.8},
+613 		{"r": 99.0, "y": -9.2},
+614 		{"r": 91.0, "y": -13.8},
+615 		{"r": 82.0, "y": -17.8},
+616 	]
+617 	var rings: Array = []
+618 	for li in levels.size():
+619 		var lv: Dictionary = levels[li]
+620 		var ring: Array[Vector3] = []
+621 		for i in seg:
+622 			var a := TAU * float(i) / float(seg)
+623 			var n := sin(a * 7.0 + float(li) * 1.7) * 1.8 + sin(a * 13.0 - 0.8 + float(li)) * 1.1
+624 			var r: float = float(lv["r"]) + (n if li > 0 else 0.0)
+625 			var y: float = float(lv["y"]) + (sin(a * 5.0 + float(li) * 2.1) * 0.35 if li > 0 else 0.0)
+626 			ring.append(Vector3(cos(a) * r, y, sin(a) * r))
+627 		rings.append(ring)
+628 
+629 	var st := SurfaceTool.new()
+630 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+631 	for l in range(rings.size() - 1):
+632 		var top: Array = rings[l]
+633 		var bot: Array = rings[l + 1]
+634 		for i in seg:
+635 			var j := (i + 1) % seg
+636 			var a0: Vector3 = top[i]
+637 			var a1: Vector3 = top[j]
+638 			var b0: Vector3 = bot[i]
+639 			var b1: Vector3 = bot[j]
+640 			st.add_vertex(a0); st.add_vertex(a1); st.add_vertex(b0)
+641 			st.add_vertex(a1); st.add_vertex(b1); st.add_vertex(b0)
+642 	st.generate_normals()
+643 	var mi := MeshInstance3D.new()
+644 	mi.name = "IslandCliff"
+645 	mi.mesh = st.commit()
+646 	mi.material_override = _island_rock_material()
+647 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+648 	parent.add_child(mi)
+649 
+650 
+651 static func _build_island_underside(parent: Node3D, rng: RandomNumberGenerator) -> void:
+652 	var cone := MeshInstance3D.new()
+653 	cone.name = "IslandUnderside"
+654 	var cm := CylinderMesh.new()
+655 	cm.top_radius = 84.0
+656 	cm.bottom_radius = 0.0
+657 	cm.height = 28.0
+658 	cm.radial_segments = 48
+659 	cone.mesh = cm
+660 	cone.position.y = -31.5
+661 	cone.material_override = DecorMesh.rock_material()
+662 	cone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+663 	parent.add_child(cone)
+664 	# 岛底倒挂岩柱：长短不一，远看像被撕开后悬空的岩层
+665 	for i in 7:
+666 		var a := TAU * float(i) / 7.0 + rng.randf_range(-0.18, 0.18)
+667 		var rr := rng.randf_range(38.0, 70.0)
+668 		var h := rng.randf_range(10.0, 24.0)
+669 		var spike := MeshInstance3D.new()
+670 		var sm := CylinderMesh.new()
+671 		sm.top_radius = rng.randf_range(5.0, 10.0)
+672 		sm.bottom_radius = rng.randf_range(0.2, 1.2)
+673 		sm.height = h
+674 		sm.radial_segments = 9
+675 		spike.mesh = sm
+676 		spike.position = Vector3(cos(a) * rr, -20.0 - h * 0.5, sin(a) * rr)
+677 		spike.rotation.z = rng.randf_range(-0.12, 0.12)
+678 		spike.material_override = DecorMesh.rock_material()
+679 		spike.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+680 		parent.add_child(spike)
+681 
+682 
+683 static func _spawn_island_grass(parent: Node3D, rng: RandomNumberGenerator) -> void:
+684 	var xforms: Array[Transform3D] = []
+685 	for i in 240:
+686 		var a := rng.randf_range(0.0, TAU)
+687 		var r := rng.randf_range(66.0, 100.0)
+688 		var p := Vector3(cos(a) * r, 0.0, sin(a) * r)
+689 		var s := rng.randf_range(0.75, 1.45)
+690 		xforms.append(Transform3D(Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(s, s, s)), p))
+691 	var grass := _make_cluster("", xforms, 1.05, false, DecorMesh.grass_mesh(), DecorMesh.leaf_material())
+692 	if grass != null:
+693 		grass.name = "IslandGrass"
+694 		parent.add_child(grass)
+695 
+696 
+697 static func _spawn_island_trees(parent: Node3D, rng: RandomNumberGenerator) -> void:
+698 	# 沿四边墙外成排，再在外圈补一圈，形成“城墙外是树林”的包边
+699 	for side in 4:
+700 		for k in range(-5, 6):
+==== 801 960
+801 		var sm := SphereMesh.new()
+802 		sm.radius = 1.0
+803 		sm.height = 1.0
+804 		sm.radial_segments = 7
+805 		sm.rings = 4
+806 		chunk.mesh = sm
+807 		chunk.position = Vector3(cos(a) * r, rng.randf_range(-30.0, -4.0), sin(a) * r)
+808 		chunk.scale = Vector3(rng.randf_range(4.0, 10.0), rng.randf_range(1.5, 4.0), rng.randf_range(4.0, 10.0))
+809 		chunk.rotation.y = rng.randf_range(0.0, TAU)
+810 		chunk.material_override = DecorMesh.rock_material()
+811 		chunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+812 		parent.add_child(chunk)
+813 
+814 
+815 # ================= 布局贴图绘制 =================
+816 
+817 static func _paint_layout() -> Image:
+818 	var size := LAYOUT_SIZE
+819 	var img := Image.create_empty(size, size, false, Image.FORMAT_RGB8)
+820 	var grass := FastNoiseLite.new()
+821 	grass.seed = 7
+822 	grass.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+823 	grass.frequency = 0.045
+824 	var patch := FastNoiseLite.new()
+825 	patch.seed = 31
+826 	patch.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+827 	patch.frequency = 0.016
+828 	for py in size:
+829 		for px in size:
+830 			var x: float = (float(px) + 0.5) / float(size) * MAP_HALF * 2.0 - MAP_HALF
+831 			var z: float = (float(py) + 0.5) / float(size) * MAP_HALF * 2.0 - MAP_HALF
+832 			var n: float = grass.get_noise_2d(x, z) * 0.5 + 0.5          # 0..1 细噪声
+833 			var pt: float = patch.get_noise_2d(x, z) * 0.5 + 0.5         # 0..1 大斑块
+834 
+835 			# 1) 野区草地基底（深浅变化 + 大块阴影）
+836 			var col := Color(0.17, 0.31, 0.14).lerp(Color(0.33, 0.48, 0.21), n)
+837 			col = col.lerp(Color(0.11, 0.20, 0.11), pt * 0.45)
+838 
+839 			# 2) 河道河床（沿 x-z=0 对角线与中路垂直；比草地暗、偏青灰）
+840 			var river_d: float = absf(x - z) * 0.70710678
+841 			col = col.lerp(Color(0.22, 0.28, 0.29).lerp(Color(0.30, 0.36, 0.34), n), _inside(river_d, 13.0, 3.0))
+842 
+843 			# 3) 三路（土黄石路，双色噪声 + 路缘更深）
+844 			var lane: float = _lane_mask(x, z)
+845 			if lane > 0.001:
+846 				var dirt := Color(0.44, 0.40, 0.30).lerp(Color(0.56, 0.51, 0.38), n)
+847 				col = col.lerp(dirt, lane)
+848 				var rim: float = _lane_rim(x, z)
+849 				if rim > 0.001:
+850 					col = col.lerp(Color(0.25, 0.24, 0.19), rim * 0.55)
+851 
+852 			# 4) 高地 / 基地台座（石砖，最后绘制盖住河道与路）
+853 			var hg: float = _high_ground_mask(x, z)
+854 			if hg > 0.001:
+855 				var stone := Color(0.40, 0.42, 0.36).lerp(Color(0.55, 0.56, 0.48), n)
+856 				col = col.lerp(stone, hg * 0.92)
+857 
+858 			# 5) 地图边缘变暗（远景承接雾色，避免看到"断崖"）
+859 			var edge_d: float = maxf(absf(x), absf(z))
+860 			col = col.darkened(clampf((edge_d - 48.0) / 14.0, 0.0, 0.4))
+861 			img.set_pixel(px, py, col)
+862 	return img
+863 
+864 # 距离场软边：d 在 half±feather 之间平滑过渡
+865 static func _inside(d: float, half: float, feather: float) -> float:
+866 	return 1.0 - smoothstep(half - feather, half + feather, d)
+867 
+868 # 三路覆盖度（0..1，软边）：四边路 + 中路对角线（x+z=0 方向，与 _is_on_lane 一致）
+869 static func _lane_mask(x: float, z: float) -> float:
+870 	var m := 0.0
+871 	# 边路贴图一直铺到外墙（±63），与加长后的分路平面一致
+872 	var along_z: float = _inside(absf(z), 61.0, 2.0)
+873 	var along_x: float = _inside(absf(x), 61.0, 2.0)
+874 	m = maxf(m, _inside(absf(absf(x) - 55.0), 8.0, 3.0) * along_z)
+875 	m = maxf(m, _inside(absf(absf(z) - 55.0), 8.0, 3.0) * along_x)
+876 	m = maxf(m, _inside(absf(x + z) * 0.70710678, 7.5, 2.5))
+877 	return m
+878 
+879 # 路缘（路两侧 1.5 单位内的暗边）
+880 static func _lane_rim(x: float, z: float) -> float:
+881 	var m := 0.0
+882 	var along_z: float = _inside(absf(z), 61.0, 2.0)
+883 	var along_x: float = _inside(absf(x), 61.0, 2.0)
+884 	m = maxf(m, _inside(absf(absf(absf(x) - 55.0) - 9.5), 1.6, 1.2) * along_z)
+885 	m = maxf(m, _inside(absf(absf(absf(z) - 55.0) - 9.5), 1.6, 1.2) * along_x)
+886 	m = maxf(m, _inside(absf(absf(x + z) * 0.70710678 - 9.0), 1.6, 1.2))
+887 	return m
+888 
+889 # 高地/基地石材区域：以 (-60,60) 与 (60,-60) 为圆心、半径 35 的扇形范围
+890 static func _high_ground_mask(x: float, z: float) -> float:
+891 	var d1: float = Vector2(x + 60.0, z - 60.0).length()
+892 	var d2: float = Vector2(x - 60.0, z + 60.0).length()
+893 	var m: float = maxf(_inside(d1, 34.0, 4.0), _inside(d2, 34.0, 4.0))
+894 	return m
+895 
+896 # ================= 装饰物散布（MultiMesh） =================
+897 
+898 static func scatter_decorations(parent: Node3D) -> void:
+899 	var rng := RandomNumberGenerator.new()
+900 	rng.seed = 20261029
+901 
+902 	# --- 草丛：野区内成片铺，避开路面/河道/高地 ---
+903 	var grass_xf: Array[Transform3D] = []
+904 	var attempts := 0
+905 	while grass_xf.size() < 360 and attempts < 2400:
+906 		attempts += 1
+907 		var gx: float = rng.randf_range(-56.0, 56.0)
+908 		var gz: float = rng.randf_range(-56.0, 56.0)
+909 		if not _open_ground(gx, gz):
+910 			continue
+911 		var rot: float = rng.randf_range(0.0, TAU)
+912 		var basis := Basis(Vector3.UP, rot)
+913 		grass_xf.append(Transform3D(basis, Vector3(gx, 0.0, gz)))
+914 	var grass := _make_cluster("res://model/grass/grass-large.glb", grass_xf, 1.1, false, DecorMesh.grass_mesh(), DecorMesh.leaf_material())
+915 	if grass != null:
+916 		grass.name = "GrassDecor"
+917 		parent.add_child(grass)
+918 
+919 	# --- 河道两岸石墙：河道沿 x-z=0，两岸在 x-z=±15（垂直距约 10.6），朝向与河道一致 ---
+920 	var wall_xf: Array[Transform3D] = []
+921 	for i in range(-40, 41, 7):
+922 		var s: float = float(i)
+923 		for side in [-1.0, 1.0]:
+924 			var wx: float = s + 7.5 * side
+925 			var wz: float = s - 7.5 * side
+926 			if absf(wx) > 55.0 or absf(wz) > 55.0:
+927 				continue
+928 			# 中路桥面两侧不放墙
+929 			if _lane_mask(wx, wz) > 0.05 or _high_ground_mask(wx, wz) > 0.05:
+930 				continue
+931 			wall_xf.append(Transform3D(Basis(Vector3.UP, -PI * 0.25), Vector3(wx, 0.0, wz)))
+932 	var walls := _make_cluster("res://model/wall/wall.glb", wall_xf, 1.5, true, DecorMesh.wall_mesh(), DecorMesh.rock_material())
+933 	if walls != null:
+934 		walls.name = "RiverWallDecor"
+935 		parent.add_child(walls)
+936 
+937 	# --- 陶罐点缀（基地附近） ---
+938 	var pot_xf: Array[Transform3D] = []
+939 	var pot_spots := [
+940 		Vector3(-46, 0, 46), Vector3(-42, 0, 52), Vector3(-52, 0, 40),
+941 		Vector3(46, 0, -46), Vector3(42, 0, -52), Vector3(52, 0, -40),
+942 		Vector3(-50, 0, -30), Vector3(30, 0, 50), Vector3(50, 0, 30), Vector3(-30, 0, -50),
+943 	]
+944 	for p in pot_spots:
+945 		if not _open_ground(p.x, p.z, 3.0):
+946 			continue
+947 		pot_xf.append(Transform3D(Basis(Vector3.UP, rng.randf_range(0.0, TAU)), Vector3(p.x, 0.0, p.z)))
+948 	var pots := _make_cluster("res://model/pot/pot.glb", pot_xf, 0.9, true)
+949 	if pots != null:
+950 		pots.name = "PotDecor"
+951 		parent.add_child(pots)
+952 
+953 # 是否是可摆放装饰的开阔地（野区，不在路面/河道/高地/外围）
+954 static func _open_ground(x: float, z: float, extra: float = 0.0) -> bool:
+955 	if absf(x) > 57.0 or absf(z) > 57.0:
+956 		return false
+957 	if _lane_mask(x, z) > 0.05:
+958 		return false
+959 	if absf(x - z) * 0.70710678 < 12.5 + extra:   # 河道（x-z=0 对角线两侧）
+960 		return false

@@ -31,6 +31,8 @@ func _ready():
 		vis = DecorMesh.wall_visual_hq(seed_v)
 	else:
 		vis = DecorMesh.wall_visual(seed_v)
+	# 让墙基贴合所在地面高度：分路台面/高地砖面会埋掉墙脚，墙看起来像直接插进地里
+	vis.position.y = _visual_ground_y()
 	add_child(vis)
 	# 较厚的老墙挂常春藤等装饰（少量墙段，控制 draw call）
 	if continuous_len > 0.0 and thick_v > 1.10 and seed_v % 3 == 0:
@@ -55,6 +57,11 @@ func _ready():
 	# 设置碰撞层
 	collision_layer = 1
 	collision_mask = 0
+
+# 墙根视觉基准高度：分路路面 y≈0.14、高地砖面 y≈0.20、野区/外墙 y≈0。
+# 只抬视觉根节点，碰撞体仍贴 y=0，避免影响寻路/推挤。
+func _visual_ground_y() -> float:
+	return DecorMesh.wall_ground_y(position)
 
 func _set_shadow_off(n: Node) -> void:
 	if n is MeshInstance3D:

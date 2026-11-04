@@ -1,0 +1,83 @@
+FILES 3746 BYTES 1006878247
+---LARGEST---
+180858888	.cache\godot47.exe
+90723777	.git\objects\pack\pack-d30cf3c2fd6dc2cca1d2263b5356fa06335ec930.pack
+55344848	tools\bin\cloudflared.exe
+53784905	HonorKing.apk
+51899912	build\honorking.apk
+39514754	build\web\index.wasm
+25407160	build\web\index.pck
+25304780	.cache\userdata_backup\vulkan\pipelines.mobile.intel(r)_arc(tm)_140t_gpu_(16gb).cache
+17966561	replays\r_20261103_114234.rep
+15399535	.cache\userdata_backup\replays\r_20261102_052344.rep
+15291066	.cache\userdata_backup\replays\r_20261102_022810.rep
+13445889	.cache\userdata_backup\replays\r_20261102_034129.rep
+13290644	.godot\imported\NotoSansSC-VariableFont_wght.ttf-f2b952c573120ab0a2c2da3a0816ad68.fontdata
+13207891	.cache\userdata_backup\replays\r_20261101_192630.rep
+13203496	.cache\userdata_backup\replays\r_20261102_015618.rep
+13046253	.cache\userdata_backup\replays\r_20261101_190809.rep
+12427843	.cache\userdata_backup\replays\r_20261102_114226.rep
+11229913	.cache\userdata_backup\replays\r_20261102_050029.rep
+10780290	.cache\userdata_backup\replays\r_20261102_044654.rep
+10628739	.cache\userdata_backup\replays\r_20261102_132138.rep
+8407914	.cache\userdata_backup\replays\r_20261102_005406.rep
+8236445	.cache\userdata_backup\replays\r_20261101_183149.rep
+8232226	.cache\userdata_backup\replays\r_20261101_181100.rep
+8227312	assets\fonts\HarmonyOS_Sans_SC_Medium.ttf
+7104429	.cache\hero_stats_appdata\Godot\app_userdata\HonorKing\logs\godot.log
+6343257	replays\r_20261103_213647.rep
+6250193	data\hero_stats\bench20.err
+6233497	.godot\imported\HarmonyOS_Sans_SC_Medium.ttf-67298050ea318ec33d597a0d2e0515e7.fontdata
+6169851	.cache\userdata_backup\replays\r_20261102_012555.rep
+5229149	.cache\hero_stats_appdata\Godot\app_userdata\HonorKing\logs\godot2026-11-04T11.15.21.log
+4907264	.cache\userdata_backup\replays\r_20261101_233810.rep
+4453965	我的截图\小地图底板错位.png
+4345733	.cache\hero_stats_appdata\Godot\app_userdata\HonorKing\logs\godot2026-11-04T11.17.23.log
+4235589	artifacts\hero_stats_batch\match_001.err
+3984804	.cache\userdata_backup\vulkan\pipelines.forward_plus.intel(r)_arc(tm)_140t_gpu_(16gb).cache
+3975852	.cache\userdata_backup\vulkan\pipelines.forward_plus.intel(r)_arc(tm)_140t_gpu_(16gb).editor.cache
+3635166	.godot\imported\ui_shot.png-8da8eb9b03caaadf7495b9ce444228f8.ctex
+3475092	artifacts\hero_stats_batch\match_002.err
+3396196	.godot\imported\_hitfx_base.png-48713fef4452fcbc491da7cc4bb62374.ctex
+3389268	.godot\imported\shot.png-0c989d394cde645850ceea1d48d247e7.ctex
+3259508	.godot\imported\picker.png-dcdf7528d9c3bb85adfed93b282ab22d.ctex
+3175454	.godot\imported\shot.png-0dd2ac894a01e2275483e0cc24a54a82.ctex
+3173378	.godot\imported\on.png-e329385ef124145ae378a6d11f92aae8.ctex
+3171092	.godot\imported\off.png-d5d26a8abd7251e33a0f4e14fffe213b.ctex
+2966611	.cache\hero_stats_appdata\Godot\app_userdata\HonorKing\logs\godot2026-11-04T11.24.09.log
+2823186	.godot\imported\dragon_bg.png-259f5109159b31db5ceaf67cc85d8abb.ctex
+2702078	.godot\imported\_shot_walk.png-b668673828ab892e363e6a92fb6f75cc.ctex
+2701500	.godot\imported\_shot_bullets.png-fc03cab2ef72887035d27844cb70337e.ctex
+2698278	.godot\imported\_shot_ui_after.png-0b83e8f1312e062de5d02dbbd06413a0.ctex
+2651192	replays\r_20261103_213927.rep
+---EXT---
+.md5	607	55083
+.cfg	541	77137
+(none)	538	6987735
+.cache	284	52408364
+.mp3str	258	53187406
+.uid	239	4670
+.gd	227	5189702
+.scn	202	1953760
+.import	190	157474
+.ctex	177	82251728
+.png	65	13449819
+.glb	63	8499396
+.mp3	59	4442831
+.py	52	239998
+.md	47	362471
+.rep	31	204123610
+.sample	26	99840
+.json	19	138102
+.gdshader	14	26432
+.log	12	19751636
+.xlsx	12	167620
+.tscn	11	29558
+.ps1	6	15888
+.err	5	18694842
+.out	5	4118316
+.txt	4	38485
+.idx	4	118892
+.pack	4	92053319
+.rev	4	16580
+.js	4	294469

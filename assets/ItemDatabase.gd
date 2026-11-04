@@ -822,4 +822,3 @@ func get_recommended_variants(hero_name: String) -> Array:
 func get_recommended_items(hero_name: String) -> Array:
 	var vs := get_recommended_variants(hero_name)
 	return (vs[0] as Array).duplicate() if not vs.is_empty() else []
-

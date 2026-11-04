@@ -899,4 +899,3 @@ func _own_tower_pos(team: int, lane: int) -> Vector3:
 		AiConfig.Lane.MID: return Vector3(0, 0, 0)
 		AiConfig.Lane.CLASH: return Vector3(40, 0, -40)
 	return Vector3.ZERO
-

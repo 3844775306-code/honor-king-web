@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bmrvju3xs5dsh"
-path="res://.godot/imported/小地图.jpg-1cbff0b8bbb9699baba3d18a6b77513a.ctex"
+uid="uid://cw3ci5a3wkm6u"
+path="res://.godot/imported/remoteDebugButton.png-0553f2b2b479c3b90ad61cea2bfd49ea.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://我的截图/小地图.jpg"
-dest_files=["res://.godot/imported/小地图.jpg-1cbff0b8bbb9699baba3d18a6b77513a.ctex"]
+source_file="res://addons/xogot_connect/resources/remoteDebugButton.png"
+dest_files=["res://.godot/imported/remoteDebugButton.png-0553f2b2b479c3b90ad61cea2bfd49ea.ctex"]
 
 [params]
 

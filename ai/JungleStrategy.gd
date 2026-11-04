@@ -396,4 +396,3 @@ func decide() -> void:
 			elif _lane_default_bush != Vector3.ZERO:
 				hero.move_target = _lane_default_bush
 				hero.manual_target = null
-

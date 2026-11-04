@@ -1,0 +1,558 @@
+==== scripts/ui/HealthBarControl.gd 255
+1 class_name HealthBarControl
+2 extends Control
+3 
+4 var max_value: float = 100.0
+5 var current_value: float = 100.0
+6 var team_color: Color = Color.WHITE
+7 var always_show: bool = false
+8 
+9 # 护盾值
+10 var shield_value: float = 0.0
+11 var interfere_value: float = 0.0   # 干扰条剩余比例(0-1)，防御塔被干扰时显示在血条上方
+12 
+13 # 史诗怪物（暴君/主宰/风暴龙王）：大号紫色分格血条，每格 1000 点生命
+14 var epic_mode: bool = false
+15 const EPIC_HP_PER_CELL: float = 1000.0
+16 
+17 # 血条前/旁的金色护盾图标（原初羁绊减伤、防御塔无兵线保护时点亮）
+18 var show_shield_icon: bool = false
+19 
+20 # 受伤闪橙
+21 var damage_flash_amount: float = 0.0
+22 var damage_flash_timer: float = 0.0
+23 
+24 # 回血渐深
+25 var heal_amount: float = 0.0
+26 var heal_timer: float = 0.0
+27 
+28 # 上一帧血量（用于检测变化）
+29 var previous_health: float = 100.0
+30 
+31 # 关联的实体（用于标记绘制等）
+32 var entity: GameEntity = null
+33 
+34 func _ready():
+35 	custom_minimum_size = Vector2(60, 10)
+36 	previous_health = current_value
+37 	set_process(true)
+38 
+39 func _process(delta):
+40 	if damage_flash_timer > 0:
+41 		damage_flash_timer -= delta
+42 		if damage_flash_timer < 0: damage_flash_timer = 0
+43 	if heal_timer > 0:
+44 		heal_timer -= delta
+45 		if heal_timer < 0: heal_timer = 0
+46 	queue_redraw()
+47 
+48 func update_bar(health, max_health, team, shield = 0.0, always_show = false, epic = false):
+49 	# 检测血量变化
+50 	if health < previous_health:
+51 		damage_flash_amount = previous_health - health
+52 		damage_flash_timer = 0.5
+53 		heal_amount = 0.0
+54 		heal_timer = 0.0
+55 	elif health > previous_health:
+56 		heal_amount = health - previous_health
+57 		heal_timer = 0.5
+58 		damage_flash_amount = 0.0
+59 		damage_flash_timer = 0.0
+60 	previous_health = health
+61 
+62 	max_value = max_health
+63 	current_value = health
+64 
+65 	# 根据队伍设置颜色（敌友相对：友方蓝 / 敌方红）
+66 	match team:
+67 		0, 1: team_color = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(int(team)) else Color(1.0, 0.33, 0.264, 1.0)
+68 		2: team_color = Color(0.0, 0.886, 0.431, 1.0)        # 中立（野怪等）
+69 		_: team_color = Color(0.945, 0.925, 0.251, 1.0)      # 默认黄色
+70 
+71 	shield_value = shield
+72 	self.always_show = always_show
+73 	epic_mode = epic
+74 	queue_redraw()
+75 
+76 func _draw():
+77 	if current_value <= 0 and shield_value <= 0 and not always_show:
+78 		return
+79 
+80 	var w = size.x
+81 	var h = size.y
+82 
+83 	if epic_mode:
+84 		_draw_epic_bar(w, h)
+85 		if show_shield_icon:
+86 			_draw_shield_icon(-18.0, h * 0.5, minf(h * 0.44, 14.0), Color(1.0, 0.78, 0.3, 0.98))
+87 		_draw_markers(h)
+88 		return
+89 
+90 	# 干扰条：防御塔被干扰时，血条上方显示灰色剩余时间条
+91 	if interfere_value > 0:
+92 		var iw = w * clampf(interfere_value, 0.0, 1.0)
+93 		draw_rect(Rect2(0, -7, w, 4), Color(0, 0, 0, 0.4))
+94 		draw_rect(Rect2(0, -7, iw, 4), Color(0.55, 0.55, 0.55))
+95 	var total_width = min((current_value + shield_value) / max_value, 1.0) * w
+96 	var health_width = (current_value / max_value) * w
+97 
+98 	# 背景
+99 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.4))
+100 
+101 	# 护盾部分（灰白色，位于血量右侧）
+102 	if shield_value > 0:
+103 		var shield_width = min(shield_value / max_value * w, total_width - health_width)
+104 		draw_rect(Rect2(health_width, 0, shield_width, h), Color(0.8, 0.8, 0.8))
+105 
+106 	# 血量部分（上下分层）
+107 	draw_rect(Rect2(0, 0, health_width, h / 2), team_color.lightened(0.2))
+108 	draw_rect(Rect2(0, h / 2, health_width, h / 2), team_color.darkened(0.2))
+109 
+110 	# 李元芳暗印预判：爆炸前将造成的实际伤害 → 当前血条右端相应段染黄（表示这部分血将被引爆掉）
+111 	if entity and entity.has_method("lyf_mark_summary"):
+112 		var doom_w := _lyf_doom_width(w)
+113 		if doom_w > 0.5:
+114 			draw_rect(Rect2(health_width - doom_w, 0, doom_w, h), Color(1.0, 0.88, 0.18, 0.9))
+115 
+116 	# 受伤闪橙
+117 	if damage_flash_timer > 0:
+118 		var ratio = damage_flash_timer / 0.5
+119 		var flash_width = (damage_flash_amount / max_value) * w * ratio
+120 		draw_rect(Rect2(health_width, 0, flash_width, h), Color.ORANGE)
+121 
+122 	# 回血深色叠加
+123 	if heal_timer > 0:
+124 		var ratio = heal_timer / 0.5
+125 		var heal_width = (heal_amount / max_value) * w
+126 		var color = Color(team_color.r * 0.6, team_color.g * 0.6, team_color.b * 0.6, ratio)
+127 		draw_rect(Rect2(health_width - heal_width, 0, heal_width, h), color)
+128 
+129 	# 边框
+130 	draw_rect(Rect2(Vector2.ZERO, size), Color(team_color.r, team_color.g, team_color.b, 0.5), false, 1.0)
+131 
+132 	_draw_markers(h)
+133 	if show_shield_icon:
+134 		# 防御塔盾图标：更大，且用塔所在队伍的颜色（与血条同色）
+135 		var s := minf(h * 0.72, 19.0)
+136 		_draw_shield_icon(-(s + 9.0), h * 0.5, s, team_color)
+137 
+138 # ---------- 史诗怪物大号紫色分格血条（每格 = 1000 点生命） ----------
+139 func _draw_epic_bar(w: float, h: float) -> void:
+140 	var seg_count := maxi(1, int(ceil(max_value / EPIC_HP_PER_CELL)))
+141 	# 满量程取整到 1000 的整数倍，使格线正好落在每个 1000 血上
+142 	var seg_total := float(seg_count) * EPIC_HP_PER_CELL
+143 	var seg_w := w / float(seg_count)
+144 	var to_w := w / seg_total
+145 	var fill_w := clampf(current_value, 0.0, max_value) * to_w
+146 	var sh_w := clampf(shield_value, 0.0, seg_total - current_value) * to_w
+147 
+148 	var margin := 1.5
+149 	var inset_y := 2.5
+150 	var avail_h := h - inset_y * 2.0
+151 	var cell_color := Color(0.13, 0.05, 0.24, 0.95)   # 空槽深紫
+152 	var top_col := Color(0.8, 0.45, 1.0)               # 填充上段亮紫
+153 	var bot_col := Color(0.46, 0.16, 0.82)             # 填充下段暗紫
+154 
+155 	for i in seg_count:
+156 		var x0: float = i * seg_w
+157 		var x1: float = minf((i + 1.0) * seg_w, w)
+158 		if x1 - x0 <= margin * 2.0:
+159 			continue
+160 		var cell := Rect2(x0 + margin, inset_y, x1 - x0 - margin * 2.0, avail_h)
+161 		draw_rect(cell, cell_color)
+162 		var filled := clampf(fill_w - cell.position.x, 0.0, cell.size.x)
+163 		if filled > 0.0:
+164 			draw_rect(Rect2(cell.position.x, cell.position.y, filled, avail_h * 0.5), top_col)
+165 			draw_rect(Rect2(cell.position.x, cell.position.y + avail_h * 0.5, filled, avail_h * 0.5), bot_col)
+166 
+167 	# 护盾白段（右侧叠置，罕见）
+168 	if sh_w > 0.0:
+169 		var sh_x := clampf(fill_w, 0.0, w)
+170 		var sh_use := clampf(sh_w, 0.0, w - sh_x)
+171 		if sh_use > 0.0:
+172 			draw_rect(Rect2(sh_x, inset_y, sh_use, avail_h), Color(0.9, 0.9, 0.95, 0.95))
+173 
+174 	# 受伤闪橙（贴血量右边界）
+175 	if damage_flash_timer > 0.0:
+176 		var ratio := damage_flash_timer / 0.5
+177 		var fw := damage_flash_amount * to_w * ratio
+178 		if fw > 0.0:
+179 			draw_rect(Rect2(fill_w, inset_y, minf(fw, w - fill_w), avail_h), Color(1.0, 0.55, 0.1, 0.9))
+180 
+181 	# 回血深色叠加（贴血量左边界）
+182 	if heal_timer > 0.0:
+183 		var ratio := heal_timer / 0.5
+184 		var hw2 := heal_amount * to_w
+185 		if hw2 > 0.0:
+186 			var col := Color(top_col.r * 0.55, top_col.g * 0.55, top_col.b * 0.55, ratio * 0.6)
+187 			draw_rect(Rect2(maxf(fill_w - hw2, 0.0), inset_y, hw2, avail_h), col)
+188 
+189 	# 暗印预判黄段（贴当前血量右尾，跨分格透明覆盖）
+190 	var doom := _lyf_doom_amount()
+191 	if doom > 0.0:
+192 		var dw := doom * to_w
+193 		if dw > 0.5:
+194 			draw_rect(Rect2(maxf(fill_w - dw, 0.0), inset_y, dw, avail_h), Color(1.0, 0.88, 0.18, 0.7))
+195 
+196 	# 亮紫外框
+197 	draw_rect(Rect2(0, 0, w, h), Color(1.0, 0.9, 1.0, 0.5), false, 1.5)
+198 
+199 # ---------- 李元芳暗印预判：黄色段（当前血条右尾被引爆的部分） ----------
+200 func _lyf_doom_amount() -> float:
+201 	if not (entity and entity.has_method("lyf_mark_summary")):
+202 		return 0.0
+203 	var lsum = entity.lyf_mark_summary()
+204 	if lsum.size() == 0:
+205 		return 0.0
+206 	var pred_total := 0.0
+207 	for lm in lsum:
+208 		pred_total += float(lm["pred"])
+209 	return clampf(pred_total - shield_value, 0.0, current_value)
+210 func _lyf_doom_width(w: float) -> float:
+211 	return (_lyf_doom_amount() / max_value) * w  # 调用侧以显式 : float 声明承接（防 := 推断歧义）
+212 
+213 # ---------- 血条下方的英雄标记文字 ----------
+214 func _draw_markers(h: float) -> void:
+215 	if not (entity and (entity.has_method("get_marker_sources") or entity.has_method("lyf_mark_summary"))):
+216 		return
+217 	var font = UiKit.font()
+218 	var marker_strs = []
+219 	if entity.has_method("get_marker_sources"):
+220 		var sources = entity.get_marker_sources()
+221 		for src in sources:
+222 			var count = entity.count_markers(src)
+223 			if count > 0:
+224 				marker_strs.append("%s %d层" % [src.display_name, count])
+225 	if entity.has_method("lyf_mark_summary"):
+226 		for lm in entity.lyf_mark_summary():
+227 			var src = lm["source"]
+228 			var _suff := ("%d层" % int(lm["stacks"])) if int(lm["stacks"]) > 0 else ""
+229 			marker_strs.append("%s·暗印%s" % [src.display_name, _suff])
+230 	if marker_strs.size() == 0:
+231 		return
+232 	var marker_str = " ".join(marker_strs)
+233 	var marker_size = 20
+234 	UiKit.text(self, Vector2(0, h - 25), marker_str, marker_size, Color.YELLOW,
+235 		HORIZONTAL_ALIGNMENT_CENTER, -1.0)
+236 
+237 # ---------- 金色盾形小图标 ----------
+238 func _draw_shield_icon(cx: float, cy: float, s: float, col: Color) -> void:
+239 	var pts := PackedVector2Array()
+240 	pts.append(Vector2(-0.55 * s, -0.85 * s))
+==== scripts/ui/WorldBarPainter.gd 427
+1 extends Control
+2 ## 世界血条合批绘制：由 HUD 每帧填 rows（屏幕坐标/数值已算好），本节点一次性画完。
+3 ## 质感：渐变填充 + 顶部高光 + 底部暗边 + 中缝 + 1px 边框/队伍色外框 + 投影 + 残血拖尾 + 低血脉冲；
+4 ## 文字：合成粗体 + 阴影 + 描边；名称在上、数值在下，居中。
+5 
+6 var rows: Array = []          # 本帧可见行（HUD 直接复用 row 字典，不新建）
+7 var _had_rows: bool = false   # 上一帧是否画过血条（用于“清空后补一次重绘”）
+8 var _font: Font = null
+9 var _font_bold: FontVariation = null
+10 var _t := 0.0
+11 
+12 # —— 缓存纹理/材质（首次用到才建）——
+13 
+14 const MarkerIconScript = preload("res://scripts/ui/MarkerIcon.gd")
+15 const OUTLINE := Color(0, 0, 0, 0.92)
+16 const SHADOW := Color(0, 0, 0, 0.55)
+17 const BAR_BG_TOP := Color(0.11, 0.12, 0.16, 0.96)
+18 const BAR_BG_BOT := Color(0.06, 0.07, 0.10, 0.96)
+19 
+20 ## 单位血条尺寸必须跟随模型实际体型：小兵按兵种高度、水晶按加宽体型
+21 static func minion_bar_scale(sub_type: String) -> float:
+22 	match sub_type:
+23 		"super":
+24 			return 2.25
+25 		"dragon", "storm", "shadow_dragon":
+26 			return 2.475
+27 		_:
+28 			return 1.5
+29 
+30 
+31 static func turret_bar_size(sub_type: String) -> Vector2:
+32 	# 水晶放大2倍：380×24 -> 760×48；普通防御塔缩为2/3：600×44 -> 400×29.33
+33 	return Vector2(760.0, 48.0) if sub_type == "crystal" else Vector2(400.0, 29.33)
+34 
+35 
+36 func _ready() -> void:
+37 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+38 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+39 	_font = UiKit.font()
+40 	set_process(true)
+41 
+42 func _process(delta: float) -> void:
+43 	_t += delta
+44 	# 有血条要画；或上一帧还有血条、这一帧没了 → 必须再重绘一次把旧血条擦掉。
+45 	# 否则最后一个可见单位死亡/离开视野后，它的血条会一直留在屏幕上，
+46 	# 直到下一次有血条出现触发重绘（表现就是“单位死了血条残留一会”）。
+47 	if not rows.is_empty():
+48 		_had_rows = true
+49 		queue_redraw()
+50 	elif _had_rows:
+51 		_had_rows = false
+52 		queue_redraw()
+53 
+54 func _draw() -> void:
+55 	for r in rows:
+56 		if bool(r.get("epic", false)):
+57 			_draw_epic(r)
+58 		else:
+59 			_draw_unit(r)
+60 
+61 # ============================ 资源缓存 ============================
+62 func _bold() -> Font:
+63 	if _font_bold == null:
+64 		var fv := FontVariation.new()
+65 		fv.base_font = _font
+66 		fv.variation_embolden = 0.45
+67 		_font_bold = fv
+68 	return _font_bold if _font_bold != null else _font
+69 
+70 # ============================ 普通单位 ============================
+71 func _draw_unit(r: Dictionary) -> void:
+72 	var w: float = float(r["w"])
+73 	var h: float = float(r["h"])
+74 	if w <= 0.0 or h <= 0.0:
+75 		return
+76 	var p: Vector2 = r["pos"]
+77 	var hp: float = float(r["hp"])
+78 	var mx: float = maxf(1.0, float(r["max_hp"]))
+79 	var shield: float = float(r.get("shield", 0.0))
+80 	var tc: Color = r["team_color"]
+81 	var team: int = int(r.get("team", 0))
+82 	# 补刀提示：正在攻击且一次普攻即可击杀 → 整条血条改为灰白（带呼吸亮边）
+83 	var last_hit: bool = bool(r.get("last_hit", false))
+84 	var lh_pulse: float = 0.0
+85 	if last_hit:
+86 		lh_pulse = 0.5 + 0.5 * sin(_t * 7.0)
+87 		tc = Color(0.90, 0.92, 0.95).lerp(Color(1.0, 1.0, 1.0), lh_pulse * 0.35)
+88 	var top := Rect2(p, Vector2(w, h))
+89 	var hw: float = clampf(hp / mx, 0.0, 1.0) * w
+90 
+91 	# 投影（两层，软化）
+92 	draw_rect(Rect2(p + Vector2(1.5, 2.5), Vector2(w, h)), Color(0, 0, 0, 0.18))
+93 	draw_rect(Rect2(p + Vector2(2.5, 3.5), Vector2(w, h)), Color(0, 0, 0, 0.10))
+94 
+95 	# 外框：深色底 + 队伍色细边
+96 	draw_rect(Rect2(p - Vector2(1, 1), Vector2(w + 2, h + 2)), Color(0.02, 0.03, 0.05, 0.94))
+97 	draw_rect(Rect2(p - Vector2(1, 1), Vector2(w + 2, h + 2)), Color(tc.r, tc.g, tc.b, 0.34), false, 1.0)
+98 	if last_hit:
+99 		# 补刀提示外光：白色呼吸描边 + 顶部一道亮线
+100 		draw_rect(Rect2(p - Vector2(1.5, 1.5), Vector2(w + 3, h + 3)),
+281 # 左对齐绘制（英雄名用途由 HeroInfoControl 处理，这里仅备用）
+282 func _text_left(txt: String, pos: Vector2, fs: int, col: Color) -> void:
+283 	var f := _bold()
+284 	draw_string(f, pos + Vector2(1.2, 1.5), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, SHADOW)
+285 	draw_string_outline(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, OUTLINE)
+286 	draw_string(f, pos, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+287 
+288 # ============================ 史诗怪（紫色分格） ============================
+289 func _draw_epic(r: Dictionary) -> void:
+290 	var w: float = float(r["w"])
+291 	var h: float = float(r["h"])
+292 	var p: Vector2 = r["pos"]
+293 	var hp: float = float(r["hp"])
+294 	var mx: float = maxf(1.0, float(r["max_hp"]))
+295 	var shield: float = float(r.get("shield", 0.0))
+296 	var cell := 1000.0
+297 	var seg_count := maxi(1, int(ceil(mx / cell)))
+298 	var seg_total := float(seg_count) * cell
+299 	var seg_w := w / float(seg_count)
+300 	var to_w := w / seg_total
+301 	var fill_w: float = clampf(hp, 0.0, mx) * to_w
+302 	var sh_w: float = clampf(shield, 0.0, seg_total - hp) * to_w
+303 
+304 	var margin := 1.5
+305 	var inset_y := 2.5
+306 	var avail_h: float = h - inset_y * 2.0
+307 	var cell_top := Color(0.16, 0.07, 0.28, 0.96)
+308 	var cell_bot := Color(0.10, 0.04, 0.18, 0.96)
+309 	var top_col := Color(0.86, 0.52, 1.0)
+310 	var bot_col := Color(0.44, 0.14, 0.80)
+311 
+312 	# 投影 + 外框发光
+313 	draw_rect(Rect2(p + Vector2(2, 3), Vector2(w, h)), Color(0, 0, 0, 0.22))
+314 	draw_rect(Rect2(p - Vector2(1.5, 1.5), Vector2(w + 3, h + 3)), Color(0.06, 0.02, 0.10, 0.95), false, 2.0)
+315 
+316 	for i in seg_count:
+317 		var x0: float = float(i) * seg_w
+318 		var x1: float = minf(float(i + 1) * seg_w, w)
+319 		if x1 - x0 <= margin * 2.0:
+320 			continue
+321 		var rc := Rect2(p + Vector2(x0 + margin, inset_y), Vector2(x1 - x0 - margin * 2.0, avail_h))
+322 		draw_rect(rc, cell_top)
+323 		draw_rect(Rect2(rc.position + Vector2(0, rc.size.y * 0.55), Vector2(rc.size.x, rc.size.y * 0.45)), cell_bot)
+324 		var filled: float = clampf(fill_w - rc.position.x + p.x, 0.0, rc.size.x)
+325 		if filled > 0.0:
+326 			draw_rect(Rect2(rc.position, Vector2(filled, avail_h * 0.5)), top_col)
+327 			draw_rect(Rect2(rc.position + Vector2(0, avail_h * 0.5), Vector2(filled, avail_h * 0.5)), bot_col)
+328 			draw_rect(Rect2(rc.position, Vector2(filled, 2.0)), Color(1, 1, 1, 0.35))
+329 		# 每格高光竖边
+330 		draw_line(rc.position + Vector2(0.5, 0), rc.position + Vector2(0.5, rc.size.y), Color(0, 0, 0, 0.45), 1.0)
+331 
+332 	# 残血拖尾
+333 	var lag: float = clampf(float(r.get("lag", hp)), 0.0, mx) * to_w
+334 	if lag > fill_w + 0.5:
+335 		draw_rect(Rect2(p + Vector2(fill_w, inset_y), Vector2(lag - fill_w, avail_h)), Color(1.0, 0.94, 0.86, 0.38))
+336 		draw_rect(Rect2(p + Vector2(lag - 1.5, inset_y), Vector2(1.5, avail_h)), Color(1, 0.92, 1.0, 0.8))
+337 
+338 	if sh_w > 0.0:
+339 		var sh_x: float = clampf(fill_w, 0.0, w)
+340 		var sh_use: float = clampf(sh_w, 0.0, w - sh_x)
+341 		if sh_use > 0.0:
+342 			draw_rect(Rect2(p + Vector2(sh_x, inset_y), Vector2(sh_use, avail_h)), Color(0.88, 0.90, 0.98, 0.94))
+343 			draw_rect(Rect2(p + Vector2(sh_x, inset_y), Vector2(sh_use, 2.0)), Color(1, 1, 1, 0.6))
+344 
+345 	var ft: float = float(r.get("flash_t", 0.0))
+346 	if ft > 0.0:
+347 		var fw: float = float(r.get("flash_amt", 0.0)) * to_w * (ft / 0.5)
+348 		if fw > 0.5:
+349 			draw_rect(Rect2(p + Vector2(fill_w, inset_y), Vector2(minf(fw, w - fill_w), avail_h)),
+350 				Color(1.0, 0.52, 0.10, 0.85))
+351 
+352 	var ht: float = float(r.get("heal_t", 0.0))
+353 	if ht > 0.0:
+354 		var hw2: float = float(r.get("heal_amt", 0.0)) * to_w
+355 		if hw2 > 0.5:
+356 			draw_rect(Rect2(p + Vector2(maxf(fill_w - hw2, 0.0), inset_y), Vector2(hw2, avail_h)),
+357 				Color(top_col.r * 0.5, top_col.g * 0.5, top_col.b * 0.5, ht / 0.5 * 0.55))
+358 
+359 	var doom: float = float(r.get("doom", 0.0))
+360 	if doom > 0.0:
+361 		var dw: float = doom * to_w
+362 		if dw > 0.5:
+363 			draw_rect(Rect2(p + Vector2(maxf(fill_w - dw, 0.0), inset_y), Vector2(dw, avail_h)),
+364 				Color(1.0, 0.86, 0.18, 0.72))
+365 
+366 	# 亮紫外框 + 顶部高光
+367 	draw_rect(Rect2(p, Vector2(w, h)), Color(1.0, 0.90, 1.0, 0.55), false, 1.5)
+368 	draw_line(Vector2(p.x, p.y), Vector2(p.x + w, p.y), Color(1, 1, 1, 0.16), 1.0)
+369 
+370 	if bool(r.get("show_name", false)):
+371 		var nm: String = str(r.get("name_text", ""))
+372 		if nm != "":
+373 			_text_center(nm, p + Vector2(0, -12.0), w, 24, Color(0.95, 0.84, 1.0))
+374 	if bool(r.get("show_numbers", false)):
+375 		var num: String = str(r.get("num_text", ""))
+376 		if num != "":
+377 			_text_center(num, p + Vector2(0, h + 26.0), w, 17, Color(1, 1, 1, 0.96))
+378 	var emlist: Array = r.get("marker_list", [])
+379 	if not emlist.is_empty():
+380 		var emr := 16.0
+==== scripts/ui/HUD.gd 281
+101 	# 英雄血条被顶部中央战况带遮挡：锚点整体下移，避开 band
+102 	var world_pos = entity.global_position + Vector3.UP * (entity.body_radius * 2.0 + 1.2)
+103 	# 锚点在相机后方（含第一人称自身：锚点位于相机正上方，深度≈0）时隐藏，避免 unproject 投影错乱
+104 	if cam_forward.dot(world_pos - cam.global_position) <= 0.3:
+105 		info.visible = false
+106 		return
+107 	info.visible = true
+108 	var screen_pos = cam.unproject_position(world_pos)
+109 	info.position = screen_pos - info.custom_minimum_size * info.scale / 2.0
+110 	info.queue_redraw()
+111 
+112 # 非英雄单位：屏幕剔除 + 距离 LOD，然后填一行交给 WorldBarPainter
+113 func _update_unit_row(entity, cam, cam_forward: Vector3, cam_pos: Vector3, vp_rect: Rect2, delta: float) -> void:
+114 	var is_turret: bool = entity is Turret
+115 	var is_monster: bool = entity is JungleMonster
+116 	var is_epic: bool = is_monster and (entity as JungleMonster).is_epic()
+117 	var dist: float = cam_pos.distance_to(entity.global_position)
+118 	# 小兵：远处直接舍弃（原系统给全图每个兵建 Control + Label 两个节点）
+119 	if not (is_turret or is_monster) and dist > 44.0:
+120 		return
+121 
+122 	var anchor: float = entity.body_radius * 2.0 + 1.0
+123 	if entity.has_method("bar_anchor_height"):
+124 		anchor = entity.bar_anchor_height()
+125 	var world_pos: Vector3 = entity.global_position + Vector3.UP * anchor
+126 	if cam_forward.dot(world_pos - cam.global_position) <= 0.3:
+127 		return
+128 	var sp: Vector2 = cam.unproject_position(world_pos)
+129 	if not vp_rect.has_point(sp):
+130 		return
+131 
+132 	var hp: float = entity.health
+133 	var mx: float = maxf(1.0, entity.max_health)
+134 	# 满血小兵且在中远距离：只画缩小细条（不带文字），避免屏幕被“320/320”塞满
+135 	var small_bar: bool = not (is_turret or is_monster) and hp >= mx and dist > 20.0
+136 
+137 	var row = _bar_rows.get(entity)
+138 	if row == null:
+139 		row = {
+140 			"lag": hp, "flash_t": 0.0, "flash_amt": 0.0, "heal_t": 0.0, "heal_amt": 0.0,
+141 			"prev_hp": hp, "num_key": -1, "num_text": "", "marker_list": [],
+142 			"disp_name": str(entity.get("display_name") if "display_name" in entity else "??"),
+143 		}
+144 		_bar_rows[entity] = row
+145 
+146 	var prev: float = float(row["prev_hp"])
+147 	if hp < prev:
+148 		row["flash_amt"] = prev - hp
+149 		row["flash_t"] = 0.5
+150 		row["heal_t"] = 0.0
+151 	elif hp > prev:
+152 		row["heal_amt"] = hp - prev
+153 		row["heal_t"] = 0.5
+154 		row["flash_t"] = 0.0
+155 		row["lag"] = hp
+156 	row["prev_hp"] = hp
+157 	var ft: float = float(row["flash_t"])
+158 	var ht: float = float(row["heal_t"])
+159 	if ft > 0.0: row["flash_t"] = maxf(0.0, ft - delta)
+160 	if ht > 0.0: row["heal_t"] = maxf(0.0, ht - delta)
+161 	var lag: float = float(row["lag"])
+162 	if lag > hp:
+163 		lag = lerpf(lag, hp, clampf(delta * 7.0, 0.0, 1.0))
+164 		if lag - hp < 1.0: lag = hp
+165 	else:
+166 		lag = hp
+167 	row["lag"] = lag
+168 
+169 	# 尺寸：跟随模型实际体型（小兵已放大1.5倍；水晶已缩半但仍比普通塔宽）
+170 	var w: float = 110.0
+171 	var h: float = 15.0
+172 	if is_turret:
+173 		var tsz: Vector2 = BarPainterScript.turret_bar_size(str(entity.get("display_name")))
+174 		w = tsz.x
+175 		h = tsz.y
+176 	elif is_epic:
+177 		var segs: int = maxi(1, int(ceil(mx / 1000.0)))
+178 		w = clampf(float(segs) * 22.0, 380.0, 880.0)
+179 		h = 30.0
+180 	elif entity is Minion:
+181 		var ms: float = BarPainterScript.minion_bar_scale(str((entity as Minion).display_name))
+182 		w *= ms
+183 		h *= ms
+184 	if small_bar:
+185 		var ss: float = BarPainterScript.minion_bar_scale(str((entity as Minion).display_name)) if entity is Minion else 1.0
+186 		w = 72.0 * ss
+187 		h = 8.0 * ss
+188 	row["w"] = w
+189 	row["h"] = h
+190 	row["pos"] = sp - Vector2(w, h) * 0.5
+191 	row["hp"] = hp
+192 	row["max_hp"] = mx
+193 	row["epic"] = is_epic
+194 	# 野怪 / 主宰先锋：血条每 1000 血一条分隔线；塔保持 2000 一格
+195 	var is_vanguard := false
+196 	if entity is Minion:
+197 		# 主宰先锋：minion_type 未赋值（默认 melee），实际类型在 display_name 上
+198 		var mtype := str((entity as Minion).display_name)
+199 		is_vanguard = mtype in ["dragon", "storm", "shadow_dragon"]
+200 	row["ticks"] = is_turret or is_monster or is_vanguard
+201 	row["tick_step"] = 2000.0 if is_turret else 1000.0
+202 
+203 	row["team"] = int(entity.team)
+204 	# 玩家自己的血条恒为绿色（与阵营无关）
+205 	var _bm := get_tree().get_first_node_in_group("battle_manager") as BattleManager
+206 	if _bm and _bm.hero and is_instance_valid(_bm.hero) and entity == _bm.hero:
+207 		row["team_color"] = Color(0.33, 0.95, 0.42, 1.0)
+208 	else:
+209 		match int(entity.team):
+210 			0, 1: row["team_color"] = Color(0.0, 0.886, 1.0, 1.0) if Config.is_ally(int(entity.team)) else Color(1.0, 0.33, 0.264, 1.0)
+211 			2: row["team_color"] = Color(0.0, 0.886, 0.431, 1.0)
+212 			_: row["team_color"] = Color(0.945, 0.925, 0.251, 1.0)
+213 
+214 	row["interfere"] = 0.0
+215 	# 补刀提示（放宽）：屏幕内任意敌方单位，剩余血量 < 玩家一次普攻（按护甲减免后）→ 血条转灰白

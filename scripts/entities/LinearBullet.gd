@@ -17,7 +17,7 @@ func _ready():
 	# 视觉
 	var mesh = MeshInstance3D.new()
 	mesh.mesh = SphereMesh.new()
-	mesh.mesh.radius = 0.2
+	mesh.mesh.radius = 0.38
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(mesh)
 	var mat = StandardMaterial3D.new()
@@ -27,7 +27,7 @@ func _ready():
 	# 碰撞
 	var col = CollisionShape3D.new()
 	col.shape = SphereShape3D.new()
-	col.shape.radius = 0.3
+	col.shape.radius = 0.65
 	add_child(col)
 	body_entered.connect(_on_body_entered)
 
