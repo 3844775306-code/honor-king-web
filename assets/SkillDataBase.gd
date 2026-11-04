@@ -629,8 +629,9 @@ func apply_skills(hero:Hero,skill_id: int,pos):
 					bullet2.damage_range=4
 					bullet2.slow_dur = 1.5
 					bullet2.slow_per = 0.125+0.125*level
-					bullet2.position=bpos
-					bullet2.set_goal(bpos)
+					var gp_bpos := Vector3(bpos.x, Config.GROUND_FX_Y, bpos.z)
+					bullet2.position=gp_bpos
+					bullet2.set_goal(gp_bpos)
 					hero.get_parent().add_child(bullet2)
 					await hero.get_tree().create_timer(1).timeout
 				water_zone.queue_free()
@@ -2754,7 +2755,8 @@ func _create_water_splash(parent: Node, pos: Vector3):
 # 创建水区域（甄姬大招用）
 func _create_water_zone(parent: Node, pos: Vector3, radius: float, team: int = -1) -> Node3D:
 	var zone_root = Node3D.new()
-	zone_root.position = pos
+	# 地面水域统一贴地：bpos 可能来自子弹/目标高度，不能直接拿来当水面Y
+	zone_root.position = Vector3(pos.x, Config.GROUND_FX_Y, pos.z)
 	# 水面圆盘（抬高到地面之上并加亮：原先贴地且颜色与河道同色，完全不可见）
 	var pool = MeshInstance3D.new()
 	pool.mesh = CylinderMesh.new()
@@ -2795,9 +2797,11 @@ func _create_water_zone(parent: Node, pos: Vector3, radius: float, team: int = -
 		NetSession.push_net_fx(NetSession.FX_WATER_ZONE, Vector3(pos.x, 0.0, pos.z), -1, radius, 4.0, "甄姬")
 	return zone_root
 func _create_water_pulse(parent: Node, pos: Vector3, radius: float, caster = null):
+	# 地面水花统一贴地，避免沿用 bpos 的空中高度
+	var gp := Vector3(pos.x, Config.GROUND_FX_Y, pos.z)
 	# 扩展冲击波
 	var wave = MeshFactory.create_torus_ring(0.2, 0.5, Color(0.3, 0.6, 1.0, 0.7), true, 0.6, true)
-	wave.position = pos + Vector3.UP * 0.3
+	wave.position = gp + Vector3.UP * 0.3
 	parent.add_child(wave)
 	var wt = create_tween()
 	wt.set_parallel(true)
@@ -2806,7 +2810,7 @@ func _create_water_pulse(parent: Node, pos: Vector3, radius: float, caster = nul
 	wt.tween_callback(wave.queue_free).set_delay(0.5)
 	# 水柱喷发
 	var spout = MeshFactory.create_cylinder(0.3, 0.6, 0.5, Color(0.25, 0.55, 0.9, 0.7))
-	spout.position = pos + Vector3.UP * 0.25
+	spout.position = gp + Vector3.UP * 0.25
 	parent.add_child(spout)
 	var st = create_tween()
 	st.set_parallel(true)
@@ -2820,7 +2824,7 @@ func _create_water_pulse(parent: Node, pos: Vector3, radius: float, caster = nul
 	for i in range(12):
 		var angle = deg_to_rad(i * 30.0)
 		var drop = MeshFactory.create_sphere(0.1, Color(0.3, 0.6, 1.0, 0.8), true)
-		drop.position = pos + Vector3.UP * 0.5
+		drop.position = gp + Vector3.UP * 0.5
 		parent.add_child(drop)
 		var dx = cos(angle) * (1.5 + randf() * 2.5)
 		var dz = sin(angle) * (1.5 + randf() * 2.5)

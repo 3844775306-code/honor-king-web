@@ -734,7 +734,8 @@ func on_hit():
 				
 				target.take_damage(fire_damage, source, is_magic,-2, 1)
 			if source.display_name == "甄姬" and skill_id == 3:
-				source.skillapply.bpos = target.global_position 
+				# 水区按地面高度结算，目标可能站在高地/空中受击，不能直接复制其Y
+				source.skillapply.bpos = Vector3(target.global_position.x, Config.GROUND_FX_Y, target.global_position.z)
 				source.skillapply.bpos_valid = true
 			if source.display_name == "马超" and skill_id == 1 :
 				if target.health<=0:

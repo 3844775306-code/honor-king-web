@@ -5417,33 +5417,29 @@ func level_up():
 	_play_level_up_fx()
 
 
-## 升级动画：金色光柱 + 环形冲击 + 符文 + 上浮等级字
+## 升级表现：只给本地玩家一个克制的金环 + 等级字；AI 升级不再刷屏
 func _play_level_up_fx() -> void:
-	if not is_inside_tree() or Vfx.quality <= 0:
+	if not is_inside_tree() or Vfx.quality <= 0 or is_ai:
 		return
 	var gold := Color(1.0, 0.82, 0.28)
-	var hero_col: Color = Vfx.color_for_hero(display_name)
-	Vfx.pillar(global_position, gold, 2.2, 7.0, 0.75)
-	Vfx.nova(global_position, hero_col, 3.2)
-	Vfx.sigil(global_position, gold, 2.6, 0.8)
-	Vfx.cast_burst(display_name, global_position + Vector3.UP * 1.0, Vector3.UP, 1.2)
+	Vfx.sigil(global_position, gold, 1.8, 0.55)
 	var host: Node = get_parent()
 	if host == null:
 		return
 	var lbl := Label3D.new()
 	lbl.text = "LEVEL %d" % level
-	lbl.font_size = 128
-	lbl.outline_size = 28
-	lbl.modulate = Color(1.0, 0.88, 0.35, 1.0)
+	lbl.font_size = 64
+	lbl.outline_size = 12
+	lbl.modulate = Color(1.0, 0.88, 0.35, 0.92)
 	lbl.outline_modulate = Color(0.08, 0.05, 0.0, 0.9)
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lbl.no_depth_test = true
-	lbl.global_position = global_position + Vector3.UP * 3.2
+	lbl.global_position = global_position + Vector3.UP * 2.6
 	host.add_child(lbl)
 	var tw := lbl.create_tween()
 	tw.set_parallel(true)
-	tw.tween_property(lbl, "global_position:y", lbl.global_position.y + 1.4, 0.85)
-	tw.tween_property(lbl, "modulate:a", 0.0, 0.85)
+	tw.tween_property(lbl, "global_position:y", lbl.global_position.y + 0.8, 0.7)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.7)
 	tw.chain().tween_callback(lbl.queue_free)
 
 var bonus_attack_speed: float = 0.0   # 来自装备的攻速百分比加成
