@@ -22,11 +22,11 @@ var _intro_time: float = 0.0
 var _intro_start: Vector3 = Vector3.ZERO
 var _intro_end: Vector3 = Vector3.ZERO
 const INTRO_DURATION: float = 2.8
-# 固定俯角 -60° 的跟随机位：12/tan60°≈6.93，让镜头正对英雄脚下的地面点（英雄居中）
-const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 2.12)
+# 固定俯角 -70° 的跟随机位：12/tan70°≈4.37，让镜头正对英雄脚下的地面点（英雄居中）
+const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 4.37)
 const HERO_BAR_CENTER_UP := 4.2   # 主英雄血条锚点：body_radius1.5*2+1.2；相机目标上移使血条位于屏幕正中
-const CAMERA_TARGET_WIDTH := 20.0   # 屏幕中心水平线对应的战场宽度（米）
-const CAMERA_PITCH_DEG := 80.0      # 跟随机位俯角
+const CAMERA_TARGET_WIDTH := 25.0   # 屏幕中心水平线对应的战场宽度（米）
+const CAMERA_PITCH_DEG := 70.0      # 跟随机位俯角
 var selected_summoner: String = "flash"
 var selected_skin_id: String = ""
 var selected_hero_type: String = ""
