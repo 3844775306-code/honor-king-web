@@ -1055,6 +1055,27 @@ func play_announce(key: String, to_net := false) -> void:
 
 ## 开局链：按每条实际时长顺次播放（欢迎→准备→全军出击），避免同优先级互相抢占。
 ## token 用于取消旧链：重开/离开对局时不会被上一局的延迟 timer 追着播。
+## 开局固定时轴：欢迎0s → 准备(敌军还有5秒...)5s → 全军出击随后
+func announce_opening() -> void:
+	_chain_token += 1
+	var token := _chain_token
+	_chain_keys.clear()
+	play_announce("welcome", true)
+	get_tree().create_timer(5.0).timeout.connect(func() -> void:
+		if not is_instance_valid(self) or token != _chain_token:
+			return
+		play_announce("ready", true)
+		var wait := 2.4
+		var s: AudioStream = _loaded.get("ready")
+		if s != null and s.get_length() > 0.0:
+			wait = s.get_length() + 0.35
+		get_tree().create_timer(wait).timeout.connect(func() -> void:
+			if is_instance_valid(self) and token == _chain_token:
+				play_announce("attack", true)
+		)
+	)
+
+
 func announce_chain(keys: Array) -> void:
 	_chain_token += 1
 	_chain_keys = keys.duplicate()

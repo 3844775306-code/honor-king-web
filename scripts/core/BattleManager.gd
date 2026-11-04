@@ -199,7 +199,7 @@ var cam
 var first_person_view: bool = false   # 第一人称视角开关（Tab切换）
 var first_blood_occurred: bool = false
 # 兵线
-var minion_spawn_timer: float = 0.0
+var minion_spawn_timer: float = 10.0   # 第一波兵：开局第10秒生成
 var minimap_dragging: bool = false
 var minimap_drag_pos: Vector3 = Vector3.ZERO
 var minimap_jump_requested: bool = false
@@ -1219,7 +1219,7 @@ func _start_net_lineup(picks: Dictionary) -> void:
 	_generate_jungle_arc_walls()
 	PathFinder.build_navigation_map()
 	# 开局语音链：欢迎→准备→全军出击（host 经战报通道转发给接管客户端）
-	SfxManager.announce_chain(["welcome", "ready", "attack"])
+	SfxManager.announce_opening()
 	# 把 guest 英雄按锁定阵容分发给人（复用接管流程，晚加入兜底仍走 _scan_assignments）
 	NetSession.assign_lineup()
 
@@ -6651,7 +6651,7 @@ func _finish_intro() -> void:
 	process_mode = Node.PROCESS_MODE_INHERIT
 	_cam_snap = true
 	# 运镜结束再播开局播报：欢迎→准备→全军出击
-	SfxManager.announce_chain(["welcome", "ready", "attack"])
+	SfxManager.announce_opening()
 	_spawn_lane_guides()
 
 
@@ -7516,18 +7516,47 @@ func _spawn_minion_wave():
 			_queue_minion("ranged", team, base + lane_dir * OFFSET_RANGED, line, i)
 			_queue_minion("ranged", team, base + lane_dir * OFFSET_RANGED, line, i)
 		i +=1
+# 沿出生点→路点折线到交汇擂台的实际路程，再按 travel_time 反算移动速度（move_speed 单位是 0.01m/s）
+func _minion_path_speed(start: Vector3, waypoints: Array, target: Vector3, travel_time: float) -> float:
+	var path_len := _minion_path_distance(start, waypoints, target)
+	return maxf(path_len / maxf(travel_time, 0.1) * 100.0, 50.0)
+
+
+func _minion_path_distance(start: Vector3, waypoints: Array, target: Vector3) -> float:
+	var best := INF
+	var travel := 0.0
+	var prev := start
+	for wp in waypoints:
+		var p: Vector3 = wp
+		var seg := p - prev
+		var length := seg.length()
+		if length > 0.001:
+			var t := clampf((target - prev).dot(seg) / (length * length), 0.0, 1.0)
+			var closest := prev + seg * t
+			var d := closest.distance_to(target)
+			if d < best:
+				best = travel + length * t
+		travel += length
+		prev = p
+	return best if best < INF else start.distance_to(target)
+
+
 # 兵线分帧生成：整波兵入队，_process 每帧生成 2 个（约 10 帧出齐，实际延迟 <0.2s）
 func _queue_minion(type: String, team: int, pos: Vector3, waypoints: Array, line: int) -> void:
-	_minion_spawn_queue.append({"type": type, "team": team, "pos": pos, "wp": waypoints, "line": line})
+	# 第一波（及后续同型波）按「出生点到本路交汇擂台」的实际路程反算移速：
+	# 第10秒出兵、走20秒，正好在第30秒到达三条路的交汇点。
+	var arena: Vector3 = ARENA_SPOTS[clampi(line, 0, ARENA_SPOTS.size() - 1)]
+	var speed := _minion_path_speed(pos, waypoints, arena, 20.0)
+	_minion_spawn_queue.append({"type": type, "team": team, "pos": pos, "wp": waypoints, "line": line, "speed": speed})
 
 func _drain_minion_spawn_queue() -> void:
 	var budget := 2
 	while budget > 0 and not _minion_spawn_queue.is_empty():
 		var e: Dictionary = _minion_spawn_queue.pop_front()
-		spawn_single_minion(str(e["type"]), int(e["team"]), e["pos"], e["wp"], int(e["line"]))
+		spawn_single_minion(str(e["type"]), int(e["team"]), e["pos"], e["wp"], int(e["line"]), float(e.get("speed", 0.0)))
 		budget -= 1
 
-func spawn_single_minion(type: String, team: int, pos: Vector3, waypoints: Array,line) -> Minion:
+func spawn_single_minion(type: String, team: int, pos: Vector3, waypoints: Array, line, move_speed_override: float = 0.0) -> Minion:
 	var m = Minion.new()
 
 	#print(line)
@@ -7564,6 +7593,8 @@ func spawn_single_minion(type: String, team: int, pos: Vector3, waypoints: Array
 		"dragon":   config.merge({"attack_range":700, "attack_speed":0.5, "body_radius":1.0, "move_speed":350})
 		"storm":        config.merge({"attack_range":700, "attack_speed":0.5, "body_radius":1.0, "move_speed":350})
 		"shadow_dragon":config.merge({"attack_range":700, "attack_speed":0.5, "body_radius":1.5, "move_speed":350})
+	if move_speed_override > 0.0:
+		config["move_speed"] = move_speed_override
 
 	# 其他固定属性
 	match type:
