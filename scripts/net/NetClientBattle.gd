@@ -58,6 +58,7 @@ const SNAP_SCORE := 10        # 顶部实时战况（击杀比分+经济比分�
 const SNAP_RESPAWN := 11      # 小地图右侧英雄环形头像带行（host _build_respawn_rows 尾段；长度守卫防旧 host）
 const SNAP_VISION := 12       # 视野之灵行 [iid,x,z,active,progress,state]（host 快照尾段）
 const SNAP_HEALTH_PACKS := 13 # 血包状态 [x,z,team,available,cooldown_timer,respawn_time]
+const BarPainterScript = preload("res://scripts/ui/WorldBarPainter.gd")
 const SNAP_SKILL_REVEALS := 14 # 技能侦察区域 [x,z,radius]（鲁班2/后羿R）
 const SNAP_DEAD_HEROES := 15  # 阵亡尸体 [nid,team,x,z,yaw,name]（躺尸到复活）
 const VisionSpiritScript = preload("res://scripts/entities/VisionSpirit.gd")
