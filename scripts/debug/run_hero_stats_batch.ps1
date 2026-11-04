@@ -6,7 +6,7 @@ param(
 )
 # 英雄强弱批量采样：反复跑 --hero-stats-batch 完整 AI 对局，直到每个英雄场次达标。
 # 用法: pwsh -NoProfile -File scripts\debug\run_hero_stats_batch.ps1 -TargetPerHero 30 -MaxMatches 200 -Speed 10
-# 可选 -DataDir 指定 Godot user:// 根目录（不指定则用当前 APPDATA）
+# 可选 -DataDir 指定 Godot user:// 根目录（不指定则用当前 APPDATA）；英雄统计固定写项目根目录 data/hero_stats
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
@@ -16,7 +16,9 @@ if ($DataDir -ne "") {
     New-Item -ItemType Directory -Force $DataDir | Out-Null
     $env:APPDATA = $DataDir
 }
-$csv = Join-Path $env:APPDATA "Godot\app_userdata\HonorKing\hero_match_stats.csv"
+$dataDir = Join-Path $root "data\hero_stats"
+New-Item -ItemType Directory -Force $dataDir | Out-Null
+$csv = Join-Path $dataDir "hero_match_stats.csv"
 $logDir = Join-Path $root "artifacts\hero_stats_batch"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 
@@ -75,14 +77,7 @@ while ($run -lt $MaxMatches) {
     Start-Sleep -Milliseconds 300
 }
 
-$counts = Get-Counts
 Write-Host "采样结束。各英雄场次："
 $counts.GetEnumerator() | Sort-Object Name | ForEach-Object { "{0,-8} {1}" -f $_.Name, $_.Value }
-if (Test-Path $csv) {
-    $outDir = Join-Path $root "artifacts\hero_stats"
-    New-Item -ItemType Directory -Force $outDir | Out-Null
-    Copy-Item $csv (Join-Path $outDir "hero_match_stats.csv") -Force
-    Write-Host "数据已复制: $(Join-Path $outDir 'hero_match_stats.csv')"
-}
 Write-Host "原始数据: $csv"
-Write-Host "生成 Excel: python scripts\debug\hero_stats_report.py --input <csv> --output <xlsx>"
+Write-Host "生成 Excel: python scripts\debug\hero_stats_report.py"

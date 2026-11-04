@@ -46,3 +46,7 @@ tools/bin/
 
 # Office 临时锁文件
 ~\$*
+
+# 英雄统计采样数据（本地生成）
+data/hero_stats/*.csv
+data/hero_stats/*.xlsx

@@ -5400,7 +5400,7 @@ func level_up():
 
 ## 升级动画：金色光柱 + 环形冲击 + 符文 + 上浮等级字
 func _play_level_up_fx() -> void:
-	if not is_inside_tree():
+	if not is_inside_tree() or Vfx.quality <= 0:
 		return
 	var gold := Color(1.0, 0.82, 0.28)
 	var hero_col: Color = Vfx.color_for_hero(display_name)

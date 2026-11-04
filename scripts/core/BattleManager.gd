@@ -90,6 +90,7 @@ var _ai_benchmark_keep := false
 var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
 var _hero_stats_record := false      # --hero-stats：记录每局10名英雄表现
 var _hero_stats_batch := false       # --hero-stats-batch：AI测试局，导出后退出（供批量采样）
+var _logic_only := false             # 批量统计：跳过纯视觉预热，只跑逻辑
 var _hero_stats_exported := false
 var _training_mode := false          # 主菜单训练营
 var _record_replay := true           # 本局是否录像（测试/训练营由入口询问）
@@ -312,6 +313,9 @@ func _ready():
 	var _cmd_args := OS.get_cmdline_user_args()
 	_hero_stats_record = "--hero-stats" in _cmd_args or "--hero-stats-batch" in _cmd_args
 	_hero_stats_batch = "--hero-stats-batch" in _cmd_args
+	if _hero_stats_batch:
+		_logic_only = true
+		Vfx.quality = 0   # 批量采样关闭特效，降低无头高倍速崩溃与日志量
 	var _auto_boot := PlayerPrefs.opt_bool("ai_test_match", false) \
 		or PlayerPrefs.opt_bool("training_mode", false) \
 		or "--ai-test" in OS.get_cmdline_user_args() \
@@ -362,7 +366,8 @@ func _ready():
 	set_process(true)
 	# 选人/BP 期间预热小兵模型模板并各渲染一帧（被选人界面遮挡），
 	# 避免首波兵线在真实渲染下每只 100~230ms 的模型构建 + 首次绘制卡顿
-	_prewarm_battle_assets()
+	if not _logic_only:
+		_prewarm_battle_assets()
 	# 大厅选人开局（host 已在 NetLobby 里 begin_pick→全员锁齐→start_match）：
 	# 带全员锁定阵容直接开战局，guest 英雄由 NetSession.assign_lineup 逐一分发接管。
 	if NetSession.mode == NetSession.Mode.HOST and NetSession.has_picks():
@@ -6285,7 +6290,7 @@ func _log_early_game_metrics() -> void:
 		get_tree().quit()
 
 
-## --hero-stats：每局导出 10 名英雄的明细到 user://hero_match_stats.csv（多局追加）
+## --hero-stats：每局导出 10 名英雄的明细到项目根目录 data/hero_stats/hero_match_stats.csv（多局追加）
 func _export_hero_match_stats() -> void:
 	if not _hero_stats_record or _hero_stats_exported:
 		return
@@ -6296,7 +6301,7 @@ func _export_hero_match_stats() -> void:
 			hs.append(e)
 	if hs.is_empty():
 		return
-	var dir := ProjectSettings.globalize_path("user://")
+	var dir := ProjectSettings.globalize_path("res://data/hero_stats")
 	DirAccess.make_dir_recursive_absolute(dir)
 	var path := dir.path_join("hero_match_stats.csv")
 	var has_file := FileAccess.file_exists(path) and FileAccess.get_file_as_string(path).length() > 0

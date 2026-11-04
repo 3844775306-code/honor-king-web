@@ -17,7 +17,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_DIR = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata", "HonorKing")
+DEFAULT_DIR = os.path.join(ROOT, "data", "hero_stats")
 DEFAULT_INPUT = os.path.join(DEFAULT_DIR, "hero_match_stats.csv")
 DEFAULT_OUTPUT = os.path.join(DEFAULT_DIR, "hero_balance_report.xlsx")
 
