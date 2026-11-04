@@ -2482,8 +2482,8 @@ func _make_view(nid: int, typ: int, team: int, name: String) -> Dictionary:
 				model_ref = tm
 			else:
 				_add_fallback_visual(node, typ, team_col)
-			# 血条锚点：普通塔与水晶模型现在高度接近，统一抬到模型头顶
-			head_off = 6.0
+			# 血条锚点：普通塔缩短到约3.46m，水晶仍为5.2m
+			head_off = 6.0 if name == "crystal" else 3.8
 			# 塔攻击范围圈（同主机 Turret._create_range_preview：贴地柔化环带，radius = 8.9 + 0.5）
 			tower_ring = MeshFactory.create_ground_ring(8.9 + 0.5, Color(1.0, 0.9, 0.35, 0.45))
 			tower_ring.name = "TowerRangeRing"

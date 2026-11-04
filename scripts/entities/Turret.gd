@@ -668,9 +668,9 @@ func _find_target():
 		return
 
 	current_target = null
-# 血条锚点：水晶/塔模型缩放后需抬到模型头顶（普通塔与水晶现在高度接近）
+# 血条锚点：普通塔缩短后抬到约3.8m，水晶保持6.0m
 func bar_anchor_height() -> float:
-	return 6.0
+	return 6.0 if display_name == "crystal" else 3.8
 
 
 func get_hit_flash_root() -> Node3D:

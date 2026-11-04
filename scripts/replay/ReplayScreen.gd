@@ -690,8 +690,8 @@ func _update_world_hud(t: float) -> void:
 		var step := 1000.0
 		var is_turret := false
 		if kind == "turret":
-			# 与单机 HUD 同源：普通塔/水晶血条尺寸跟随模型体型
-			anchor = 6.0
+			# 与单机 HUD 同源：普通塔缩短、水晶不变
+			anchor = 6.0 if sub == "crystal" else 3.8
 			var tsz: Vector2 = WorldBarPainterScript.turret_bar_size(sub)
 			w = tsz.x
 			hh = tsz.y

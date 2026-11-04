@@ -54,7 +54,7 @@ static func base_brick_material() -> StandardMaterial3D:
 	_base_brick_mat = m
 	return m
 
-const TOWER_MODEL_SCALE := 1.38       # 普通塔模型：基准高3.76m -> 约5.2m
+const TOWER_MODEL_SCALE := 0.92       # 普通塔模型：基准高3.76m -> 约3.46m（原5.2m的2/3）
 const CRYSTAL_MODEL_SCALE := 1.595    # 水晶模型：基准高3.26m -> 约5.2m（原10.4m的一半）
 
 

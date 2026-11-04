@@ -29,7 +29,8 @@ static func minion_bar_scale(sub_type: String) -> float:
 
 
 static func turret_bar_size(sub_type: String) -> Vector2:
-	return Vector2(380.0, 24.0) if sub_type == "crystal" else Vector2(300.0, 22.0)
+	# 防御塔血条统一放大2倍；水晶维持单独规格
+	return Vector2(380.0, 24.0) if sub_type == "crystal" else Vector2(600.0, 44.0)
 
 
 func _ready() -> void:
