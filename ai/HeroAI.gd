@@ -3345,8 +3345,14 @@ func _recall_safe_behavior(delta):
 		hero.cancel_recall()
 	var safe_pos = _find_safe_recall_spot()
 	if safe_pos == Vector3.ZERO:
+		# 找不到安全读条点时先取消读条，否则 is_recalling 会锁移动，表现为站在塔后不动
+		if hero.is_recalling:
+			hero.cancel_recall()
 		_leave_recall_spot()
 		return
+	# 读条点还没走到（例如为避开塔身提前起读）：先取消读条，恢复移动去安全点
+	if hero.is_recalling and hero.global_position.distance_to(safe_pos) > 2.0:
+		hero.cancel_recall()
 	if hero.global_position.distance_to(safe_pos) > 2.0:
 		# 去安全点的路上有敌人/敌塔危险区，或敌人已压到身边：先拉开，不闷头跑/读条
 		if perception.count_enemy_heroes_near(AiConfig.RECALL_DANGER_RADIUS) > 0 \
@@ -3567,6 +3573,9 @@ func _pick_safe_recall_turret() -> Turret:
 		if _recall_tower_under_minions(t):
 			continue
 		var spot: Vector3 = _recall_spot_for_turret(t)
+		# 塔中心安全不代表塔后落点安全：落点附近有敌方英雄/兵线、或走过去危险时直接跳过
+		if _recall_point_threatened(spot) or _recall_path_threatened(spot):
+			continue
 		# 用实际 A* 路线风险选塔，而不是只比较直线距离
 		var score := _path_risk(spot) * 10.0 + d * 0.15
 		score += _recall_memory_risk(spot, AiConfig.RECALL_SPOT_CLEAR) * 8.0

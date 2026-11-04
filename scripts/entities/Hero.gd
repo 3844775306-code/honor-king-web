@@ -553,6 +553,9 @@ func start_recall():
 		_start_wukong_cloud()
 		return
 	if is_recalling: return
+	# 先清掉旧移动指令：否则玩家刚点过地面/寻路时，回城起手后下一帧会被
+	# 「move_target != ZERO 即取消回城」立即打断，出现动画/音效已出但没有读条。
+	move_target = Vector3.ZERO
 	# 大禹：如果附近有戍鼎，传送到最远鼎（非回城）
 	if display_name == "大禹" and dayu_teleport_cd <= 0:
 		var furthest = _get_furthest_tripod()
