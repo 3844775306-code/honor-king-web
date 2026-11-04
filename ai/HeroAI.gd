@@ -1532,11 +1532,32 @@ func _try_escape_dash() -> bool:
 
 
 
+## 当前是否已经选定了本路敌方塔作为强拆目标（LaneStrategy 已做兵线/残血/4分钟等条件过滤）
+func _committed_to_tower_attack() -> bool:
+	var target: GameEntity = hero.manual_target
+	if target == null or not is_instance_valid(target) or target.health <= 0.0:
+		target = hero.current_target
+	if target == null or not is_instance_valid(target) or not (target is Turret):
+		return false
+	if target.team == hero.team or target.health <= 0.0:
+		return false
+	if _is_action(AIAction.Type.PUSH_LANE):
+		return true
+	if team_task != null and team_task.is_active() and team_task.type in [TeamTask.Type.PUSH_LANE, TeamTask.Type.PUSH_TOWER]:
+		return true
+	return false
+
+
 # ==================== 主循环 ====================
 func _process(delta):
 	_frame_delta = delta
 	# --- 塔攻击检测 ---
-	if hero.under_tower_attack:
+	# 推线/抱团推塔时，如果当前目标就是允许攻击的敌方防御塔，则说明AI已选择强拆：
+	# 不再因为塔打自己而触发 TOWER_ESCAPE 后撤。
+	if hero.under_tower_attack and _committed_to_tower_attack():
+		if _is_action(AIAction.Type.TOWER_ESCAPE):
+			_resume_safety_action()
+	elif hero.under_tower_attack:
 		hero.tower_attack_timer -= delta
 		if hero.tower_attack_timer <= 0:
 			hero.under_tower_attack = false
