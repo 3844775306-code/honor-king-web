@@ -3015,21 +3015,35 @@ func flash_landing(dir: Vector3, dist: float = 5.0) -> Vector3:
 
 
 func clamp_dash_landing(dir: Vector3, dist: float) -> Vector3:
+	# type4 位移：允许穿墙，只保证落点可站立；不能再用射线把落点截在墙前。
 	var flat := Vector3(dir.x, 0.0, dir.z)
 	if flat.length() < 0.01:
 		return global_position
-	var from := global_position + flat.normalized() * 0.4
-	var to := from + flat.normalized() * dist
-	var space := get_world_3d().direct_space_state
-	var q := PhysicsRayQueryParameters3D.create(from + Vector3.UP * 0.7, to + Vector3.UP * 0.7)
-	q.collision_mask = 1
-	q.collide_with_bodies = true
-	var hit: Dictionary = space.intersect_ray(q)
-	var out := to
-	if not hit.is_empty() and hit.get("collider") is Wall:
-		var p: Vector3 = hit["position"] + (hit["normal"] as Vector3) * 0.45
-		out = Vector3(p.x, global_position.y, p.z)
-	return out
+	flat = flat.normalized()
+	var from := global_position
+	var half := Config.MAP_SIZE * 0.5
+	var direct := from + flat * dist
+	direct.x = clampf(direct.x, -half, half)
+	direct.z = clampf(direct.z, -half, half)
+	direct.y = from.y
+	if PathFinder.is_walkable_world(direct):
+		return direct
+	# 目标点落在墙里/不可走：沿冲刺方向继续找墙后的可站立点
+	for extra in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0]:
+		var cand: Vector3 = direct + flat * extra
+		cand.x = clampf(cand.x, -half, half)
+		cand.z = clampf(cand.z, -half, half)
+		cand.y = from.y
+		if PathFinder.is_walkable_world(cand) and from.distance_to(cand) >= 1.0:
+			return cand
+	# 墙后没有可站立点：取最近的可站点，最后才退回起点
+	var snapped := PathFinder.nearest_walkable_world(direct, flat)
+	snapped.y = from.y
+	snapped.x = clampf(snapped.x, -half, half)
+	snapped.z = clampf(snapped.z, -half, half)
+	if PathFinder.is_walkable_world(snapped) and from.distance_to(snapped) >= 1.0:
+		return snapped
+	return from
 
 # 位移预览环：拖动闪现/位移技能时在落点画圈（已按墙体修正）；关=不显示
 func _update_dash_preview() -> void:

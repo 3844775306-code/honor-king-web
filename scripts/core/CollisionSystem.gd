@@ -107,6 +107,8 @@ func apply_collision_pushback(entities: Array, delta: float):
 	var half_map: float = Config.MAP_EDGE_LIMIT
 	for ent in entities:
 		if not is_instance_valid(ent) or ent.health <= 0 or not ent.get("can_move"): continue
+		# 位移类技能允许穿墙：Tween 滑行期间不再做墙体推离，否则会被推回墙前/抖动
+		if ent.get("is_dashing") == true: continue
 		if ent.collision_layer == 0: continue   # 隐身/筋斗云等无碰撞状态不参与墙体推离
 		var ep: Vector3 = ent.global_position
 		# 与 PathFinder 3×3 实心区（离墙心约 1.5m）对齐：+0.05 留一点余量，

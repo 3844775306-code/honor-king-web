@@ -1024,7 +1024,7 @@ func _try_travel_dash():
 	if dir.length() < 0.01:
 		return
 	dir = dir.normalized()
-	var end := _resolve_dash_end(hero.global_position, dir, dash_len)
+	var end := _resolve_dash_end(hero.global_position, dir, dash_len, true)
 	if end == Vector3.ZERO:
 		return
 	hero._start_casting(idx, sk, dest)
@@ -1104,10 +1104,19 @@ func _pick_travel_dash_skill(skip_mana_cost: bool = false) -> int:
 
 
 ## 计算位移落点：允许“穿墙”，但只在前方绕路明显更远时才穿；落点必须可站立、不进敌方塔
-func _resolve_dash_end(from: Vector3, dir: Vector3, length: float) -> Vector3:
+func _resolve_dash_end(from: Vector3, dir: Vector3, length: float, allow_wall: bool = false) -> Vector3:
 	if length <= 0.1:
 		return Vector3.ZERO
 	var end: Vector3 = from + dir * length
+	if allow_wall:
+		# type4 位移允许穿墙：落点由 Hero.clamp_dash_landing 负责找墙后可站立点，
+		# AI 只检查敌方塔落点，不再因直线经过墙体而取消位移。
+		var half := Config.MAP_SIZE * 0.5
+		end.x = clampf(end.x, -half, half)
+		end.z = clampf(end.z, -half, half)
+		if _dash_landing_in_enemy_turret(end):
+			return Vector3.ZERO
+		return end
 	if not PathFinder.is_walkable_world(end):
 		end = PathFinder.nearest_walkable_world(end, dir)
 		if end == Vector3.ZERO or from.distance_to(end) < length * 0.5:
@@ -1430,7 +1439,7 @@ func _try_libai_q_dash(target: GameEntity, escaping: bool) -> bool:
 	if dir.length() < 0.1:
 		return false
 	dir = dir.normalized()
-	var end := _resolve_dash_end(hero.global_position, dir, hero.skills[0].self_displacement if hero.skills[0].self_displacement > 0.0 else 2.5)
+	var end := _resolve_dash_end(hero.global_position, dir, hero.skills[0].self_displacement if hero.skills[0].self_displacement > 0.0 else 2.5, int(hero.skills[0].type) == 4)
 	if end == Vector3.ZERO:
 		return false
 	hero.move_target = Vector3.ZERO
@@ -1476,7 +1485,7 @@ func _try_chase_dash(target: GameEntity) -> bool:
 	if bool(d.get("point", false)):
 		dash_len = minf(dash_len, maxf(1.0, dist - 0.8))   # 点落位移不要越过目标
 	# 落点做墙面修正：dash_move_to 不受碰撞约束，不修正会穿墙/卡在墙里
-	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, dash_len)
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, dash_len, true)
 	if end == Vector3.ZERO:
 		return false                      # 穿墙绕路不值得/落点危险
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，免得突进被移动逻辑覆盖
@@ -1523,7 +1532,7 @@ func _try_escape_dash() -> bool:
 		dir = Vector3(0.0, 0.0, 1.0)
 	dir = dir.normalized()
 	# 逃跑落点同样做墙面修正：贴着墙位移否则会把自己塞进墙角
-	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, float(d["len"]))
+	var end: Vector3 = _resolve_dash_end(hero.global_position, dir, float(d["len"]), true)
 	if end == Vector3.ZERO:
 		return false                      # 落点不可站/穿墙绕路不值得
 	hero.move_target = Vector3.ZERO      # 清掉走路指令，保证撤退位移真正生效
