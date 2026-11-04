@@ -27,6 +27,9 @@ var _strafe_t := 0.0       # 普攻间隙走A：剩余横移时间
 var _strafe_side := 1.0    # 横移方向（绕目标顺时针/逆时针）
 var _strafe_cd := 0.0      # 下一次尝试横移的冷却
 var _retreat_started_at := -1.0            # 进入撤退(RETURN_TO_BASE)的时间；用于超时反击
+var _hit_evade_timer := 0.0                # 受击脱战：远离攻击者的剩余时长
+var _hit_evade_cd_until := -1.0            # 受击脱战冷却（避免连续触发）
+var _hit_evade_goal := Vector3.ZERO        # 受击脱战目标点
 var _yingrui_w_aim := Vector3.ZERO         # 英睿W三段/赶路的目标点
 var _minion_escape_started_at := -1.0      # 塔前脱战开始时间
 var _minion_escape_cooldown_until := -1.0  # 塔前脱战超时后的重触发冷却
@@ -423,6 +426,57 @@ func _end_safe_distance(now: float) -> void:
 	_safe_target = null
 	_safe_target_pos = Vector3.ZERO
 	_safe_goal = Vector3.ZERO
+
+
+# 受击脱战：2秒内被敌方英雄命中≥2次，且当前目标不是攻击者 → 朝远离攻击者方向移动1秒
+func _try_hit_evade(delta: float) -> bool:
+	if hero == null or not is_instance_valid(hero) or hero.is_dead:
+		return false
+	var now := _game_time()
+	if _hit_evade_timer > 0.0:
+		_hit_evade_timer -= delta
+		if _hit_evade_timer > 0.0:
+			_walk_to(_hit_evade_goal)
+			return true
+		_hit_evade_goal = Vector3.ZERO
+		return false
+	if now < _hit_evade_cd_until:
+		return false
+	if hero.casting_skill or hero.channeling_skill_index >= 0:
+		return false
+	var attacker: Hero = hero.last_hero_attacker
+	if attacker == null or not is_instance_valid(attacker) or attacker.health <= 0.0:
+		return false
+	if now - float(hero.last_hero_attacker_at) > 2.0:
+		return false
+	# 统计最近2秒内被敌方英雄命中的次数（可来自不同英雄）
+	var hit_count := 0
+	var attackers: Array = []
+	for e in hero.recent_hero_hits:
+		if now - float(e.get("t", 0.0)) <= 2.0 and e.get("hero") is Hero and is_instance_valid(e.get("hero")):
+			hit_count += 1
+			if not attackers.has(e.get("hero")):
+				attackers.append(e.get("hero"))
+	if hit_count < 2:
+		return false
+	# 自己当前目标若就是攻击自己的某个英雄，说明正在对拼，不脱战
+	var my_target: GameEntity = hero.manual_target
+	if my_target == null or not is_instance_valid(my_target) or my_target.health <= 0.0:
+		my_target = hero.current_target
+	if my_target != null and attackers.has(my_target):
+		return false
+	var away: Vector3 = hero.global_position - attacker.global_position
+	away.y = 0.0
+	if away.length() < 0.2:
+		away = Vector3(-sin(hero.rotation.y), 0.0, -cos(hero.rotation.y))
+	away = away.normalized()
+	_hit_evade_goal = hero.global_position + away * 7.0
+	_hit_evade_timer = 1.0
+	_hit_evade_cd_until = now + 3.5
+	if "--ai-skill-probe" in OS.get_cmdline_user_args():
+		print("[AISKILL] hit_evade %s attacker=%s hits=%d" % [hero.display_name, attacker.display_name, hit_count])
+	_walk_to(_hit_evade_goal)
+	return true
 
 
 func _try_keep_safe_distance() -> bool:

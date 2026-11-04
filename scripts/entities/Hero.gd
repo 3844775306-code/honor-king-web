@@ -264,6 +264,7 @@ var is_teleporting: bool = false
 # 最近一次「被敌方英雄实际打到」的记录（防御塔越塔保护用；不用 AI 的 current_target 猜）
 var last_hero_attacker: Hero = null
 var last_hero_attacker_at: float = -9999.0
+var recent_hero_hits: Array = []   # [{hero:Hero, t:秒}] 最近2秒被敌方英雄命中的记录（AI受击脱战判定）
 var last_hero_attacked_from: Vector3 = Vector3.ZERO
 var last_hero_attacked_at: Vector3 = Vector3.ZERO
 var is_dashing: bool = false        # 位移（突进/闪现）滑行中：位置由 Tween 逐帧推进，不再瞬移
@@ -799,9 +800,13 @@ func take_damage(amount: float, source: GameEntity = null, is_magic: bool = fals
 	# 记录真实的英雄伤害来源与命中位置：防御塔只据此判断「是否在塔内打了己方英雄」
 	if source is Hero and source.team != team:
 		last_hero_attacker = source as Hero
-		last_hero_attacker_at = Time.get_ticks_msec() * 0.001
+		var _now_hit := Time.get_ticks_msec() * 0.001
+		last_hero_attacker_at = _now_hit
 		last_hero_attacked_from = source.global_position
 		last_hero_attacked_at = global_position
+		recent_hero_hits.append({"hero": source, "t": _now_hit})
+		while not recent_hero_hits.is_empty() and _now_hit - float(recent_hero_hits[0].get("t", 0.0)) > 2.0:
+			recent_hero_hits.pop_front()
 	# 孙悟空1技能：格挡一次敌方技能
 	if sunwukong_1_block_active and skill_id > 0 and source != null and is_instance_valid(source) and source.team != team:
 		sunwukong_1_block_active = false
