@@ -43,6 +43,7 @@ var _safe_started_at := -1.0               # 保持安全距离开始时间
 var _safe_cooldown_until := -1.0           # 保持安全距离重触发冷却
 var _walk_home := false                    # 回城判断：直接走回泉水比读条回城更快
 var _recall_recover_t := 0.0               # 回城中血量>30% 持续时间（≥2.5s 退出回城）
+var _recall_start_block_t := 0.0            # 回城取消后的短暂重启保护，防止每帧取消/重启把读条重置为0
 var _task_commit_until: float = -999.0
 var _env_pause_used := false
 var _task_pause_active := false
@@ -3283,6 +3284,8 @@ func _try_use_recover():
 
 # ==================== 安全回城 ====================
 func _recall_safe_behavior(delta):
+	if _recall_start_block_t > 0.0:
+		_recall_start_block_t = maxf(0.0, _recall_start_block_t - delta)
 	# 回城中血量恢复到 30% 以上并持续 2.5 秒 → 主动退出回城
 	if hero.is_recalling:
 		# 低蓝回城不在血量恢复到 30% 时提前取消，需回到泉水补蓝
@@ -3364,33 +3367,36 @@ func _recall_safe_behavior(delta):
 	# 读条中敌人/兵线压过来（AI 读条期间不能动）：立刻取消，换到别的安全点再回城
 	if hero.is_recalling and _recall_point_threatened(hero.global_position):
 		hero.cancel_recall()
+		_recall_start_block_t = 0.8
+		_recall_spot_cache = Vector3.ZERO
+		_leave_recall_spot()
+		return
 	var safe_pos = _find_safe_recall_spot()
 	if safe_pos == Vector3.ZERO:
 		# 找不到安全读条点时先取消读条，否则 is_recalling 会锁移动，表现为站在塔后不动
 		if hero.is_recalling:
 			hero.cancel_recall()
+		_recall_start_block_t = 0.5
 		_leave_recall_spot()
 		return
 	# 读条点还没走到（例如为避开塔身提前起读）：先取消读条，恢复移动去安全点
 	if hero.is_recalling and hero.global_position.distance_to(safe_pos) > 2.0:
 		hero.cancel_recall()
+		_recall_start_block_t = 0.3
 	if hero.global_position.distance_to(safe_pos) > 2.0:
 		# 去安全点的路上有敌人/敌塔危险区，或敌人已压到身边：先拉开，不闷头跑/读条
 		if perception.count_enemy_heroes_near(AiConfig.RECALL_DANGER_RADIUS) > 0 \
 				or _recall_path_threatened(safe_pos):
 			_leave_recall_spot()
 			return
-		# 回城点在塔后侧：直线会撞塔 → 离点够近就直接读条，避免被塔身卡住
-		var dist_sp: float = hero.global_position.distance_to(safe_pos)
-		if dist_sp <= 4.5 and _recall_blocked_by_friendly_tower(safe_pos):
-			hero.start_recall()
-			return
+		# 回城点在塔后侧：直线会撞塔 → 先绕到 2m 内再读条。
+		# 不能在 2~4.5m 提前起读：下一帧的“距离>2m 取消”会立即取消并重启，读条永远为0。
 		var detour := _recall_detour_point(safe_pos)
 		if detour != Vector3.ZERO and hero.global_position.distance_to(detour) > 1.5:
 			_follow_safe_route(detour)
 		else:
 			_follow_safe_route(safe_pos)
-	elif not hero.is_recalling and not _fully_recovered():
+	elif not hero.is_recalling and not _fully_recovered() and _recall_start_block_t <= 0.0:
 		hero.start_recall()
 
 
