@@ -144,6 +144,8 @@ var _recall_press_pending := false
 
 var _tower_button: TouchActionButton      # 推塔键（普攻键上方）：切换普攻目标优先级=防御塔
 var _minion_button: TouchActionButton     # 小兵键（推塔键左侧）：切换普攻目标优先级=小兵/野怪
+var _recall_button: TouchActionButton = null
+var _cc_banner: Label = null
 var _attack_priority := ATTACK_PRIORITY_AUTO   # 当前普攻目标优先级（见顶部常量）
 var _priority_press_pending := -1         # 待消费的优先级按键（TOWER/MINION），-1=无
 
@@ -249,6 +251,142 @@ func _process(_delta):
 		_update_skill_button_ui()
 		_push_attack_stats()
 		_update_skill_detail()
+		_update_control_feedback()
+
+func _update_control_feedback() -> void:
+	if hero == null or not is_instance_valid(hero) or hero.is_dead:
+		_clear_cc_visual()
+		return
+	var kind := hero.control_kind()
+	var left := hero.control_remaining()
+	if kind == "":
+		_clear_cc_visual()
+		return
+	var locks_move := hero.control_locks_move()
+	var locks_skill := hero.control_locks_skills()
+	var locks_atk := hero.control_locks_attack()
+	var info := _cc_info(kind)
+	var label := str(info.get("name", "受控"))
+	var tint: Color = info.get("color", Color(1, 0.6, 0.4))
+	# 每个按键分别反馈：可解控技能保持亮绿，其余灰红并带控制类型。
+	for i in range(_skill_buttons.size()):
+		var b: SkillTouchButton = _skill_buttons[i]
+		if b == null or not is_instance_valid(b):
+			continue
+		var cleanse: bool = hero.is_cleanse_skill(i)
+		if locks_skill and not cleanse:
+			b.blocked = true
+			b.block_cue = label
+			b.modulate = Color(1.0, 0.72, 0.72, 1.0)
+		elif cleanse and locks_skill:
+			b.blocked = false
+			b.block_cue = ""
+			b.modulate = Color(0.72, 1.0, 0.78, 1.0)
+		else:
+			b.modulate = Color.WHITE
+		b.queue_redraw()
+	if _extra_skill_button != null and is_instance_valid(_extra_skill_button):
+		var cb: bool = hero.is_cleanse_skill(3)
+		if locks_skill and not cb:
+			_extra_skill_button.blocked = true
+			_extra_skill_button.block_cue = label
+		else:
+			_extra_skill_button.blocked = false
+			_extra_skill_button.block_cue = ""
+		_extra_skill_button.modulate = Color(0.72, 1.0, 0.78, 1.0) if (locks_skill and cb) else Color.WHITE
+		_extra_skill_button.queue_redraw()
+	if _summoner_button != null and is_instance_valid(_summoner_button):
+		var sc: bool = hero.is_cleanse_summoner()
+		_summoner_button.blocked = locks_skill and not sc
+		_summoner_button.block_cue = label if _summoner_button.blocked else ""
+		_summoner_button.modulate = Color(0.72, 1.0, 0.78, 1.0) if (locks_skill and sc) else Color.WHITE
+		_summoner_button.queue_redraw()
+	if _recover_button != null and is_instance_valid(_recover_button):
+		_recover_button.blocked = locks_skill
+		_recover_button.block_cue = label if locks_skill else ""
+		_recover_button.modulate = Color(1.0, 0.72, 0.72, 1.0) if locks_skill else Color.WHITE
+		_recover_button.queue_redraw()
+	if _attack_button != null and is_instance_valid(_attack_button):
+		_attack_button.modulate = Color(1.0, 0.55, 0.55, 1.0) if locks_atk else Color.WHITE
+	if _recall_button != null and is_instance_valid(_recall_button):
+		_recall_button.dimmed = locks_skill
+		_recall_button.modulate = Color(1.0, 0.68, 0.68, 1.0) if locks_skill else Color.WHITE
+		_recall_button.queue_redraw()
+	if _tower_button != null and is_instance_valid(_tower_button):
+		_tower_button.modulate = Color(1.0, 0.65, 0.65, 1.0) if locks_atk else Color.WHITE
+	if _minion_button != null and is_instance_valid(_minion_button):
+		_minion_button.modulate = Color(1.0, 0.65, 0.65, 1.0) if locks_atk else Color.WHITE
+	if _joystick != null and is_instance_valid(_joystick):
+		_joystick.modulate = Color(0.65, 0.78, 1.0, 1.0) if locks_move else Color.WHITE
+	if _cc_banner == null:
+		_cc_banner = Label.new()
+		_cc_banner.anchor_left = 0.28
+		_cc_banner.anchor_right = 0.72
+		_cc_banner.anchor_top = 0.68
+		_cc_banner.anchor_bottom = 0.76
+		_cc_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_cc_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_cc_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_cc_banner.add_theme_font_size_override("font_size", int(28 * UiKit.scale()))
+		_cc_banner.add_theme_constant_override("outline_size", 4)
+		_cc_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		_gameplay_root.add_child(_cc_banner)
+	_cc_banner.visible = true
+	_cc_banner.text = "%s  %.1fs" % [label, maxf(0.0, left)]
+	_cc_banner.add_theme_color_override("font_color", tint)
+	var lock_txt := ""
+	if locks_move: lock_txt += "移动 "
+	if locks_skill: lock_txt += "技能/回城/恢复 "
+	if locks_atk: lock_txt += "普攻 "
+	if lock_txt != "":
+		_cc_banner.text += " · " + lock_txt + "锁定"
+	elif kind == "slow":
+		_cc_banner.text += " · 移速降低"
+
+
+func _clear_cc_visual() -> void:
+	if _cc_banner != null:
+		_cc_banner.visible = false
+	for b in _skill_buttons:
+		if b != null and is_instance_valid(b):
+			b.modulate = Color.WHITE
+	if _extra_skill_button != null and is_instance_valid(_extra_skill_button):
+		_extra_skill_button.modulate = Color.WHITE
+	if _extra_skill_button != null and is_instance_valid(_extra_skill_button):
+		_extra_skill_button.blocked = false
+		_extra_skill_button.block_cue = ""
+		_extra_skill_button.modulate = Color.WHITE
+	if _summoner_button != null and is_instance_valid(_summoner_button):
+		_summoner_button.blocked = false
+		_summoner_button.block_cue = ""
+		_summoner_button.modulate = Color.WHITE
+	if _recover_button != null and is_instance_valid(_recover_button):
+		_recover_button.blocked = false
+		_recover_button.block_cue = ""
+		_recover_button.modulate = Color.WHITE
+	if _attack_button != null and is_instance_valid(_attack_button):
+		_attack_button.modulate = Color.WHITE
+	if _recall_button != null and is_instance_valid(_recall_button):
+		_recall_button.modulate = Color.WHITE
+		_recall_button.dimmed = false
+	if _tower_button != null and is_instance_valid(_tower_button):
+		_tower_button.modulate = Color.WHITE
+	if _minion_button != null and is_instance_valid(_minion_button):
+		_minion_button.modulate = Color.WHITE
+	if _joystick != null and is_instance_valid(_joystick):
+		_joystick.modulate = Color.WHITE
+
+
+func _cc_info(kind: String) -> Dictionary:
+	match kind:
+		"stun": return {"name": "眩晕", "color": Color(1.0, 0.88, 0.35)}
+		"knockup": return {"name": "击飞", "color": Color(1.0, 0.62, 0.25)}
+		"freeze": return {"name": "冰冻", "color": Color(0.45, 0.9, 1.0)}
+		"suppress": return {"name": "压制", "color": Color(1.0, 0.28, 0.28)}
+		"silence": return {"name": "沉默", "color": Color(0.52, 0.68, 1.0)}
+		"slow": return {"name": "减速", "color": Color(0.62, 0.82, 1.0)}
+	return {"name": "受控", "color": Color(1, 1, 1)}
+
 
 func set_hero(h: Hero):
 	hero = h
@@ -1131,6 +1269,7 @@ func _build_ui():
 	rec.emit_activated_on_press = true
 	rec.activated.connect(func(): _recall_press_pending = true)
 	rec.set_meta("layout_key", "recall")
+	_recall_button = rec
 	_anchor_br(rec, Vector2(900, ROW_FROM_BOTTOM), Vector2(220, 220))
 	_gameplay_root.add_child(rec)
 

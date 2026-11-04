@@ -754,6 +754,9 @@ func _on_snapshot(snap: Array) -> void:
 				if ent.has("jg"):
 					_jg = ent["jg"]
 				break
+	if _pad != null and not _own.is_empty():
+		_pad.apply_control_feedback(str(_own.get("cc_kind", "")), float(_own.get("cc_left", 0.0)),
+			_own.get("cleanse", []), bool(_own.get("cleanse_summoner", false)))
 	var seen := {}
 	var lists := [
 		[NET_HERO, snap[SNAP_HEROES]],

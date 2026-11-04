@@ -1487,6 +1487,13 @@ func _process_host(delta: float) -> void:
 			_attack_time.erase(pid)
 
 
+func _cleanse_flags(h: Hero) -> Array:
+	var out: Array = []
+	for i in range(h.skills.size()):
+		out.append(h.is_cleanse_skill(i))
+	return out
+
+
 func _build_snapshot(bm: Node, viewer_team: int = TEAM_PLAYER) -> Array:
 	var viewer := clampi(viewer_team, 0, 1)
 	var out: Array = []

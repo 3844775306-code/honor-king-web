@@ -119,6 +119,8 @@ var _upgrade_pending := -1            # 待消费的升级槽位（0..2），-1=
 var _summoner_btn: SkillTouchButton = null
 var _recover_btn: SkillTouchButton = null
 var _recall_btn: TouchActionButton = null
+var _ui_root: Control = null
+var _cc_banner: Label = null
 var _active_btns: Array = []          # 主动装备钮 ×2（TouchActionButton）
 var _cancel_btn: CancelCastButton = null
 var _picker_root: Control = null
@@ -140,6 +142,7 @@ func _ready() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	_ui_root = root
 
 	# 固定摇杆：底座中心钉在距左下 (330,300)，边长 600（同 TouchController：按下点须落在
 	# 中心 ACTIVATE_RADIUS=300 内才启动，激活圆之外不抢占输入）
@@ -621,6 +624,82 @@ func flash_attack() -> void:
 
 
 ## 回放：摇杆视觉跟随英雄移动方向（不产生输入）
+func apply_control_feedback(kind: String, left: float, cleanse: Array, cleanse_summoner: bool) -> void:
+	if kind == "":
+		for b in _skill_btns:
+			if b != null and is_instance_valid(b):
+				b.blocked = false
+				b.block_cue = ""
+				b.modulate = Color.WHITE
+		if _extra_skill_btn != null:
+			_extra_skill_btn.blocked = false
+			_extra_skill_btn.block_cue = ""
+			_extra_skill_btn.modulate = Color.WHITE
+		if _summoner_btn != null: _summoner_btn.blocked = false; _summoner_btn.block_cue = ""; _summoner_btn.modulate = Color.WHITE
+		if _recover_btn != null: _recover_btn.blocked = false; _recover_btn.block_cue = ""; _recover_btn.modulate = Color.WHITE
+		if _attack_btn != null: _attack_btn.modulate = Color.WHITE
+		if _recall_btn != null: _recall_btn.dimmed = false; _recall_btn.modulate = Color.WHITE
+		if _joystick != null: _joystick.modulate = Color.WHITE
+		if _cc_banner != null: _cc_banner.visible = false
+		return
+	var hard := kind in ["suppress", "stun", "knockup", "freeze"]
+	var locks_skill := kind in ["suppress", "stun", "knockup", "freeze", "silence"]
+	var locks_atk := hard
+	var locks_move := hard
+	var label: String = {"stun": "眩晕", "knockup": "击飞", "freeze": "冰冻", "suppress": "压制",
+		"silence": "沉默", "slow": "减速"}.get(kind, "受控")
+	var tint: Color = {"stun": Color(1.0, 0.88, 0.35), "knockup": Color(1.0, 0.62, 0.25),
+		"freeze": Color(0.45, 0.9, 1.0), "suppress": Color(1.0, 0.28, 0.28),
+		"silence": Color(0.52, 0.68, 1.0), "slow": Color(0.62, 0.82, 1.0)}.get(kind, Color.WHITE)
+	for i in range(_skill_btns.size()):
+		var b: SkillTouchButton = _skill_btns[i]
+		if b == null or not is_instance_valid(b):
+			continue
+		var can_cleanse: bool = i < cleanse.size() and bool(cleanse[i]) and kind != "suppress"
+		if locks_skill and not can_cleanse:
+			b.blocked = true; b.block_cue = label; b.modulate = Color(1.0, 0.72, 0.72, 1.0)
+		elif can_cleanse:
+			b.blocked = false; b.block_cue = ""; b.modulate = Color(0.72, 1.0, 0.78, 1.0)
+		else:
+			b.blocked = false; b.block_cue = ""; b.modulate = Color.WHITE
+		b.queue_redraw()
+	if _summoner_btn != null:
+		var sc: bool = cleanse_summoner and kind != "suppress"
+		_summoner_btn.blocked = locks_skill and not sc
+		_summoner_btn.block_cue = label if _summoner_btn.blocked else ""
+		_summoner_btn.modulate = Color(0.72, 1.0, 0.78, 1.0) if sc else (Color(1.0, 0.72, 0.72, 1.0) if locks_skill else Color.WHITE)
+		_summoner_btn.queue_redraw()
+	if _recover_btn != null:
+		_recover_btn.blocked = locks_skill
+		_recover_btn.block_cue = label if locks_skill else ""
+		_recover_btn.modulate = Color(1.0, 0.72, 0.72, 1.0) if locks_skill else Color.WHITE
+		_recover_btn.queue_redraw()
+	if _attack_btn != null: _attack_btn.modulate = Color(1.0, 0.55, 0.55, 1.0) if locks_atk else Color.WHITE
+	if _recall_btn != null: _recall_btn.dimmed = locks_skill; _recall_btn.modulate = Color(1.0, 0.68, 0.68, 1.0) if locks_skill else Color.WHITE
+	if _joystick != null: _joystick.modulate = Color(0.65, 0.78, 1.0, 1.0) if locks_move else Color.WHITE
+	if _cc_banner == null and _ui_root != null:
+		_cc_banner = Label.new()
+		_cc_banner.anchor_left = 0.28; _cc_banner.anchor_right = 0.72
+		_cc_banner.anchor_top = 0.68; _cc_banner.anchor_bottom = 0.76
+		_cc_banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_cc_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_cc_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_cc_banner.add_theme_font_size_override("font_size", int(28 * UiKit.scale()))
+		_cc_banner.add_theme_constant_override("outline_size", 4)
+		_cc_banner.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		_ui_root.add_child(_cc_banner)
+	if _cc_banner != null:
+		_cc_banner.visible = true
+		_cc_banner.text = "%s  %.1fs" % [label, maxf(0.0, left)]
+		_cc_banner.add_theme_color_override("font_color", tint)
+		var lk := ""
+		if locks_move: lk += "移动 "
+		if locks_skill: lk += "技能/回城/恢复 "
+		if locks_atk: lk += "普攻 "
+		if lk != "": _cc_banner.text += " · " + lk + "锁定"
+		elif kind == "slow": _cc_banner.text += " · 移速降低"
+
+
 func set_joystick_external(v: Vector2) -> void:
 	if _joystick != null and is_instance_valid(_joystick):
 		_joystick.set_external_move(v)

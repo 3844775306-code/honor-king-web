@@ -538,6 +538,7 @@ var last_indicator_time: float = 0.0
 const INDICATOR_COOLDOWN = 0.5
 func start_recall():
 	if is_dead: return
+	if control_locks_skills(): return
 	# 孙悟空：双击回城键触发筋斗云
 	if display_name == "孙悟空" and not is_ai:
 		var _now = Time.get_ticks_msec() / 1000.0
@@ -1936,7 +1937,8 @@ func _physics_process(delta):
 	# 技能前摇打断：受控/沉默 → 取消施法（不扣蓝不进 CD，资源只在 _finish_casting 结算）
 	if casting_skill and _cast_windup_left > 0.0 \
 			and (stun_timer > 0.0 or knockup_timer > 0.0 or froze_timer > 0.0 \
-				or suppress_timer > 0.0 or silence_timer > 0.0):
+				or suppress_timer > 0.0 or silence_timer > 0.0) \
+			and not is_cleanse_skill(pending_skill_index):
 		_cancel_cast_windup()
 	
 	if manual_target and manual_target.health <= 0 :
@@ -4494,7 +4496,7 @@ func _handle_skill_input(delta):
 			if channeling_skill_index == i:
 				channeling_skill_index = -1
 			continue
-		if i >= skills.size() or silence_timer > 0:
+		if i >= skills.size() or not _skill_input_allowed(i):
 			continue
 		# 太乙Q: 炼药中再按引爆（已在按下时处理，这里跳过避免重复）
 		if taiyi_q_channeling and i == 0:
@@ -4537,7 +4539,7 @@ func _handle_skill_input(delta):
 				return
 			# 沈梦溪1技能（猫咪炸弹）：按下技能轮盘即开始释放——首发立即出，
 			# 按住期间每0.75秒一发、实时跟踪轮盘方向；松开 / 弹尽 / 满5发即停
-			if display_name == "沈梦溪" and i == 0 and silence_timer <= 0 and skill_cast_ready(0):
+			if display_name == "沈梦溪" and i == 0 and _skill_input_allowed(0) and skill_cast_ready(0):
 				if stat <= 0.0:
 					continue
 				var cast_pos := _compute_skill_aim(TouchController.get_skill_drag(0), skills[0], false)
@@ -4548,7 +4550,7 @@ func _handle_skill_input(delta):
 				return
 	# 键盘/桌面：非引导技能按下即施放（瞄准=鼠标位置）
 	for i in range(3):
-		if Input.is_action_just_pressed("skill_%d" % i) and i < skills.size() and silence_timer <= 0:
+		if Input.is_action_just_pressed("skill_%d" % i) and i < skills.size() and _skill_input_allowed(i):
 			# 安琪拉大招引导中再次按大招：取消引导
 			if angela_ult_active and i == 2:
 				cancel_angela_ult()
@@ -4621,7 +4623,7 @@ func _handle_desktop_type0_aim():
 				attack_aim_marker.visible = false
 			continue
 		if Input.is_action_just_pressed("skill_%d" % i):
-			if silence_timer <= 0 and skill_cast_ready(i) and _dt0_hold == -1:
+			if _skill_input_allowed(i) and skill_cast_ready(i) and _dt0_hold == -1:
 				_dt0_hold = i
 				_dt0_press_ms = Time.get_ticks_msec()
 				_dt0_ent = null
@@ -4636,7 +4638,7 @@ func _handle_desktop_type0_aim():
 			attack_aim_marker.visible = false
 			if is_dead or health <= 0:
 				return
-			if silence_timer > 0 or not skill_cast_ready(i) or (i < skill_window_timers.size() and skill_window_timers[i] > 0):
+			if not _skill_input_allowed(i) or not skill_cast_ready(i) or (i < skill_window_timers.size() and skill_window_timers[i] > 0):
 				return   # 按住期间被控/进CD/已进入连发窗口 → 放弃本次
 			var cast_pos := aim
 			pending_skill_target_entity = null
@@ -4871,6 +4873,11 @@ func cancel_angela_ult() -> void:
 
 
 func _start_casting(index: int, skill: Skill, target_pos: Vector3):
+	# 受控输入门控：解控技能可在眩晕/击飞/冰冻/沉默中使用，但压制下全部不可用
+	if suppress_timer > 0.0:
+		return
+	if control_locks_skills() and not is_cleanse_skill(index):
+		return
 	# AI 最终落点二次钳制：候选阶段可能在目标移动后过期，确保非全图技能不超过 cast_range；
 	# 沈梦溪 1 技能连发沿用首次落点时也不会飞出施法距离。
 	if is_ai and skill != null and skill.cast_range > 0.0:
@@ -5207,6 +5214,8 @@ func _finish_casting():
 ## world_dir=true 表示调用方已换算成世界方向（联机客户端 C_SUMMONER 传的就是世界方向）
 func _use_summoner(aim_dir: Vector2 = Vector2.ZERO, world_dir: bool = false):
 	if not summoner_skill or summoner_cooldown > 0: return
+	if suppress_timer > 0.0: return
+	if control_locks_skills() and not is_cleanse_summoner(): return
 	# AI 回城引导中禁止使用召唤师技能
 	if is_ai and is_recalling: return
 	var cd = summoner_skill.cooldown
@@ -5268,7 +5277,7 @@ func _use_summoner(aim_dir: Vector2 = Vector2.ZERO, world_dir: bool = false):
 						ent.stun_timer = 0.75; ent.apply_move_pct_buff("ms_slow", 1.0, -0.3, true)
 						_cc_burst(ent)
 		"净化":
-			_cleanse(); bt_timer = 0; wd_timer = 0; stun_timer = 0
+			_cleanse(); bt_timer = 0; wd_timer = 0; stun_timer = 0; silence_timer = 0
 			slow_timer = 0; knockup_timer = 0; froze_timer = 0; bt_timer = 1.5
 			Vfx.shockwave(global_position, 1.8, Color(0.55, 0.95, 1.0), 0.45)
 		"弱化":
@@ -5354,8 +5363,63 @@ func _get_nearest_enemy_in_range(range: float) -> GameEntity:
 			best = entity
 	return best
 
+## 当前控制类型（用于 UI 视觉反馈/输入门控）；优先级=压制>眩晕>击飞>冰冻>沉默>减速
+func control_kind() -> String:
+	if suppress_timer > 0.0: return "suppress"
+	if stun_timer > 0.0: return "stun"
+	if knockup_timer > 0.0: return "knockup"
+	if froze_timer > 0.0: return "freeze"
+	if silence_timer > 0.0: return "silence"
+	if slow_timer > 0.0 and slow_amount > 0.03: return "slow"
+	return ""
+
+func control_remaining() -> float:
+	match control_kind():
+		"suppress": return suppress_timer
+		"stun": return stun_timer
+		"knockup": return knockup_timer
+		"freeze": return froze_timer
+		"silence": return silence_timer
+		"slow": return slow_timer
+	return 0.0
+
+func control_locks_move() -> bool:
+	return control_kind() in ["suppress", "stun", "knockup", "freeze"]
+
+func control_locks_skills() -> bool:
+	# 沉默禁技能/回城/召唤师/恢复；硬控同样禁；减速只影响移速
+	return control_kind() in ["suppress", "stun", "knockup", "freeze", "silence"]
+
+func control_locks_attack() -> bool:
+	# 沉默不禁普攻；硬控禁普攻
+	return control_kind() in ["suppress", "stun", "knockup", "freeze"]
+
+func is_cleanse_skill(slot: int) -> bool:
+	if slot < 0 or slot >= skills.size() or skills[slot] == null:
+		return false
+	var info := SkillDatabase.get_skill_fx(self, slot)
+	for fx in info.get("fx", []):
+		if fx is Dictionary and str(fx.get("t", "")) == "cleanse":
+			return true
+	return false
+
+func is_cleanse_summoner() -> bool:
+	if summoner_skill == null:
+		return false
+	return str(summoner_skill.skill_name) in ["净化", "疾跑"]
+
+func _skill_input_allowed(slot: int) -> bool:
+	if suppress_timer > 0.0:
+		return false
+	if is_cleanse_skill(slot):
+		return true  # 解控技能在眩晕/击飞/冰冻/沉默中可用（压制上面已拦）
+	return not control_locks_skills()
+
 func _cleanse():
+	if suppress_timer > 0.0:
+		return   # 压制不可解
 	remove_cc_speed_buffs(); stun_timer = 0; knockup_timer = 0
+	froze_timer = 0; silence_timer = 0
 # ---------- 属性成长 ----------
 # 经验表：1-15级所需升级经验（累计总经验仅参考，不需要）
 const EXP_TABLE = [0, 162, 296, 446, 526, 611, 713, 826, 952, 1085, 1246, 1400, 1589, 1778, 2000]
