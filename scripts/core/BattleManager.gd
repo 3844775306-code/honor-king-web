@@ -6296,11 +6296,13 @@ func _export_hero_match_stats() -> void:
 			hs.append(e)
 	if hs.is_empty():
 		return
-	var path := "user://hero_match_stats.csv"
+	var dir := ProjectSettings.globalize_path("user://")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var path := dir.path_join("hero_match_stats.csv")
 	var has_file := FileAccess.file_exists(path) and FileAccess.get_file_as_string(path).length() > 0
 	var f: FileAccess = FileAccess.open(path, FileAccess.READ_WRITE) if has_file else FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
-		print("[HERO-STATS] 无法写入 ", path)
+		print("[HERO-STATS] 无法写入 ", path, " err=", FileAccess.get_open_error())
 		return
 	f.seek_end()
 	if not has_file:
