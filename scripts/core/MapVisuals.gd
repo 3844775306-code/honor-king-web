@@ -13,7 +13,7 @@ extends RefCounted
 
 const DecorMesh = preload("res://scripts/entities/DecorMesh.gd")
 const MAP_HALF := 60.0
-const LAYOUT_SIZE := 256
+const LAYOUT_SIZE := 1024
 const ISLAND_RADIUS := 105.0
 
 static var _layout_tex: ImageTexture
@@ -22,6 +22,7 @@ static var _normal_tex: NoiseTexture2D
 static var _ground_shader: Shader
 static var _brick_shader: Shader
 static var _water_shader: Shader
+static var _water_normal_tex: NoiseTexture2D
 static var _sun_light: DirectionalLight3D
 static var _fill_light: DirectionalLight3D
 
@@ -139,8 +140,8 @@ static func ground_material(bump: float = 0.0) -> ShaderMaterial:
 		dn.frequency = 0.055
 		var dt := NoiseTexture2D.new()
 		dt.noise = dn
-		dt.width = 256
-		dt.height = 256
+		dt.width = 512
+		dt.height = 512
 		dt.seamless = true
 		_detail_tex = dt
 	if _normal_tex == null:
@@ -150,11 +151,11 @@ static func ground_material(bump: float = 0.0) -> ShaderMaterial:
 		nn.frequency = 0.09
 		var nt := NoiseTexture2D.new()
 		nt.noise = nn
-		nt.width = 256
-		nt.height = 256
+		nt.width = 512
+		nt.height = 512
 		nt.seamless = true
 		nt.as_normal_map = true
-		nt.bump_strength = 6.0
+		nt.bump_strength = 8.0
 		_normal_tex = nt
 	var mat := ShaderMaterial.new()
 	mat.shader = _ground_shader
@@ -282,9 +283,23 @@ static func water_material() -> ShaderMaterial:
 	if _water_shader == null:
 		_water_shader = Shader.new()
 		_water_shader.code = _WATER_CODE
+	if _water_normal_tex == null:
+		var wn := FastNoiseLite.new()
+		wn.seed = 73
+		wn.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		wn.frequency = 0.19
+		var wt := NoiseTexture2D.new()
+		wt.noise = wn
+		wt.width = 512
+		wt.height = 512
+		wt.seamless = true
+		wt.as_normal_map = true
+		wt.bump_strength = 4.0
+		_water_normal_tex = wt
 	var mat := ShaderMaterial.new()
 	mat.shader = _water_shader
 	mat.set_shader_parameter("map_half", MAP_HALF)
+	mat.set_shader_parameter("water_normal_tex", _water_normal_tex)
 	return mat
 
 static func _build_ground_shader() -> Shader:
@@ -338,7 +353,15 @@ void fragment() {
 	// 运行时生成的贴图没有 sRGB 标记，手动转线性，避免整片发白
 	vec3 base = pow(texture(layout_tex, luv).rgb, vec3(2.2));
 	vec3 det = texture(detail_tex, duv).rgb;
-	base *= mix(vec3(1.0), det, 0.55);
+	vec3 det2 = texture(detail_tex, duv * 3.7 + vec2(0.17, 0.41)).rgb;
+	// 中档质感：大尺度色斑 + 两套细节，压掉均匀草地/泥地的“纯色塑料感”
+	vec3 macro = texture(detail_tex, wp.xz * 0.0105 + vec2(0.23, 0.61)).rgb;
+	base *= mix(vec3(1.0), macro, 0.30);
+	base *= mix(vec3(1.0), det, 0.52);
+	base *= mix(vec3(1.0), det2, 0.18);
+	// 野区草地色相轻微偏移：阳光照射处偏暖、低洼处偏冷
+	float green_var = texture(detail_tex, wp.xz * 0.045 + vec2(0.7, 0.2)).g;
+	base *= mix(vec3(0.93, 1.04, 0.91), vec3(1.03, 1.01, 0.94), green_var);
 	// 岛内布局图只覆盖 ±60；城墙外的大片岛面用程序化草甸延续，避免采样到边缘黑边
 	if (island_edge > 0.5) {
 		float rr = length(wp.xz);
@@ -366,6 +389,7 @@ uniform vec3 shallow_color : source_color = vec3(0.24, 0.56, 0.57);
 uniform vec3 deep_color : source_color = vec3(0.035, 0.125, 0.185);
 uniform vec3 foam_color : source_color = vec3(0.88, 0.95, 0.93);
 uniform vec3 sky_color : source_color = vec3(0.42, 0.60, 0.80);
+uniform sampler2D water_normal_tex : filter_linear, repeat_enable, hint_normal;
 uniform float map_half = 60.0;
 uniform float wave_strength = 0.040;
 
@@ -409,7 +433,14 @@ void fragment() {
 	// 法线：波高场解析梯度（世界空间 → 视图空间），让高光/天空反射随波起伏
 	float h0 = waves(p, t);
 	vec2 grad = waves_grad(p, t);
-	vec3 n = normalize(vec3(-grad.x * 0.45, 1.0, -grad.y * 0.45));
+	// 两套滚动法线：一套慢速主水流，一套高频细波；避免整条河只有规则正弦波
+	vec2 nuv1 = p * 0.085 + vec2(t * 0.024, -t * 0.036);
+	vec2 nuv2 = p * 0.21 - vec2(t * 0.018, t * 0.027);
+	vec3 n1 = texture(water_normal_tex, nuv1).rgb * 2.0 - 1.0;
+	vec3 n2 = texture(water_normal_tex, nuv2).rgb * 2.0 - 1.0;
+	vec3 n = normalize(vec3(-grad.x * 0.45 + (n1.x + n2.x) * 0.22,
+		1.0,
+		-grad.y * 0.45 + (n1.y + n2.y) * 0.22));
 	vec3 n_view = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 	NORMAL = n_view;
 
@@ -430,8 +461,13 @@ void fragment() {
 	float foam_wave = sin(d * 5.4 - t * 2.4 + sin(along * 1.1 + t * 0.6) * 1.6) * 0.5 + 0.5;
 	float shore = smoothstep(7.2, 8.8, d) * (1.0 - smoothstep(9.55, 10.1, d));
 	float foam = smoothstep(0.48, 0.92, foam_wave) * shore;
+	// 第二层碎泡：用细节法线纹理做噪声，打散规则泡沫带
+	float foam_noise = texture(water_normal_tex, p * 0.34 + vec2(t * 0.018, -t * 0.012)).r;
+	float foam_break = smoothstep(0.52, 0.86, foam_noise);
+	float foam2 = smoothstep(0.66, 0.94, foam_noise) * shore;
 	float wet_line = smoothstep(8.7, 9.45, d) * (1.0 - smoothstep(9.6, 10.15, d));
-	col = mix(col, foam_color, clamp(foam * 0.62, 0.0, 1.0));
+	col = mix(col, foam_color, clamp(foam * 0.58 * (0.55 + 0.65 * foam_break), 0.0, 1.0));
+	col = mix(col, foam_color, foam2 * 0.20);
 	col = mix(col, foam_color, wet_line * 0.34);
 	// 最贴岸的一线湿光：稍稍提亮，让水/沙/石交界有一道自然的水线
 	float lip = smoothstep(9.55, 9.95, d) * (1.0 - smoothstep(9.95, 10.1, d));
@@ -915,6 +951,45 @@ static func scatter_decorations(parent: Node3D) -> void:
 	if grass != null:
 		grass.name = "GrassDecor"
 		parent.add_child(grass)
+
+	# --- 近景草叶：程序化草簇 + 风摆，补足远景 GLB 草的空洞感 ---
+	var near_xf: Array[Transform3D] = []
+	var near_attempts := 0
+	while near_xf.size() < 780 and near_attempts < 6500:
+		near_attempts += 1
+		var nx: float = rng.randf_range(-56.0, 56.0)
+		var nz: float = rng.randf_range(-56.0, 56.0)
+		if not _open_ground(nx, nz, 0.4):
+			continue
+		var ns: float = rng.randf_range(0.62, 1.12)
+		var nb := Basis(Vector3.UP, rng.randf_range(0.0, TAU)).scaled(Vector3(ns, ns, ns))
+		near_xf.append(Transform3D(nb, Vector3(nx, 0.0, nz)))
+	var near_grass := _make_cluster("", near_xf, 0.58, false, DecorMesh.grass_mesh(), DecorMesh.leaf_material())
+	if near_grass != null:
+		near_grass.name = "GrassNear"
+		parent.add_child(near_grass)
+	# 假 AO：移动端没有 SSAO，用少量贴地暗斑压住草根/石根，增加接触感
+	var ao_mesh := PlaneMesh.new()
+	ao_mesh.size = Vector2(1.05, 1.05)
+	var ao_mm := MultiMesh.new()
+	ao_mm.transform_format = MultiMesh.TRANSFORM_3D
+	ao_mm.mesh = ao_mesh
+	ao_mm.instance_count = near_xf.size()
+	for i in near_xf.size():
+		var op: Vector3 = near_xf[i].origin + Vector3(0.0, 0.022, 0.0)
+		ao_mm.set_instance_transform(i, Transform3D(Basis(), op))
+	var ao_mat := StandardMaterial3D.new()
+	ao_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ao_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ao_mat.albedo_color = Color(0.02, 0.045, 0.025, 0.15)
+	ao_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	ao_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var ao_node := MultiMeshInstance3D.new()
+	ao_node.name = "GrassContactAO"
+	ao_node.multimesh = ao_mm
+	ao_node.material_override = ao_mat
+	ao_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(ao_node)
 
 	# --- 河道两岸石墙：河道沿 x-z=0，两岸在 x-z=±15（垂直距约 10.6），朝向与河道一致 ---
 	var wall_xf: Array[Transform3D] = []
