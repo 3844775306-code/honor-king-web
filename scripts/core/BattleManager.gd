@@ -23,10 +23,10 @@ var _intro_start: Vector3 = Vector3.ZERO
 var _intro_end: Vector3 = Vector3.ZERO
 const INTRO_DURATION: float = 2.8
 # 固定俯角 -60° 的跟随机位：12/tan60°≈6.93，让镜头正对英雄脚下的地面点（英雄居中）
-const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 6.93)
+const CAMERA_FOLLOW_OFFSET := Vector3(0.0, 12.0, 2.12)
 const HERO_BAR_CENTER_UP := 4.2   # 主英雄血条锚点：body_radius1.5*2+1.2；相机目标上移使血条位于屏幕正中
 const CAMERA_TARGET_WIDTH := 20.0   # 屏幕中心水平线对应的战场宽度（米）
-const CAMERA_PITCH_DEG := 60.0      # 跟随机位俯角
+const CAMERA_PITCH_DEG := 80.0      # 跟随机位俯角
 var selected_summoner: String = "flash"
 var selected_skin_id: String = ""
 var selected_hero_type: String = ""
@@ -297,7 +297,7 @@ func _ready():
 	cam.fov = 70.0
 	cam.size = 30
 	cam.position = Vector3(0, 20, 10)
-	cam.rotation_degrees = Vector3(-60, 0, 0)
+	cam.rotation_degrees = Vector3(-CAMERA_PITCH_DEG, 0, 0)
 	add_child(cam)
 
 	# 地图
@@ -1467,7 +1467,7 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	selected_hero_type = hero_type
 	hero_selected = true
 	cam_yaw = PI if Config.player_team == Config.Team.ENEMY else 0.0
-	cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
+	cam.rotation_degrees = Vector3(-CAMERA_PITCH_DEG, rad_to_deg(cam_yaw), 0)
 	# 调试：默认开启AI路径小球显示（F4可切换）
 	GameEntity.debug_show_path = true
 	print("[Debug] AI路径球显示已开启（F4切换）")
@@ -6601,7 +6601,7 @@ func _begin_intro() -> void:
 	# 起始机位沿同一俯视方向拉远、抬高；随后插值回正常跟随位
 	_intro_start = _intro_end + Vector3(0, 70, 130).rotated(Vector3.UP, cam_yaw)
 	cam.global_position = _intro_start
-	cam.rotation_degrees = Vector3(-72, rad_to_deg(cam_yaw), 0)
+	cam.rotation_degrees = Vector3(-CAMERA_PITCH_DEG - 5.0, rad_to_deg(cam_yaw), 0)
 	cam.fov = 52.0
 	if ui:
 		ui.visible = false
@@ -6630,7 +6630,7 @@ func _process_intro(delta: float) -> void:
 	var t := clampf(_intro_time / INTRO_DURATION, 0.0, 1.0)
 	var e := 1.0 - pow(1.0 - t, 3.0)
 	cam.global_position = _intro_start.lerp(_intro_end, e)
-	cam.rotation_degrees = Vector3(lerpf(-72.0, -60.0, e), rad_to_deg(cam_yaw), 0)
+	cam.rotation_degrees = Vector3(lerpf(-CAMERA_PITCH_DEG - 5.0, -CAMERA_PITCH_DEG, e), rad_to_deg(cam_yaw), 0)
 	cam.fov = lerpf(52.0, 70.0, e)
 	MapVisuals.update_backlight_for_camera(cam)
 	if t >= 1.0:
@@ -6639,7 +6639,7 @@ func _process_intro(delta: float) -> void:
 func _finish_intro() -> void:
 	intro_active = false
 	cam.global_position = _intro_end
-	cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
+	cam.rotation_degrees = Vector3(-CAMERA_PITCH_DEG, rad_to_deg(cam_yaw), 0)
 	cam.fov = 70.0
 	if ui:
 		ui.visible = true
@@ -7778,7 +7778,7 @@ func _set_camera_mode(first_person: bool):
 		# 恢复俯视视角（回到第三人称时硬设一次，避免从头部缓慢拉出）
 		_cam_snap = true
 		cam.fov = 70.0
-		cam.rotation_degrees = Vector3(-60, rad_to_deg(cam_yaw), 0)
+		cam.rotation_degrees = Vector3(-CAMERA_PITCH_DEG, rad_to_deg(cam_yaw), 0)
 		if is_instance_valid(hero) and hero.visual_mesh:
 			hero.visual_mesh.visible = true
 var game_over: bool = false
