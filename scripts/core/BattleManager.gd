@@ -88,6 +88,9 @@ var _ai_benchmark_seed := 1
 var _ai_benchmark_speed := 1.0
 var _ai_benchmark_keep := false
 var _ai_test_match := false          # 主菜单测试模块：10 AI 随机阵容 + 4x + 赛后自动存档并回大厅
+var _hero_stats_record := false      # --hero-stats：记录每局10名英雄表现
+var _hero_stats_batch := false       # --hero-stats-batch：AI测试局，导出后退出（供批量采样）
+var _hero_stats_exported := false
 var _training_mode := false          # 主菜单训练营
 var _record_replay := true           # 本局是否录像（测试/训练营由入口询问）
 var _training_minions := false
@@ -306,9 +309,13 @@ func _ready():
 	# 视野管理器
 
 	# 大厅选人开局（host 带全员锁定阵容进入）：跳过选人 UI，见 _ready 末尾的 _start_net_lineup
+	var _cmd_args := OS.get_cmdline_user_args()
+	_hero_stats_record = "--hero-stats" in _cmd_args or "--hero-stats-batch" in _cmd_args
+	_hero_stats_batch = "--hero-stats-batch" in _cmd_args
 	var _auto_boot := PlayerPrefs.opt_bool("ai_test_match", false) \
 		or PlayerPrefs.opt_bool("training_mode", false) \
 		or "--ai-test" in OS.get_cmdline_user_args() \
+		or "--hero-stats-batch" in OS.get_cmdline_user_args() \
 		or "--training-camp" in OS.get_cmdline_user_args() \
 		or "--net-test" in OS.get_cmdline_user_args() \
 		or "--ai-bench" in OS.get_cmdline_user_args()
@@ -369,6 +376,11 @@ func _ready():
 		_record_replay = PlayerPrefs.opt_bool("ai_test_record", false)
 		PlayerPrefs.set_opt("ai_test_match", false)
 		PlayerPrefs.set_opt("ai_test_record", false)
+		call_deferred("_start_ai_test_match")
+	elif _hero_stats_batch:
+		# 英雄统计批量采样：随机 10 AI 打完整对局，导出数据后退出
+		_ai_test_match = true
+		_record_replay = false
 		call_deferred("_start_ai_test_match")
 	elif "--ai-test" in OS.get_cmdline_user_args():
 		# CLI/无头测试入口：与主菜单测试模块同一流程（CLI 默认不录像）
@@ -1372,8 +1384,13 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 	_ai_benchmark_keep = "--ai-bench-keep" in _bench_args
 	if _ai_test_match:
 		Config.player_team = Config.Team.PLAYER
-		Engine.time_scale = 4.0
-		print("[AI-TEST] time_scale=4")
+		var _hs_speed := 4.0
+		if _hero_stats_batch:
+			for a in OS.get_cmdline_user_args():
+				if str(a).begins_with("--hero-stats-speed="):
+					_hs_speed = clampf(float(str(a).get_slice("=", 1)), 1.0, 20.0)
+		Engine.time_scale = _hs_speed
+		print("[AI-TEST] time_scale=%.1f stats=%s" % [_hs_speed, str(_hero_stats_record)])
 	if _training_mode:
 		Config.player_team = Config.Team.PLAYER
 		Engine.time_scale = 1.0
@@ -6268,6 +6285,49 @@ func _log_early_game_metrics() -> void:
 		get_tree().quit()
 
 
+## --hero-stats：每局导出 10 名英雄的明细到 user://hero_match_stats.csv（多局追加）
+func _export_hero_match_stats() -> void:
+	if not _hero_stats_record or _hero_stats_exported:
+		return
+	_hero_stats_exported = true
+	var hs: Array = []
+	for e in get_tree().get_nodes_in_group("heroes"):
+		if e is Hero:
+			hs.append(e)
+	if hs.is_empty():
+		return
+	var path := "user://hero_match_stats.csv"
+	var has_file := FileAccess.file_exists(path) and FileAccess.get_file_as_string(path).length() > 0
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ_WRITE) if has_file else FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		print("[HERO-STATS] 无法写入 ", path)
+		return
+	f.seek_end()
+	if not has_file:
+		f.store_string("\uFEFF")
+		f.store_line("match_id,time,duration,winner,mode,hero,role,team,is_ai,level,kills,deaths,assists,gold,damage_dealt,damage_taken,healing,cc_duration,turret_damage,jungle_gold,last_hits,respawn_time")
+	var now := Time.get_datetime_string_from_system()
+	var mid := now + "_" + str(Time.get_ticks_msec())
+	var mode := "ai_test" if _ai_test_match else "battle"
+	for h in hs:
+		var hh := h as Hero
+		var role := str(hero_configs.get(hh.display_name, {}).get("role", ""))
+		f.store_line("%s,%s,%.1f,%d,%s,%s,%s,%d,%d,%d,%d,%d,%d,%.0f,%.1f,%.1f,%.1f,%.2f,%.1f,%d,%d,%.1f" % [
+			mid, now, game_time, winner, mode, _csvq(str(hh.display_name)), _csvq(role),
+			int(hh.team), 1 if hh.is_ai else 0, int(hh.level), int(hh.kills), int(hh.deaths),
+			int(hh.assists), float(hh.total_gold_earned), hh.damage_dealt_to_heroes,
+			hh.damage_taken_from_heroes, hh.healing_done, hh.cc_duration_dealt,
+			hh.turret_damage, int(hh.jungle_gold), int(hh.last_hits), hh.respawn_time_total])
+	f.close()
+	print("[HERO-STATS] 已记录 %d 名英雄 → %s" % [hs.size(), ProjectSettings.globalize_path(path)])
+
+
+func _csvq(s: String) -> String:
+	if s.contains(",") or s.contains("\"") or s.contains("\n") or s.contains("\r"):
+		return "\"" + s.replace("\"", "\"\"") + "\""
+	return s
+
+
 func _count_alive_turrets(team: int) -> int:
 	var n := 0
 	for t in turrets:
@@ -7667,6 +7727,10 @@ func crystal_destroyed(team: int):
 		winner = Config.Team.ENEMY
 	else:
 		winner = Config.Team.PLAYER
+	_export_hero_match_stats()
+	if _hero_stats_batch:
+		get_tree().quit()
+		return
 	# 胜负语音（host/离线；接管客户端由 NetResultPanel 收到结算广播时各自播）
 	SfxManager.play_announce("victory" if winner == Config.player_team else "defeat")
 	# 对战纪录：写入 user://battle_history.json（大厅「对战纪录」页回看）
