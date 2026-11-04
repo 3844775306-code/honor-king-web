@@ -3205,7 +3205,7 @@ func _empty_attack() -> void:
 	if not is_melee_aa():
 		# 远程：沿朝向直线弹道（无锁定目标）
 		var bullet := Bullet.new()
-		bullet.speed = 40.0
+		bullet.speed = 40.0 * maxf(attack_speed, 0.1)
 		bullet.damage = actual_attack_damage
 		bullet.team = team
 		bullet.source = self
@@ -3615,7 +3615,8 @@ func _perform_attack(target: GameEntity):
 	_debug_atk_info = " | AD:" + " + ".join(_dbg_parts) + " =" + str(round(dmg)) + _dbg_jg
 	if not is_melee_aa():  # 远程弹道
 		var bullet = Bullet.new()
-		bullet.speed = 40.0
+		# 普攻弹速与当前攻速成正比：基准攻速1.0次/秒时保持原40
+		bullet.speed = 40.0 * maxf(attack_speed, 0.1)
 		if display_name == "狄仁杰":
 			if stat2==3: 
 				stat2=0
@@ -3688,7 +3689,8 @@ func _perform_attack(target: GameEntity):
 				stat = 0
 				dmg+=int(100+25*skill_levels[1]+0.32*bonus_attack)
 		var bullet = Bullet.new()
-		bullet.speed = 40.0
+		# 近战普攻弹道本身不可见，但速度同样跟随攻速，保持逻辑一致
+		bullet.speed = 40.0 * maxf(attack_speed, 0.1)
 		bullet.damage_range =1.2
 		if display_name == "不知火舞":
 			bullet.damage_range = 0

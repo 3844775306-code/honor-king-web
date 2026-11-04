@@ -117,6 +117,9 @@ static func _apply_flags(node: Node3D, vkind: int, flags: int) -> void:
 	if HeroProjectilesScript.is_hero_vkind(vkind):
 		if (flags & 1) != 0:
 			node.scale *= 1.35
+		# 与主机 Bullet 同步：普攻弹体放大2倍，技能弹保持原尺寸
+		if int(HeroProjectilesScript.decode(vkind).get("skill", -1)) == 0:
+			node.scale *= 2.0
 		var c1: Color = node.get_meta("c1", COL_ALLY)
 		var c2: Color = node.get_meta("c2", c1.lightened(0.35))
 		Vfx.attach_trail(node, c1, 0.24, 0.32, 8, c2)

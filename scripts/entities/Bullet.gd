@@ -144,8 +144,10 @@ func _build_hero_projectile_visual(vk: int) -> void:
 	var base := 1.0
 	if linear_dir != Vector3.ZERO and int(skill_id) != 0:
 		base = 1.35
+	# 英雄普攻弹体额外放大2倍（技能弹保持原尺寸）
+	var aa_size := 2.0 if int(skill_id) == 0 else 1.0
 	_pitch_visual = bool(visual_mesh.get_meta("pitch", false))
-	visual_mesh.scale = Vector3.ONE * base * 0.82
+	visual_mesh.scale = Vector3.ONE * base * 0.82 * aa_size
 	_recursive_set_shadow(visual_mesh, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 	add_child(visual_mesh)
 	var spn := visual_mesh.get_node_or_null("Spin")
@@ -160,8 +162,8 @@ func _build_hero_projectile_visual(vk: int) -> void:
 		Vfx.attach_trail(self, c1, 0.24, 0.32, 8, c2)
 		Vfx.muzzle(global_position, _aim_dir(), c1, c2)
 	var tw := create_tween()
-	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base * 1.10, 0.06)
-	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base, 0.06)
+	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base * 1.10 * aa_size, 0.06)
+	tw.tween_property(visual_mesh, "scale", Vector3.ONE * base * aa_size, 0.06)
 
 
 ## 统一程序化弹体：核心形态 + 双色光晕 + 元素拖尾 + 出手弹跳（判定/速度完全不变）
