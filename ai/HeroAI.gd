@@ -789,10 +789,31 @@ func _try_upgrade_skills():
 # ==================== 赶路位移（非战斗位移技能） ====================
 # 位移/加速赶路：只要离 move_target 超过普攻距离就尝试（技能类型4/self_displacement>0，如孙尚香Q翻滚、
 # 马可波罗W漫游）；施法/受控/回城/有锁定目标时不触发。闪现只用于追击/逃跑，不用于赶路。
-## 是否处于长距离赶路（移动目标 >6m）
+## 取「最终移动目的」，而不是 A* 路径上下一个约1米的航点：
+## 追击目标 > 活跃安全路线终点 > 活跃导航终点 > 活跃 A* 终点 > 当前 move_target。
+func _travel_goal() -> Vector3:
+	if not is_instance_valid(hero):
+		return Vector3.ZERO
+	if is_instance_valid(hero.manual_target) and hero.manual_target.health > 0.0:
+		return hero.manual_target.global_position
+	if _safe_route_goal != Vector3.ZERO and _safe_route_index < _safe_route_path.size() \
+			and hero.global_position.distance_to(_safe_route_path[_safe_route_index]) < 2.5:
+		return _safe_route_goal
+	if _nav_goal != Vector3.ZERO and _nav_index < _nav_path.size() \
+			and hero.global_position.distance_to(_nav_path[_nav_index]) < 2.5:
+		return _nav_goal
+	if _ai_path_goal != Vector3.ZERO and _ai_path_index < _ai_path.size() \
+			and hero.global_position.distance_to(_ai_path[_ai_path_index]) < 2.5:
+		return _ai_path_goal
+	return hero.move_target
+
+
+## 是否处于长距离赶路（最终目标 >6m，不按 A* 下一航点）
 func _is_traveling() -> bool:
-	return is_instance_valid(hero) and hero.move_target != Vector3.ZERO \
-		and hero.global_position.distance_to(hero.move_target) > 6.0
+	if not is_instance_valid(hero):
+		return false
+	var goal := _travel_goal()
+	return goal != Vector3.ZERO and hero.global_position.distance_to(goal) > 6.0
 
 
 ## 马超赶路投枪：没强化普攻时朝移动方向丢 W/Q，枪落在前方，走过去捡枪后接强化普攻位移
@@ -982,7 +1003,7 @@ func _try_travel_dash():
 	if hero.stun_timer > 0.0 or hero.knockup_timer > 0.0 or hero.froze_timer > 0.0 \
 			or hero.suppress_timer > 0.0 or hero.silence_timer > 0.0:
 		return
-	var dest := hero.move_target
+	var dest := _travel_goal()
 	if dest == Vector3.ZERO:
 		return
 	var dist := hero.global_position.distance_to(dest)
