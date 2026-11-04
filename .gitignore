@@ -34,3 +34,15 @@ replays/
 
 # 录像导出（分享副本）
 exports/
+
+# 根目录导出/调试残留（发布产物统一放 build/）
+HonorKing.*
+*.log
+*.err
+*.out
+
+# 本地工具二进制
+tools/bin/
+
+# Office 临时锁文件
+~\$*
