@@ -42,14 +42,14 @@ while ($run -lt $MaxMatches) {
     }
     $run++
     Write-Host ("[{0}/{1}] 开始第 {2} 局，未达标英雄 {3} 个，当前最少场次 {4}" -f $run, $MaxMatches, $run, $missing.Count, ($(if ($counts.Count) { ($counts.Values | Measure-Object -Minimum).Minimum } else { 0 })))
-    $args = @(
+    $gameArgs = @(
         "--headless", "--path", $root,
         "res://scenes/battle.tscn",
         "--",
         "--hero-stats-batch",
         "--hero-stats-speed=$Speed"
     )
-    $p = Start-Process -FilePath $godot -ArgumentList $args -PassThru -WindowStyle Hidden
+    $p = Start-Process -FilePath $godot -ArgumentList $gameArgs -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit(900000)) {
         Write-Warning "第 $run 局超时，强制结束"
         $p.Kill()
