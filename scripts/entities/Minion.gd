@@ -293,8 +293,10 @@ func _physics_process(delta):
 	# 如果有目标且在视野内，追击或攻击
 	if current_target and is_instance_valid(current_target) and current_target.health > 0:
 		var dist = global_position.distance_to(current_target.global_position) 
-		# 塔基半径 3.2：以塔基边缘判定攻击距离（塔基是障碍，否则近战兵永远够不到塔心）
-		var reach: float = attack_range*0.01 + (3.2 if current_target is Turret else 0.0)
+		# 以塔的实际碰撞半径判定攻击距离；之前固定 +3.2 是按旧塔基半径写的，
+		# 现塔 body_radius=1.5、石台约1.6，导致近战兵在距塔心约5m就隔空挥砍。
+		var tower_pad: float = ((current_target.body_radius + 0.2) if current_target is Turret else 0.0)
+		var reach: float = attack_range*0.01 + tower_pad
 		if dist <= reach:
 			# 进入攻击范围：始终面向目标（近战/远程/攻城车一致，不再只朝移动方向）
 			var to_t: Vector3 = current_target.global_position - global_position
