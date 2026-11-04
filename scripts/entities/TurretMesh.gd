@@ -54,6 +54,14 @@ static func base_brick_material() -> StandardMaterial3D:
 	_base_brick_mat = m
 	return m
 
+const TOWER_MODEL_SCALE := 1.38       # 普通塔模型：基准高3.76m -> 约5.2m
+const CRYSTAL_MODEL_SCALE := 3.19     # 水晶模型：基准高3.26m -> 约10.4m，塔:水晶≈1:2
+
+
+static func model_scale(tier: String) -> float:
+	return CRYSTAL_MODEL_SCALE if tier == "crystal" else TOWER_MODEL_SCALE
+
+
 static func visual(tier: String, team: int) -> Node3D:
 	var root := Node3D.new()
 	root.name = "TurretVisual"
@@ -133,6 +141,7 @@ static func visual(tier: String, team: int) -> Node3D:
 		orbit.material_override = accent_material(team)
 		orbit.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		tp.add_child(orbit)
+	root.scale = Vector3.ONE * model_scale(tier)
 	return root
 
 # ==================== 普通塔 ====================

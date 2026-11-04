@@ -89,10 +89,10 @@ func _get_player_hero() -> Hero:
 
 
 func _create_visual():
-	# 塔型缩放：外塔/二塔/高地统一为高地尺寸，仅水晶更大
-	var f := 2.0
+	# 塔型缩放：普通塔/水晶模型由 TurretMesh 按同一比例放大；底座同步匹配
+	var f := TurretMesh.TOWER_MODEL_SCALE * 2.0
 	match display_name:
-		"crystal": f = 2.5
+		"crystal": f = TurretMesh.CRYSTAL_MODEL_SCALE * 2.0
 	# 程序化石塔模型（替代原 Turret.glb）：八角石身 + 队伍色发光刻纹，与石墙同一套材质
 	var vis := TurretMesh.visual(str(display_name), team)
 	add_child(vis)
