@@ -7551,7 +7551,10 @@ func _minion_path_speed(start: Vector3, waypoints: Array, target: Vector3, trave
 
 
 func _minion_path_distance(start: Vector3, waypoints: Array, target: Vector3) -> float:
-	var best := INF
+	# 必须分别记录「最近垂距」和「该点累计路程」：
+	# 不能拿累计路程直接和垂距比较，否则会把更后面的路段误判为更近。
+	var best_len := INF
+	var best_perp := INF
 	var travel := 0.0
 	var prev := start
 	for wp in waypoints:
@@ -7562,11 +7565,12 @@ func _minion_path_distance(start: Vector3, waypoints: Array, target: Vector3) ->
 			var t := clampf((target - prev).dot(seg) / (length * length), 0.0, 1.0)
 			var closest := prev + seg * t
 			var d := closest.distance_to(target)
-			if d < best:
-				best = travel + length * t
+			if d < best_perp:
+				best_perp = d
+				best_len = travel + length * t
 		travel += length
 		prev = p
-	return best if best < INF else start.distance_to(target)
+	return best_len if best_len < INF else start.distance_to(target)
 
 
 # 兵线分帧生成：整波兵入队，_process 每帧生成 2 个（约 10 帧出齐，实际延迟 <0.2s）
