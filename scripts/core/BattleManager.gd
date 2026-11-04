@@ -1282,7 +1282,7 @@ func _should_prompt_damage_audit() -> bool:
 func _setup_damage_audit() -> void:
 	var stamp := Time.get_datetime_string_from_system().replace(":", "-").replace("T", "_").replace(" ", "_")
 	var mode := "training" if _training_mode else ("test" if _ai_test_match else "battle")
-	var audit_dir := ProjectSettings.globalize_path("res://data/damage_audit")
+	var audit_dir := ProjectSettings.globalize_path("res://data/damage_audit_raw")
 	DirAccess.make_dir_recursive_absolute(audit_dir)
 	GameEntity.damage_audit_enabled = true
 	GameEntity.damage_audit_mode = mode

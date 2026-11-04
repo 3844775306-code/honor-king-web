@@ -51,6 +51,11 @@ tools/bin/
 data/hero_stats/*.csv
 data/hero_stats/*.xlsx
 
-# 伤害审计表格（本地生成）
-data/damage_audit/*.csv
-data/damage_audit/*.log
+# 伤害审计原始数据（本地生成）
+data/damage_audit_raw/*.csv
+data/damage_audit_raw/*.log
+data/damage_audit_raw/*.translation
+data/damage_audit_raw/*.import
+
+# 伤害审计整理表（本地生成）
+data/damage_audit/*.xlsx

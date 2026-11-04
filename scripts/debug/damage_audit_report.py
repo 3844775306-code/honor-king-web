@@ -7,7 +7,7 @@ Sheet 内按 skill 分组，同 skill 连续，组内按游戏时间升序。
 
 用法:
   python scripts/debug/damage_audit_report.py
-  python scripts/debug/damage_audit_report.py --input-dir data/damage_audit --output data/damage_audit/damage_audit_report.xlsx
+  python scripts/debug/damage_audit_report.py --input-dir data/damage_audit_raw --output data/damage_audit/damage_audit_report.xlsx
 """
 import argparse
 import csv
@@ -19,8 +19,9 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DEFAULT_DIR = os.path.join(ROOT, "data", "damage_audit")
-DEFAULT_OUTPUT = os.path.join(DEFAULT_DIR, "damage_audit_report.xlsx")
+RAW_DIR = os.path.join(ROOT, "data", "damage_audit_raw")
+OUT_DIR = os.path.join(ROOT, "data", "damage_audit")
+DEFAULT_OUTPUT = os.path.join(OUT_DIR, "damage_audit_report.xlsx")
 
 SKILL_NAMES = {
     0: "普攻", 1: "技能1", 2: "技能2", 3: "技能3",
@@ -149,13 +150,14 @@ def build_workbook(rows, output):
                        fnum(r.get("shield")), fnum(r.get("post_delta")), r["_match"], r.get("mode", "")])
         style_sheet(ws, widths)
 
+    os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     wb.save(output)
     return output
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input-dir", default=DEFAULT_DIR)
+    ap.add_argument("--input-dir", default=RAW_DIR)
     ap.add_argument("--input", default="", help="只处理单个 CSV")
     ap.add_argument("--output", default=DEFAULT_OUTPUT)
     args = ap.parse_args()
