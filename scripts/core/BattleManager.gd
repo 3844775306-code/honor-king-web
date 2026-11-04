@@ -1560,6 +1560,7 @@ func _start_game_body(hero_type: String, summoner_id: String = "flash"):
 # 三路兵线正常交汇处（= 河道与各路的交叉口）的圆形青砖擂台
 const ARENA_SPOTS: Array = [Vector3(43, 0, 43), Vector3(0, 0, 0), Vector3(-43, 0, -43)]
 const ARENA_RADIUS: float = 7.2
+const MINION_CLASH_CONTACT_RANGE: float = 8.0   # 小兵视野8m，双方各距交汇点4m时开始交火
 
 func _create_map():
 	# 1. 浮空岛顶面（圆岛外由 shader discard，露出天空；岛缘/树林在背景层生成）
@@ -7540,8 +7541,10 @@ func _spawn_minion_wave():
 			_queue_minion("ranged", team, base + lane_dir * OFFSET_RANGED, line, i)
 		i +=1
 # 沿出生点→路点折线到交汇擂台的实际路程，再按 travel_time 反算移动速度（move_speed 单位是 0.01m/s）
-func _minion_path_speed(start: Vector3, waypoints: Array, target: Vector3, travel_time: float) -> float:
-	var path_len := _minion_path_distance(start, waypoints, target)
+func _minion_path_speed(start: Vector3, waypoints: Array, target: Vector3, travel_time: float, contact_margin: float = 0.0) -> float:
+	# 双方各走 contact_margin 时进入视野开始交火；用这个有效路程反算移速，
+	# 使「首次交火」而不是「到达擂台圆心」发生在目标时刻。
+	var path_len := maxf(_minion_path_distance(start, waypoints, target) - contact_margin, 1.0)
 	return maxf(path_len / maxf(travel_time, 0.1) * 100.0, 50.0)
 
 
@@ -7566,10 +7569,10 @@ func _minion_path_distance(start: Vector3, waypoints: Array, target: Vector3) ->
 
 # 兵线分帧生成：整波兵入队，_process 每帧生成 2 个（约 10 帧出齐，实际延迟 <0.2s）
 func _queue_minion(type: String, team: int, pos: Vector3, waypoints: Array, line: int) -> void:
-	# 第一波（及后续同型波）按「出生点到本路交汇擂台」的实际路程反算移速：
-	# 第10秒出兵、走20秒，正好在第30秒到达三条路的交汇点。
+	# 第一波（及后续同型波）按「出生点到本路交汇擂台」的有效路程反算移速：
+	# 第10秒出兵，走20秒后双方在交汇点前4m进入8m视野，正好第30秒开始交火。
 	var arena: Vector3 = ARENA_SPOTS[clampi(line, 0, ARENA_SPOTS.size() - 1)]
-	var speed := _minion_path_speed(pos, waypoints, arena, 20.0)
+	var speed := _minion_path_speed(pos, waypoints, arena, 20.0, MINION_CLASH_CONTACT_RANGE * 0.5)
 	_minion_spawn_queue.append({"type": type, "team": team, "pos": pos, "wp": waypoints, "line": line, "speed": speed})
 
 func _drain_minion_spawn_queue() -> void:
